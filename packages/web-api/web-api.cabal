@@ -32,7 +32,8 @@ synopsis:           haskell web api
 homepage:           https://github.com/gorban/haskell-web-api
 
 -- The license under which the package is released.
-license:            NONE
+license:            BSD-2-Clause-Patent
+license-file:       ../../LICENSE
 
 -- The package author(s).
 author:             David Bruck
