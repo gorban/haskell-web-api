@@ -1,0 +1,9 @@
+/dist-newstyle/
+/.vscode/*
+!/.vscode/settings.json
+!/.vscode/launch.json
+!/.vscode/tasks.json
+*.tix
+/hpc_index.html
+cabal.project.local
+cabal.project.local~

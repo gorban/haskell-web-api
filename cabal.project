@@ -1,0 +1,13 @@
+packages:
+  packages/hspec-expectations-match/
+  packages/test-lib/
+  packages/web-api/
+
+with-compiler: ghc-9.12.2
+optimization: 2
+tests: True
+debug-info: True
+
+-- We do not need to capture coverage from third party packages (also, it fails if we try)
+package hspec-expectations-match
+  coverage: False
