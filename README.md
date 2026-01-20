@@ -11,7 +11,7 @@ packages/
 
 ## Prerequisites
 
-The following is a detailed guide to set up a Haskell development environment on Windows and Linux (e.g. WSL2 / Ubuntu).
+The following is a detailed guide to set up a Haskell development environment on Windows, MacOS, and Linux (e.g. WSL2 / Ubuntu).
 
 - Haskell GHC Compiler and Cabal
 - (recommended) IDE/editor with Haskell support (e.g. Visual Studio Code with Haskell extension)
@@ -131,7 +131,7 @@ The following is a detailed guide to set up a Haskell development environment on
     - You might have to "Switch to Pre-Release Version" for compatibility with the latest GHC/HLS versions.
     - If it gives an option to "Restart Extensions", do so.
 - For Haskell Language Server (HLS), to be able to process our files with custom preprocessors, as well as debug support, we need to install `spec-preprocessor`, `hspec-discover`, `ghci-dap`, `haskell-debug-adapter`, and `hlint` globally.
-  - TODO: some of these might not be necessary anymore after the switch from Haskell GHCi Debug Adapter to Haskell Debugger extension.
+  - **NOTE:** some of the following dependencies will not be necessary anymore after the switch from Haskell GHCi Debug Adapter to Haskell Debugger extension.
   - In a PowerShell terminal (non-admin), navigate to packages/test-lib directory and run:
     ```bash
     cabal update
@@ -156,38 +156,71 @@ The following is a detailed guide to set up a Haskell development environment on
     - You may have to restart the Haskell Language Server for the change to take effect. In VS Code command palette (Ctrl+Shift+P), run `Haskell: Restart Haskell LSP Server`.
   - **NOTE:** if you make any updates to `spec-preprocessor`, you need to re-run the `cabal build cabal build test-lib:spec-preprocessor` and `Copy-Item ...` commands if you want the updated version to be the one used when you GHCi debug.
 
-## Linux (e.g. WSL2 / Ubuntu)
+## MacOS / Linux (e.g. WSL2 / Ubuntu)
 
 ### WSL2 on Windows
 
 If you want to do a Linux install but you have Windows, consider a WSL2 install.
 - This works around a (currently unresolved) issue for debugging in VS Code on Windows:\
   <https://github.com/well-typed/haskell-debugger/issues/149>
+- Then continue with the MacOS / Linux / WSL2 instructions below.
 
-### Linux / WSL2
+### MacOS / Linux / WSL2
 - Linux (either WSL2 or native): Install [GHCup](https://www.haskell.org/ghcup/)
-  ```bash
-  sudo apt update
-  sudo apt upgrade -y
-  sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev
-  curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
-  ```
+  - Ubuntu (including WSL2):
+    ```bash
+    sudo apt update
+    sudo apt upgrade -y
+    sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev
+    curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+    ```
+  - MacOS:
+    - First, you need to procure LLVM. Either use Homebrew command `brew install llvm`, or follow instructions here:\
+      <https://releases.llvm.org/download.html>
+      - E.g. for version 18.1.8 on M-series Macs, you can download `clang+llvm-18.1.8-arm64-apple-macos11.tar.xz`
+    - Regardless of installation method, ensure that the `bin` directory of the LLVM installation is in your PATH environment variable. For Homebrew, you can run:
+      ```bash
+      echo 'export PATH="/opt/homebrew/opt/llvm/bin:$PATH"' >> ~/.zshrc
+      source ~/.zshrc
+      ```
+    - Then, install GHCup:
+      ```bash
+      curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
+      ```
   - Press ENTER to accept the only available ghcup install location ($HOME/.ghcup)
   - Press ENTER to acknowledge that the System requirements had just been installed
-  - Answer 'D' to use the Default (GHCup maintained) binary distribution "channel"
+  - Answer 'D' (or 'G' on MacOS) to use the Default (GHCup maintained) binary distribution "channel"
   - Answer 'N' to disable the pre-releases channel
   - Answer 'Y' to enable the cross channel (GHCJS, WASM, etc.)
-  - Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc"
+  - Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc" (or "$HOME/.zshrc" on MacOS)
   - Answer 'Y' to install HLS (Haskell Language Server), we need it for IDE support
   - Answer 'Y' to install stack (we might be able to build our project with Caba alone, but other projects might need stack)
+  - MacOS only: look for security warnings installing with GHCup. They may appear as popups like "llc" Not Opened - Apple could not verify "llc" ...
+    - Select "Done" to not move each file to the Trash
+    - After clicking "Done" before addressing any subsequent popup that appears (if any), you'll have to unblock the last executable in System Preferences:
+      - Open System Preferences -> Privacy & Security -> scroll down to Security section
+      - There should be a message like "llc" was blocked to protect your Mac.
+      - Click Allow Anyway
+    - Repeat for other files like "opt", etc. until no more popups appear
+    - If any popups appeared, you may want to kill the ghcup installer (Ctrl+C), clean out "$HOME/.ghcup", and re-run it, so that it can proceed with installing with now unblocked executables.
+    - On rerun you may get popups again for the same executables like Open "llc"? This time, click Open Anyway for each. It may also ask for your password to allow the installation to proceed.
   - For the new PATH variable to take effect, either restart the WSL terminal or run:
     ```bash
     . "$HOME/.ghcup/env"
     ```
   - Now run `ghcup tui` to manage installed versions of GHC, Cabal, Stack, HLS, etc.
-    - Immediately change GHC to the latest version that is "hls-powered" (compatible with Haskell Language Server) by selecting it in the list and pressing 's'.
+    - Immediately change GHC to the latest version that is "hls-powered" (compatible with Haskell Language Server) by selecting it in the list and pressing 's'. On MacOS, I did not see any "hls-powered" versions, so just select a version that would be "hls-powered" on Windows / Linux (can test via a Linux VM or another machine), or use GHC 9.12.2 if it's still current enough.
       - Answer 'Y' for whether you would like to install the selected version if it is not already installed.
+      - MacOS only: look for security warnings installing with GHCup. They may appear as popups like "clang-18" Not Opened - Apple could not verify "clang-18" ...
+        - Select "Done" to not move each file to the Trash
+        - After clicking "Done" before addressing any subsequent popup that appears (if any), you'll have to unblock the last executable in System Preferences:
+          - Open System Preferences -> Privacy & Security -> scroll down to Security section
+          - There should be a message like "llc" was blocked to protect your Mac.
+          - Click Allow Anyway
+        - Repeat for other files until no more popups appear
       - Press enter after "Success"
+        - MacOS only: if any popups appeared, you may want to use undo by setting the GHC version to the "recommended" one with 's', selecting the newer one again and uninstalling with 'u', then pressing 's' to install and set it again, so that it can proceed with installing with now unblocked executables.
+        - On rerun you may get popups again for the same executables like Open "clang-18"? This time, click Open Anyway for each. It may also ask for your password to allow the installation to proceed.
     - You should be returned back into `ghcup tui`. For cabal, HLS, and stack, select the latest versions and press 's' to set them as default.
       - Similarly answer 'Y' for whether you would like to install the selected version if it is not already installed.
       - Also, press enter after each "Success" and finally answer 'q' to exit ghcup
@@ -270,25 +303,35 @@ If you want to do a Linux install but you have Windows, consider a WSL2 install.
         ```
       - Don't forget to undo changes to `cabal.project` and `*.cabal` files when you want to go back to normal development with HLS.
 - IDE: Install [Visual Studio Code](https://code.visualstudio.com/) or another Haskell-compatible IDE/editor. If using WSL, you can install VS Code on the host operating system (Windows).
-- For Haskell Language Server (HLS), to be able to process our files with custom preprocessors, as well as debug support, we need to install `spec-preprocessor`, `hspec-discover`, `ghci-dap`, `haskell-debug-adapter`, and `hlint` globally.
-  - TODO: some of these might not be necessary anymore after the switch from Haskell GHCi Debug Adapter to Haskell Debugger extension.
-  - Back in Ubuntu terminal (WSL), navigate to packages/test-lib directory (e.g. `cd "/mnt/c/Users/$(whoami)/source/repos/haskell-web-api/packages/test-lib"`) and run:
+- For Haskell Language Server (HLS), to be able to process our files with custom preprocessors, as well as debug support, we need to install `spec-preprocessor`, `hspec-discover`, and `hlint` globally.
+  - Back in Bash terminal (WSL), navigate to packages/test-lib directory (e.g. `cd "/mnt/c/Users/$(whoami)/source/repos/haskell-web-api/packages/test-lib"`) and run:
     ```bash
     cabal update
-    cabal install ghci-dap haskell-debug-adapter hspec-discover hlint --overwrite-policy=always
+    cabal install hlint --overwrite-policy=always
     cabal build test-lib:spec-preprocessor
     cp "$(cabal list-bin test-lib:exe:spec-preprocessor)" "$HOME/.cabal/bin/"
     ```
   - And in case it matters the last known working version of hlint, you can find it from running the following command; example compatible version is v3.10:
     ```powershell
-    cabal exec $env:APPDATA\cabal\bin\hlint -- --version
+    cabal exec "$HOME/.cabal/bin/hlint" -- --version
     ```
+  - If you can also install `hspec-discover`, do so with:
+    ```bash
+    cabal install hspec-discover --overwrite-policy=always
+    ```
+    - On MacOS, I have seen that fail with error: "filepath wildcard 'package.yaml' does not match any files.", so you will have to build it from source manually if needed.
+    - Download the source from: <https://hackage.haskell.org/package/hspec-discover>\
+      E.g. download `hspec-discover-2.11.16.tar.gz`, extract it, and in the extracted directory run:
+      ```bash
+      cabal v2-build
+      cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
+      ```
   - Additionally, in VS Code, I was seeing error logs in output `Haskell (haskell-web-api)` like `semanticTokens is disabled globally in your config.`. See issue:\
     <https://github.com/haskell/haskell-language-server/issues/4081>
-    - To fix this, open VS Code settings (Ctrl+,), search for `semantic tokens`, and ensure that `Haskell › Plugin › Semantic Tokens: Global On` (description: `Enables semanticTokens plugin`) is checked.
+    - To fix this, open VS Code settings (Ctrl+,) (or command+, on a Mac), search for `semantic tokens`, and ensure that `Haskell › Plugin › Semantic Tokens: Global On` (description: `Enables semanticTokens plugin`) is checked.
     - You may have to restart the Haskell Language Server for the change to take effect. In VS Code command palette (Ctrl+Shift+P), run `Haskell: Restart Haskell LSP Server`.
   - **NOTE:** if you make any updates to `spec-preprocessor`, you need to re-run the `cabal build test-lib:spec-preprocessor` and `cp ...` commands if you want the updated version to be the one used when you GHCi debug.
-- And to hook up host VS Code to the now set up WSL environment, install the
+- Windows host only: To hook up host VS Code to the now set up WSL environment, install the
   [Remote - WSL extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-wsl)
   by Microsoft in the host VS Code.
   - After installing the extension, in the host VS Code command palette (Ctrl+Shift+P),
