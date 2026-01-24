@@ -1,12 +1,10 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# SPEC #-}
 
-import Control.Exception (IOException, evaluate, finally, try)
-import Data.Bifunctor (first)
-import Data.List (intercalate)
+import Control.Exception (evaluate)
+import Control.Monad.Except (runExceptT)
+import Data.List (intercalate, isInfixOf)
 import System.FilePath (takeFileName, (</>))
-import System.IO.Error (isDoesNotExistError)
-import System.Mem (performGC)
 import TestLib.SpecPreprocessor (run, runPure)
 import TestLib.Temp (withTempFile)
 
@@ -17,18 +15,24 @@ spec = describe "Run spec-preprocessor" $ do
         hsRoot = "test-spec"
         inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = ["hs-source-dir=" ++ hsRoot, inputPath, "ignored.out"]
         expectedHeader = getModuleHeader (getModuleName moduleSegments moduleBase)
-    output <- $([|runPure args absolutePath pureSpecContents|] `shouldMatch` [p|Right output|])
+        output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "Fails with missing output argument" $ do
-    err <- $([|runPure ["inputOnly.hs"] "/abs/inputOnly.hs" pureSpecContents|] `shouldMatch` [p|Left err|])
-    err `shouldBe` missingArgsError
+  it "IO: Fails with missing output argument" $ do
+    result <- runExceptT $ run ["inputOnly.hs"]
+    err <- $([|result|] `shouldMatch` [p|Left err|])
+    err `shouldContain'` missingArgsError
 
-  it "Fails with missing input and output arguments" $ do
-    err <- $([|runPure [] "/abs/ignored" pureSpecContents|] `shouldMatch` [p|Left err|])
-    err `shouldBe` missingArgsError
+  it "IO: Fails with missing input and output arguments" $ do
+    result <- runExceptT $ run []
+    err <- $([|result|] `shouldMatch` [p|Left err|])
+    err `shouldContain'` missingArgsError
+
+  it "IO: Fails with too many file arguments" $ do
+    result <- runExceptT $ run ["file1.hs", "file2.hs", "file3.hs"]
+    err <- $([|result|] `shouldMatch` [p|Left err|])
+    err `shouldContain'` missingArgsError
 
   it "Preserves existing imports and body" $ do
     let moduleSegments = ["Nested"]
@@ -36,7 +40,6 @@ spec = describe "Run spec-preprocessor" $ do
         hsRoot = "test"
         inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = ["hs-source-dir=" ++ hsRoot, inputPath, "ignored.out"]
         contents =
           unlines
             [ "{-# SPEC #-}",
@@ -52,7 +55,7 @@ spec = describe "Run spec-preprocessor" $ do
             "spec :: Spec",
             "spec = describe \"example\" $ do"
           ]
-    output <- $([|runPure args absolutePath contents|] `shouldMatch` [p|Right output|])
+        output = runPure hsRoot absolutePath contents
     mapM_ (output `shouldContain'`) expectedFragments
 
   it "Infers modules when hs-source-dir is explicitly fallback value" $ do
@@ -61,9 +64,8 @@ spec = describe "Run spec-preprocessor" $ do
         hsRoot = "test"
         inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = ["hs-source-dir=" ++ hsRoot, inputPath, "ignored.out"]
         expectedHeader = buildModuleHeader moduleSegments moduleBase
-    output <- $([|runPure args absolutePath pureSpecContents|] `shouldMatch` [p|Right output|])
+        output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
   it "Infers modules using default hs-source-dir" $ do
@@ -72,9 +74,8 @@ spec = describe "Run spec-preprocessor" $ do
         hsRoot = "test"
         inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = [inputPath, "ignored.out"]
         expectedHeader = buildModuleHeader moduleSegments moduleBase
-    output <- $([|runPure args absolutePath pureSpecContents|] `shouldMatch` [p|Right output|])
+        output = runPure "test" absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
   it "Falls back to basename when hs-source-dir unmatched" $ do
@@ -83,9 +84,8 @@ spec = describe "Run spec-preprocessor" $ do
         rootlessDir = "specs"
         inputPath = rootlessDir </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = [inputPath, "ignored.out"]
         expectedHeader = getModuleHeader moduleBase
-    output <- $([|runPure args absolutePath pureSpecContents|] `shouldMatch` [p|Right output|])
+        output = runPure "test" absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
   it "Handles files without nested segments" $ do
@@ -94,14 +94,15 @@ spec = describe "Run spec-preprocessor" $ do
         hsRoot = "test"
         inputPath = hsRoot </> getRelativePath moduleSegments moduleBase
         absolutePath = "" </> "abs" </> inputPath
-        args = ["hs-source-dir=" ++ hsRoot, inputPath, "ignored.out"]
         expectedHeader = getModuleHeader moduleBase
-    output <- $([|runPure args absolutePath pureSpecContents|] `shouldMatch` [p|Right output|])
+        output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
   it "IO: Fails when input file is missing" $
-    withTempFile "tst-missing" [] "MissingSpec.hs" $ \(_, missingFile) ->
-      run [missingFile, missingFile ++ ".out"] `shouldThrow` isDoesNotExistError
+    withTempFile "tst-missing" [] "MissingSpec.hs" $ \(_, missingFile) -> do
+      result <- runExceptT $ run [missingFile, missingFile ++ ".out"]
+      err <- $([|result|] `shouldMatch` [p|Left err|])
+      err `shouldSatisfy` ("does not exist" `isInfixOf`)
 
   it "IO: Fails when output path is too long" $
     withExampleSpecTemp [] "LongOutputSpec" $ \(tempDir, tempFile) -> do
@@ -109,11 +110,9 @@ spec = describe "Run spec-preprocessor" $ do
       let longFileNameLength = 4000
           longFileName = replicate longFileNameLength 'o' ++ ".out"
           outputPath = tempDir </> longFileName
-      (try (run [tempFile, outputPath]) :: IO (Either IOException ()))
-        >>= \outcome -> $([|first (const ()) outcome|] `shouldMatch` [p|Left ()|])
-        -- Force a GC cycle here to encourage timely release of file handles/resources
-        -- after this filesystem error test (important on some platforms).
-        `finally` performGC
+      result <- runExceptT $ run [tempFile, outputPath]
+      err <- $([|result|] `shouldMatch` [p|Left err|])
+      err `shouldSatisfy` ("invalid" `isInfixOf`)
 
   let moduleSegments = ["Nested"]
       moduleBase = "ExampleSpec"
@@ -125,7 +124,8 @@ spec = describe "Run spec-preprocessor" $ do
       writeFile tempFile "{-# SPEC #-}"
       let hsSourceDir = takeFileName tempDir
           outputFile = getOutputFile tempFile
-      run ["hs-source-dir=" ++ hsSourceDir, tempFile, outputFile]
+      result <- runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, tempFile, outputFile]
+      result `shouldBe` Right ()
       outputContents <- readFile outputFile
       _ <- evaluate (length outputContents)
       outputContents `shouldContain'` expectedHeader

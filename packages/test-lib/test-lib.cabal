@@ -37,7 +37,7 @@ homepage:           https://github.com/gorban/haskell-web-api
 
 -- The license under which the package is released.
 license:            BSD-2-Clause-Patent
-license-file:       ../../LICENSE
+license-file:       LICENSE
 
 -- The package author(s).
 author:             David Bruck
@@ -48,10 +48,15 @@ maintainer:         1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright:          (c) David Bruck
 category:           Web
-build-type:         Simple
+build-type:         Custom
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
+
+custom-setup
+  setup-depends: base ^>= 4.21.0.0
+               , Cabal
+               , directory
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -82,6 +87,7 @@ library
     build-depends:    base ^>= 4.21.0.0
                     , directory
                     , filepath
+                    , mtl
                     , temporary
                     , hspec
                     , hspec-expectations-match
@@ -104,12 +110,22 @@ executable spec-preprocessor
     -- Other library packages from which modules are imported.
     build-depends:    base ^>= 4.21.0.0
                     , test-lib
-                    , directory
+                    , mtl
 
     -- Directories containing source files.
     hs-source-dirs:   app
 
-test-suite test-lib
+executable test-lib
+    -- This dummy executable is required so we can have a "build-type: Custom" package,
+    -- and so other packages can depend on this package without getting errors like:
+    -- Unknown build target 'exe:test-lib'.
+    -- There is no executable component 'test-lib'.
+    import:           common
+    main-is:          Dummy.hs
+    hs-source-dirs:   app
+    build-depends:    base ^>= 4.21.0.0
+
+test-suite test-lib-tests
     import:           common
 
     -- Common test suite settings.
@@ -137,7 +153,9 @@ test-suite test-lib
     -- Other library packages from which modules are imported.
     build-depends:    base ^>= 4.21.0.0
                     , test-lib
+                    , directory
                     , filepath
+                    , mtl
                       -- For testing framework:
                     , hspec
                     , hspec-expectations-match

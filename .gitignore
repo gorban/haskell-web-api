@@ -7,3 +7,8 @@
 /hpc_index.html
 cabal.project.local
 cabal.project.local~
+
+# Ignore LICENSE files copied by Setup.hs, except root and 3rd party packages
+**/LICENSE
+!/LICENSE
+!/packages/hspec-expectations-match/LICENSE

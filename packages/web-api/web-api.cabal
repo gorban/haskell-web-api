@@ -33,7 +33,7 @@ homepage:           https://github.com/gorban/haskell-web-api
 
 -- The license under which the package is released.
 license:            BSD-2-Clause-Patent
-license-file:       ../../LICENSE
+license-file:       LICENSE
 
 -- The package author(s).
 author:             David Bruck
@@ -44,10 +44,15 @@ maintainer:         1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright:          (c) David Bruck
 category:           Web
-build-type:         Simple
+build-type:         Custom
 
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files:    CHANGELOG.md
+
+custom-setup
+  setup-depends: base ^>= 4.21.0.0
+               , Cabal
+               , directory
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:

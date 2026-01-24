@@ -18,7 +18,7 @@ echo "        break;" >> hpc_index.html
 echo "      }" >> hpc_index.html
 echo "    }" >> hpc_index.html
 echo "    if (!fromKnownIframe) return;" >> hpc_index.html
-echo "    if (data.type === 'hpc-nav' && typeof data.href !== 'string') {" >> hpc_index.html
+echo "    if (data.type === 'hpc-nav' && typeof data.href === 'string') {" >> hpc_index.html
 echo "      // Basic href sanity check then navigate." >> hpc_index.html
 echo "      if (!/^file:/i.test(data.href)) return;" >> hpc_index.html
 echo "      window.location.assign(data.href);" >> hpc_index.html
@@ -43,7 +43,37 @@ set -euo pipefail
 find . -name "*.tix" -type f -print0 | xargs -0 rm -f --
 cabal clean
 cabal configure --disable-backup
-cabal test all --enable-coverage --test-show-details=direct --test-options=+RTS --test-options=--read-tix-file=no --test-options=-RTS --test-options=--match --test-options=Unit
+
+# Parse cabal.project to get packages and run tests for each separately.
+# This works around Cabal issue where "cabal test all --enable-coverage" only
+# generates coverage for the last package. See: https://github.com/haskell/cabal/issues/7200
+
+# Extract package directories from cabal.project, then read actual package names from .cabal files
+all_packages=""
+while IFS= read -r pkgdir; do
+  pkgdir="${pkgdir//$'\r'/}"                    # strip Windows CR
+  pkgdir="${pkgdir#"${pkgdir%%[![:space:]]*}"}" # trim leading whitespace
+  pkgdir="${pkgdir%/}"                          # trim trailing slash
+  cabal_file=$(find "$pkgdir" -maxdepth 1 -name "*.cabal" -type f 2>/dev/null | head -n1)
+  if [ -n "$cabal_file" ]; then
+    pkg_name=$(grep -m1 '^name:' "$cabal_file" | sed 's/^name:[[:space:]]*//;s/\r$//')
+    all_packages="$all_packages $pkg_name"
+  fi
+done < <(grep -E '^\s+\S+/' cabal.project | tr -d '\r')
+
+# Find packages with coverage: False (look for "package <name>" followed by "coverage: False")
+excluded_packages=$(awk '/^package / { pkg=$2 } /coverage:\s*False/ && pkg { print pkg; pkg="" }' cabal.project)
+
+# Run tests for each package not in the excluded list
+for pkg in $all_packages; do
+  if ! echo "$excluded_packages" | grep -qxF "$pkg"; then
+    echo -e "\n\e[36mRunning tests with coverage for: $pkg\e[0m"
+    cabal test "$pkg" --enable-coverage --test-show-details=direct --test-options=+RTS --test-options=--read-tix-file=no --test-options=-RTS --test-options=--match --test-options=Unit
+  else
+    echo -e "\n\e[33mSkipping coverage for: $pkg (coverage: False in cabal.project)\e[0m"
+  fi
+done
+
 repoRoot=$(pwd)
 tempdir="$(mktemp -d)"
 missing_coverage=false
@@ -89,7 +119,7 @@ while IFS= read -r -d '' report; do
 
   var resolved = new URL(href, window.location.href).href;
   if (window.parent && window.parent !== window) {
-    window.parent.postMessage({ type: "hpc-nav", href: resolved }, "*");
+    window.parent.postMessage({ type: 'hpc-nav', href: resolved }, '*');
   } else {
     window.location.assign(resolved);
   }
@@ -127,7 +157,42 @@ $PSNativeCommandUseErrorActionPreference = $true
 ls -r **\*.tix | rm -Force
 cabal clean
 cabal configure --disable-backup
-cabal test all --enable-coverage --test-show-details=direct --test-options=+RTS --test-options=--read-tix-file=no --test-options=-RTS --test-options=--match --test-options=Unit
+
+# Parse cabal.project to get packages and run tests for each separately.
+# This works around Cabal issue where "cabal test all --enable-coverage" only
+# generates coverage for the last package. See: https://github.com/haskell/cabal/issues/7200
+
+$CabalProjectContent = gc cabal.project
+$CabalProjectRaw = gc -Raw cabal.project
+
+# Extract package directories from cabal.project, then read actual package names from .cabal files
+$AllPackages = @()
+foreach ($line in $CabalProjectContent) {
+  if ($line -match '^\s+(\S+)/?$') {
+    $pkgDir = $Matches[1].TrimEnd('/')
+    $cabalFile = ls "$pkgDir/*.cabal" -EA 0 | select -First 1
+    if ($cabalFile) {
+      $cabalContent = gc $cabalFile.FullName
+      foreach ($line in $cabalContent) {
+        if ($line -match '^name:\s*(\S+)') { $AllPackages += $Matches[1] }
+      }
+    }
+  }
+}
+
+# Find packages with coverage: False (look for "package <name>" followed by "coverage: False")
+$ExcludedPackages = [regex]::Matches($CabalProjectRaw, '(?ms)^package\s+(\S+)\s*$.*?coverage:\s*False') | ForEach-Object { $_.Groups[1].Value }
+
+# Run tests for each package not in the excluded list
+foreach ($pkg in $AllPackages) {
+  if ($pkg -notin $ExcludedPackages) {
+    Write-Host "`nRunning tests with coverage for: $pkg" -F Blue
+    cabal test $pkg --enable-coverage --test-show-details=direct --test-options=+RTS --test-options=--read-tix-file=no --test-options=-RTS --test-options=--match --test-options=Unit
+  } else {
+    Write-Host "`nSkipping coverage for: $pkg (coverage: False in cabal.project)" -F Yellow
+  }
+}
+
 $CurrentPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath('.\')
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
 ls -r dist-newstyle\**\hpc_index.html | sort FullName -Descending | % {

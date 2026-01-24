@@ -344,6 +344,11 @@ If you want to do a Linux install but you have Windows, consider a WSL2 install.
 
 1. Run all tests (Unit and Integration):
    ```bash
+   cabal build test-lib # TODO: find a better way to do this, this is a workaround for
+                        # Error: [Cabal-5678]
+                        # Could not find test program
+                        # "<repo-root>\dist-newstyle\build\x86_64-windows\ghc-9.12.2\test-lib-0.1.0.0\opt\build\test-lib-tests\test-lib-tests.exe".
+                        # Did you build the package first?
    cabal test all
    ```
 2. Generate coverage report (must be based on Unit tests only):

@@ -1,237 +1,150 @@
 module TestLib.SpecPreprocessor (run, runPure) where
 
+import Control.Exception (IOException, displayException, try)
+import Control.Monad.Except (ExceptT, throwError)
+import Control.Monad.IO.Class (liftIO)
 import Data.Char (isSpace)
-import Data.List (dropWhileEnd, intercalate, isSuffixOf, stripPrefix)
-import Data.Maybe (mapMaybe)
+import Data.List (intercalate)
 import System.Directory (makeAbsolute)
-import System.Exit (die)
+import System.FilePath (normalise, splitDirectories, takeBaseName)
+import System.IO (IOMode (ReadMode), hGetContents, withFile)
 
-run :: [String] -> IO ()
-run args =
-  case parseRunArgs args of
-    Left err -> die err
-    Right (opts, input, output) -> do
-      contents <- readFile input
+run :: [String] -> ExceptT String IO ()
+run args = do
+  let (hsSourceDir, fileArgs) = parseArgs "test" [] args
+  case fileArgs of
+    [input, output] ->
+      processFile hsSourceDir input output
+    -- GHC may pass the input file twice, we check to prevent an actual 3 positional argument call
+    [input, input', output]
+      | input == input' ->
+          processFile hsSourceDir input output
+    _ -> throwError "spec-preprocessor: expected input and output file arguments"
+  where
+    processFile hsSourceDir input output = tryIO $ do
       absolutePath <- makeAbsolute input
-      let result = transform opts input absolutePath contents
-      writeFile output result
+      withFile input ReadMode $ \handle -> do
+        contents <- hGetContents handle
+        writeFile output $ runPure hsSourceDir absolutePath contents
 
-runPure :: [String] -> FilePath -> String -> Either String String
-runPure args absoluteInputPath contents =
-  case parseRunArgs args of
-    Left err -> Left err
-    Right (opts, input, _) -> Right (transform opts input absoluteInputPath contents)
+    tryIO :: IO a -> ExceptT String IO a
+    tryIO action = do
+      result <- liftIO $ try action
+      case result of
+        Left (e :: IOException) -> throwError $ "spec-preprocessor: " ++ displayException e
+        Right a -> pure a
 
-parseRunArgs :: [String] -> Either String (Options, FilePath, FilePath)
-parseRunArgs args =
-  case reverse args of
-    (output : input : restRev) ->
-      Right (parseOptions (reverse restRev), input, output)
-    _ -> Left missingArgsMessage
-
-missingArgsMessage :: String
-missingArgsMessage = "spec-preprocessor: expected input and output file arguments"
-
-data Options where
-  Options :: {sourceRoots :: [String]} -> Options
-
-defaultOptions :: Options
-defaultOptions = Options {sourceRoots = ["test"]}
-
-parseOptions :: [String] -> Options
-parseOptions rawArgs =
-  case mapMaybe parseHsSourceDir rawArgs of
-    [] -> defaultOptions
-    dirs -> Options {sourceRoots = dirs}
+runPure :: String -> String -> String -> String
+runPure hsSourceDir absolutePath contents =
+  unlines $ process 1 (inferModuleName hsSourceDir absolutePath) $ lines contents
   where
-    parseHsSourceDir = stripPrefix "hs-source-dir="
+    process :: Int -> String -> [String] -> [String]
+    process inputLine moduleName (header : rest)
+      -- If its the SPEC pragma line, we write our module header and imports,
+      -- the original imports, and then the spec type signature with line pragma,
+      -- and then the remaining lines
+      | let trimmed = dropWhile isSpace header,
+        Just remainder <- stripSpecPragma trimmed,
+        all isSpace remainder,
+        let (importCount, imports, remaining) = processTillEndOfImports rest,
+        -- LINE pragma points to the first line of remaining content in the original file:
+        -- inputLine (current) + 1 (SPEC pragma) + importCount (imports we're copying)
+        let originalLineOfRemaining = inputLine + 1 + importCount =
+          [ "module " ++ moduleName ++ " (spec) where",
+            "",
+            "import TestLib.Prelude"
+          ]
+            ++ imports
+            ++ [ "spec :: Spec",
+                 "{-# LINE " ++ show originalLineOfRemaining ++ " \"" ++ normalizePathForPragma absolutePath ++ "\" #-}"
+               ]
+            ++ remaining
+      -- If not, just keep the line and continue (common case is whitespace lines before the pragma)
+      | otherwise = header : process (inputLine + 1) moduleName rest
+    -- Empty file case
+    process _ _ [] = []
 
-transform :: Options -> FilePath -> FilePath -> String -> String
-transform opts path absolutePath contents =
-  case analyze contents of
-    Nothing -> contents
-    Just (pragmas, markerLine, body, bodyStartLine) ->
-      let moduleName = resolveModuleName opts markerLine path
-          (importsSectionRaw, remainderRaw) = splitImportSection body
-          importsSection = trimTrailingBlankLines importsSectionRaw
-          importsWithPrelude = ensurePrelude importsSection
-          (remainderLeadingBlanks, remainderBody) = span isBlank remainderRaw
-          remainder = remainderBody
-          specSection = ["spec :: Spec"]
-          specLine = bodyStartLine + length importsSectionRaw + length remainderLeadingBlanks
-          linePragma = mkLinePragma specLine (normalizePath absolutePath)
-          remainderWithLine = case remainder of
-            [] -> []
-            _ -> linePragma : remainder
-          importsBlock = case importsWithPrelude of
-            [] -> []
-            _ -> importsWithPrelude ++ [""]
-          finalLines =
-            pragmas
-              ++ ["module " ++ moduleName ++ " (spec) where"]
-              ++ importsBlock
-              ++ specSection
-              ++ remainderWithLine
-       in unlines (trimTrailingBlankLines finalLines)
+-- Normalize path for LINE pragma: convert backslashes to forward slashes
+-- to prevent Windows paths from being interpreted as escape sequences
+normalizePathForPragma :: String -> String
+normalizePathForPragma = map (\c -> if c == '\\' then '/' else c)
 
-newtype Marker = Marker (Maybe String)
-
-analyze :: String -> Maybe ([String], Marker, [String], Int)
-analyze contents =
-  let ls = map stripCarriage (lines contents)
-      (leadingPragmas, rest) = span leadingPragma ls
-   in case rest of
-        (line : restLines)
-          | Just marker <- parseMarker line ->
-              let (followingPragmas, body0) = span isPragma restLines
-                  body = body0
-                  bodyStartLine = length leadingPragmas + 1 + length followingPragmas + 1
-               in Just (leadingPragmas ++ followingPragmas, marker, body, bodyStartLine)
+-- We are making sure that for the line with {-# SPEC #-}, at most the rest is whitespace
+stripSpecPragma :: String -> Maybe String
+stripSpecPragma ('{' : '-' : '#' : xs) =
+  let afterStart = dropWhile isSpace xs
+   in case afterStart of
+        'S' : 'P' : 'E' : 'C' : rest' ->
+          let afterSpec = dropWhile isSpace rest'
+           in case afterSpec of
+                '#' : '-' : '}' : r -> Just r
+                _ -> Nothing
         _ -> Nothing
+stripSpecPragma _ = Nothing
+
+-- Process lines until we reach a line that is not an import or comment or empty
+-- These are added after our added imports but before the spec definition
+-- Returns (count, imports, remaining)
+processTillEndOfImports :: [String] -> (Int, [String], [String])
+processTillEndOfImports (header : rest)
+  | keep trimmed =
+      let (count, imports, remaining) = processTillEndOfImports rest
+       in (count + 1, header : imports, remaining)
+  | otherwise = (0, [], header : rest)
   where
-    leadingPragma line =
-      isPragma line && case parseMarker line of
-        Nothing -> True
-        Just _ -> False
+    -- If line is empty or whitespace,
+    trimmed = dropWhile isSpace header
+    keep [] = True
+    -- Or if first non-whitespace characters are for comment or import, add it and continue
+    keep ('-' : '-' : _) = True
+    keep ('i' : 'm' : 'p' : 'o' : 'r' : 't' : ' ' : _) = True
+    -- Otherwise, stop processing imports
+    keep _ = False
+processTillEndOfImports [] = (0, [], [])
 
-isPragma :: String -> Bool
-isPragma line =
-  let trimmed = dropWhile isSpace line
-   in "{-#" `isPrefixOf` trimmed
+-- Parse arguments to extract hs-source-dir option and file arguments
+-- Returns (hsSourceDir, fileArgs) where hsSourceDir defaults to "test"
+parseArgs :: String -> [String] -> [String] -> (String, [String])
+parseArgs hsSourceDir files [] = (hsSourceDir, files)
+parseArgs hsSourceDir files (arg : rest)
+  -- hs-source-dir=...
+  | 'h' : 's' : '-' : 's' : 'o' : 'u' : 'r' : 'c' : 'e' : '-' : 'd' : 'i' : 'r' : '=' : dir <- arg =
+      parseArgs dir files rest
+  | otherwise = parseArgs hsSourceDir (files ++ [arg]) rest
 
-isPrefixOf :: String -> String -> Bool
-isPrefixOf prefix str = prefix == take (length prefix) str
+-- Infer module name from file path hierarchy
+-- Goes up directories until hitting hs-source-dir
+-- Returns module name as dotted namespace
+inferModuleName :: String -> String -> String
+inferModuleName hsSourceDir absolutePath =
+  let pathParts = splitDirectories $ normalise absolutePath
+      baseName = takeBaseName absolutePath
+   in case findModuleSegments pathParts hsSourceDir of
+        Just segments -> intercalate "." (segments ++ [baseName])
+        Nothing -> baseName
 
-isBlank :: String -> Bool
-isBlank = all isSpace
-
-parseMarker :: String -> Maybe Marker
-parseMarker line =
-  let trimmed = dropWhile isSpace line
-   in case parsePragmaMarker trimmed of
-        Just marker -> Just marker
-        Nothing -> parseCommentMarker trimmed
-
-parsePragmaMarker :: String -> Maybe Marker
-parsePragmaMarker trimmed
-  | "{-#" `isPrefixOf` trimmed && "#-}" `isSuffixOf` trimmed =
-      let innerWithTrailing = drop 3 trimmed
-          inner = take (length innerWithTrailing - 3) innerWithTrailing
-          stripped = dropWhile isSpace inner
-       in case words stripped of
-            ("SPEC" : rest) -> parseSpecArgs rest
-            _ -> Nothing
-  | otherwise = Nothing
-
-parseSpecArgs :: [String] -> Maybe Marker
-parseSpecArgs [] = Just (Marker Nothing)
-parseSpecArgs [token]
-  | Just name <- stripPrefix "module=" token = Just (Marker (Just name))
-parseSpecArgs _ = Nothing
-
-parseCommentMarker :: String -> Maybe Marker
-parseCommentMarker trimmed =
-  case words trimmed of
-    ["--", "%spec"] -> Just (Marker Nothing)
-    ("--" : "%spec" : moduleName : _) -> Just (Marker (Just moduleName))
-    _ -> Nothing
-
-resolveModuleName :: Options -> Marker -> FilePath -> String
-resolveModuleName _ (Marker (Just name)) _ = name
-resolveModuleName opts (Marker Nothing) path =
-  case moduleFromPath opts path of
-    Just name -> name
-    Nothing -> error ("spec-preprocessor: unable to infer module name from path: " ++ path)
-
-moduleFromPath :: Options -> FilePath -> Maybe String
-moduleFromPath opts path =
-  let normalized = map replaceSlash path
-      segments = split '/' normalized
-      moduleSegments = remainderFromRoots segments (sourceRoots opts)
-   in case moduleSegments of
-        Just segs@(_ : _) -> Just (intercalate "." (init segs ++ [dropHsSuffix (last segs)]))
-        _ -> fallbackFromPath segments
-
-replaceSlash :: Char -> Char
-replaceSlash '\\' = '/'
-replaceSlash c = c
-
-split :: Char -> String -> [String]
-split delim = foldr step [[]]
-  where
-    step c acc@(x : xs)
-      | c == delim = [] : acc
-      | otherwise = (c : x) : xs
-    step _ [] = [[]]
-
-dropHsSuffix :: String -> String
-dropHsSuffix str
-  | ".hs" `isSuffixOf` str = take (length str - 3) str
-  | otherwise = str
-
-splitImportSection :: [String] -> ([String], [String])
-splitImportSection = go []
-  where
-    go acc [] = (reverse acc, [])
-    go acc (line : rest)
-      | isBlank line = go (line : acc) rest
-      | isImport line = go (line : acc) rest
-      | otherwise = (reverse acc, line : rest)
-
-isImport :: String -> Bool
-isImport line =
-  let trimmed = dropWhile isSpace line
-   in "import" `isPrefixOf` trimmed
-
-ensurePrelude :: [String] -> [String]
-ensurePrelude imports
-  | any (containsPrelude . dropWhile isSpace) imports = imports
-  | otherwise =
-      let (leadingBlanks, rest) = span isBlank imports
-       in case rest of
-            [] -> leadingBlanks ++ ["import TestLib.Prelude"]
-            _ -> leadingBlanks ++ ("import TestLib.Prelude" : rest)
-
-containsPrelude :: String -> Bool
-containsPrelude line = "import TestLib.Prelude" `isPrefixOf` line
-
-mkLinePragma :: Int -> FilePath -> String
-mkLinePragma lineNumber filePath = "{-# LINE " ++ show lineNumber ++ " \"" ++ filePath ++ "\" #-}"
-
-normalizePath :: FilePath -> FilePath
-normalizePath = map replaceSlash
-
-trimTrailingBlankLines :: [String] -> [String]
-trimTrailingBlankLines = reverse . dropWhile isBlank . reverse
-
-stripCarriage :: String -> String
-stripCarriage = dropWhileEnd (== '\r')
-
-remainderFromRoots :: [String] -> [String] -> Maybe [String]
-remainderFromRoots segments = go
-  where
-    go [] = Nothing
-    go (root : rest) =
-      case matchRoot segments (splitRoot root) of
-        Just remainder -> Just remainder
-        Nothing -> go rest
-
-    matchRoot :: [String] -> [String] -> Maybe [String]
-    matchRoot segs [] = Just segs
-    matchRoot segs rootSegs =
-      case stripPrefix rootSegs segs of
-        Just remainder -> Just remainder
-        Nothing ->
-          case segs of
-            [] -> Nothing
-            (_ : xs) -> matchRoot xs rootSegs
-
-    splitRoot :: String -> [String]
-    splitRoot rootPath = filter (not . null) (split '/' (map replaceSlash rootPath))
-
-fallbackFromPath :: [String] -> Maybe String
-fallbackFromPath segments =
-  case reverse segments of
-    [] -> Nothing
-    (file : _) | null file -> Nothing
-    (file : _) -> Just (dropHsSuffix file)
+-- Find module segments by going up from file until hitting source directory
+-- Returns Nothing if source directory is not found (fallback to basename)
+findModuleSegments :: [String] -> String -> Maybe [String]
+findModuleSegments pathParts sourceDir =
+  let reversedParts = reverse pathParts
+      -- Drop the filename (last part) to get directory parts
+      dirParts = case reversedParts of
+        _ : rest -> reverse rest
+        [] -> []
+      -- Check from end (closest to file) to beginning
+      reversedDirs = reverse dirParts
+   in case reversedDirs of
+        [] -> Nothing
+        dir : _ -- dir is the directory closest to the file
+          | dir == sourceDir -> Just [] -- Found sourceDir, return empty (directories after will be tracked by recursion)
+          | null dirParts -> Nothing
+          | otherwise ->
+              -- Recurse: go up one directory by removing last directory, keep filename
+              -- Track the directories we've removed so we can return them when we find sourceDir
+              let removedDir = last dirParts
+                  newPathParts = init dirParts ++ [last pathParts]
+               in case findModuleSegments newPathParts sourceDir of
+                    Just [] -> Just [removedDir] -- Found sourceDir with no segments after, return removed dir
+                    Just segments -> Just (removedDir : segments) -- Prepend removed dir to segments
+                    Nothing -> Nothing
