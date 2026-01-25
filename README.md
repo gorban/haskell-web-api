@@ -9,6 +9,13 @@ packages/
     - No public GitHub repo, so not sure if we can get these changes upstreamed to Hackage:\
       <https://hackage.haskell.org/package/hspec-expectations-match>
 
+### Build Status
+
+[![CI](https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml/badge.svg)](https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml)
+
+Coverage report:\
+<https://gorban.github.io/haskell-web-api/>
+
 ## Prerequisites
 
 The following is a detailed guide to set up a Haskell development environment on Windows, MacOS, and Linux (e.g. WSL2 / Ubuntu).
