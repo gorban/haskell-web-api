@@ -1,13 +1,11 @@
 module Main (main) where
 
-import Control.Monad.Except (runExceptT)
+import Core.Prelude (handleError)
 import System.Environment (getArgs)
 import System.Exit (die)
-import TestLib.SpecPreprocessor (run)
+import TestCore.SpecPreprocessor (run)
 
 main :: IO ()
 main = do
   args <- getArgs
-  result <- runExceptT (run args)
-  either die pure result
-
+  run args `handleError` die
