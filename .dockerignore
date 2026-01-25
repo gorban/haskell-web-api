@@ -1,0 +1,38 @@
+# Build artifacts
+dist-newstyle/
+dist/
+.cabal-sandbox/
+cabal.sandbox.config
+cabal.project.local
+cabal.project.local~
+
+# IDE and editor files
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# GitHub
+.github/
+
+# Coverage output (generated during build)
+coverage-out/
+hpc_index.html
+*.tix
+
+# Documentation
+*.md
+!packages/*/CHANGELOG.md
+
+# Windows-specific (keep generate-code-coverage.ps1 as it's polyglot)
+PSScriptAnalyzerSettings.psd1
+
+# Misc
+.editorconfig

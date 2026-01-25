@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
+# However, do NOT cancel in-progress runs as we want to allow these production deployments to complete.
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+# Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Haskell
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: '3.16.1.0'
+
+      - name: Cache Cabal
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cabal/store
+            dist-newstyle
+          key: ${{ runner.os }}-ghc-9.12.2-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          restore-keys: |
+            ${{ runner.os }}-ghc-9.12.2-cabal-
+
+      - name: Run tests with coverage
+        id: coverage
+        shell: bash
+        run: |
+          # Fail on first non-zero exit code, including intermediate piped commands
+          set -euo pipefail
+
+          # Run coverage script, but capture exit code instead of failing immediately
+          # This allows us to publish the coverage report before exiting
+          coverage_exit=0
+          ./generate-code-coverage.ps1 || coverage_exit=$?
+
+          # Store exit code for later
+          echo "exit_code=$coverage_exit" >> "$GITHUB_OUTPUT"
+
+          # Continue even if coverage failed - we want to publish the report
+
+      - name: Prepare coverage report for GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+
+          # Create a directory structure for GitHub Pages
+          mkdir -p _site
+
+          # Copy the main coverage index
+          cp hpc_index.html _site/index.html
+
+          # Copy all HPC report directories from dist-newstyle
+          # Structure: dist-newstyle/build/<arch>/ghc-<ver>/<pkg-ver>/opt/hpc/vanilla/html/
+          # We need the entire html/ directory contents (hpc_index*.html + <pkg>-inplace/ subdir)
+          find dist-newstyle -type d -path '*/hpc/vanilla/html' | while read -r html_dir; do
+            # Extract package-version from path (e.g., "core-0.1.0.0" from ".../core-0.1.0.0/opt/hpc/...")
+            pkg_ver=$(echo "$html_dir" | sed -n 's|.*/ghc-[^/]*/\([^/]*\)/opt/hpc/vanilla/html|\1|p')
+            if [ -n "$pkg_ver" ]; then
+              mkdir -p "_site/$pkg_ver"
+              cp -r "$html_dir"/* "_site/$pkg_ver/"
+            fi
+          done
+
+          # Fix iframe src paths in the index to use relative paths
+          # From: dist-newstyle/build/x86_64-linux/ghc-9.12.2/core-0.1.0.0/opt/hpc/vanilla/html/hpc_index.html
+          # To:   core-0.1.0.0/hpc_index.html
+          sed -i "s|dist-newstyle/build/[^/]*/ghc-[^/]*/\([^/]*\)/opt/hpc/vanilla/html/|\1/|g" _site/index.html
+
+          # Fix the file: URL check to work with https:// on GitHub Pages
+          # The original checks for file:// URLs (for local viewing)
+          # Replace with same-origin check for GitHub Pages (https://*.github.io/*)
+          sed -i 's@if (!/^file:/i\.test(data\.href)) return;@if (new URL(data.href, window.location.href).origin !== window.location.origin) return;@g' _site/index.html
+
+      - name: Setup Pages
+        if: github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v5
+
+      - name: Upload coverage artifact
+        if: github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+      - name: Deploy to GitHub Pages
+        if: github.ref == 'refs/heads/main'
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+      - name: Check coverage result
+        if: always()
+        shell: bash
+        run: |
+          exit_code="${{ steps.coverage.outputs.exit_code }}"
+          if [ "$exit_code" != "0" ]; then
+            echo "::error::Coverage script failed with exit code $exit_code"
+            exit "$exit_code"
+          fi

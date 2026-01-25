@@ -340,6 +340,66 @@ If you want to do a Linux install but you have Windows, consider a WSL2 install.
     - You might have to "Switch to Pre-Release Version" for compatibility with the latest GHC/HLS versions.
     - If it gives an option to "Restart Extensions", do so.
 
+## Docker
+
+You can build and run the project including running tests and generating coverage report
+with Docker. The base image is Linux-based so will not work if you on Windows and the
+docker engine only supports Windows containers.
+
+### Windows
+
+If you are on Windows and want to build and run the project with Docker, you can use WSL2.
+Docker Desktop can be switched to use Linux containers from its System Tray icon menu,
+"Switch to Linux Containers", if you set up Docker Desktop correctly:\
+<https://docs.docker.com/desktop/windows/wsl/>
+
+However, Docker Desktop is not free software. You don't need to install any Windows docker
+if you continue with the WSL2 option below and run docker commands directly in the WSL
+terminal. If you want to use Docker Desktop anyways, continue with the MacOS / Linux /
+WSL2 instructions below, jumping past the dockerd engine setup.
+
+Another option is [Rancher Desktop](https://rancherdesktop.io/), which is currently free
+software. Likewise, continue with the MacOS / Linux / WSL2 instructions below, jumping
+past the dockerd engine setup.
+
+### WSL2 on Windows
+
+If you want to do a Linux install but you have Windows, consider a WSL2 install:\
+<https://dev.to/bowmanjd/install-docker-on-windows-wsl-without-docker-desktop-34m9>
+- Then continue with the MacOS / Linux / WSL2 instructions below, which also use this same
+  setup guide. Start from the "Make sure that WSL is version 2" section to the end.
+
+### MacOS / Linux / WSL2
+
+There are many options for a docker engine, it also doesn't have to be docker if you can
+use containerd or podman (nerdctl). Instructions are only provided for dockerd below.
+
+#### Dockerd engine setup
+
+Follow the same instructions as for installing the dockerd engine in the WSL2 on Windows:
+<https://dev.to/bowmanjd/install-docker-on-windows-wsl-without-docker-desktop-34m9>
+- Start from the "Prepare for Docker installation" section to the end.
+
+#### Docker commands
+
+```bash
+# Build the minimal runtime image
+docker build -t haskell-web-api .
+
+# Extract just the coverage reports
+docker build --target coverage-artifacts --output type=local,dest=./coverage-out .
+
+# Run the container
+docker run --rm haskell-web-api
+```
+
+You can host the coverage reports from ./coverage-out. E.g. if you have python3:
+```
+python3 -m http.server 8000 -d ./coverage-out
+```
+
+Then, you can view the coverage reports at <http://localhost:8000>.
+
 ## Running tests and capturing coverage
 
 1. Run all tests (Unit and Integration):

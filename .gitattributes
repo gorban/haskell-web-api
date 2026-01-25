@@ -1,2 +1,4 @@
 * text=auto
 /generate-code-coverage.ps1 eol=lf
+Dockerfile eol=lf
+.dockerignore eol=lf
