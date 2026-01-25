@@ -1,6 +1,7 @@
 packages:
+  packages/core/
   packages/hspec-expectations-match/
-  packages/test-lib/
+  packages/test-core/
   packages/web-api/
 
 with-compiler: ghc-9.12.2

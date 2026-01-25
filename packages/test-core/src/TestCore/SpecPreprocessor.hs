@@ -1,4 +1,4 @@
-module TestLib.SpecPreprocessor (run, runPure) where
+module TestCore.SpecPreprocessor (run, runPure) where
 
 import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, throwError)
@@ -52,7 +52,7 @@ runPure hsSourceDir absolutePath contents =
         let originalLineOfRemaining = inputLine + 1 + importCount =
           [ "module " ++ moduleName ++ " (spec) where",
             "",
-            "import TestLib.Prelude"
+            "import TestCore.Prelude"
           ]
             ++ imports
             ++ [ "spec :: Spec",

@@ -5,11 +5,10 @@ import Control.Exception (evaluate)
 import Control.Monad.Except (runExceptT)
 import Data.List (intercalate, isInfixOf)
 import System.FilePath (takeFileName, (</>))
-import TestLib.SpecPreprocessor (run, runPure)
-import TestLib.Temp (withTempFile)
+import TestCore.SpecPreprocessor (run, runPure)
 
 spec = describe "Run spec-preprocessor" $ do
-  it "Pure: processes a simple spec file" $ do
+  it "purely processes a simple spec file" $ do
     let moduleSegments = ["Nested"]
         moduleBase = "PureSpec"
         hsRoot = "test-spec"
@@ -19,22 +18,22 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "IO: Fails with missing output argument" $ do
+  it "fails with missing output argument" $ do
     result <- runExceptT $ run ["inputOnly.hs"]
     err <- $([|result|] `shouldMatch` [p|Left err|])
     err `shouldContain'` missingArgsError
 
-  it "IO: Fails with missing input and output arguments" $ do
+  it "fails with missing input and output arguments" $ do
     result <- runExceptT $ run []
     err <- $([|result|] `shouldMatch` [p|Left err|])
     err `shouldContain'` missingArgsError
 
-  it "IO: Fails with too many file arguments" $ do
+  it "fails with too many file arguments" $ do
     result <- runExceptT $ run ["file1.hs", "file2.hs", "file3.hs"]
     err <- $([|result|] `shouldMatch` [p|Left err|])
     err `shouldContain'` missingArgsError
 
-  it "Preserves existing imports and body" $ do
+  it "preserves existing imports and body" $ do
     let moduleSegments = ["Nested"]
         moduleBase = "PureSpec"
         hsRoot = "test"
@@ -50,7 +49,7 @@ spec = describe "Run spec-preprocessor" $ do
             ]
         expectedFragments =
           [ buildModuleHeader moduleSegments moduleBase,
-            "import TestLib.Prelude",
+            "import TestCore.Prelude",
             "import Data.List (nub)",
             "spec :: Spec",
             "spec = describe \"example\" $ do"
@@ -58,7 +57,7 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure hsRoot absolutePath contents
     mapM_ (output `shouldContain'`) expectedFragments
 
-  it "Infers modules when hs-source-dir is explicitly fallback value" $ do
+  it "infers modules when hs-source-dir is explicitly fallback value" $ do
     let moduleSegments = ["Nested"]
         moduleBase = "PureSpec"
         hsRoot = "test"
@@ -68,7 +67,7 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "Infers modules using default hs-source-dir" $ do
+  it "infers modules using default hs-source-dir" $ do
     let moduleSegments = ["Nested"]
         moduleBase = "PureSpec"
         hsRoot = "test"
@@ -78,7 +77,7 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure "test" absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "Falls back to basename when hs-source-dir unmatched" $ do
+  it "falls back to basename when hs-source-dir unmatched" $ do
     let moduleSegments = ["Nested"]
         moduleBase = "PureSpec"
         rootlessDir = "specs"
@@ -88,7 +87,7 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure "test" absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "Handles files without nested segments" $ do
+  it "handles files without nested segments" $ do
     let moduleSegments = []
         moduleBase = "PureSpec"
         hsRoot = "test"
@@ -98,13 +97,13 @@ spec = describe "Run spec-preprocessor" $ do
         output = runPure hsRoot absolutePath pureSpecContents
     output `shouldContain'` expectedHeader
 
-  it "IO: Fails when input file is missing" $
+  it "fails when input file is missing" $
     withTempFile "tst-missing" [] "MissingSpec.hs" $ \(_, missingFile) -> do
       result <- runExceptT $ run [missingFile, missingFile ++ ".out"]
       err <- $([|result|] `shouldMatch` [p|Left err|])
       err `shouldSatisfy` ("does not exist" `isInfixOf`)
 
-  it "IO: Fails when output path is too long" $
+  it "fails when output path is too long" $
     withExampleSpecTemp [] "LongOutputSpec" $ \(tempDir, tempFile) -> do
       writeFile tempFile pureSpecContents
       let longFileNameLength = 4000
@@ -117,7 +116,7 @@ spec = describe "Run spec-preprocessor" $ do
   let moduleSegments = ["Nested"]
       moduleBase = "ExampleSpec"
   around (withExampleSpecTemp moduleSegments moduleBase) $ do
-    it "IO: Processes a simple spec file" $ \(tempDir, tempFile) -> do
+    it "processes a simple spec file" $ \(tempDir, tempFile) -> do
       let moduleSegments' = moduleSegments
           moduleBase' = moduleBase
           expectedHeader = getModuleHeader (getModuleName moduleSegments' moduleBase')

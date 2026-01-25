@@ -12,3 +12,6 @@ cabal.project.local~
 **/LICENSE
 !/LICENSE
 !/packages/hspec-expectations-match/LICENSE
+
+# Ignore intentionally duplicated test-core sources in core package that avoids cyclic dependencies
+/packages/core/test-core-src/

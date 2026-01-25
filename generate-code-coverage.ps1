@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 
+cabal clean
+# Use -O0 to disable optimization for accurate coverage (prevents inlining)
+cabal configure --disable-backup --ghc-options=-O0
+
+# TODO: this is a workaround for an issue that appeared when we switched from
+#       build-type: Simple to build-type: Custom in various packages. Addresses error:
+#       Error: [Cabal-5678]
+#       Could not find test program "<repo-root>\dist-newstyle\build\<arch>\ghc-<version>\
+#         <package>\opt\build\<package>-tests\<package>-tests.exe".
+#         Did you build the package first?
+cabal build all
+
 echo "<html><head><title>haskell-web-api Coverage Reports</title><style>" > hpc_index.html
 echo "  iframe { width: 100%; border: none; }" >> hpc_index.html
 echo "</style></head><body>" >> hpc_index.html
@@ -41,8 +53,6 @@ echo `# <#` >/dev/null
 # --- BASH SECTION ---
 set -euo pipefail
 find . -name "*.tix" -type f -print0 | xargs -0 rm -f --
-cabal clean
-cabal configure --disable-backup
 
 # Parse cabal.project to get packages and run tests for each separately.
 # This works around Cabal issue where "cabal test all --enable-coverage" only
@@ -155,8 +165,6 @@ $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 $PSNativeCommandUseErrorActionPreference = $true
 ls -r **\*.tix | rm -Force
-cabal clean
-cabal configure --disable-backup
 
 # Parse cabal.project to get packages and run tests for each separately.
 # This works around Cabal issue where "cabal test all --enable-coverage" only
@@ -195,8 +203,18 @@ foreach ($pkg in $AllPackages) {
 
 $CurrentPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath('.\')
 $TempDir = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
+New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 ls -r dist-newstyle\**\hpc_index.html | sort FullName -Descending | % {
-  ls -r "$($_.Directory.Parent.Parent.Parent.Parent.Parent.Parent)\**\mix" | ls | % { cp -r $_ "$TempDir\$($_.Name)" }
+  # Copy contents of each mix directory into temp dir (merges duplicates like bash version)
+  ls -r "$($_.Directory.Parent.Parent.Parent.Parent.Parent.Parent)\**\mix" | ls | % {
+    $destDir = "$TempDir\$($_.Name)"
+    if (-not (Test-Path $destDir)) {
+      cp -r $_ $destDir
+    } else {
+      # Directory exists, merge contents
+      cp -r "$($_.FullName)\*" $destDir -Force
+    }
+  }
 }
 ls -r dist-newstyle\**\hpc_index.html | sort FullName -Descending | % {
   echo "<iframe src='$([System.IO.Path]::GetRelativePath($CurrentPath, $_.FullName))'></iframe><br/>" >> hpc_index.html

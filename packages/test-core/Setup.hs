@@ -18,3 +18,4 @@ copyLicenseFromRoot = do
   when (srcExists && not destExists) $ do
     copyFile src dest
     putStrLn "Setup: Copied LICENSE from repository root"
+

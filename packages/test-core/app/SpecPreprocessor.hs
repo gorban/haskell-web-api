@@ -10,3 +10,4 @@ main = do
   args <- getArgs
   result <- runExceptT (run args)
   either die pure result
+

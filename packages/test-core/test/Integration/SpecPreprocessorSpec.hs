@@ -5,16 +5,15 @@ import Data.List (intercalate)
 import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName)
 import System.Process (readProcessWithExitCode)
-import TestLib.Temp (withTempFile)
 
 spec = describe "Run spec-preprocessor" $ do
-  it "Fails for missing arguments" $ do
+  it "fails for missing arguments" $ do
     (exitCode, _, stderr) <- readProcessWithExitCode "spec-preprocessor" [] ""
     exitCode `shouldBe` ExitFailure 1
     stderr `shouldContain'` "spec-preprocessor: expected input and output file arguments"
 
   around withExampleSpecTemp $ do
-    it "Processes a simple spec file" $ \(tempDir, tempFile) -> do
+    it "processes a simple spec file" $ \(tempDir, tempFile) -> do
       writeFile tempFile "{-# SPEC #-}"
       let hsSourceDir = takeFileName tempDir
           outputFile = specOutputFile tempFile

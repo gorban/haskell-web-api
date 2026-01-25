@@ -1,4 +1,4 @@
-module TestLib.CustomAssertions (shouldContain') where
+module TestCore.CustomAssertions (shouldContain') where
 
 import Data.List (isInfixOf)
 import Test.Hspec (Expectation, expectationFailure)
