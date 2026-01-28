@@ -163,7 +163,8 @@ EOF
   fi
 done
 
-while IFS= read -r -d '' staged_pkg; do
+while IFS= read -r staged_pkg; do
+  [ -z "$staged_pkg" ] && continue
   package_name="$(basename "$staged_pkg")"
   target_dir=$(find dist-newstyle -path "*/$package_name-*/opt/hpc/vanilla" -type d -print | head -n1)
   if [ -n "$target_dir" ]; then
@@ -171,12 +172,8 @@ while IFS= read -r -d '' staged_pkg; do
     mkdir -p "$target_dir"
     cp -r "$staged_pkg"/. "$target_dir"/
   fi
-done < <(find "$coverage_staging_dir" -mindepth 1 -maxdepth 1 -type d -print0)
-repoRoot=$(pwd)
-repo_hpc_dir="$repoRoot/.hpc"
-if [ -d "$repo_hpc_dir" ]; then
-  rm -rf "$repo_hpc_dir"
-fi
+done < <(find "$coverage_staging_dir" -mindepth 1 -maxdepth 1 -type d -print)
+repoRoot="$(pwd)"
 missing_coverage=false
 aggregate_issue=false
 copied_mix=false
@@ -184,27 +181,30 @@ declare -a hpc_search_dirs=()
 declare -a per_project_findings=()
 declare -a aggregate_findings=()
 declare -a aggregate_tix_paths=()
-while IFS= read -r -d '' mixdir; do
+while IFS= read -r mixdir; do
+  [ -z "$mixdir" ] && continue
   \cp -Rf "$mixdir"/. "$mix_cache_dir"/
-  if ! array_contains "$mixdir" "${hpc_search_dirs[@]}"; then
+  if ! array_contains "$mixdir" ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; then
     hpc_search_dirs+=("$mixdir")
   fi
   copied_mix=true
-done < <(find dist-newstyle -type d -name mix -print0)
+done < <(find dist-newstyle -type d -name mix -print)
 if [ -d "$hpc_work_dir" ] && find "$hpc_work_dir" -mindepth 1 -print -quit >/dev/null 2>&1; then
   \cp -Rf "$hpc_work_dir"/. "$mix_cache_dir"/
-  while IFS= read -r -d '' extra_mix; do
-    if ! array_contains "$extra_mix" "${hpc_search_dirs[@]}"; then
+  while IFS= read -r extra_mix; do
+    [ -z "$extra_mix" ] && continue
+    if ! array_contains "$extra_mix" ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; then
       hpc_search_dirs+=("$extra_mix")
     fi
     copied_mix=true
-  done < <(find "$hpc_work_dir" -type d -name mix -print0)
+  done < <(find "$hpc_work_dir" -type d -name mix -print)
 fi
 if $copied_mix; then
   mix_dir_count=${#hpc_search_dirs[@]}
   echo "Collected HPC mix files into $mix_cache_dir ($mix_dir_count directories)."
 fi
-while IFS= read -r -d '' report; do
+while IFS= read -r report; do
+  [ -z "$report" ] && continue
   echo "<iframe src='${report#$repoRoot/}'></iframe><br/>" >> hpc_index.html
   snippet=$(
     sed -e ':a' -e 'N' -e '$!ba' \
@@ -252,16 +252,19 @@ while IFS= read -r -d '' report; do
 </body>
 SCRIPT
   )
-  sed -i "1,/<\/body>/s@</body>@$snippet@" "$report"
+  report_sed_tmp="$(mktemp "$temp_root/$report.sed")"
+  sed "1,/<\/body>/s@</body>@$snippet@" "$report" > "$report_sed_tmp"
+  mv "$report_sed_tmp" "$report"
   tix_root="$(dirname "$(dirname "$report")")/tix"
   pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$report")")")")")")"
   package_name="${pkg_version_dir%%-[0-9]*}"
   if [ -d "$tix_root" ]; then
-    while IFS= read -r -d '' tixfile; do
-      if ! array_contains "$tixfile" "${aggregate_tix_paths[@]}"; then
+    while IFS= read -r tixfile; do
+      [ -z "$tixfile" ] && continue
+      if ! array_contains "$tixfile" ${aggregate_tix_paths[@]+"${aggregate_tix_paths[@]}"}; then
         aggregate_tix_paths+=("$tixfile")
       fi
-    done < <(find "$tix_root" -name "*.tix" -type f -print0)
+    done < <(find "$tix_root" -name "*.tix" -type f -print)
   fi
 
   fractions=()
@@ -271,9 +274,14 @@ SCRIPT
     awk 'BEGIN{IGNORECASE=1}
       /Program Coverage Total/ { capture=1; next }
       capture {
-        while (match($0, /([0-9]+)[[:space:]]*\/[[:space:]]*([0-9]+)/, arr)) {
-          printf "%s/%s\n", arr[1], arr[2]
-          $0 = substr($0, RSTART + RLENGTH)
+        while (match($0, /[0-9]+[[:space:]]*\/[[:space:]]*[0-9]+/)) {
+          s = substr($0, RSTART, RLENGTH)
+          gsub(/[[:space:]]/, "", s)
+          n = index(s, "/")
+          if (n > 0) {
+            printf "%s/%s\n", substr(s, 1, n-1), substr(s, n+1)
+          }
+          $0 = substr($0, 1, RSTART-1) substr($0, RSTART+RLENGTH)
         }
         if (index($0, "</tr>") > 0) {
           exit
@@ -302,28 +310,28 @@ SCRIPT
       missing_coverage=true
     fi
   done
-done < <(find dist-newstyle -name hpc_index.html -type f -print0 | sort -z)
+done < <(find dist-newstyle -name hpc_index.html -type f -print | sort)
 aggregate_report_output=""
 aggregate_tix_to_report=""
 if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
   if [ "${#aggregate_tix_paths[@]}" -gt 1 ]; then
     aggregate_tix_to_report="$temp_root/all-packages.tix"
     rm -f "$aggregate_tix_to_report"
-    hpc sum --union --output="$aggregate_tix_to_report" "${aggregate_tix_paths[@]}"
+    hpc sum --union --output="$aggregate_tix_to_report" ${aggregate_tix_paths[@]+"${aggregate_tix_paths[@]}"}
   else
     aggregate_tix_to_report="${aggregate_tix_paths[0]}"
   fi
 
   report_args=()
-  for search_dir in "${hpc_search_dirs[@]}"; do
+  for search_dir in ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; do
     report_args+=("--hpcdir" "$search_dir")
   done
 
   echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
-  if aggregate_report_output=$(hpc report "${report_args[@]}" "$aggregate_tix_to_report" 2>&1); then
+  if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
     printf '%s\n' "$aggregate_report_output"
     while IFS= read -r line; do
-      if awk 'match($0, /^[[:space:]]*([0-9]+(\.[0-9]+)?)%/, m) { if ((m[1] + 0) < 100) { exit 0 } else { exit 1 } } { exit 1 }' <<<"$line"; then
+      if awk 'match($0, /[0-9]+(\.[0-9]+)?%/) { s=substr($0,RSTART,RLENGTH); gsub(/%/,"",s); if ((s+0)<100) exit 0; exit 1 } { exit 1 }' <<<"$line"; then
         trimmed_line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         aggregate_findings+=("$trimmed_line")
         aggregate_issue=true
@@ -347,13 +355,13 @@ printf '\n\e[32mMulti-package coverage report generated at %s/hpc_index.html\e[0
 if [ "${#per_project_findings[@]}" -gt 0 ]; then
   echo
   printf '\033[31mPer-project reports found with <100%% coverage, exiting with error:\033[0m\n'
-  for finding in "${per_project_findings[@]}"; do
+  for finding in ${per_project_findings[@]+"${per_project_findings[@]}"}; do
     printf '\033[31m- %s\033[0m\n' "$finding"
   done
 elif $aggregate_issue; then
   echo
   printf '\033[31mCoverage report contains less than 100%% coverage, exiting with error.\033[0m\n'
-  for line in "${aggregate_findings[@]}"; do
+  for line in ${aggregate_findings[@]+"${aggregate_findings[@]}"}; do
     printf '\033[31m- %s\033[0m\n' "$line"
   done
 fi
@@ -378,11 +386,6 @@ $AggregateCoverageIssue = $false
 ls -r **\*.tix | rm -Force
 Get-ChildItem -Filter "cabal.project.local.backup.*" -File -ErrorAction SilentlyContinue |
   Remove-Item -Force
-
-$RepoHpcDir = Join-Path (pwd) ".hpc"
-if (Test-Path $RepoHpcDir) {
-  rm -LiteralPath $RepoHpcDir -Recurse -Force
-}
 
 $DistRoot = Join-Path (pwd) "dist-newstyle"
 

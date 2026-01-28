@@ -28,7 +28,7 @@ The following is a detailed guide to set up a Haskell development environment on
       > Consider updating these prerequisites for Windows to recommend the Haskell GHCi Debug Adapter instead.
 - (optional) Stack (some third party projects might require it)
 
-### Windows
+## Windows
 
 - Windows: Install [GHCup](https://www.haskell.org/ghcup/)\
   (non-admin PowerShell terminal):
