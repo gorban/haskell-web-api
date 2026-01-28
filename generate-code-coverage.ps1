@@ -252,7 +252,7 @@ while IFS= read -r report; do
 </body>
 SCRIPT
   )
-  report_sed_tmp="$(mktemp "$temp_root/$report.sed")"
+  report_sed_tmp="$(mktemp "$temp_root/report.sed.XXXXXX")"
   sed "1,/<\/body>/s@</body>@$snippet@" "$report" > "$report_sed_tmp"
   mv "$report_sed_tmp" "$report"
   tix_root="$(dirname "$(dirname "$report")")/tix"
