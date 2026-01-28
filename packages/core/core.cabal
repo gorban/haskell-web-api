@@ -1,14 +1,12 @@
-cabal-version:      3.14
+cabal-version: 3.14
 -- The cabal-version field refers to the version of the .cabal specification,
 -- and can be different from the cabal-install (the tool) version and the
 -- Cabal (the library) version you are using. As such, the Cabal (the library)
 -- version used must be equal or greater than the version stated in this field.
 -- Starting from the specification version 2.2, the cabal-version field must be
 -- the first thing in the cabal file.
-
 -- The name of the package.
-name:               core
-
+name: core
 -- The package version.
 -- See the Haskell package versioning policy (PVP) for standards
 -- guiding when and how versions should be incremented.
@@ -16,127 +14,124 @@ name:               core
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version:            0.1.0.0
-
+version: 0.1.0.0
 -- A short (one-line) description of the package.
-synopsis:           haskell core (utilities shared across application and tests)
-
+synopsis: haskell core (utilities shared across application and tests)
 -- A longer description of the package.
-description:        Shared utility functions and types used by test-lib,
-                    haskell-web-api, and other packages in this repository.
+description:
+  Shared utility functions and types used by test-lib,
+  haskell-web-api, and other packages in this repository.
 
 -- URL for the project homepage or repository.
-homepage:           https://github.com/gorban/haskell-web-api
-
+homepage: https://github.com/gorban/haskell-web-api
 -- The license under which the package is released.
-license:            BSD-2-Clause-Patent
-license-file:       LICENSE
-
+license: BSD-2-Clause-Patent
+license-file: LICENSE
 -- The package author(s).
-author:             David Bruck
-
+author: David Bruck
 -- An email address to which users can send suggestions, bug reports, and patches.
-maintainer:         1393236+gorban@users.noreply.github.com
-
+maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
-copyright:          (c) David Bruck
-category:           Web
-build-type:         Custom
-
+copyright: (c) David Bruck
+category: Web
+build-type: Custom
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
-extra-doc-files:    CHANGELOG.md
+extra-doc-files: CHANGELOG.md
 
 custom-setup
-  setup-depends: base ^>= 4.21.0.0
-               , Cabal
-               , directory
-               , filepath
+  setup-depends:
+    Cabal,
+    base ^>=4.21.0.0,
+    directory,
+    filepath,
 
 common common
-    -- Common warning flags.
-    ghc-options: -Wall
-
-    -- Common settings.
-    default-language: GHC2024
+  -- Common warning flags.
+  ghc-options: -Wall
+  -- Common settings.
+  default-language: GHC2024
 
 library
-    import:           common
+  import: common
+  -- Common library settings.
+  exposed: True
+  -- Modules included in this library.
+  exposed-modules:
+    Core.Control.Error
+    Core.Prelude
+    Core.Setup
+    Core.System.Path
+    Core.System.Temp
 
-    -- Common library settings.
-    exposed:          True
+  -- LANGUAGE extensions used by modules in this package.
+  -- other-extensions:
+  -- Other library packages from which modules are imported.
+  build-depends:
+    Cabal,
+    base ^>=4.21.0.0,
+    directory,
+    filepath,
+    mtl,
+    temporary,
 
-    -- Modules included in this library.
-    exposed-modules:  Core.Prelude
-            , Core.Control.Error
-            , Core.Setup
-            , Core.System.Path
-            , Core.System.Temp
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- Other library packages from which modules are imported.
-    build-depends:    base ^>= 4.21.0.0
-                    , Cabal
-                    , directory
-                    , filepath
-                    , mtl
-                    , temporary
-
-    -- Directories containing source files.
-    hs-source-dirs:   src
+  -- Directories containing source files.
+  hs-source-dirs: src
 
 -- Internal spec-preprocessor that compiles test-core sources directly.
 -- This avoids the package-level cycle that would occur if core-tests
 -- depended on test-core:spec-preprocessor.
 -- Sources are copied from test-core by Setup.hs at configure time.
 executable core-spec-preprocessor
-    import:           common
+  import: common
+  main-is: SpecPreprocessor.hs
+  -- Modules included in this executable, other than Main.
+  other-modules: TestCore.SpecPreprocessor
+  -- LANGUAGE extensions used by modules in this package.
+  -- other-extensions:
+  hs-source-dirs:
+    test-core-src/app
+    test-core-src/src
 
-    main-is:          SpecPreprocessor.hs
-
-    -- Modules included in this executable, other than Main.
-    other-modules:    TestCore.SpecPreprocessor
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    hs-source-dirs:   test-core-src/app
-                    , test-core-src/src
-    build-depends:    base ^>= 4.21.0.0
-                    , core
-                    , directory
-                    , filepath
-                    , mtl
+  build-depends:
+    base ^>=4.21.0.0,
+    core,
+    directory,
+    filepath,
+    mtl,
 
 test-suite core-tests
-    import:           common
+  import: common
+  -- Common test suite settings.
+  type: exitcode-stdio-1.0
+  -- Include test-core/src (copied by Setup.hs) to get TestCore.Prelude and
+  -- TestCore.CustomAssertions without creating a package-level dependency cycle.
+  hs-source-dirs:
+    test
+    test-core-src/src
 
-    -- Common test suite settings.
-    type:             exitcode-stdio-1.0
+  ghc-options:
+    -F
+    -pgmF=core-spec-preprocessor
+    -Wno-missing-home-modules
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+    -- Discovers hspec *Spec.hs tests
 
-    -- Include test-core/src (copied by Setup.hs) to get TestCore.Prelude and
-    -- TestCore.CustomAssertions without creating a package-level dependency cycle.
-    hs-source-dirs:   test
-                    , test-core-src/src
+  build-tool-depends:
+    -- Our internal spec-preprocessor
+    core:core-spec-preprocessor,
+    hspec-discover:hspec-discover,
 
-    ghc-options:      -F -pgmF=core-spec-preprocessor -Wno-missing-home-modules -rtsopts -threaded -with-rtsopts=-N
-
-                        -- Discovers hspec *Spec.hs tests
-    build-tool-depends: hspec-discover:hspec-discover
-                        -- Our internal spec-preprocessor
-                      , core:core-spec-preprocessor
-
-    -- .hs or .lhs file containing the Main module.
-    main-is:          Main.hs
-
-    -- LANGUAGE extensions used by modules in this package.
-    -- other-extensions:
-
-    -- Other library packages from which modules are imported.
-    build-depends:    base ^>= 4.21.0.0
-                    , core
-                      -- For testing framework:
-                    , hspec
-                    , hspec-expectations-match
-                    , mtl
+  -- .hs or .lhs file containing the Main module.
+  main-is: Main.hs
+  -- LANGUAGE extensions used by modules in this package.
+  -- other-extensions:
+  -- Other library packages from which modules are imported.
+  build-depends:
+    -- For testing framework:
+    base ^>=4.21.0.0,
+    core,
+    hspec,
+    hspec-expectations-match,
+    mtl,

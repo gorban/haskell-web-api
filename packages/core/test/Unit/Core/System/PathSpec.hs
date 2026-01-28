@@ -7,7 +7,7 @@ spec = describe "normalizePath" $ do
   [ '\\',
     '/'
     ]
-    `forM_` \(slashDirection) ->
+    `forM_` \slashDirection ->
       it ("converts (" ++ [slashDirection] ++ ") to forward slashes") $ do
         normalizePath ("foo" ++ [slashDirection] ++ "bar" ++ [slashDirection] ++ "baz")
           `shouldBe` "foo/bar/baz"

@@ -13,11 +13,12 @@
 # =============================================================================
 FROM debian:bookworm-slim AS builder
 
+SHELL ["/bin/bash", "-eo", "pipefail", "-c"]
+
 # Install build dependencies, GHCup, GHC, and Cabal in one layer
 ENV GHCUP_INSTALL_BASE_PREFIX=/opt
 ENV PATH="/opt/.ghcup/bin:/root/.local/bin:/root/.cabal/bin:${PATH}"
 RUN <<EOF
-set -e
 apt-get update
 apt-get install -y --no-install-recommends \
     curl \
@@ -32,7 +33,8 @@ apt-get install -y --no-install-recommends \
     make \
     xz-utils \
     zlib1g-dev \
-    ca-certificates
+    ca-certificates \
+    dos2unix
 rm -rf /var/lib/apt/lists/*
 
 curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | \
@@ -50,8 +52,7 @@ cabal --version
 # GHC needs this executable during test compilation
 # Use --install-method=copy to avoid symlink issues in Docker
 cabal update
-cabal install hspec-discover --install-method=copy --overwrite-policy=always
-which hspec-discover
+LANG=C.UTF-8 cabal install hlint hspec-discover ormolu cabal-gild --install-method=copy --overwrite-policy=always
 EOF
 
 WORKDIR /app
@@ -65,7 +66,6 @@ COPY packages/web-api/web-api.cabal packages/web-api/
 
 # Download dependencies (cacheable layer)
 RUN <<EOF
-set -e
 cabal update
 cabal build all --only-dependencies
 EOF
@@ -80,9 +80,47 @@ FROM builder AS build-and-test
 
 # Run coverage script (builds with -O0 for accurate coverage) then rebuild with -O2 for release
 RUN <<EOF
-set -e
-./generate-code-coverage.ps1
+# Excludes any third party packages from hlint, ormolu, and cabal-gild like hspec-expectations-match
+
+format_ok=0
+find packages -name '*.cabal' -type f | \
+  grep -v '^packages/hspec-expectations-match' | \
+  xargs -I {} bash -c '
+    output="$(cabal-gild -i "{}" -m check 2>&1)"
+    if [ $? -ne 0 ]; then
+      printf "%s: %s\\n\\n" "{}" "$output"
+      exit 1
+    fi' || format_ok=1
+find packages -name '*.hs' -type f | \
+  grep -v '^packages/hspec-expectations-match' | \
+  xargs -I {} bash -c '
+    dos2unix -q "{}"
+    output="$(hlint "{}" 2>&1)"
+    issues_found=false
+    if [ $? -ne 0 ]; then
+      printf "%s\\n" "$output"
+      issues_found=true
+      exit 1
+    fi
+    output="$(ormolu -m check "{}" 2>&1)"
+    if [ $? -ne 0 ]; then
+      printf "%s\\n" "$output"
+      issues_found=true
+      exit 1
+    fi
+    if $issues_found; then
+      printf "\\n"
+      exit 1
+    fi' || format_ok=1
+
+if [ "$format_ok" -ne 0 ]; then
+  printf "Found formatting issues in packages/ files"
+  exit 1
+fi
+
+./generate-code-coverage.ps1 # Runs Unit tests and ensures 100% coverage
 cabal build all -O2
+cabal test all -O2 --test-options="--skip Unit" # Runs the rest of the tests
 cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
 EOF
 
@@ -93,7 +131,6 @@ FROM build-and-test AS coverage-prep
 
 # Prepare coverage output directory with all fixes applied
 RUN <<EOF
-set -e
 mkdir -p /app/_coverage
 cp hpc_index.html /app/_coverage/index.html
 

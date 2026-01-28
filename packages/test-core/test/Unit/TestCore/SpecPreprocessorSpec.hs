@@ -152,12 +152,11 @@ spec = do
                     ++ importSegments
                     ++ [ "",
                          "spec :: Spec",
-                         ( "{-# LINE "
-                             ++ show (length topSegments + length importSegments + 4)
-                             ++ " \""
-                             ++ map (\c -> if c == '\\' then '/' else c) absolutePath
-                             ++ "\" #-}"
-                         ),
+                         "{-# LINE "
+                           ++ show (length topSegments + length importSegments + 4)
+                           ++ " \""
+                           ++ map (\c -> if c == '\\' then '/' else c) absolutePath
+                           ++ "\" #-}",
                          "spec = describe \"example\" $ do",
                          "  pure ()"
                        ]

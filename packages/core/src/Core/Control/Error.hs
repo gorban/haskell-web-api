@@ -15,5 +15,5 @@ import Control.Monad.Except (ExceptT, runExceptT)
 --   args <- getArgs
 --   run args \`handleError\` die
 -- @
-handleError :: Monad m => ExceptT e m a -> (e -> m a) -> m a
+handleError :: (Monad m) => ExceptT e m a -> (e -> m a) -> m a
 handleError action handler = runExceptT action >>= either handler pure

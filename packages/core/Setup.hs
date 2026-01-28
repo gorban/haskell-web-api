@@ -1,15 +1,17 @@
 import Control.Monad (forM_, when)
-import Distribution.Simple (defaultMainWithHooks, simpleUserHooks, preConf)
+import Distribution.Simple (defaultMainWithHooks, preConf, simpleUserHooks)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory)
 
 main :: IO ()
-main = defaultMainWithHooks simpleUserHooks
-  { preConf = \args flags -> do
-      copyLicenseFromRoot
-      copyTestCoreSources
-      preConf simpleUserHooks args flags
-  }
+main =
+  defaultMainWithHooks
+    simpleUserHooks
+      { preConf = \args flags -> do
+          copyLicenseFromRoot
+          copyTestCoreSources
+          preConf simpleUserHooks args flags
+      }
 
 copyLicenseFromRoot :: IO ()
 copyLicenseFromRoot = do
@@ -27,10 +29,10 @@ copyLicenseFromRoot = do
 copyTestCoreSources :: IO ()
 copyTestCoreSources = do
   let filesToCopy =
-        [ ("../test-core/app/SpecPreprocessor.hs", "test-core-src/app/SpecPreprocessor.hs")
-        , ("../test-core/src/TestCore/SpecPreprocessor.hs", "test-core-src/src/TestCore/SpecPreprocessor.hs")
-        , ("../test-core/src/TestCore/Prelude.hs", "test-core-src/src/TestCore/Prelude.hs")
-        , ("../test-core/src/TestCore/CustomAssertions.hs", "test-core-src/src/TestCore/CustomAssertions.hs")
+        [ ("../test-core/app/SpecPreprocessor.hs", "test-core-src/app/SpecPreprocessor.hs"),
+          ("../test-core/src/TestCore/SpecPreprocessor.hs", "test-core-src/src/TestCore/SpecPreprocessor.hs"),
+          ("../test-core/src/TestCore/Prelude.hs", "test-core-src/src/TestCore/Prelude.hs"),
+          ("../test-core/src/TestCore/CustomAssertions.hs", "test-core-src/src/TestCore/CustomAssertions.hs")
         ]
   forM_ filesToCopy $ \(src, dest) -> do
     srcExists <- doesFileExist src
