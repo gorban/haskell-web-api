@@ -3,8 +3,9 @@ module TestCore.SpecPreprocessor (run, runPure) where
 import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Core.System.Path (normalizePath)
 import Data.Char (isSpace)
-import Data.List (intercalate)
+import Data.List (intercalate, stripPrefix)
 import System.Directory (makeAbsolute)
 import System.FilePath (normalise, splitDirectories, takeBaseName)
 import System.IO (IOMode (ReadMode), hGetContents, withFile)
@@ -39,35 +40,27 @@ runPure hsSourceDir absolutePath contents =
   unlines $ process 1 (inferModuleName hsSourceDir absolutePath) $ lines contents
   where
     process :: Int -> String -> [String] -> [String]
-    process inputLine moduleName (header : rest)
-      -- If its the SPEC pragma line, we write our module header and imports,
-      -- the original imports, and then the spec type signature with line pragma,
-      -- and then the remaining lines
-      | let trimmed = dropWhile isSpace header,
-        Just remainder <- stripSpecPragma trimmed,
-        all isSpace remainder,
-        let (importCount, imports, remaining) = processTillEndOfImports rest,
-        -- LINE pragma points to the first line of remaining content in the original file:
-        -- inputLine (current) + 1 (SPEC pragma) + importCount (imports we're copying)
-        let originalLineOfRemaining = inputLine + 1 + importCount =
-          [ "module " ++ moduleName ++ " (spec) where",
-            "",
-            "import TestCore.Prelude"
-          ]
-            ++ imports
-            ++ [ "spec :: Spec",
-                 "{-# LINE " ++ show originalLineOfRemaining ++ " \"" ++ normalizePathForPragma absolutePath ++ "\" #-}"
-               ]
-            ++ remaining
-      -- If not, just keep the line and continue (common case is whitespace lines before the pragma)
-      | otherwise = header : process (inputLine + 1) moduleName rest
+    process inputLine moduleName (header : rest) =
+      let trimmed = dropWhile isSpace header
+       in case stripSpecPragma trimmed of
+            Just remainder
+              | all isSpace remainder ->
+                  let (importCount, imports, remaining) = processTillEndOfImports rest
+                      -- LINE pragma points to the first line of remaining content in the original file:
+                      -- inputLine (current) + 1 (SPEC pragma) + importCount (imports we're copying)
+                      originalLineOfRemaining = inputLine + 1 + importCount
+                   in [ "module " ++ moduleName ++ " (spec) where",
+                        "",
+                        "import TestCore.Prelude"
+                      ]
+                        ++ imports
+                        ++ [ "spec :: Spec",
+                             "{-# LINE " ++ show originalLineOfRemaining ++ " \"" ++ normalizePath absolutePath ++ "\" #-}"
+                           ]
+                        ++ remaining
+            _ -> header : process (inputLine + 1) moduleName rest
     -- Empty file case
     process _ _ [] = []
-
--- Normalize path for LINE pragma: convert backslashes to forward slashes
--- to prevent Windows paths from being interpreted as escape sequences
-normalizePathForPragma :: String -> String
-normalizePathForPragma = map (\c -> if c == '\\' then '/' else c)
 
 -- We are making sure that for the line with {-# SPEC #-}, at most the rest is whitespace
 stripSpecPragma :: String -> Maybe String
@@ -86,14 +79,15 @@ stripSpecPragma _ = Nothing
 -- These are added after our added imports but before the spec definition
 -- Returns (count, imports, remaining)
 processTillEndOfImports :: [String] -> (Int, [String], [String])
-processTillEndOfImports (header : rest)
-  | keep trimmed =
-      let (count, imports, remaining) = processTillEndOfImports rest
-       in (count + 1, header : imports, remaining)
-  | otherwise = (0, [], header : rest)
+processTillEndOfImports (header : rest) =
+  let trimmed = dropWhile isSpace header
+   in if keep trimmed
+        then
+          let (count, imports, remaining) = processTillEndOfImports rest
+           in (count + 1, header : imports, remaining)
+        else (0, [], header : rest)
   where
     -- If line is empty or whitespace,
-    trimmed = dropWhile isSpace header
     keep [] = True
     -- Or if first non-whitespace characters are for comment or import, add it and continue
     keep ('-' : '-' : _) = True
@@ -106,45 +100,38 @@ processTillEndOfImports [] = (0, [], [])
 -- Returns (hsSourceDir, fileArgs) where hsSourceDir defaults to "test"
 parseArgs :: String -> [String] -> [String] -> (String, [String])
 parseArgs hsSourceDir files [] = (hsSourceDir, files)
-parseArgs hsSourceDir files (arg : rest)
-  -- hs-source-dir=...
-  | 'h' : 's' : '-' : 's' : 'o' : 'u' : 'r' : 'c' : 'e' : '-' : 'd' : 'i' : 'r' : '=' : dir <- arg =
-      parseArgs dir files rest
-  | otherwise = parseArgs hsSourceDir (files ++ [arg]) rest
+parseArgs hsSourceDir files (arg : rest) =
+  case stripPrefix "hs-source-dir=" arg of
+    Just dir -> parseArgs dir files rest
+    Nothing -> parseArgs hsSourceDir (files ++ [arg]) rest
 
 -- Infer module name from file path hierarchy
 -- Goes up directories until hitting hs-source-dir
 -- Returns module name as dotted namespace
 inferModuleName :: String -> String -> String
 inferModuleName hsSourceDir absolutePath =
-  let pathParts = splitDirectories $ normalise absolutePath
-      baseName = takeBaseName absolutePath
-   in case findModuleSegments pathParts hsSourceDir of
-        Just segments -> intercalate "." (segments ++ [baseName])
-        Nothing -> baseName
+  case absolutePath of
+    [] ->
+      let defaultModule = "Spec"
+       in null hsSourceDir `seq` buildModuleName [] defaultModule
+    _ ->
+      let pathParts = splitDirectories $ normalise absolutePath
+          baseName = takeBaseName absolutePath
+       in case findModuleSegments pathParts hsSourceDir of
+            Just segments -> buildModuleName segments baseName
+            Nothing -> baseName
+  where
+    buildModuleName segments baseName =
+      let parts = filter (not . null) (segments ++ [baseName])
+       in intercalate "." parts
 
 -- Find module segments by going up from file until hitting source directory
 -- Returns Nothing if source directory is not found (fallback to basename)
 findModuleSegments :: [String] -> String -> Maybe [String]
 findModuleSegments pathParts sourceDir =
-  let reversedParts = reverse pathParts
-      -- Drop the filename (last part) to get directory parts
-      dirParts = case reversedParts of
-        _ : rest -> reverse rest
-        [] -> []
-      -- Check from end (closest to file) to beginning
+  let dirParts = take (max 0 (length pathParts - 1)) pathParts
       reversedDirs = reverse dirParts
-   in case reversedDirs of
+      (between, after) = break (== sourceDir) reversedDirs
+   in case after of
         [] -> Nothing
-        dir : _ -- dir is the directory closest to the file
-          | dir == sourceDir -> Just [] -- Found sourceDir, return empty (directories after will be tracked by recursion)
-          | null dirParts -> Nothing
-          | otherwise ->
-              -- Recurse: go up one directory by removing last directory, keep filename
-              -- Track the directories we've removed so we can return them when we find sourceDir
-              let removedDir = last dirParts
-                  newPathParts = init dirParts ++ [last pathParts]
-               in case findModuleSegments newPathParts sourceDir of
-                    Just [] -> Just [removedDir] -- Found sourceDir with no segments after, return removed dir
-                    Just segments -> Just (removedDir : segments) -- Prepend removed dir to segments
-                    Nothing -> Nothing
+        _ : _ -> Just (reverse between)

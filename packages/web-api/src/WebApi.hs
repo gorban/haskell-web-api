@@ -1,5 +1,6 @@
 module WebApi (run) where
 
-run :: IO ()
--- Put string to stderr
-run = putStrLn "Web API Module"
+import System.IO (Handle, hPutStrLn)
+
+run :: Handle -> IO ()
+run handle = hPutStrLn handle "Web API Module"

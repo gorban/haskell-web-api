@@ -6,7 +6,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (takeFileName)
 import System.Process (readProcessWithExitCode)
 
-spec = describe "Run spec-preprocessor" $ do
+spec = describe "main" $ do
   it "fails for missing arguments" $ do
     (exitCode, _, stderr) <- readProcessWithExitCode "spec-preprocessor" [] ""
     exitCode `shouldBe` ExitFailure 1

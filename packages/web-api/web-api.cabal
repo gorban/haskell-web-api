@@ -139,3 +139,4 @@ test-suite haskell-web-api-tests
                       -- For running the executable in tests:
                     , process
                     , text
+                    , temporary

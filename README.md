@@ -116,15 +116,15 @@ The following is a detailed guide to set up a Haskell development environment on
     ```powershell
     ghcup set ghc 9.12.2
     ```
-    - If this is the case, you need the higher version when you want to use the debugger, and the "hls-powered" version for normal development (so you get proper language server support). For the debugger to work, you may also need to update the `cabal.project` file in the repository root to specify the higher GHC version: `with-compiler: ghc-<<higher_version>>`, e.g.:
+    - If this is the case, you need the higher version when you want to use the debugger, and the "hls-powered" version for normal development (so you get proper language server support). E.g. to switch the project to work with the debugger, run command in the repository root:
       ```
-      with-compiler: ghc-9.14.1
+      cabal configure --with-compiler ghc-<<higher_version>>
       ```
-      - And update any `*.cabal` files for any `base` version bounds that might prevent building with the higher GHC version, e.g. change from `build-depends:    base ^>= 4.21.0.0` to:
-        ```
-        build-depends:    base ^>= 4.22.0.0
-        ```
-      - Don't forget to undo changes to `cabal.project` and `*.cabal` files when you want to go back to normal development with HLS.
+        - E.g. for GHC 9.14.1:
+          ```
+          cabal configure --with-compiler ghc-9.14.1
+          ```
+      - You can simply delete the file it creates, cabal.project.local, when you want to go back to normal development with HLS.
   - You might still have issues trying to debug if you are on Windows, e.g. I am seeing:
     ```
     haskell-debugger did not signal readiness in time
@@ -300,15 +300,15 @@ If you want to do a Linux install but you have Windows, consider a WSL2 install.
     ```bash
     ghcup set ghc 9.12.2
     ```
-    - If this is the case, you need the higher version when you want to use the debugger, and the "hls-powered" version for normal development (so you get proper language server support). For the debugger to work, you may also need to update the `cabal.project` file in the repository root to specify the higher GHC version: `with-compiler: ghc-<<higher_version>>`, e.g.:
+    - If this is the case, you need the higher version when you want to use the debugger, and the "hls-powered" version for normal development (so you get proper language server support). E.g. to switch the project to work with the debugger, run command in the repository root:
       ```
-      with-compiler: ghc-9.14.1
+      cabal configure --with-compiler ghc-<<higher_version>>
       ```
-      - And update any `*.cabal` files for any `base` version bounds that might prevent building with the higher GHC version, e.g. change from `build-depends:    base ^>= 4.21.0.0` to:
-        ```
-        build-depends:    base ^>= 4.22.0.0
-        ```
-      - Don't forget to undo changes to `cabal.project` and `*.cabal` files when you want to go back to normal development with HLS.
+        - E.g. for GHC 9.14.1:
+          ```
+          cabal configure --with-compiler ghc-9.14.1
+          ```
+      - You can simply delete the file it creates, cabal.project.local, when you want to go back to normal development with HLS.
 - IDE: Install [Visual Studio Code](https://code.visualstudio.com/) or another Haskell-compatible IDE/editor. If using WSL, you can install VS Code on the host operating system (Windows).
 - For Haskell Language Server (HLS), to be able to process our files with custom preprocessors, as well as debug support, we need to install `spec-preprocessor`, `hspec-discover`, and `hlint` globally.
   - Back in Bash terminal (WSL), navigate to packages/test-lib directory (e.g. `cd "/mnt/c/Users/$(whoami)/source/repos/haskell-web-api/packages/test-lib"`) and run:
@@ -418,13 +418,19 @@ Then, you can view the coverage reports at <http://localhost:8000>.
                    # Did you build the package first?
    cabal test all
    ```
-2. Generate coverage report (must be based on Unit tests only):
+2. Generate full coverage report (must be based on Unit tests only):
    ```bash
    ./generate-code-coverage.ps1
    ```
    - Works on both Windows PowerShell and Linux bash (e.g. WSL2 / Ubuntu), it is both a PowerShell and bash script (polyglot).
    - For PowerShell only, opens `hpc_index.html` in default browser when done, but you can also open it manually.
-   - It gives a non-zero exit code if coverage is below 100% (currently not configurable). Useful for CI pipelines.
+   - It gives a non-zero exit code if coverage is below 100% (currently not configurable). 100% is enforced for every single project, so still fails out even if the coverage is achieved by use of a package by another package. Useful for CI pipelines.
+   - **Note:** we have seen cases where 100% coverage in Windows does not mean 100% coverage in Linux. An example helper to test coverage if you have a default WSL2 distro set up:\
+     `bash -lc "./generate-code-coverage.ps1"`
+3. For quicker iterations to refresh one project's coverage report you can run:
+   ```bash
+   cabal test <<project_name>> --enable-coverage --test-options="+RTS --read-tix-file=no -RTS --match Unit"
+   ```
 
 ## License
 

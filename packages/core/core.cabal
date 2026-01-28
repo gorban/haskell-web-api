@@ -67,9 +67,10 @@ library
 
     -- Modules included in this library.
     exposed-modules:  Core.Prelude
-                    , Core.Control.Error
-                    , Core.Setup
-                    , Core.System.Temp
+            , Core.Control.Error
+            , Core.Setup
+            , Core.System.Path
+            , Core.System.Temp
 
     -- LANGUAGE extensions used by modules in this package.
     -- other-extensions:

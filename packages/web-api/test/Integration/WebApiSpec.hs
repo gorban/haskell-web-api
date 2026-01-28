@@ -3,7 +3,7 @@
 import System.Exit (ExitCode (ExitSuccess))
 import System.Process (readProcessWithExitCode)
 
-spec = describe "Run app" $
+spec = describe "main" $
   it "prints \"Web API Module\"" $ do
     (exitCode, stdout, _) <- readProcessWithExitCode "haskell-web-api" [] ""
     exitCode `shouldBe` ExitSuccess

@@ -158,5 +158,6 @@ test-suite test-core-tests
                       -- For testing framework:
                     , hspec
                     , hspec-expectations-match
+                    , HUnit
                       -- For running the executable in tests:
                     , process
