@@ -42,6 +42,51 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-ghc-9.12.2-cabal-
 
+      - name: Install formatting tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dos2unix
+          cabal update
+          LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+
+      - name: Formatting checks
+        run: |
+          set -euo pipefail
+          format_ok=0
+          find packages -name '*.cabal' -type f | \
+            grep -v '^packages/hspec-expectations-match' | \
+            xargs -I {} bash -c '
+              output="$(cabal-gild -i "{}" -m check 2>&1)"
+              if [ $? -ne 0 ]; then
+                printf "%s: %s\\n\\n" "{}" "$output"
+                exit 1
+              fi' || format_ok=1
+          find packages -name '*.hs' -type f | \
+            grep -v '^packages/hspec-expectations-match' | \
+            xargs -I {} bash -c '
+              dos2unix -q "{}"
+              output="$(hlint "{}" 2>&1)"
+              issues_found=false
+              if [ $? -ne 0 ]; then
+                printf "%s\\n" "$output"
+                issues_found=true
+                exit 1
+              fi
+              output="$(ormolu -m check "{}" 2>&1)"
+              if [ $? -ne 0 ]; then
+                printf "%s\\n" "$output"
+                issues_found=true
+                exit 1
+              fi
+              if $issues_found; then
+                printf "\\n"
+                exit 1
+              fi' || format_ok=1
+          if [ "$format_ok" -ne 0 ]; then
+            printf "Found formatting issues in packages/ files"
+            exit 1
+          fi
+
       - name: Run tests with coverage
         id: coverage
         shell: bash
@@ -58,6 +103,11 @@ jobs:
           echo "exit_code=$coverage_exit" >> "$GITHUB_OUTPUT"
 
           # Continue even if coverage failed - we want to publish the report
+
+      - name: Run tests (skip Unit)
+        run: |
+          cabal build all -O2
+          cabal test all -O2 --test-options="--skip Unit"
 
       - name: Prepare coverage report for GitHub Pages
         if: github.ref == 'refs/heads/main'
