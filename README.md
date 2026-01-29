@@ -418,6 +418,68 @@ Then, you can view the coverage reports at <http://localhost:8000>.
                    # Did you build the package first?
    cabal test all
    ```
+   - **Note:** our CI pipeline builds with `-O2 --ghc-options=-Werror` that treats warnings as errors. We also enforce 0 hlint and ormolu issues in our packages. In VS Code, you can setup format document with settings.json section:
+   ```json
+   {
+     ...
+     "[haskell]": {
+       "editor.defaultFormatter": "haskell.haskell"
+     }
+   }
+   ```
+     - Full build command:
+       ```bash
+       cabal build all -O2 --ghc-options=-Werror
+       ```
+   - But you can manually run the equivalent checks in Bash terminal (Linux commands):
+     ```bash
+     # Initial setup (first-time only):
+     sudo apt-get -y install dos2unix
+     cabal update
+     cabal install cabal-gild hlint ormolu --overwrite-policy=always
+
+     # Run checks (every time):
+     format_ok=0
+     echo "Checking packages/**/*.cabal files' format"
+     find packages -name '*.cabal' -type f | \
+       grep -v '^packages/hspec-expectations-match' | \
+       xargs -I {} bash -c '
+         output="$(cabal-gild -i "{}" -m check 2>&1)"
+         if [ $? -ne 0 ]; then
+           printf "%s: %s\\n\\n" "{}" "$output"
+           exit 1
+         fi' || format_ok=1
+
+     echo "Checking packages/**/*.hs files' format and linting"
+     find packages -name '*.hs' -type f | \
+       grep -v '^packages/hspec-expectations-match' | \
+       xargs -I {} bash -c '
+         dos2unix -q "{}"
+         output="$(hlint "{}" 2>&1)"
+         issues_found=false
+         if [ $? -ne 0 ]; then
+           printf "%s\\n" "$output"
+           issues_found=true
+           exit 1
+         fi
+         output="$(ormolu -m check "{}" 2>&1)"
+         if [ $? -ne 0 ]; then
+           printf "%s\\n" "$output"
+           issues_found=true
+           exit 1
+         fi
+         if $issues_found; then
+           printf "\\n"
+           exit 1
+         fi' || format_ok=1
+
+     if [ "$format_ok" -ne 0 ]; then
+       echo "Found formatting issues in packages/ files"
+       exit 1
+     else
+       echo "No formatting issues in packages/ files"
+     fi
+     ```
 2. Generate full coverage report (must be based on Unit tests only):
    ```bash
    ./generate-code-coverage.ps1
