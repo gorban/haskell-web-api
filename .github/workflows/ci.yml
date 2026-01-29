@@ -107,12 +107,22 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Install formatting tools
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y dos2unix
           cabal update
           LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+
+          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
+          # Error: [Cabal-6661]
+          # filepath wildcard 'package.yaml' does not match any files.
+          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
+          cd hspec-discover-2.11.16
+          echo "packages: ." > cabal.project
+          cabal v2-build
+          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
+          cd ..
 
       - name: Formatting checks
         run: |

@@ -326,9 +326,9 @@ If you want to do a Linux install but you have Windows, consider a WSL2 install.
     ```bash
     cabal install hspec-discover --overwrite-policy=always
     ```
-    - On MacOS, I have seen that fail with error: "filepath wildcard 'package.yaml' does not match any files.", so you will have to build it from source manually if needed.
+    - On MacOS (and GitHub actions runner), I have seen that fail with error: "filepath wildcard 'package.yaml' does not match any files.", so you will have to build it from source manually if needed.
     - Download the source from: <https://hackage.haskell.org/package/hspec-discover>\
-      E.g. download `hspec-discover-2.11.16.tar.gz`, extract it, and in the extracted directory run:
+      E.g. download `hspec-discover-2.11.16.tar.gz`, extract it somewhere else  (must be outside of this repository directory tree), and in the extracted directory run:
       ```bash
       cabal v2-build
       cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
