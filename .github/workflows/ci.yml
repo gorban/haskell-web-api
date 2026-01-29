@@ -68,41 +68,14 @@ jobs:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
-      - name: Setup Node
-        if: steps.setup_haskell.outcome == 'success'
-        id: setup_node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '24'
-
-      - name: Install system tools
-        if: steps.setup_node.outcome == 'success'
-        id: dos2unix
+      - name: Install dos2unix
         run: |
           sudo apt-get update
-          sudo apt-get install -y dos2unix postgresql-client
+          sudo apt-get install -y dos2unix
 
-      - name: Wait for prerequisite services
-        if: steps.dos2unix.outcome == 'success'
-        id: prerequisite_services
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          until pg_isready --host="$DATABASE_HOST" --port="$DATABASE_PORT" --username="$WEB_API_MIGRATION_DATABASE_USER" --dbname="$WEB_API_MIGRATION_DATABASE_NAME"; do
-            sleep 1
-          done
-
-          until curl --fail --silent --show-error http://127.0.0.1:16686/ >/dev/null; do
-            sleep 1
-          done
-
-          node --version
-
-      - name: Restore Cabal cache
-        if: steps.dos2unix.outcome == 'success'
-        id: cabal_cache
-        uses: actions/cache/restore@v5
+      - name: Cache Cabal
+        id: cache
+        uses: actions/cache@v4
         with:
           path: |
             ~/.cabal/bin
@@ -195,7 +168,18 @@ jobs:
         if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
         id: install_formatting_tools
         run: |
-          .github/scripts/install-formatting-tools.sh
+          cabal update
+          LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+
+          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
+          # Error: [Cabal-6661]
+          # filepath wildcard 'package.yaml' does not match any files.
+          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
+          cd hspec-discover-2.11.16
+          echo "packages: ." > cabal.project
+          cabal v2-build
+          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
+          cd ..
 
       - name: Formatting checks
         if: steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped'
