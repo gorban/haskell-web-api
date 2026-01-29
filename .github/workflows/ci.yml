@@ -155,7 +155,9 @@ jobs:
 
       - name: Run tests (skip Unit)
         run: |
+          cd packages/test-core
           cabal install hspec-discover --install-method=copy --overwrite-policy=always
+          cd ../..
           cabal build all -O2 --ghc-options=-Werror
           cabal test all -O2 --test-options="--skip Unit"
 
