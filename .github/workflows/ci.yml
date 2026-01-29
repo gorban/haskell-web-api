@@ -32,12 +32,16 @@ jobs:
           ghc-version: '9.12.2'
           cabal-version: '3.16.1.0'
 
+      - name: Install dos2unix
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dos2unix
+
       - name: Cache Cabal
         id: cache
         uses: actions/cache@v4
         with:
           path: |
-            /usr/bin/dos2unix
             ~/.cabal/bin
             ~/.cabal/store
           key: ${{ runner.os }}-ghc-9.12.2-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
@@ -110,8 +114,6 @@ jobs:
       - name: Install tools
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dos2unix
           cabal update
           LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
 
