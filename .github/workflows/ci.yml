@@ -49,6 +49,16 @@ jobs:
           # Fail on first non-zero exit code, including intermediate piped commands
           set -euo pipefail
 
+          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
+          # Error: [Cabal-6661]
+          # filepath wildcard 'package.yaml' does not match any files.
+          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
+          cd hspec-discover-2.11.16
+          echo "packages: ." > cabal.project
+          cabal v2-build
+          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
+          cd ..
+
           # Run coverage script, but capture exit code instead of failing immediately
           # This allows us to publish the coverage report before exiting
           coverage_exit=0
@@ -107,22 +117,12 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Install tools
+      - name: Install formatting tools
         run: |
           sudo apt-get update
           sudo apt-get install -y dos2unix
           cabal update
           LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
-
-          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
-          # Error: [Cabal-6661]
-          # filepath wildcard 'package.yaml' does not match any files.
-          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
-          cd hspec-discover-2.11.16
-          echo "packages: ." > cabal.project
-          cabal v2-build
-          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
-          cd ..
 
       - name: Formatting checks
         run: |
