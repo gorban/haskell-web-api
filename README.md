@@ -39,7 +39,11 @@ See [CHANGELOG](CHANGELOG.md) for a detailed changelog.
 ## Components
 
 packages/
-  - web-api: The main application package providing currently only an putStrLn (not a real web API yet).
+  - harch-web: Haskell Architecture Web - The SSR-first web framework package. It currently provides the
+    initial facade boundary that `web-api` composes against, and it is intended to grow into the shared
+    route, page shell, server adapter, and progressive enhancement infrastructure tracked in `TASKS.md`.
+  - web-api: The example application package and composition root that wires app-specific routes, pages,
+    config, and startup into the shared `HarchWeb` facade.
   - core: Shared utility functions and setup helpers used across application and test packages.
   - test-core: A library with shared test utilities and custom preprocessors.
   - hspec-expectations-match: A fork of the third-party package `hspec-expectations-match` with local
@@ -83,6 +87,6 @@ Windows containers).
 - Install WSL2 (Windows Subsystem for Linux) and set up a Linux distribution (e.g. Ubuntu or Fedora) to run
   the Haskell environment in a Linux-like environment, which is more compatible with Haskell tooling.
 - Alternatively, you can use Docker with Linux containers. Docker Desktop can be switched to use Linux
-  containers from its System Tray icon menu,
-"Switch to Linux Containers", if you set up Docker Desktop correctly:\
-<https://docs.docker.com/desktop/windows/wsl/>
+  containers from its System Tray icon menu, "Switch to Linux Containers", if you set up Docker Desktop
+  correctly:\
+  <https://docs.docker.com/desktop/windows/wsl/>

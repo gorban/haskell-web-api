@@ -1,10 +1,17 @@
 # Revision history for haskell-web-api
 
-## 0.1.0.1 -- 2026-03-14
+## 0.1.1.0
+
+* `web-api` now serves as the composition root over the new `HarchWeb` facade instead of owning only a stdout placeholder.
+* App-facing seams are being kept pure where possible so route matching, page rendering, layout decisions, and future config parsing can be Unit-tested before IO adapters are added.
+* The intended PR-ready scope for `web-api` is to remain responsible for app routes, pages, config, and startup while delegating shared SSR/server/runtime concerns to `HarchWeb`.
+* The executable and tests now target the new facade startup path rather than the previous direct banner-writing stub.
+
+## 0.1.0.1
 
 * Upgraded GHC to 9.14.1 and Base to 4.22.0.0
 
-## 0.1.0.0 -- 2026-01-19
+## 0.1.0.0
 
 * web-api is not a real API yet.
-* Hooks in test-lib package for testing purposes.
+* Hooks in test-core package for testing purposes.

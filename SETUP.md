@@ -178,7 +178,8 @@ cabal install --ignore-project hspec-discover --overwrite-policy=always
 Notes:
 - Run this from anywhere, including the repository root. The `--ignore-project` flag prevents
   `cabal install` from trying to package the local workspace first.
-- The previous instructions to enhance the system PATH from "$HOME/.ghcup/env" mean that `ghc` should now also be available with `which ghc`.
+- The previous instructions to enhance the system PATH from "$HOME/.ghcup/env" mean that `ghc` should now
+  also be available with `which ghc`.
 
 After that, the build command should at least have the required external build tool available:
 
@@ -263,4 +264,11 @@ cabal install --ignore-project -w ghc-9.14.1 haskell-debugger --allow-newer=base
 ```
 
 If your editor starts outside a login shell, make sure the shell startup file it does read contains the
-GHCup environment line shown earlier so the editor can find `ghc`, `hlint`, and `haskell-debugger`.
+GHCup environment line shown earlier so the editor can find `ghc`, `hlint`, and `hdb`.
+
+Haskell Debugger will fail to start without installing our spec-preprocessor executable in its path:
+
+```bash
+cabal install core:core-spec-preprocessor
+cabal install test-core:spec-preprocessor
+```

@@ -19,7 +19,7 @@ version: 0.1.0.0
 synopsis: haskell core (utilities shared across application and tests)
 -- A longer description of the package.
 description:
-  Shared utility functions and types used by test-lib,
+  Shared utility functions and types used by test-core,
   haskell-web-api, and other packages in this repository.
 
 -- URL for the project homepage or repository.
