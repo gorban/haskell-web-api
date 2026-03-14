@@ -40,7 +40,8 @@ See [CHANGELOG](CHANGELOG.md) for a detailed changelog.
 
 packages/
   - web-api: The main application package providing currently only an putStrLn (not a real web API yet).
-  - test-lib: A library with shared test utilities and custom preprocessors.
+  - core: Shared utility functions and setup helpers used across application and test packages.
+  - test-core: A library with shared test utilities and custom preprocessors.
   - hspec-expectations-match: A fork of the third-party package `hspec-expectations-match` with local
     changes to get it to work with current versions of Template Haskell.
     - No public GitHub repo, so not sure if we can get these changes upstreamed to Hackage:\

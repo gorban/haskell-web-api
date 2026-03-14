@@ -41,7 +41,7 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
@@ -62,7 +62,7 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
 
   -- Directories containing source files.
@@ -78,7 +78,7 @@ executable haskell-web-api
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     haskell-web-api,
 
   -- Directories containing source files.
@@ -118,7 +118,7 @@ test-suite haskell-web-api-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     haskell-web-api,
     hspec,

@@ -12,6 +12,7 @@
    can use WSL2 or Docker (configured for Linux containers).
 2. Simplified generate-code-coverage-report to just be an .sh script (no more PowerShell polyglot).
 3. Split off this setup guide into its own file, and added a link to it from the main README.
+4. Upgraded GHC to 9.14.1 and Base to 4.22.0.0.
 
 ## v0.1.0.0
 

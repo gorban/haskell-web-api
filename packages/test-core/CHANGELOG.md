@@ -1,5 +1,9 @@
 # Revision history for test-core
 
+## 0.1.0.1 -- 2026-03-14
+
+* Upgraded GHC to 9.14.1 and Base to 4.22.0.0
+
 ## 0.1.0.0 -- 2026-01-19
 
 * Some initial testing utilities. For example TestCore.CustomAssertions (`shouldContain'`) for fluent substring assertions.

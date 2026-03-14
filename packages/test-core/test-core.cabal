@@ -47,7 +47,7 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
@@ -72,7 +72,7 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     directory,
     filepath,
@@ -93,7 +93,7 @@ executable spec-preprocessor
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     test-core,
 
@@ -108,7 +108,7 @@ executable test-core
   import: common
   main-is: Dummy.hs
   hs-source-dirs: app
-  build-depends: base ^>=4.21.0.0
+  build-depends: base ^>=4.22.0.0
 
 test-suite test-core-tests
   import: common
@@ -143,7 +143,7 @@ test-suite test-core-tests
     -- For testing framework:
     -- For running the executable in tests:
     HUnit,
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     directory,
     filepath,

@@ -41,7 +41,7 @@ extra-doc-files: CHANGELOG.md
 custom-setup
   setup-depends:
     Cabal,
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     directory,
     filepath,
 
@@ -68,7 +68,7 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     Cabal,
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     directory,
     filepath,
     mtl,
@@ -93,7 +93,7 @@ executable core-spec-preprocessor
     test-core-src/src
 
   build-depends:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     directory,
     filepath,
@@ -130,7 +130,7 @@ test-suite core-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
-    base ^>=4.21.0.0,
+    base ^>=4.22.0.0,
     core,
     hspec,
     hspec-expectations-match,

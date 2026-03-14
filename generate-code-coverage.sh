@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 cabal clean
 
 # TODO: this is a workaround for an issue that appeared when we switched from
@@ -10,46 +12,42 @@ cabal clean
 #         Did you build the package first?
 cabal build all
 
-echo "<html><head><title>haskell-web-api Coverage Reports</title><style>" > hpc_index.html
-echo "  iframe { width: 100%; border: none; }" >> hpc_index.html
-echo "</style></head><body>" >> hpc_index.html
-echo "<h1>haskell-web-api Coverage Reports</h1>" >> hpc_index.html
-echo "<script>" >> hpc_index.html
-echo "  window.addEventListener('message', function (event) {" >> hpc_index.html
-echo "    var data = event && event.data;" >> hpc_index.html
-echo "    if (!data) return;" >> hpc_index.html
-echo "    // Ensure the message came from one of our iframes." >> hpc_index.html
-echo "    var iframes = document.querySelectorAll('iframe');" >> hpc_index.html
-echo "    var fromKnownIframe = false;" >> hpc_index.html
-echo "    for (var i = 0; i < iframes.length; i++) {" >> hpc_index.html
-echo "      if (event.source === iframes[i].contentWindow) {" >> hpc_index.html
-echo "        fromKnownIframe = true;" >> hpc_index.html
-echo "        break;" >> hpc_index.html
-echo "      }" >> hpc_index.html
-echo "    }" >> hpc_index.html
-echo "    if (!fromKnownIframe) return;" >> hpc_index.html
-echo "    if (data.type === 'hpc-nav' && typeof data.href === 'string') {" >> hpc_index.html
-echo "      // Basic href sanity check then navigate." >> hpc_index.html
-echo "      if (!/^file:/i.test(data.href)) return;" >> hpc_index.html
-echo "      window.location.assign(data.href);" >> hpc_index.html
-echo "    } else if (data.type === 'hpc-height' && typeof data.height === 'number') {" >> hpc_index.html
-echo "      // Adjust iframe height." >> hpc_index.html
-echo "      for (var j = 0; j < iframes.length; j++) {" >> hpc_index.html
-echo "        var iframe = iframes[j];" >> hpc_index.html
-echo "        if (event.source === iframe.contentWindow) {" >> hpc_index.html
-echo "          iframe.style.height = (Math.ceil(data.height) + 32) + 'px';" >> hpc_index.html
-echo "          break;" >> hpc_index.html
-echo "        }" >> hpc_index.html
-echo "      }" >> hpc_index.html
-echo "    }" >> hpc_index.html
-echo "  });" >> hpc_index.html
-echo "</script>" >> hpc_index.html
-
-# The line below is seen as a comment by Bash but starts a multi-line comment for PowerShell
-echo `# <#` >/dev/null
-
-# --- BASH SECTION ---
-set -euo pipefail
+cat > hpc_index.html <<'EOF'
+<html><head><title>haskell-web-api Coverage Reports</title><style>
+  iframe { width: 100%; border: none; }
+</style></head><body>
+<h1>haskell-web-api Coverage Reports</h1>
+<script>
+  window.addEventListener('message', function (event) {
+    var data = event && event.data;
+    if (!data) return;
+    // Ensure the message came from one of our iframes.
+    var iframes = document.querySelectorAll('iframe');
+    var fromKnownIframe = false;
+    for (var i = 0; i < iframes.length; i++) {
+      if (event.source === iframes[i].contentWindow) {
+        fromKnownIframe = true;
+        break;
+      }
+    }
+    if (!fromKnownIframe) return;
+    if (data.type === 'hpc-nav' && typeof data.href === 'string') {
+      // Basic href sanity check then navigate.
+      if (!/^file:/i.test(data.href)) return;
+      window.location.assign(data.href);
+    } else if (data.type === 'hpc-height' && typeof data.height === 'number') {
+      // Adjust iframe height.
+      for (var j = 0; j < iframes.length; j++) {
+        var iframe = iframes[j];
+        if (event.source === iframe.contentWindow) {
+          iframe.style.height = (Math.ceil(data.height) + 32) + 'px';
+          break;
+        }
+      }
+    }
+  });
+</script>
+EOF
 
 array_contains() {
   local needle="$1"
@@ -60,6 +58,27 @@ array_contains() {
       return 0
     fi
   done
+  return 1
+}
+
+open_generated_report() {
+  local report_path="$1"
+
+  if [ -n "${CONTAINER_ID:-}" ] && command -v distrobox-host-exec >/dev/null 2>&1; then
+    distrobox-host-exec xdg-open "$report_path" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v xdg-open >/dev/null 2>&1; then
+    xdg-open "$report_path" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    open "$report_path" >/dev/null 2>&1 &
+    return 0
+  fi
+
   return 1
 }
 
@@ -351,6 +370,7 @@ fi
 rm -rf "$temp_root"
 echo "</body></html>" >> hpc_index.html
 printf '\n\e[32mMulti-package coverage report generated at %s/hpc_index.html\e[0m\n' "$(pwd)"
+open_generated_report "$(pwd)/hpc_index.html" || true
 
 if [ "${#per_project_findings[@]}" -gt 0 ]; then
   echo
@@ -369,340 +389,3 @@ fi
 if $missing_coverage; then
   exit 1
 fi
-exit
-# --- END BASH SECTION ---
-
-# The line below ends the PowerShell multi-line comment and suppresses output
-#> > $null
-
-# --- POWERSHELL SECTION ---
-$ErrorActionPreference = "Stop"
-Set-StrictMode -Version Latest
-$PSNativeCommandUseErrorActionPreference = $true
-$script:MissingCoverage = $false
-$PerProjectCoverageFindings = [System.Collections.Generic.List[string]]::new()
-$AggregateCoverageFindings = [System.Collections.Generic.List[string]]::new()
-$AggregateCoverageIssue = $false
-ls -r **\*.tix | rm -Force
-Get-ChildItem -Filter "cabal.project.local.backup.*" -File -ErrorAction SilentlyContinue |
-  Remove-Item -Force
-
-$DistRoot = Join-Path (pwd) "dist-newstyle"
-
-# Parse cabal.project to get packages and run tests for each separately.
-# This works around Cabal issue where "cabal test all --enable-coverage" only
-# generates coverage for the last package. See: https://github.com/haskell/cabal/issues/7200
-
-$CabalProjectContent = gc cabal.project
-$CabalProjectRaw = gc -Raw cabal.project
-
-# Extract package directories from cabal.project, then read actual package names from .cabal files
-$AllPackages = @()
-foreach ($line in $CabalProjectContent) {
-  if ($line -match "^\s+(\S+)/?$") {
-    $pkgDir = $Matches[1].TrimEnd("/")
-    $cabalFile = ls "$pkgDir/*.cabal" -EA 0 | select -f 1
-    if ($cabalFile) {
-      $cabalContent = gc $cabalFile.FullName
-      foreach ($line in $cabalContent) {
-        if ($line -match "^name:\s*(\S+)") { $AllPackages += $Matches[1] }
-      }
-    }
-  }
-}
-
-# Find packages with coverage: False (look for "package <name>" followed by "coverage: False")
-$ExcludedPackages = [regex]::Matches(
-  $CabalProjectRaw,
-  "(?ms)^package\s+(\S+)\s*$.*?coverage:\s*False") |
-  % { $_.Groups[1].Value }
-
-
-$TempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ([System.IO.Path]::GetRandomFileName())
-ni -it D $TempRoot -f > $null
-$CoverageRoot = Join-Path $TempRoot "hpc"
-ni -it D $CoverageRoot -f > $null
-$TempMixDir = Join-Path $TempRoot "mix"
-ni -it D $TempMixDir -f > $null
-$TempWorkDir = Join-Path $TempRoot "hpc-work"
-ni -it D $TempWorkDir -f > $null
-$HpcSearchDirs = @()
-
-$ProjectLocalPath = Join-Path (pwd) "cabal.project.local"
-$ExistingProjectLocal = if (Test-Path $ProjectLocalPath) {
-  gc -Raw -LiteralPath $ProjectLocalPath
-  rm -LiteralPath $ProjectLocalPath -Force
-} else {
-  $null
-}
-$BaseProjectLocal = $ExistingProjectLocal
-if ($BaseProjectLocal -and -not $BaseProjectLocal.EndsWith("`n")) {
-  $BaseProjectLocal += "`n"
-}
-
-# Run tests for each package not in the excluded list
-foreach ($pkg in $AllPackages) {
-  if ($pkg -notin $ExcludedPackages) {
-    if (Test-Path $ProjectLocalPath) {
-      rm -LiteralPath $ProjectLocalPath -Force
-    }
-    if ($null -ne $BaseProjectLocal) {
-      [System.IO.File]::WriteAllText($ProjectLocalPath, $BaseProjectLocal)
-    } else {
-      ni -it F $ProjectLocalPath -f > $null
-      clc -LiteralPath $ProjectLocalPath
-    }
-    $CoverageEntries = foreach ($candidate in $AllPackages) {
-      $coverageValue = "False"
-      if ($candidate -eq $pkg) {
-        if ($ExcludedPackages -notcontains $candidate) {
-          $coverageValue = "True"
-        }
-      }
-      "package $candidate`n  coverage: $coverageValue`n"
-    }
-    ac -LiteralPath $ProjectLocalPath $CoverageEntries
-
-    # Use -O0 to disable optimization for accurate coverage (prevents inlining)
-    cabal configure --disable-backup --ghc-options=-O0
-
-    # Clean build artifacts to avoid coverage data for dependent packages that will be
-    # tested by their own iterations of this loop.
-    ls -r dist-newstyle\**\*.tix | rm -Force
-    ls -r dist-newstyle\**\mix\* | rm -Force
-
-    Write-Host "`nRunning tests with coverage for: $pkg" -F Blue
-    cabal test $pkg --enable-coverage --test-show-details=direct --test-options="+RTS --read-tix-file=no -RTS --match Unit"
-
-    $PackageHpcDir = ls $DistRoot -Directory -r |
-      ? { $_.FullName -match "\\$pkg-[^\\]+\\opt\\hpc\\vanilla$" } |
-      select -f 1
-    if ($PackageHpcDir) {
-      $Destination = Join-Path $CoverageRoot $pkg
-      if (Test-Path $Destination) {
-        rm -LiteralPath $Destination -r -Force
-      }
-      ni -it D $Destination -f > $null
-      cp (Join-Path $PackageHpcDir.FullName "*") $Destination -r -Force
-    }
-  } else {
-    Write-Host "`nSkipping coverage for: $pkg (coverage: False in cabal.project)" -F Yellow
-  }
-}
-
-if ($null -ne $ExistingProjectLocal) {
-  [System.IO.File]::WriteAllText($ProjectLocalPath, $ExistingProjectLocal)
-} elseif (Test-Path $ProjectLocalPath) {
-  rm -LiteralPath $ProjectLocalPath -Force
-}
-
-# Restore staged coverage artifacts into dist-newstyle before aggregation
-ls $CoverageRoot -Directory | % {
-  $PackageName = $_.Name
-  $TargetDir = ls $DistRoot -Directory -r |
-    ? { $_.FullName -match "\\$PackageName-[^\\]+\\opt\\hpc\\vanilla$" } |
-    select -f 1
-  if ($TargetDir) {
-    cp (Join-Path $_.FullName "*") $TargetDir.FullName -r -Force
-  }
-}
-
-$CurrentPath = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath(".\")
-$MixDirs = ls $DistRoot -Directory -r | ? { $_.Name -eq "mix" }
-if ($MixDirs) {
-  foreach ($MixDir in $MixDirs) {
-    $SourcePattern = Join-Path $MixDir.FullName '*'
-    if (Test-Path $SourcePattern) {
-      cp $SourcePattern $TempMixDir -Recurse -Force
-    }
-    if ($HpcSearchDirs -notcontains $MixDir.FullName) {
-      $HpcSearchDirs += $MixDir.FullName
-    }
-  }
-}
-$WorkMixDirs = ls $TempWorkDir -Directory -r | ? { $_.Name -eq "mix" }
-foreach ($WorkMixDir in $WorkMixDirs) {
-  $SourcePattern = Join-Path $WorkMixDir.FullName '*'
-  if (Test-Path $SourcePattern) {
-    cp $SourcePattern $TempMixDir -Recurse -Force
-  }
-  if ($HpcSearchDirs -notcontains $WorkMixDir.FullName) {
-    $HpcSearchDirs += $WorkMixDir.FullName
-  }
-}
-if ($HpcSearchDirs.Count -gt 0) {
-  Write-Host "Collected HPC mix files into $TempMixDir ($($HpcSearchDirs.Count) directories)."
-}
-
-$iframeInjection = @"
-<script>
-  function scheduleHeight() {
-    setTimeout(function () {
-      var table = document.querySelector('body > *');
-      var height = table
-        ? table.scrollHeight
-        : (document.documentElement.scrollHeight || document.body.scrollHeight);
-      if (window.parent && window.parent !== window) {
-        window.parent.postMessage({ type: 'hpc-height', height: height }, '*');
-      }
-    }, 0);
-  }
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    scheduleHeight();
-  } else {
-    document.addEventListener('DOMContentLoaded', scheduleHeight);
-  }
-  window.addEventListener('load', scheduleHeight);
-  window.addEventListener('resize', scheduleHeight);
-  document.addEventListener('click', function (e) {
-    var el = e.target;
-    var a = el && el.closest ? el.closest('a[href]') : null;
-    if (!a) return;
-
-    var href = a.getAttribute('href');
-    if (!href || href[0] === '#' || /^\s*javascript:/i.test(href)) return;
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    var resolved = new URL(href, window.location.href).href;
-    if (window.parent && window.parent !== window) {
-      window.parent.postMessage({ type: 'hpc-nav', href: resolved }, '*');
-    } else {
-      window.location.assign(resolved);
-    }
-  }, true);
-</script>
-</body>
-"@
-
-$HtmlReports = ls -r $DistRoot -Filter hpc_index.html | sort FullName -d
-$ProcessedPackages =
-  [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::OrdinalIgnoreCase)
-$AggregateTixPaths =
-  [System.Collections.Generic.HashSet[string]]::new(
-    [System.StringComparer]::OrdinalIgnoreCase)
-
-foreach ($report in $HtmlReports) {
-  $relativePath = [System.IO.Path]::GetRelativePath($CurrentPath, $report.FullName)
-  echo "<iframe src='$relativePath'></iframe><br/>" >> hpc_index.html
-
-  $htmlContent = Get-Content -Raw -LiteralPath $report.FullName
-  $updatedContent = $htmlContent -replace '(?i)</body>', $iframeInjection
-  Set-Content -LiteralPath $report.FullName -Value $updatedContent
-
-  $PackageRoot = $report.Directory.Parent
-  $TixRoot = Join-Path $PackageRoot "tix"
-  $DiscoveredName = $report.Directory.Parent.Parent.Parent.Parent.Name
-  $packageNameMatch = [regex]::Match($DiscoveredName, "^(.*?)(?:-[0-9].*)?$")
-  $PackageName = if ($packageNameMatch.Success -and $packageNameMatch.Groups[1].Value) {
-    $packageNameMatch.Groups[1].Value
-  } else {
-    $DiscoveredName
-  }
-
-  if (-not $ProcessedPackages.Add($PackageName)) {
-    continue
-  }
-
-  $totalsIndex = $htmlContent.IndexOf(
-    "Program Coverage Total",
-    [System.StringComparison]::OrdinalIgnoreCase)
-
-  if ($totalsIndex -ge 0) {
-    $segmentLength = [Math]::Min(1000, $htmlContent.Length - $totalsIndex)
-    $totalsSegment =
-      $htmlContent.Substring($totalsIndex, $segmentLength)
-
-    $Fractions = [regex]::Matches(
-      $totalsSegment,
-      "<td[^>]*>(\d+)\s*/\s*(\d+)</td>",
-      [Text.RegularExpressions.RegexOptions]::IgnoreCase)
-    $Categories = @("Top Level Definitions", "Alternatives", "Expressions")
-    for ($i = 0; $i -lt [Math]::Min($Fractions.Count, $Categories.Count); $i++) {
-      $covered = [int]$Fractions[$i].Groups[1].Value
-      $total = [int]$Fractions[$i].Groups[2].Value
-      if ($total -ne 0 -and $covered -ne $total) {
-        [void]$PerProjectCoverageFindings.Add(
-          "$($Categories[$i]) coverage for $PackageName ($covered/$total).")
-        $script:MissingCoverage = $true
-      }
-    }
-  }
-
-  if (Test-Path $TixRoot) {
-    foreach ($item in ls $TixRoot -Filter *.tix -File -Recurse -EA 0) {
-      [void]$AggregateTixPaths.Add($item.FullName)
-    }
-  }
-}
-
-if ($AggregateTixPaths.Count -gt 0) {
-  $AggregateTixList = [System.Linq.Enumerable]::ToArray($AggregateTixPaths)
-  $TempCombinedTix = $null
-  if ($AggregateTixList.Length -gt 1) {
-    $TempCombinedTix =
-      Join-Path ([System.IO.Path]::GetTempPath()) (([System.IO.Path]::GetRandomFileName()) + ".tix")
-    $sumArgs = @("--union", "--output=$TempCombinedTix")
-    $sumArgs += $AggregateTixList
-    hpc sum @sumArgs
-    $TixToReport = $TempCombinedTix
-  } else {
-    $TixToReport = $AggregateTixList[0]
-  }
-
-  Write-Host "`nFull coverage report (all packages):" -F DarkGray
-  $HpcReport = @()
-  try {
-    $HpcArgs = @()
-    foreach ($dir in $HpcSearchDirs) {
-      $HpcArgs += "--hpcdir=$dir"
-    }
-    hpc report @HpcArgs $TixToReport | tee -v HpcReport
-  } finally {
-    if ($TempCombinedTix -and (Test-Path $TempCombinedTix)) {
-      rm -LiteralPath $TempCombinedTix -Force
-    }
-  }
-
-  $UnderCoveredLines = $HpcReport |
-    Where-Object {
-      $_ -match '^\s*(\d+(?:\.\d+)?)%' -and [double]$Matches[1] -lt 100
-    }
-
-  if ($UnderCoveredLines) {
-    $AggregateCoverageIssue = $true
-    foreach ($line in $UnderCoveredLines) {
-      [void]$AggregateCoverageFindings.Add($line.Trim())
-    }
-    $script:MissingCoverage = $true
-  }
-}
-if (Test-Path $TempRoot) {
-  rm -LiteralPath $TempRoot -Recurse -Force
-}
-echo "</body></html>" >> hpc_index.html
-$CombinedPath = Join-Path $CurrentPath "hpc_index.html"
-Write-Host "`nMulti-package coverage report generated at $CombinedPath" -F Green
-start $(([System.Uri]$CombinedPath).AbsoluteUri)
-
-if ($PerProjectCoverageFindings.Count -gt 0) {
-  Write-Host "`nPer-project reports found with <100% coverage, exiting with error:" -F Red
-  foreach ($finding in $PerProjectCoverageFindings) {
-    Write-Host "- $finding" -F Red
-  }
-  if ($AggregateCoverageIssue -and $AggregateCoverageFindings.Count -gt 0) {
-    Write-Host "`nAll-packages coverage report also below 100% coverage:" -F Red
-    foreach ($line in $AggregateCoverageFindings) {
-      Write-Host "- $line" -F Red
-    }
-  }
-} elseif ($AggregateCoverageIssue) {
-  Write-Host "`nCoverage report contains less than 100% coverage, exiting with error." -F Red
-}
-
-if ($script:MissingCoverage) {
-  exit 1
-}
-# --- END POWERSHELL SECTION ---

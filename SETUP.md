@@ -20,6 +20,10 @@ sudo apt upgrade -y
 sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev git
 ```
 
+These Ubuntu packages already include the development libraries needed by the optional Haskell Debugger:
+`libncurses-dev` provides the ncurses / `tinfo` linker files, and `zlib1g-dev` provides the `z` linker
+files.
+
 ### Example: Fedora Prerequisites
 
 Prerequisites for Fedora provided by Distrobox container, making them compatible whether you are using an
@@ -30,14 +34,33 @@ curl -s https://raw.githubusercontent.com/89luca89/distrobox/main/install | sudo
 
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
-[devbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs xz perl git"
+[haskellbox]
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced"
 image="registry.fedoraproject.org/fedora:latest"
+root=false
+additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
+init_hooks="install -d /var/tmp/distrobox-git /var/tmp/distrobox-git/bin"
+init_hooks="if [ -f \$HOME/.gitconfig ]; then cp \$HOME/.gitconfig /var/tmp/distrobox-git/gitconfig; else : > /var/tmp/distrobox-git/gitconfig; fi"
+init_hooks="GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get diff.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global diff.tool vimdiff; GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get merge.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global merge.tool vimdiff"
+init_hooks="resolve_git_tool_bin() { case \$1 in bc|bc3|bc4) printf %s bcompare ;; gvimdiff|gvimdiff1|gvimdiff2|gvimdiff3) printf %s gvim ;; nvimdiff|nvimdiff1|nvimdiff2|nvimdiff3) printf %s nvimdiff ;; vimdiff|vimdiff1|vimdiff2|vimdiff3) printf %s vimdiff ;; vscode) printf %s code ;; *) printf %s \$1 ;; esac; }; if command -v distrobox-host-exec >/dev/null 2>&1; then for tool_key in diff.tool merge.tool; do tool_name=\$(GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get \$tool_key || true); test x\$tool_name = x && continue; tool_bin=\$(resolve_git_tool_bin \$tool_name); if ! command -v \$tool_bin >/dev/null 2>&1; then ln -sf /usr/bin/distrobox-host-exec /var/tmp/distrobox-git/bin/\$tool_bin; case \$tool_key in diff.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global difftool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; merge.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global mergetool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; esac; fi; done; fi"
 ```
+
+- In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
+  optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
+  without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
+  built-in `vimdiff` tool inside the container.
+- The `init_hooks` do git setup overrides inside the container. `additional_flags` sets `GIT_CONFIG_GLOBAL`
+  on every container start, and the hooks copy the
+  host `~/.gitconfig` into that container-local file if it exists. They then inspect the selected
+  `diff.tool` and `merge.tool` values from that copied config. If a selected tool is not installed locally,
+  the example creates a symlink under `/var/tmp/distrobox-git/bin` that reroutes that executable via
+  `distrobox-host-exec`, and points git at that symlink with `difftool.<tool>.path` or
+  `mergetool.<tool>.path`. They do not override any existing `diff.tool` or `merge.tool` setting copied
+  from the host; they only default missing tool entries to `vimdiff`.
 
 Then to assemble and run the container:
 ```bash
-distrobox assemble create --name haskellbox --file distrobox.ini
+distrobox assemble create --file distrobox.ini
 distrobox enter haskellbox
 ```
 
@@ -46,7 +69,8 @@ distrobox enter haskellbox
 According to the [GHCup official instructions](https://www.haskell.org/ghcup/install/#system-requirements),
 simply running the GHCup installer below should install some prerequisites, but it notes:
 
-> On Darwin M1 you might also need a working llvm installed (e.g. via brew) and have the toolchain exposed in PATH.
+> On Darwin M1 you might also need a working llvm installed (e.g. via brew) and have the toolchain exposed
+> in PATH.
 
 ## Install GHCup
 
@@ -142,24 +166,101 @@ Run `ghcup tui` to manage installed versions of GHC, Cabal, Stack, HLS, etc.
 4. Check the versions with `ghc --version`, `cabal --version`,
    `haskell-language-server-wrapper --version`, and `stack --version` for last installed, respectively.
 
-### Emscripten for JavaScript Backend for GHC
+### Build Prerequisites for This Repository
 
-We need to install the exact emscripten version messaged by the `ghcup tui` when we tried to install
-`javascript-unknown-ghc-9.12.2`. For example, change any 3.1.74 to the exact version from the message:
+Before running `cabal build all` in this repository, install the one external build tool that is currently
+required globally:
 
-1. To install emscripten:
-   ```bash
-   cd "$HOME"
-   git clone https://github.com/emscripten-core/emsdk.git --depth 1 --branch 3.1.74 emsdk-3-1-74
-   cd emsdk-3-1-74
-   ./emsdk install latest
-   ./emsdk activate latest
-   source ./emsdk_env.sh
-   ```
-2. `emsdk` command should then be available in the terminal, but to persist we need to update any shell
-   startup scripts:
-   ```
-   source "$HOME/emsdk-3-1-74/emsdk_env.sh"
-   ```
-   1. If `bash` is your shell (default in Ubuntu and Fedora), add this line to "$HOME/.bash_profile".
-   2. If `zsh` is your shell (default in MacOS), add this line to "$HOME/.zshrc".
+```bash
+cabal install --ignore-project hspec-discover --overwrite-policy=always
+```
+
+Notes:
+- Run this from anywhere, including the repository root. The `--ignore-project` flag prevents
+  `cabal install` from trying to package the local workspace first.
+- The previous instructions to enhance the system PATH from "$HOME/.ghcup/env" mean that `ghc` should now also be available with `which ghc`.
+
+After that, the build command should at least have the required external build tool available:
+
+```bash
+cabal build all
+```
+
+## (optional) IDE Setup with VS Code-likes
+
+For editor support, install Visual Studio Code or another editor with Haskell support.
+
+### VS Code with Distrobox
+
+If you are using a container (e.g. Distrobox) for development with Visual Studio Code, install the
+[Dev Containers extension
+](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers) on the host VS
+Code instance.
+
+After that, use the Command Palette and run `Dev Containers: Attach to Running Container...`, then select
+the running container.
+
+- **NOTE:** Immediately open an integrated terminal in the attached container, and run `whoami` to make
+  sure it's not `root`. Attaching to a running container might not carry through the current user from the
+  host, and VS Code can end up using the container engine's default user instead. If you leave it `root`,
+  files created from that session may not be writable or readable as expected from the host user.
+  \
+  If you find the user is `root`, from either the host VS Code or the attached container, immediately run
+  `Dev Containers: Open Attached Container Configuration File` from the Command Palette and add:
+  \
+  ```jsonc
+  {
+     // ...keep existing config...
+     "remoteUser": "your-username",
+     "containerUser": "your-username"
+  }
+  ```
+  \
+  At minimum, `remoteUser` should be set. `containerUser` is also reasonable if you want the whole attached
+  session to stay on that user consistently. After attaching, run `whoami` in the VS Code terminal before
+  building anything.
+  \
+  VS Code stores that attached-container override outside the repository, so each developer needs to set it
+  on their own machine the first time they attach.
+  \
+  **Finally** if you had to set the user override, close the attached VS Code window and re-attach to the
+  container again for the override to take effect. Then run `whoami` again to confirm it's correct before
+  continuing.
+- **Expected subsequent issue**: If you had to set the user override, the reopening remote VS Code may fail
+  with error like:
+  > [6838 ms] cat: $HOME/.vscode-server/data/Machine/.connection-token-...: Permission denied
+  > [6838 ms] Exit code 1
+  \
+  Fix this on the host machine by running command:
+  ```bash
+  sudo chown -LR "$(whoami):$(whoami)" $HOME/.vscode-server
+  ```
+  \
+  Then, close the attached VS Code window and re-attach to the container again. Finally `whoami` in the
+  attached VS Code terminal should show the correct non-root user.
+
+### Recommended VS Code Extensions
+
+- Haskell by the Haskell Foundation
+- Haskell Debugger by Well-Typed
+  - With GHC 9.14.1, use the Haskell Debugger extension rather than the older GHCi Debug Adapter / Phoityne
+    tooling.
+
+You might need the pre-release versions for compatibility with the latest GHC and HLS releases.
+
+### Global Tools For IDE Extensions
+
+`hlint` is not required for `cabal build all`, but it is useful for editor diagnostics and local linting:
+
+```bash
+cabal install --ignore-project hlint --overwrite-policy=always
+```
+
+Install the debugger backend with:
+
+```bash
+cabal install --ignore-project -w ghc-9.14.1 haskell-debugger --allow-newer=base,containers,ghc,time,template-haskell --enable-executable-dynamic
+```
+
+If your editor starts outside a login shell, make sure the shell startup file it does read contains the
+GHCup environment line shown earlier so the editor can find `ghc`, `hlint`, and `haskell-debugger`.
