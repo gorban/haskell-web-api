@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppRequestContext (..), AppRoute (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderPage, renderRoutePath, run)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppRequestContext (..), AppRoute (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderPage, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -15,6 +15,15 @@ homeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb
 
 secondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = defaultRequestContext}
+
+frenchRequestContext :: AppRequestContext
+frenchRequestContext = defaultRequestContext {requestLocale = French}
+
+frenchHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+frenchHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = frenchRequestContext}
+
+frenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+frenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = frenchRequestContext}
 
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 notFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = defaultRequestContext}
@@ -80,14 +89,32 @@ spec = do
         `shouldBe` "OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}"
 
   describe "parseRoute" $ do
-    it "parses the home path" $
-      parseRoute defaultRequestContext (Text.pack "/") `shouldBe` Just homeRequest
+    it "maps bare and default-locale paths to the same home route" $ do
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/en")) `shouldBe` Just HomeRoute
 
     it "parses the second page path" $
       parseRoute defaultRequestContext (Text.pack "/second") `shouldBe` Just secondRequest
 
+    it "lets explicit locale prefixes override the incoming request context" $ do
+      parseRoute defaultRequestContext (Text.pack "/fr/second") `shouldBe` Just frenchSecondRequest
+      parseRoute frenchRequestContext (Text.pack "/en/second") `shouldBe` Just secondRequest
+
     it "returns an unsupported-route representation for unknown paths" $
       parseRoute defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
+
+    it "fails unsupported locale prefixes with a precise route-selection error" $ do
+      selectRoute defaultRequestContext (Text.pack "/de") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
+      selectRoute defaultRequestContext (Text.pack "/de/second") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
+
+    it "merges middleware-supplied and path-derived request inputs deterministically" $ do
+      let middlewareContext =
+            defaultRequestContext
+              { requestLocale = English,
+                requestCorrelationId = Just (Text.pack "req-123")
+              }
+      parseRoute middlewareContext (Text.pack "/fr")
+        `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = French}})
 
     it "rejects invalid trailing slashes while keeping the root path valid" $ do
       parseRoute defaultRequestContext (Text.pack "/") `shouldBe` Just homeRequest
@@ -97,10 +124,13 @@ spec = do
     it "round-trips known routes through the parser" $ do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
+      parseRoute defaultRequestContext (renderRoutePath frenchSecondRequest) `shouldBe` Just frenchSecondRequest
 
-    it "renders the stable paths for each route" $ do
+    it "renders locale prefixes only for non-default locales" $ do
       renderRoutePath homeRequest `shouldBe` Text.pack "/"
+      renderRoutePath frenchHomeRequest `shouldBe` Text.pack "/fr"
       renderRoutePath secondRequest `shouldBe` Text.pack "/second"
+      renderRoutePath frenchSecondRequest `shouldBe` Text.pack "/fr/second"
       renderRoutePath notFoundRequest `shouldBe` Text.pack "/404"
 
   describe "matchRoute" $ do
@@ -109,6 +139,9 @@ spec = do
 
     it "matches the second page path" $
       pureRouteMatcher (Text.pack "/second") `shouldBe` secondRequest
+
+    it "matches locale-prefixed paths with the merged request context" $
+      pureRouteMatcher (Text.pack "/fr") `shouldBe` frenchHomeRequest
 
     it "falls back to the stable not-found route for unknown paths" $
       pureRouteMatcher (Text.pack "/missing") `shouldBe` notFoundRequest
@@ -166,9 +199,9 @@ spec = do
               }
       show config
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
-      show defaultRequestContext `shouldBe` "AppRequestContext"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}"
       show (renderPage config secondRequest)
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext, pageBody = \"<h1>Second</h1>\"}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}, pageBody = \"<h1>Second</h1>\"}"
       renderPage config secondRequest `shouldBe` renderPage config secondRequest
 
   describe "buildApp" $ do
@@ -178,9 +211,11 @@ spec = do
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/") `shouldBe` parseRoute defaultRequestContext (Text.pack "/")
+      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/fr") `shouldBe` parseRoute defaultRequestContext (Text.pack "/fr")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/second")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
       HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
+      HarchWeb.renderRoute codec frenchSecondRequest `shouldBe` renderRoutePath frenchSecondRequest
       HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
