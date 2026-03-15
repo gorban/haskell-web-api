@@ -6,8 +6,10 @@ module WebApi
     AppRequestContext (..),
     AppRoute (..),
     CertbotConfig (..),
+    Layout (..),
     ListenerConfig (..),
     ListenerScheme (..),
+    NavigationItem (..),
     ObservabilityConfig (..),
     RouteSelectionError (..),
     OtlpExporter (..),
@@ -18,9 +20,11 @@ module WebApi
     buildApp,
     defaultAppConfig,
     defaultRequestContext,
+    buildLayout,
     matchRoute,
     parseRoute,
     renderPage,
+    renderLayout,
     renderRoutePath,
     run,
     selectRoute,
@@ -129,6 +133,21 @@ data AppRoute
   = HomeRoute
   | SecondRoute
   | NotFoundRoute
+  deriving (Eq, Show)
+
+data NavigationItem = NavigationItem
+  { navigationLabel :: Text,
+    navigationRoute :: AppRoute,
+    navigationHref :: Text,
+    navigationIsActive :: Bool
+  }
+  deriving (Eq, Show)
+
+data Layout = Layout
+  { layoutTitle :: Text,
+    layoutNavigation :: [NavigationItem],
+    layoutMainContent :: Text
+  }
   deriving (Eq, Show)
 
 defaultAppConfig :: AppConfig
@@ -288,15 +307,60 @@ renderRouteSuffix route =
     NotFoundRoute -> Text.pack "/404"
 
 appShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
-appShell config page =
+appShell config page = renderLayout config (buildLayout config page)
+
+buildLayout :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Layout
+buildLayout _config page =
+  Layout
+    { layoutTitle = HarchWeb.pageTitle page,
+      layoutNavigation = navigationItems page,
+      layoutMainContent = HarchWeb.pageBody page
+    }
+
+navigationItems :: HarchWeb.Page AppRoute AppRequestContext -> [NavigationItem]
+navigationItems page =
+  [ navigationItem page HomeRoute (Text.pack "Home"),
+    navigationItem page SecondRoute (Text.pack "Second")
+  ]
+
+navigationItem :: HarchWeb.Page AppRoute AppRequestContext -> AppRoute -> Text -> NavigationItem
+navigationItem page route label =
+  NavigationItem
+    { navigationLabel = label,
+      navigationRoute = route,
+      navigationHref =
+        renderRoutePath
+          HarchWeb.RouteRequest
+            { HarchWeb.requestRoute = route,
+              HarchWeb.requestContext = HarchWeb.pageContext page
+            },
+      navigationIsActive = HarchWeb.pageRoute page == route
+    }
+
+renderLayout :: AppConfig -> Layout -> Text
+renderLayout config layout =
   Text.concat
     [ Text.pack "<html><head><title>",
-      HarchWeb.pageTitle page,
+      layoutTitle layout,
       Text.pack "</title></head><body data-app=\"",
       appTitlePrefix config,
-      Text.pack "\"><main>",
-      HarchWeb.pageBody page,
+      Text.pack "\"><nav>",
+      Text.concat (map renderNavigationItem (layoutNavigation layout)),
+      Text.pack "</nav><main id=\"app-main\">",
+      layoutMainContent layout,
       Text.pack "</main></body></html>"
+    ]
+
+renderNavigationItem :: NavigationItem -> Text
+renderNavigationItem item =
+  Text.concat
+    [ Text.pack "<a href=\"",
+      navigationHref item,
+      Text.pack "\"",
+      if navigationIsActive item then Text.pack " aria-current=\"page\"" else Text.empty,
+      Text.pack ">",
+      navigationLabel item,
+      Text.pack "</a>"
     ]
 
 renderResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext

@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppRequestContext (..), AppRoute (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderPage, renderRoutePath, run, selectRoute)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppRequestContext (..), AppRoute (..), CertbotConfig (..), Layout (..), ListenerConfig (..), ListenerScheme (..), NavigationItem (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildLayout, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderLayout, renderPage, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -36,6 +36,9 @@ renderedShell config route =
   let application = buildApp config
       page = renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
    in HarchWeb.pageShell application page
+
+layoutFor :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> Layout
+layoutFor config routeRequest = buildLayout config (renderPage config routeRequest)
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -183,11 +186,11 @@ spec = do
                 observability = observability defaultAppConfig
               }
       renderedShell config HomeRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><main><h1>Home</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Home</h1></main></body></html>"
       renderedShell config SecondRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><main><h1>Second</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><h1>Second</h1></main></body></html>"
       renderedShell config NotFoundRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><main><h1>Not Found</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do
       let config =
@@ -203,6 +206,44 @@ spec = do
       show (renderPage config secondRequest)
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}, pageBody = \"<h1>Second</h1>\"}"
       renderPage config secondRequest `shouldBe` renderPage config secondRequest
+
+  describe "buildLayout" $ do
+    it "includes title, navigation, and main-content container fields" $
+      layoutFor defaultAppConfig secondRequest
+        `shouldBe` Layout
+          { layoutTitle = Text.pack "web-api: Second",
+            layoutNavigation =
+              [ NavigationItem
+                  { navigationLabel = Text.pack "Home",
+                    navigationRoute = HomeRoute,
+                    navigationHref = Text.pack "/",
+                    navigationIsActive = False
+                  },
+                NavigationItem
+                  { navigationLabel = Text.pack "Second",
+                    navigationRoute = SecondRoute,
+                    navigationHref = Text.pack "/second",
+                    navigationIsActive = True
+                  }
+              ],
+            layoutMainContent = Text.pack "<h1>Second</h1>"
+          }
+
+    it "marks the active navigation item for each routed page" $ do
+      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig homeRequest)) `shouldBe` [True, False]
+      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig secondRequest)) `shouldBe` [False, True]
+      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig notFoundRequest)) `shouldBe` [False, False]
+
+    it "keeps layout output identical for repeated renders of the same page input" $ do
+      let page = renderPage defaultAppConfig frenchSecondRequest
+          layout = buildLayout defaultAppConfig page
+      renderLayout defaultAppConfig layout `shouldBe` renderLayout defaultAppConfig layout
+
+    it "keeps not-found pages inside the shared layout" $ do
+      let layout = layoutFor defaultAppConfig notFoundRequest
+      layoutMainContent layout `shouldBe` Text.pack "<h1>Not Found</h1>"
+      renderLayout defaultAppConfig layout
+        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
 
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
@@ -230,11 +271,11 @@ spec = do
           secondPage = renderPage defaultAppConfig secondRequest
           notFoundPage = renderPage defaultAppConfig notFoundRequest
       HarchWeb.pageShell pureApplication homePage
-        `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><main><h1>Home</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Home</h1></main></body></html>"
       HarchWeb.pageShell pureApplication secondPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><main><h1>Second</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><h1>Second</h1></main></body></html>"
       HarchWeb.pageShell pureApplication notFoundPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><main><h1>Not Found</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
 
     it "can grow from page responses to API responses without changing route matching" $
       case HarchWeb.renderResponse pureApplication homeRequest of
