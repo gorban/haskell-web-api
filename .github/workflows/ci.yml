@@ -50,16 +50,7 @@ jobs:
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cabal update
-
-          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
-          # Error: [Cabal-6661]
-          # filepath wildcard 'package.yaml' does not match any files.
-          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
-          cd hspec-discover-2.11.16
-          echo "packages: ." > cabal.project
-          cabal v2-build
-          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
-          cd ..
+          cabal install --ignore-project hspec-discover
 
       - name: Run tests with coverage
         id: coverage
