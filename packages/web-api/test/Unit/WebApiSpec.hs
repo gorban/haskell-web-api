@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppRequestContext (..), AppRoute (..), CertbotConfig (..), Layout (..), ListenerConfig (..), ListenerScheme (..), NavigationItem (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildLayout, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderLayout, renderPage, renderRoutePath, run, selectRoute)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), HomePageModel (..), Layout (..), ListenerConfig (..), ListenerScheme (..), NavigationItem (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildLayout, buildPageModel, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderLayout, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -156,7 +156,7 @@ spec = do
           { HarchWeb.pageTitle = Text.pack "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<h1>Home</h1>"
+            HarchWeb.pageBody = Text.pack "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
           }
 
     it "selects a distinct second page model" $
@@ -165,7 +165,7 @@ spec = do
           { HarchWeb.pageTitle = Text.pack "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<h1>Second</h1>"
+            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "selects a stable not-found page model" $
@@ -174,7 +174,7 @@ spec = do
           { HarchWeb.pageTitle = Text.pack "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<h1>Not Found</h1>"
+            HarchWeb.pageBody = Text.pack "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "keeps shared layout data consistent across all routes" $ do
@@ -186,11 +186,11 @@ spec = do
                 observability = observability defaultAppConfig
               }
       renderedShell config HomeRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Home</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       renderedShell config SecondRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><h1>Second</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       renderedShell config NotFoundRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do
       let config =
@@ -204,8 +204,78 @@ spec = do
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}"
       show (renderPage config secondRequest)
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}, pageBody = \"<h1>Second</h1>\"}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
       renderPage config secondRequest `shouldBe` renderPage config secondRequest
+
+  describe "buildPageModel" $ do
+    it "builds stubbed home page data with a navigation affordance" $
+      buildPageModel homeRequest
+        `shouldBe` HomePage
+          HomePageModel
+            { homeHeading = Text.pack "Home",
+              homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              homePrimaryAction =
+                CallToAction
+                  { callToActionLabel = Text.pack "Browse the second page",
+                    callToActionRoute = SecondRoute,
+                    callToActionHref = Text.pack "/second"
+                  }
+            }
+
+    it "keeps locale-aware action paths in stubbed page data" $
+      buildPageModel frenchHomeRequest
+        `shouldBe` HomePage
+          HomePageModel
+            { homeHeading = Text.pack "Home",
+              homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              homePrimaryAction =
+                CallToAction
+                  { callToActionLabel = Text.pack "Browse the second page",
+                    callToActionRoute = SecondRoute,
+                    callToActionHref = Text.pack "/fr/second"
+                  }
+            }
+
+  describe "renderPageBody" $ do
+    it "renders the home page heading and navigation affordance" $
+      renderPageBody (buildPageModel homeRequest)
+        `shouldBe` Text.pack "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
+
+    it "renders the second page with distinct content while the shared shell stays the same" $ do
+      let homeShell = renderedShell defaultAppConfig HomeRoute
+          secondShell = renderedShell defaultAppConfig SecondRoute
+      renderPageBody (buildPageModel secondRequest)
+        `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+      Text.isInfixOf (Text.pack "<nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\">") homeShell `shouldBe` True
+      Text.isInfixOf (Text.pack "<nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\">") secondShell `shouldBe` True
+
+    it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
+      let homeBody = renderPageBody (buildPageModel homeRequest)
+          secondBody = renderPageBody (buildPageModel secondRequest)
+      Text.isInfixOf (Text.pack "<section data-page=\"home\">") homeBody `shouldBe` True
+      Text.isInfixOf (Text.pack "<section data-page=\"second\">") secondBody `shouldBe` True
+      Text.isInfixOf (Text.pack "data-page-title=\"true\"") homeBody `shouldBe` True
+      Text.isInfixOf (Text.pack "data-page-link=\"true\"") secondBody `shouldBe` True
+      Text.isInfixOf (Text.pack "<main") homeBody `shouldBe` False
+      Text.isInfixOf (Text.pack "<body") secondBody `shouldBe` False
+
+    it "covers empty and populated highlight rendering branches" $ do
+      Text.isInfixOf (Text.pack "<p data-empty-state=\"true\">No highlights yet.</p>") (renderPageBody (buildPageModel secondRequest)) `shouldBe` True
+      renderPageBody
+        ( SecondPage
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"],
+                secondPrimaryAction =
+                  CallToAction
+                    { callToActionLabel = Text.pack "Return home",
+                      callToActionRoute = HomeRoute,
+                      callToActionHref = Text.pack "/"
+                    }
+              }
+        )
+        `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
 
   describe "buildLayout" $ do
     it "includes title, navigation, and main-content container fields" $
@@ -226,7 +296,7 @@ spec = do
                     navigationIsActive = True
                   }
               ],
-            layoutMainContent = Text.pack "<h1>Second</h1>"
+            layoutMainContent = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "marks the active navigation item for each routed page" $ do
@@ -241,9 +311,9 @@ spec = do
 
     it "keeps not-found pages inside the shared layout" $ do
       let layout = layoutFor defaultAppConfig notFoundRequest
-      layoutMainContent layout `shouldBe` Text.pack "<h1>Not Found</h1>"
+      layoutMainContent layout `shouldBe` Text.pack "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
       renderLayout defaultAppConfig layout
-        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
@@ -271,11 +341,11 @@ spec = do
           secondPage = renderPage defaultAppConfig secondRequest
           notFoundPage = renderPage defaultAppConfig notFoundRequest
       HarchWeb.pageShell pureApplication homePage
-        `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Home</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication secondPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><h1>Second</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication notFoundPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><h1>Not Found</h1></main></body></html>"
+        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "can grow from page responses to API responses without changing route matching" $
       case HarchWeb.renderResponse pureApplication homeRequest of
