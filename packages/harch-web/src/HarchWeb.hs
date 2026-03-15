@@ -10,6 +10,7 @@ where
 
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import System.IO (Handle, hPutStrLn)
 
 data Page route = Page
   { pageTitle :: Text,
@@ -38,5 +39,6 @@ application = id
 matchRoute :: RouteCodec route -> Text -> route
 matchRoute codec path = fromMaybe (notFoundRoute codec) (parseRoute codec path)
 
-runServer :: config -> Application route -> IO ()
-runServer _config _application = pure ()
+runServer :: Handle -> config -> Application route -> IO ()
+runServer outputHandle _config _application =
+  hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"

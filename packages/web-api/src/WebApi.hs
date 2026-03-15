@@ -12,6 +12,7 @@ where
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
+import System.IO (Handle)
 
 newtype AppConfig = AppConfig
   { appTitlePrefix :: Text
@@ -96,5 +97,6 @@ buildApp config =
         HarchWeb.pageShell = appShell config
       }
 
-run :: IO ()
-run = HarchWeb.runServer defaultAppConfig (buildApp defaultAppConfig)
+run :: Handle -> IO ()
+run outputHandle =
+  HarchWeb.runServer outputHandle defaultAppConfig (buildApp defaultAppConfig)

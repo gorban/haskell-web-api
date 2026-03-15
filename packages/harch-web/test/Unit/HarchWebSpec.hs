@@ -3,6 +3,8 @@
 import Data.Text (Text)
 import qualified Data.Text as Text
 import HarchWeb
+import System.IO (hClose)
+import System.IO.Temp (withSystemTempFile)
 
 data TestRoute
   = KnownRoute
@@ -59,5 +61,8 @@ spec = do
       matchRoute sampleCodec (Text.pack "/missing") `shouldBe` MissingRoute
 
   describe "runServer" $
-    it "completes for the stub server boundary" $
-      runServer () sampleApplication `shouldReturn` ()
+    it "writes the stub startup message to the supplied handle" $
+      withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
+        runServer outputHandle () sampleApplication
+        hClose outputHandle
+        readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"

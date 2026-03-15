@@ -3,6 +3,8 @@
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified HarchWeb
+import System.IO (hClose)
+import System.IO.Temp (withSystemTempFile)
 import WebApi (AppConfig (..), AppRoute (..), buildApp, defaultAppConfig, matchRoute, renderRoute, run)
 
 pureApplication :: HarchWeb.Application AppRoute
@@ -33,5 +35,8 @@ spec = do
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageBody = \"<h1>Second</h1>\"}"
 
   describe "run" $
-    it "keeps IO at the composition-root startup seam" $
-      run `shouldReturn` ()
+    it "writes startup output to the supplied handle for isolated tests" $
+      withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
+        run outputHandle
+        hClose outputHandle
+        readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
