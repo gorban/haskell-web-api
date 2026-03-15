@@ -42,8 +42,6 @@ extra-doc-files: CHANGELOG.md
 custom-setup
   setup-depends:
     base ^>=4.22.0.0,
-    Cabal,
-    Cabal-syntax,
     core,
     directory,
     filepath,
@@ -85,7 +83,6 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
-    bytestring,
     core,
     directory,
     harch-web,
@@ -163,7 +160,6 @@ test-suite haskell-web-api-tests
     -- For testing framework:
     -- For running the executable in tests:
     base ^>=4.22.0.0,
-    bytestring,
     core,
     directory,
     filepath,

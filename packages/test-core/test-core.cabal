@@ -149,6 +149,7 @@ test-suite test-core-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
+    HUnit,
     base ^>=4.22.0.0,
     core,
     directory,

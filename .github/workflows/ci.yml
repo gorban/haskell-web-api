@@ -83,19 +83,6 @@ jobs:
           key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
 
       - name: Install test tools
-        if: steps.cabal_cache.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
-        id: install_test_tools
-        run: |
-          cabal update
-          cabal install --ignore-project hspec-discover
-
-      - name: Seed PostgreSQL test database
-        if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
-        id: seed_postgres
-        run: |
-          cabal run haskell-web-api-db -- migrate-and-seed
-
-      - name: Install test tools
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
           cabal update
@@ -182,7 +169,19 @@ jobs:
       - name: Install formatting tools
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+          set -euo pipefail
+
+          LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+
+          curl -fsSL https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz | tar -xzf - -C "$temp_dir"
+          install -Dm755 "$temp_dir/hlint-3.10/hlint" "$HOME/.cabal/bin/hlint"
+
+          curl -fsSL https://github.com/tweag/ormolu/archive/2164be7c68086e647c2c001a12a2f6f51c214ff0.tar.gz | tar -xzf - -C "$temp_dir"
+          cd "$temp_dir/ormolu-2164be7c68086e647c2c001a12a2f6f51c214ff0"
+          LANG=C.UTF-8 cabal install exe:ormolu --install-method=copy --overwrite-policy=always
 
       - name: Formatting checks
         if: steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped'

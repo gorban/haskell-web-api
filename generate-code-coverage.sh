@@ -291,15 +291,8 @@ SCRIPT
     fractions+=("$fraction_line")
   done < <(
     awk 'BEGIN{IGNORECASE=1}
-      {
-        if (!capture) {
-          if (match($0, /Program Coverage Total/)) {
-            $0 = substr($0, RSTART + RLENGTH)
-            capture = 1
-          } else {
-            next
-          }
-        }
+      /Program Coverage Total/ { capture=1; next }
+      capture {
         while (match($0, /[0-9]+[[:space:]]*\/[[:space:]]*[0-9]+/)) {
           s = substr($0, RSTART, RLENGTH)
           gsub(/[[:space:]]/, "", s)
@@ -352,13 +345,6 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
   for search_dir in ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; do
     report_args+=("--hpcdir" "$search_dir")
   done
-  while IFS= read -r spec_path; do
-    [ -z "$spec_path" ] && continue
-    spec_module="${spec_path#packages/*/test/}"
-    spec_module="${spec_module%.hs}"
-    spec_module="${spec_module//\//.}"
-    report_args+=("--exclude=$spec_module")
-  done < <(find packages -path "*/test/*Spec.hs" -type f -print | sort)
 
   echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
