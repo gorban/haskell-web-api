@@ -1,18 +1,19 @@
 module WebApi
-  ( AppConfig (..)
-  , AppRoute (..)
-  , buildApp
-  , defaultAppConfig
-  , matchRoute
-  , renderRoute
-  , run
-  ) where
+  ( AppConfig (..),
+    AppRoute (..),
+    buildApp,
+    defaultAppConfig,
+    matchRoute,
+    renderRoute,
+    run,
+  )
+where
 
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified HarchWeb
+import Data.Text qualified as Text
+import HarchWeb qualified
 
-data AppConfig = AppConfig
+newtype AppConfig = AppConfig
   { appTitlePrefix :: Text
   }
   deriving (Eq, Show)
@@ -29,9 +30,9 @@ defaultAppConfig = AppConfig {appTitlePrefix = Text.pack "web-api"}
 routeCodec :: HarchWeb.RouteCodec AppRoute
 routeCodec =
   HarchWeb.RouteCodec
-    { HarchWeb.parseRoute = parseAppRoute
-    , HarchWeb.renderRoute = renderAppRoute
-    , HarchWeb.notFoundRoute = NotFoundRoute
+    { HarchWeb.parseRoute = parseAppRoute,
+      HarchWeb.renderRoute = renderAppRoute,
+      HarchWeb.notFoundRoute = NotFoundRoute
     }
 
 parseAppRoute :: Text -> Maybe AppRoute
@@ -53,9 +54,9 @@ matchRoute = HarchWeb.matchRoute routeCodec
 renderRoute :: AppConfig -> AppRoute -> HarchWeb.Page AppRoute
 renderRoute config route =
   HarchWeb.Page
-    { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, Text.pack ": ", routeTitle route]
-    , HarchWeb.pageRoute = route
-    , HarchWeb.pageBody = routeBody route
+    { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, Text.pack ": ", routeTitle route],
+      HarchWeb.pageRoute = route,
+      HarchWeb.pageBody = routeBody route
     }
 
 routeTitle :: AppRoute -> Text
@@ -75,24 +76,24 @@ routeBody route =
 appShell :: AppConfig -> HarchWeb.Page AppRoute -> Text
 appShell config page =
   Text.concat
-    [ Text.pack "<html><head><title>"
-    , HarchWeb.pageTitle page
-    , Text.pack "</title></head><body data-app=\""
-    , appTitlePrefix config
-    , Text.pack "\"><main>"
-    , HarchWeb.pageBody page
-    , Text.pack "</main></body></html>"
+    [ Text.pack "<html><head><title>",
+      HarchWeb.pageTitle page,
+      Text.pack "</title></head><body data-app=\"",
+      appTitlePrefix config,
+      Text.pack "\"><main>",
+      HarchWeb.pageBody page,
+      Text.pack "</main></body></html>"
     ]
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute
 buildApp config =
   HarchWeb.application
     HarchWeb.Application
-      { HarchWeb.appName = Text.pack "web-api"
-      , HarchWeb.routeCodec = routeCodec
-      , HarchWeb.renderPage = renderRoute config
-      , HarchWeb.notFoundPage = renderRoute config NotFoundRoute
-      , HarchWeb.pageShell = appShell config
+      { HarchWeb.appName = Text.pack "web-api",
+        HarchWeb.routeCodec = routeCodec,
+        HarchWeb.renderPage = renderRoute config,
+        HarchWeb.notFoundPage = renderRoute config NotFoundRoute,
+        HarchWeb.pageShell = appShell config
       }
 
 run :: IO ()

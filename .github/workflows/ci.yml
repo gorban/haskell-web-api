@@ -120,58 +120,11 @@ jobs:
       - name: Install formatting tools
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          set -euo pipefail
-
-          LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
-
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-
-          curl -fsSL https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz | tar -xzf - -C "$temp_dir"
-          install -Dm755 "$temp_dir/hlint-3.10/hlint" "$HOME/.cabal/bin/hlint"
-
-          curl -fsSL https://github.com/tweag/ormolu/archive/2164be7c68086e647c2c001a12a2f6f51c214ff0.tar.gz | tar -xzf - -C "$temp_dir"
-          cd "$temp_dir/ormolu-2164be7c68086e647c2c001a12a2f6f51c214ff0"
-          LANG=C.UTF-8 cabal install exe:ormolu --install-method=copy --overwrite-policy=always
+          .github/scripts/install-formatting-tools.sh
 
       - name: Formatting checks
         run: |
-          set -euo pipefail
-          format_ok=0
-          find packages -name '*.cabal' -type f | \
-            grep -v '^packages/hspec-expectations-match' | \
-            xargs -I {} bash -c '
-              output="$(cabal-gild -i "{}" -m check 2>&1)"
-              if [ $? -ne 0 ]; then
-                printf "%s: %s\\n\\n" "{}" "$output"
-                exit 1
-              fi' || format_ok=1
-          find packages -name '*.hs' -type f | \
-            grep -v '^packages/hspec-expectations-match' | \
-            xargs -I {} bash -c '
-              dos2unix -q "{}"
-              output="$(hlint "{}" 2>&1)"
-              issues_found=false
-              if [ $? -ne 0 ]; then
-                printf "%s\\n" "$output"
-                issues_found=true
-                exit 1
-              fi
-              output="$(ormolu -m check "{}" 2>&1)"
-              if [ $? -ne 0 ]; then
-                printf "%s\\n" "$output"
-                issues_found=true
-                exit 1
-              fi
-              if $issues_found; then
-                printf "\\n"
-                exit 1
-              fi' || format_ok=1
-          if [ "$format_ok" -ne 0 ]; then
-            echo "Found formatting issues in packages/ files"
-            exit 1
-          fi
-          echo "No formatting issues in packages/ files"
+          .github/scripts/formatting-checks.sh
 
       - name: Run tests (skip Unit)
         run: |

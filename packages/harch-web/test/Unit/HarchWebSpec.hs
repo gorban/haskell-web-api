@@ -12,9 +12,9 @@ data TestRoute
 sampleCodec :: RouteCodec TestRoute
 sampleCodec =
   RouteCodec
-    { parseRoute = parseSampleRoute
-    , renderRoute = renderSampleRoute
-    , notFoundRoute = MissingRoute
+    { parseRoute = parseSampleRoute,
+      renderRoute = renderSampleRoute,
+      notFoundRoute = MissingRoute
     }
 
 parseSampleRoute :: Text -> Maybe TestRoute
@@ -31,19 +31,19 @@ renderSampleRoute route =
 samplePage :: Page TestRoute
 samplePage =
   Page
-    { pageTitle = Text.pack "Known"
-    , pageRoute = KnownRoute
-    , pageBody = Text.pack "<h1>Known</h1>"
+    { pageTitle = Text.pack "Known",
+      pageRoute = KnownRoute,
+      pageBody = Text.pack "<h1>Known</h1>"
     }
 
 sampleApplication :: Application TestRoute
 sampleApplication =
   Application
-    { appName = Text.pack "sample"
-    , routeCodec = sampleCodec
-    , renderPage = const samplePage
-    , notFoundPage = samplePage {pageRoute = MissingRoute, pageTitle = Text.pack "Missing"}
-    , pageShell = \page -> Text.concat [Text.pack "<main>", pageBody page, Text.pack "</main>"]
+    { appName = Text.pack "sample",
+      routeCodec = sampleCodec,
+      renderPage = const samplePage,
+      notFoundPage = samplePage {pageRoute = MissingRoute, pageTitle = Text.pack "Missing"},
+      pageShell = \page -> Text.concat [Text.pack "<main>", pageBody page, Text.pack "</main>"]
     }
 
 spec = do

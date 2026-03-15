@@ -17,7 +17,7 @@ Commands to install prerequisites in Ubuntu. Also tested in WSL2 on Windows:
 ```bash
 sudo apt update
 sudo apt upgrade -y
-sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev git
+sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev git dos2unix
 ```
 
 These Ubuntu packages already include the development libraries needed by the optional Haskell Debugger:
@@ -35,7 +35,7 @@ curl -s https://raw.githubusercontent.com/89luca89/distrobox/main/install | sudo
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -50,13 +50,13 @@ init_hooks="resolve_git_tool_bin() { case \$1 in bc|bc3|bc4) printf %s bcompare 
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
   built-in `vimdiff` tool inside the container.
 - The `init_hooks` do git setup overrides inside the container. `additional_flags` sets `GIT_CONFIG_GLOBAL`
-  on every container start, and the hooks copy the
-  host `~/.gitconfig` into that container-local file if it exists. They then inspect the selected
-  `diff.tool` and `merge.tool` values from that copied config. If a selected tool is not installed locally,
-  the example creates a symlink under `/var/tmp/distrobox-git/bin` that reroutes that executable via
-  `distrobox-host-exec`, and points git at that symlink with `difftool.<tool>.path` or
-  `mergetool.<tool>.path`. They do not override any existing `diff.tool` or `merge.tool` setting copied
-  from the host; they only default missing tool entries to `vimdiff`.
+  on every container start, and the hooks copy the host `~/.gitconfig` into that container-local file if
+  it exists. They then inspect the selected `diff.tool` and `merge.tool` values from that copied config.
+  If a selected tool is not installed locally, the example creates a symlink under
+  `/var/tmp/distrobox-git/bin` that reroutes that executable via `distrobox-host-exec`, and points git at
+  that symlink with `difftool.<tool>.path` or `mergetool.<tool>.path`. They do not override any existing
+  `diff.tool` or `merge.tool` setting copied from the host; they only default missing tool entries to
+  `vimdiff`.
 
 Then to assemble and run the container:
 ```bash
@@ -71,6 +71,12 @@ simply running the GHCup installer below should install some prerequisites, but 
 
 > On Darwin M1 you might also need a working llvm installed (e.g. via brew) and have the toolchain exposed
 > in PATH.
+
+But, we also have a custom pre-commit hook that uses `dos2unix` for formatting checks, so you may want to install that as well with Homebrew:
+
+```bash
+brew install llvm dos2unix
+```
 
 ## Install GHCup
 
@@ -168,7 +174,7 @@ Run `ghcup tui` to manage installed versions of GHC, Cabal, Stack, HLS, etc.
 
 ### Build Prerequisites for This Repository
 
-Before running `cabal build all` in this repository, install the one external build tool that is currently
+Before running `cabal build all` in this repository, install the external build tool that is currently
 required globally:
 
 ```bash
@@ -185,6 +191,36 @@ After that, the build command should at least have the required external build t
 
 ```bash
 cabal build all
+```
+
+#### Additional Build Prerequisites for CI Builds
+
+The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
+`Formatting checks` step.
+
+You may want to install the formatting tools and set up the pre-commit hook that the CI workflow uses to
+fail fast on formatting regressions before a push or pull request.
+
+```bash
+.github/scripts/install-formatting-tools.sh
+```
+
+Those commands install:
+- `cabal-gild`
+- `hlint`
+- `ormolu`
+
+To fail fast on formatting regressions before a push or pull request, copy the tracked pre-commit hook into
+your local git hooks directory:
+
+```bash
+install -Dm755 .github/hooks/pre-commit .git/hooks/pre-commit
+```
+
+After copying it, any git commit will automatically run formatting checks, or you can also run it yourself:
+
+```bash
+git hook run pre-commit
 ```
 
 ## (optional) IDE Setup with VS Code-likes
@@ -249,13 +285,7 @@ the running container.
 
 You might need the pre-release versions for compatibility with the latest GHC and HLS releases.
 
-### Global Tools For IDE Extensions
-
-`hlint` is not required for `cabal build all`, but it is useful for editor diagnostics and local linting:
-
-```bash
-cabal install --ignore-project hlint --overwrite-policy=always
-```
+### Global Tools for IDE Extensions
 
 Install the debugger backend with:
 
@@ -264,7 +294,8 @@ cabal install --ignore-project -w ghc-9.14.1 haskell-debugger --allow-newer=base
 ```
 
 If your editor starts outside a login shell, make sure the shell startup file it does read contains the
-GHCup environment line shown earlier so the editor can find `ghc`, `hlint`, and `hdb`.
+GHCup environment line shown earlier so the editor can find `ghc`, `hlint`, `ormolu`, `cabal-gild`, and
+`hdb`.
 
 Haskell Debugger will fail to start without installing our spec-preprocessor executable in its path:
 

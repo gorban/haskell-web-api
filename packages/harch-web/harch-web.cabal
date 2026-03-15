@@ -56,7 +56,6 @@ library
   exposed: True
   -- Modules included in this library.
   exposed-modules: HarchWeb
-
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
@@ -88,7 +87,6 @@ test-suite harch-web-tests
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
-
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
