@@ -29,7 +29,7 @@ jobs:
       - name: Setup Haskell
         uses: haskell-actions/setup@v2
         with:
-          ghc-version: '9.12.2'
+          ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
       - name: Install dos2unix
@@ -44,7 +44,7 @@ jobs:
           path: |
             ~/.cabal/bin
             ~/.cabal/store
-          key: ${{ runner.os }}-ghc-9.12.2-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
+          key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
 
       - name: Install test tools
         if: steps.cache.outputs.cache-hit != 'true'
@@ -71,7 +71,7 @@ jobs:
           # Run coverage script, but capture exit code instead of failing immediately
           # This allows us to publish the coverage report before exiting
           coverage_exit=0
-          ./generate-code-coverage.ps1 || coverage_exit=$?
+          ./generate-code-coverage.sh || coverage_exit=$?
 
           # Store exit code for later
           echo "exit_code=$coverage_exit" >> "$GITHUB_OUTPUT"
@@ -102,7 +102,7 @@ jobs:
           done
 
           # Fix iframe src paths in the index to use relative paths
-          # From: dist-newstyle/build/x86_64-linux/ghc-9.12.2/core-0.1.0.0/opt/hpc/vanilla/html/hpc_index.html
+          # From: dist-newstyle/build/x86_64-linux/ghc-9.14.1/core-0.1.0.0/opt/hpc/vanilla/html/hpc_index.html
           # To:   core-0.1.0.0/hpc_index.html
           sed -i "s|dist-newstyle/build/[^/]*/ghc-[^/]*/\([^/]*\)/opt/hpc/vanilla/html/|\1/|g" _site/index.html
 
@@ -129,7 +129,19 @@ jobs:
       - name: Install formatting tools
         if: steps.cache.outputs.cache-hit != 'true'
         run: |
-          LANG=C.UTF-8 cabal install hlint ormolu cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+          set -euo pipefail
+
+          LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+
+          temp_dir="$(mktemp -d)"
+          trap 'rm -rf "$temp_dir"' EXIT
+
+          curl -fsSL https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz | tar -xzf - -C "$temp_dir"
+          install -Dm755 "$temp_dir/hlint-3.10/hlint" "$HOME/.cabal/bin/hlint"
+
+          curl -fsSL https://github.com/tweag/ormolu/archive/2164be7c68086e647c2c001a12a2f6f51c214ff0.tar.gz | tar -xzf - -C "$temp_dir"
+          cd "$temp_dir/ormolu-2164be7c68086e647c2c001a12a2f6f51c214ff0"
+          LANG=C.UTF-8 cabal install exe:ormolu --install-method=copy --overwrite-policy=always
 
       - name: Formatting checks
         run: |

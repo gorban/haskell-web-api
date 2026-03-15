@@ -4,7 +4,7 @@ packages:
   packages/test-core/
   packages/web-api/
 
-with-compiler: ghc-9.12.2
+with-compiler: ghc-9.14.1
 optimization: 2
 tests: True
 debug-info: True

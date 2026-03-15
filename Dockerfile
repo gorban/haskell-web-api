@@ -9,7 +9,7 @@
 #   docker build -t haskell-web-api .
 
 # =============================================================================
-# Stage 1: Build environment with GHC 9.12.2 and Cabal 3.16.1.0
+# Stage 1: Build environment with GHC 9.14.1 and Cabal 3.16.1.0
 # =============================================================================
 FROM debian:bookworm-slim AS builder
 
@@ -42,7 +42,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | \
     BOOTSTRAP_HASKELL_MINIMAL=1 \
     sh
 
-ghcup install ghc 9.12.2 --set
+ghcup install ghc 9.14.1 --set
 ghcup install cabal 3.16.1.0 --set
 ghc --version
 cabal --version
@@ -79,7 +79,7 @@ FROM builder AS build-and-test
 
 # Run coverage script (builds with -O0 for accurate coverage) then rebuild with -O2 for release
 RUN <<EOF
-./generate-code-coverage.ps1 # Runs Unit tests and ensures 100% coverage
+./generate-code-coverage.sh # Runs Unit tests and ensures 100% coverage
 cabal build all -O2
 cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
 EOF

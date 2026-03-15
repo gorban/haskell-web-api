@@ -31,8 +31,5 @@ hpc_index.html
 *.md
 !packages/*/CHANGELOG.md
 
-# Windows-specific (keep generate-code-coverage.ps1 as it's polyglot)
-PSScriptAnalyzerSettings.psd1
-
 # Misc
 .editorconfig
