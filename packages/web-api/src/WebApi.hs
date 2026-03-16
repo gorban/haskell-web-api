@@ -9,10 +9,8 @@ module WebApi
     CertbotConfig (..),
     CallToAction (..),
     HomePageModel (..),
-    Layout (..),
     ListenerConfig (..),
     ListenerScheme (..),
-    NavigationItem (..),
     NotFoundPageModel (..),
     ObservabilityConfig (..),
     RouteSelectionError (..),
@@ -25,12 +23,10 @@ module WebApi
     buildApp,
     defaultAppConfig,
     defaultRequestContext,
-    buildLayout,
     buildPageModel,
     matchRoute,
     parseRoute,
     renderPage,
-    renderLayout,
     renderPageBody,
     renderRoutePath,
     run,
@@ -175,21 +171,6 @@ data AppRoute
   = HomeRoute
   | SecondRoute
   | NotFoundRoute
-  deriving (Eq, Show)
-
-data NavigationItem = NavigationItem
-  { navigationLabel :: Text,
-    navigationRoute :: AppRoute,
-    navigationHref :: Text,
-    navigationIsActive :: Bool
-  }
-  deriving (Eq, Show)
-
-data Layout = Layout
-  { layoutTitle :: Text,
-    layoutNavigation :: [NavigationItem],
-    layoutMainContent :: Text
-  }
   deriving (Eq, Show)
 
 defaultAppConfig :: AppConfig
@@ -448,61 +429,29 @@ renderRouteSuffix route =
     NotFoundRoute -> Text.pack "/404"
 
 appShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
-appShell config page = renderLayout config (buildLayout config page)
+appShell config = HarchWeb.buildPageShell routeCodec (appShellConfig config)
 
-buildLayout :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Layout
-buildLayout _config page =
-  Layout
-    { layoutTitle = HarchWeb.pageTitle page,
-      layoutNavigation = navigationItems page,
-      layoutMainContent = HarchWeb.pageBody page
-    }
-
-navigationItems :: HarchWeb.Page AppRoute AppRequestContext -> [NavigationItem]
-navigationItems page =
-  [ navigationItem page HomeRoute (Text.pack "Home"),
-    navigationItem page SecondRoute (Text.pack "Second")
-  ]
-
-navigationItem :: HarchWeb.Page AppRoute AppRequestContext -> AppRoute -> Text -> NavigationItem
-navigationItem page route label =
-  NavigationItem
-    { navigationLabel = label,
-      navigationRoute = route,
-      navigationHref =
-        renderRoutePath
-          HarchWeb.RouteRequest
-            { HarchWeb.requestRoute = route,
-              HarchWeb.requestContext = HarchWeb.pageContext page
+appShellConfig :: AppConfig -> HarchWeb.PageShell AppRoute AppRequestContext
+appShellConfig config =
+  HarchWeb.PageShell
+    { HarchWeb.shellBodyAttributes =
+        [ HarchWeb.HtmlAttribute
+            { HarchWeb.attributeName = Text.pack "data-app",
+              HarchWeb.attributeValue = appTitlePrefix config
+            }
+        ],
+      HarchWeb.shellNavigationItems =
+        [ HarchWeb.NavigationItem
+            { HarchWeb.navigationLabel = Text.pack "Home",
+              HarchWeb.navigationRoute = HomeRoute
             },
-      navigationIsActive = HarchWeb.pageRoute page == route
+          HarchWeb.NavigationItem
+            { HarchWeb.navigationLabel = Text.pack "Second",
+              HarchWeb.navigationRoute = SecondRoute
+            }
+        ],
+      HarchWeb.shellMainId = Text.pack "app-main"
     }
-
-renderLayout :: AppConfig -> Layout -> Text
-renderLayout config layout =
-  Text.concat
-    [ Text.pack "<html><head><title>",
-      layoutTitle layout,
-      Text.pack "</title></head><body data-app=\"",
-      appTitlePrefix config,
-      Text.pack "\"><nav>",
-      Text.concat (map renderNavigationItem (layoutNavigation layout)),
-      Text.pack "</nav><main id=\"app-main\">",
-      layoutMainContent layout,
-      Text.pack "</main></body></html>"
-    ]
-
-renderNavigationItem :: NavigationItem -> Text
-renderNavigationItem item =
-  Text.concat
-    [ Text.pack "<a href=\"",
-      navigationHref item,
-      Text.pack "\"",
-      if navigationIsActive item then Text.pack " aria-current=\"page\"" else Text.empty,
-      Text.pack ">",
-      navigationLabel item,
-      Text.pack "</a>"
-    ]
 
 renderResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext
 renderResponse config routeRequest = HarchWeb.PageResponse (renderPage config routeRequest)

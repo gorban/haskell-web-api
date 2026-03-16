@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), HomePageModel (..), Layout (..), ListenerConfig (..), ListenerScheme (..), NavigationItem (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildLayout, buildPageModel, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderLayout, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -36,9 +36,6 @@ renderedShell config route =
   let application = buildApp config
       page = renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
    in HarchWeb.pageShell application page
-
-layoutFor :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> Layout
-layoutFor config routeRequest = buildLayout config (renderPage config routeRequest)
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -277,42 +274,19 @@ spec = do
         )
         `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
 
-  describe "buildLayout" $ do
-    it "includes title, navigation, and main-content container fields" $
-      layoutFor defaultAppConfig secondRequest
-        `shouldBe` Layout
-          { layoutTitle = Text.pack "web-api: Second",
-            layoutNavigation =
-              [ NavigationItem
-                  { navigationLabel = Text.pack "Home",
-                    navigationRoute = HomeRoute,
-                    navigationHref = Text.pack "/",
-                    navigationIsActive = False
-                  },
-                NavigationItem
-                  { navigationLabel = Text.pack "Second",
-                    navigationRoute = SecondRoute,
-                    navigationHref = Text.pack "/second",
-                    navigationIsActive = True
-                  }
-              ],
-            layoutMainContent = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-          }
-
+  describe "page shell integration" $ do
     it "marks the active navigation item for each routed page" $ do
-      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig homeRequest)) `shouldBe` [True, False]
-      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig secondRequest)) `shouldBe` [False, True]
-      map navigationIsActive (layoutNavigation (layoutFor defaultAppConfig notFoundRequest)) `shouldBe` [False, False]
+      Text.isInfixOf (Text.pack "<a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a>") (renderedShell defaultAppConfig HomeRoute) `shouldBe` True
+      Text.isInfixOf (Text.pack "<a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a>") (renderedShell defaultAppConfig SecondRoute) `shouldBe` True
+      Text.isInfixOf (Text.pack "aria-current=\"page\"") (renderedShell defaultAppConfig NotFoundRoute) `shouldBe` False
 
-    it "keeps layout output identical for repeated renders of the same page input" $ do
-      let page = renderPage defaultAppConfig frenchSecondRequest
-          layout = buildLayout defaultAppConfig page
-      renderLayout defaultAppConfig layout `shouldBe` renderLayout defaultAppConfig layout
+    it "keeps shell output identical for repeated renders of the same page input" $ do
+      let application = buildApp defaultAppConfig
+          page = renderPage defaultAppConfig frenchSecondRequest
+      HarchWeb.pageShell application page `shouldBe` HarchWeb.pageShell application page
 
-    it "keeps not-found pages inside the shared layout" $ do
-      let layout = layoutFor defaultAppConfig notFoundRequest
-      layoutMainContent layout `shouldBe` Text.pack "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      renderLayout defaultAppConfig layout
+    it "keeps not-found pages inside the shared shell" $
+      renderedShell defaultAppConfig NotFoundRoute
         `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
   describe "buildApp" $ do

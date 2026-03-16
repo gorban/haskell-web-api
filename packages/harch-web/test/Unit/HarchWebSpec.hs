@@ -55,13 +55,35 @@ samplePage request =
       pageBody = Text.pack "<h1>Known</h1>"
     }
 
+sampleShell :: PageShell TestRoute TestContext
+sampleShell =
+  PageShell
+    { shellBodyAttributes =
+        [ HtmlAttribute
+            { attributeName = Text.pack "data-app",
+              attributeValue = Text.pack "sample"
+            }
+        ],
+      shellNavigationItems =
+        [ NavigationItem
+            { navigationLabel = Text.pack "Known",
+              navigationRoute = KnownRoute
+            },
+          NavigationItem
+            { navigationLabel = Text.pack "Missing",
+              navigationRoute = MissingRoute
+            }
+        ],
+      shellMainId = Text.pack "app-main"
+    }
+
 sampleApplication :: Application TestRoute TestContext
 sampleApplication =
   Application
     { appName = Text.pack "sample",
       routeCodec = sampleCodec,
       renderResponse = renderSampleResponse,
-      pageShell = \page -> Text.concat [Text.pack "<main>", pageBody page, Text.pack "</main>"]
+      pageShell = buildPageShell sampleCodec sampleShell
     }
 
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext
@@ -104,6 +126,62 @@ spec = do
         `shouldBe` Text.pack "/known"
       renderRoute sampleCodec (RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext})
         `shouldBe` Text.pack "/es/known"
+
+  describe "routeHref" $
+    it "reuses route rendering for app-provided navigation targets" $ do
+      routeHref sampleCodec defaultContext KnownRoute `shouldBe` Text.pack "/known"
+      routeHref sampleCodec spanishContext KnownRoute `shouldBe` Text.pack "/es/known"
+
+  describe "buildNavigation" $
+    it "resolves hrefs and active state from the current page context" $
+      buildNavigation sampleCodec (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext})) (shellNavigationItems sampleShell)
+        `shouldBe` [ ResolvedNavigationItem
+                       { navigationLabel = Text.pack "Known",
+                         navigationRoute = KnownRoute,
+                         navigationHref = Text.pack "/es/known",
+                         navigationIsActive = True
+                       },
+                     ResolvedNavigationItem
+                       { navigationLabel = Text.pack "Missing",
+                         navigationRoute = MissingRoute,
+                         navigationHref = Text.pack "/404",
+                         navigationIsActive = False
+                       }
+                   ]
+
+  describe "buildDocument" $
+    it "preserves the generic shell contract separately from app-specific page content" $
+      buildDocument sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+        `shouldBe` Document
+          { documentTitle = Text.pack "Known",
+            documentBodyAttributes =
+              [ HtmlAttribute
+                  { attributeName = Text.pack "data-app",
+                    attributeValue = Text.pack "sample"
+                  }
+              ],
+            documentNavigation =
+              [ ResolvedNavigationItem
+                  { navigationLabel = Text.pack "Known",
+                    navigationRoute = KnownRoute,
+                    navigationHref = Text.pack "/known",
+                    navigationIsActive = True
+                  },
+                ResolvedNavigationItem
+                  { navigationLabel = Text.pack "Missing",
+                    navigationRoute = MissingRoute,
+                    navigationHref = Text.pack "/404",
+                    navigationIsActive = False
+                  }
+              ],
+            documentMainId = Text.pack "app-main",
+            documentMainContent = Text.pack "<h1>Known</h1>"
+          }
+
+  describe "buildPageShell" $
+    it "renders the shared HTML document for the supplied page and shell options" $
+      buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+        `shouldBe` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
   describe "runServer" $
     it "writes the stub startup message to the supplied handle" $
