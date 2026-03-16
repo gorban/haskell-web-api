@@ -92,6 +92,7 @@ spec = do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/en")) `shouldBe` Just HomeRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/404")) `shouldBe` Just NotFoundRoute
 
     it "parses the second page path" $
       parseRoute defaultRequestContext (Text.pack "/second") `shouldBe` Just secondRequest
@@ -106,6 +107,19 @@ spec = do
     it "fails unsupported locale prefixes with a precise route-selection error" $ do
       selectRoute defaultRequestContext (Text.pack "/de") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
       selectRoute defaultRequestContext (Text.pack "/de/second") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
+
+    it "rejects paths that do not start with a slash" $
+      selectRoute defaultRequestContext (Text.pack "second") `shouldBe` Left (UnsupportedPath (Text.pack "second"))
+
+    it "rejects unsupported multi-segment paths" $
+      selectRoute defaultRequestContext (Text.pack "/fr/second/extra") `shouldBe` Left (UnsupportedPath (Text.pack "/fr/second/extra"))
+
+    it "rejects unsupported single-segment non-locale paths" $
+      selectRoute defaultRequestContext (Text.pack "/missing") `shouldBe` Left (UnsupportedPath (Text.pack "/missing"))
+
+    it "rejects locale-prefixed paths whose trailing segment is unsupported" $ do
+      selectRoute defaultRequestContext (Text.pack "/fr/missing") `shouldBe` Left (UnsupportedPath (Text.pack "/fr/missing"))
+      selectRoute defaultRequestContext (Text.pack "/other/second") `shouldBe` Left (UnsupportedPath (Text.pack "/other/second"))
 
     it "merges middleware-supplied and path-derived request inputs deterministically" $ do
       let middlewareContext =
