@@ -508,6 +508,124 @@ spec = do
       HomeRoute `shouldNotBe` SecondRoute
       SecondRoute `shouldNotBe` NotFoundRoute
 
+    it "covers high-precedence show rendering for the remaining public types" $ do
+      let shouldBeParenthesized rendered = do
+            case rendered of
+              '(' : rest ->
+                case reverse rest of
+                  ')' : _ -> pure ()
+                  _ -> expectationFailure "expected parenthesized rendering"
+              _ -> expectationFailure "expected parenthesized rendering"
+          certbotConfig =
+            CertbotConfig
+              { certbotExecutable = "certbot",
+                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+              }
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = [Text.pack "ops@example.com"],
+                acmeChallengeBackend = CertbotHttp01 certbotConfig
+              }
+          manualCertificateSource =
+            ManualCertificateFiles
+              { certificateFile = "cert.pem",
+                privateKeyFile = "key.pem"
+              }
+          acmeCertificateSource = AcmeCertificateSource acmeConfig
+          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
+          listenerConfig =
+            ListenerConfig
+              { listenerHost = Text.pack "0.0.0.0",
+                listenerPort = 5443,
+                listenerScheme = Https,
+                listenerTls = Just tlsConfig
+              }
+          staticRoot =
+            StaticAssetRoot
+              { staticUrlPrefix = Text.pack "/assets",
+                staticDirectory = "public"
+              }
+          staticAssetsConfig =
+            StaticAssetsConfig
+              { staticAssetRoots = [staticRoot],
+                staticCacheControlSeconds = Just 3600
+              }
+          exporter =
+            OtlpExporter
+              { otlpEndpoint = Text.pack "http://otel-collector:4318",
+                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              }
+          observabilityConfig =
+            ObservabilityConfig
+              { tracingExporter = Just exporter,
+                metricsExporter = Just exporter
+              }
+          appConfig =
+            AppConfig
+              { appTitlePrefix = Text.pack "test-app",
+                listenerConfigs = [listenerConfig],
+                staticAssets = staticAssetsConfig,
+                observability = observabilityConfig
+              }
+          requestContext =
+            AppRequestContext
+              { requestLocale = French,
+                requestCorrelationId = Just (Text.pack "req-999")
+              }
+          callToAction =
+            CallToAction
+              { callToActionLabel = Text.pack "Return home",
+                callToActionRoute = HomeRoute,
+                callToActionHref = Text.pack "/"
+              }
+          homePageModel =
+            HomePageModel
+              { homeHeading = Text.pack "Home",
+                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+                homePrimaryAction = callToAction
+              }
+          secondPageModel =
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = [Text.pack "Fast SSR"],
+                secondPrimaryAction = callToAction
+              }
+          notFoundPageModel =
+            NotFoundPageModel
+              { notFoundHeading = Text.pack "Not Found",
+                notFoundSummary = Text.pack "The requested page could not be found.",
+                notFoundPrimaryAction = callToAction
+              }
+      show Http `shouldBe` "Http"
+      show Https `shouldBe` "Https"
+      show HomeRoute `shouldBe` "HomeRoute"
+      show SecondRoute `shouldBe` "SecondRoute"
+      show NotFoundRoute `shouldBe` "NotFoundRoute"
+      shouldBeParenthesized (showsPrec 11 certbotConfig "")
+      shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
+      shouldBeParenthesized (showsPrec 11 acmeConfig "")
+      shouldBeParenthesized (showsPrec 11 manualCertificateSource "")
+      shouldBeParenthesized (showsPrec 11 acmeCertificateSource "")
+      shouldBeParenthesized (showsPrec 11 tlsConfig "")
+      shouldBeParenthesized (showsPrec 11 listenerConfig "")
+      shouldBeParenthesized (showsPrec 11 staticRoot "")
+      shouldBeParenthesized (showsPrec 11 staticAssetsConfig "")
+      shouldBeParenthesized (showsPrec 11 exporter "")
+      shouldBeParenthesized (showsPrec 11 observabilityConfig "")
+      shouldBeParenthesized (showsPrec 11 appConfig "")
+      shouldBeParenthesized (showsPrec 11 requestContext "")
+      shouldBeParenthesized (showsPrec 11 callToAction "")
+      shouldBeParenthesized (showsPrec 11 homePageModel "")
+      shouldBeParenthesized (showsPrec 11 secondPageModel "")
+      shouldBeParenthesized (showsPrec 11 notFoundPageModel "")
+      shouldBeParenthesized (showsPrec 11 (HomePage homePageModel) "")
+      shouldBeParenthesized (showsPrec 11 (SecondPage secondPageModel) "")
+      shouldBeParenthesized (showsPrec 11 (NotFoundPage notFoundPageModel) "")
+      shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix (Text.pack "de")) "")
+      shouldBeParenthesized (showsPrec 11 (UnsupportedPath (Text.pack "/missing")) "")
+
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
