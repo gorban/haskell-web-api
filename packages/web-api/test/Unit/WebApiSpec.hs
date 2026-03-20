@@ -152,6 +152,24 @@ spec = do
                 notFoundSummary = Text.pack "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
+          homePageModel =
+            HomePageModel
+              { homeHeading = Text.pack "Home",
+                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+                homePrimaryAction =
+                  CallToAction
+                    { callToActionLabel = Text.pack "Browse the second page",
+                      callToActionRoute = SecondRoute,
+                      callToActionHref = Text.pack "/fr/second"
+                    }
+              }
+          secondPageModel =
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"],
+                secondPrimaryAction = callToAction
+              }
       case manualCertificateSource of
         source@ManualCertificateFiles {} -> do
           certificateFile source `shouldBe` "cert.pem"
@@ -182,6 +200,18 @@ spec = do
       callToActionLabel callToAction `shouldBe` Text.pack "Return home"
       callToActionRoute callToAction `shouldBe` HomeRoute
       callToActionHref callToAction `shouldBe` Text.pack "/fr"
+      homeHeading homePageModel `shouldBe` Text.pack "Home"
+      homeSummary homePageModel `shouldBe` Text.pack "Server-rendered home page with stubbed content."
+      homePrimaryAction homePageModel
+        `shouldBe` CallToAction
+          { callToActionLabel = Text.pack "Browse the second page",
+            callToActionRoute = SecondRoute,
+            callToActionHref = Text.pack "/fr/second"
+          }
+      secondHeading secondPageModel `shouldBe` Text.pack "Second"
+      secondSummary secondPageModel `shouldBe` Text.pack "Second page content with stubbed data ready for future loaders."
+      secondHighlights secondPageModel `shouldBe` [Text.pack "Fast SSR", Text.pack "Progressive enhancement"]
+      secondPrimaryAction secondPageModel `shouldBe` callToAction
       notFoundHeading notFoundPageModel `shouldBe` Text.pack "Not Found"
       notFoundSummary notFoundPageModel `shouldBe` Text.pack "The requested page could not be found."
       notFoundPrimaryAction notFoundPageModel `shouldBe` callToAction
@@ -265,15 +295,76 @@ spec = do
       show certbotConfig
         `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
       show InProcessHttp01 `shouldBe` "InProcessHttp01"
+      show (CertbotHttp01 certbotConfig)
+        `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
+      show acmeCertificateSource
+        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
+      show (TlsConfig {certificateSource = manualCertificateSource})
+        `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
+      show manualCertificateSource
+        `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
+      show (ListenerConfig {listenerHost = Text.pack "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})
+        `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
+      show
+        ( StaticAssetsConfig
+            { staticAssetRoots = [staticRoot],
+              staticCacheControlSeconds = Just 3600
+            }
+        )
+        `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
+      show
+        ( ObservabilityConfig
+            { tracingExporter =
+                Just
+                  OtlpExporter
+                    { otlpEndpoint = Text.pack "http://otel-collector:4318",
+                      otlpHeaders = [(Text.pack "x-api-key", Text.pack "secret")]
+                    },
+              metricsExporter = Nothing
+            }
+        )
+        `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}), metricsExporter = Nothing}"
+      show
+        ( AppRequestContext
+            { requestLocale = French,
+              requestCorrelationId = Just (Text.pack "req-789")
+            }
+        )
+        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\"}"
+      show
+        ( CallToAction
+            { callToActionLabel = Text.pack "Return home",
+              callToActionRoute = HomeRoute,
+              callToActionHref = Text.pack "/"
+            }
+        )
+        `shouldBe` "CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}"
       show English `shouldBe` "English"
       show French `shouldBe` "French"
       show (UnsupportedLocalePrefix (Text.pack "de")) `shouldBe` "UnsupportedLocalePrefix \"de\""
       show (UnsupportedPath (Text.pack "/missing")) `shouldBe` "UnsupportedPath \"/missing\""
+      show homePageModel
+        `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}}"
+      show secondPageModel
+        `shouldBe` "SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
+      show (HomePage homePageModel)
+        `shouldBe` "HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}})"
+      show (SecondPage secondPageModel)
+        `shouldBe` "SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
       show notFoundPageModel
         `shouldBe` "NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
       show (NotFoundPage notFoundPageModel)
         `shouldBe` "NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
+      show
+        ( AppConfig
+            { appTitlePrefix = Text.pack "test-app",
+              listenerConfigs = [ListenerConfig {listenerHost = Text.pack "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}],
+              staticAssets = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600},
+              observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+            }
+        )
+        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
