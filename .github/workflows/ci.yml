@@ -24,22 +24,28 @@ jobs:
 
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
 
       - name: Setup Haskell
+        if: steps.checkout.outcome == 'success'
+        id: setup_haskell
         uses: haskell-actions/setup@v2
         with:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
       - name: Install dos2unix
+        if: steps.setup_haskell.outcome == 'success'
+        id: dos2unix
         run: |
           sudo apt-get update
           sudo apt-get install -y dos2unix
 
-      - name: Cache Cabal
-        id: cache
-        uses: actions/cache@v4
+      - name: Restore Cabal cache
+        if: steps.dos2unix.outcome == 'success'
+        id: cabal_cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cabal/bin
@@ -47,12 +53,14 @@ jobs:
           key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
 
       - name: Install test tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cabal_cache.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_test_tools
         run: |
           cabal update
           cabal install --ignore-project hspec-discover
 
       - name: Run tests with coverage
+        if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
         id: coverage
         shell: bash
         run: |
@@ -70,7 +78,8 @@ jobs:
           # Continue even if coverage failed - we want to publish the report
 
       - name: Prepare coverage report for GitHub Pages
-        if: github.ref == 'refs/heads/main'
+        id: prepare_coverage_report
+        if: github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
         run: |
           set -euo pipefail
 
@@ -103,36 +112,44 @@ jobs:
           sed -i 's@if (!/^file:/i\.test(data\.href)) return;@if (new URL(data.href, window.location.href).origin !== window.location.origin) return;@g' _site/index.html
 
       - name: Setup Pages
-        if: github.ref == 'refs/heads/main'
+        id: setup_pages
+        if: github.ref == 'refs/heads/main' && steps.prepare_coverage_report.outcome == 'success'
         uses: actions/configure-pages@v5
 
       - name: Upload coverage artifact
-        if: github.ref == 'refs/heads/main'
+        id: upload_coverage_artifact
+        if: github.ref == 'refs/heads/main' && steps.setup_pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
       - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.upload_coverage_artifact.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@v4
 
       - name: Install formatting tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_formatting_tools
         run: |
           .github/scripts/install-formatting-tools.sh
 
       - name: Formatting checks
+        if: steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped'
+        id: formatting_checks
         run: |
           .github/scripts/formatting-checks.sh
 
       - name: Run tests (skip Unit)
+        if: steps.coverage.outcome == 'success'
+        id: run_tests_skip_unit
         run: |
           cabal build all -O2 --ghc-options=-Werror
           cabal test all -O2 --test-options="--skip Unit"
 
       - name: Check coverage result
-        if: always()
+        if: steps.coverage.outcome == 'success'
+        id: check_coverage_result
         shell: bash
         run: |
           exit_code="${{ steps.coverage.outputs.exit_code }}"
@@ -140,3 +157,25 @@ jobs:
             echo "::error::Coverage script failed with exit code $exit_code"
             exit "$exit_code"
           fi
+
+      - name: Save Cabal cache
+        if: |
+          always() &&
+          steps.cabal_cache.outputs.cache-hit != 'true' &&
+          (
+            success() ||
+            steps.coverage.outcome == 'failure' ||
+            steps.prepare_coverage_report.outcome == 'failure' ||
+            steps.setup_pages.outcome == 'failure' ||
+            steps.upload_coverage_artifact.outcome == 'failure' ||
+            steps.deployment.outcome == 'failure' ||
+            steps.formatting_checks.outcome == 'failure' ||
+            steps.run_tests_skip_unit.outcome == 'failure' ||
+            steps.check_coverage_result.outcome == 'failure'
+          )
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cabal/bin
+            ~/.cabal/store
+          key: ${{ steps.cabal_cache.outputs.cache-primary-key }}
