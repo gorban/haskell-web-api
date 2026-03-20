@@ -366,6 +366,148 @@ spec = do
         )
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
 
+    it "covers direct equality branches across the remaining public config and page types" $ do
+      let certbotConfig =
+            CertbotConfig
+              { certbotExecutable = "certbot",
+                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+              }
+          otherCertbotConfig =
+            CertbotConfig
+              { certbotExecutable = "certbot",
+                certbotArguments = [Text.pack "renew"]
+              }
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = [Text.pack "ops@example.com"],
+                acmeChallengeBackend = CertbotHttp01 certbotConfig
+              }
+          otherAcmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = [Text.pack "ops@example.com"],
+                acmeChallengeBackend = InProcessHttp01
+              }
+          manualCertificateSource =
+            ManualCertificateFiles
+              { certificateFile = "cert.pem",
+                privateKeyFile = "key.pem"
+              }
+          acmeCertificateSource = AcmeCertificateSource acmeConfig
+          tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
+          listenerConfig =
+            ListenerConfig
+              { listenerHost = Text.pack "127.0.0.1",
+                listenerPort = 5001,
+                listenerScheme = Http,
+                listenerTls = Nothing
+              }
+          secureListenerConfig =
+            ListenerConfig
+              { listenerHost = Text.pack "0.0.0.0",
+                listenerPort = 5443,
+                listenerScheme = Https,
+                listenerTls = Just tlsConfig
+              }
+          staticRoot =
+            StaticAssetRoot
+              { staticUrlPrefix = Text.pack "/assets",
+                staticDirectory = "public"
+              }
+          staticAssetsConfig =
+            StaticAssetsConfig
+              { staticAssetRoots = [staticRoot],
+                staticCacheControlSeconds = Just 3600
+              }
+          exporter =
+            OtlpExporter
+              { otlpEndpoint = Text.pack "http://otel-collector:4318",
+                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              }
+          observabilityConfig =
+            ObservabilityConfig
+              { tracingExporter = Just exporter,
+                metricsExporter = Nothing
+              }
+          appConfig =
+            AppConfig
+              { appTitlePrefix = Text.pack "test-app",
+                listenerConfigs = [listenerConfig, secureListenerConfig],
+                staticAssets = staticAssetsConfig,
+                observability = observabilityConfig
+              }
+          requestContext =
+            AppRequestContext
+              { requestLocale = French,
+                requestCorrelationId = Just (Text.pack "req-123")
+              }
+          callToAction =
+            CallToAction
+              { callToActionLabel = Text.pack "Return home",
+                callToActionRoute = HomeRoute,
+                callToActionHref = Text.pack "/"
+              }
+          homePageModel =
+            HomePageModel
+              { homeHeading = Text.pack "Home",
+                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+                homePrimaryAction = callToAction
+              }
+          secondPageModel =
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = [Text.pack "Fast SSR"],
+                secondPrimaryAction = callToAction
+              }
+          notFoundPageModel =
+            NotFoundPageModel
+              { notFoundHeading = Text.pack "Not Found",
+                notFoundSummary = Text.pack "The requested page could not be found.",
+                notFoundPrimaryAction = callToAction
+              }
+      certbotExecutable certbotConfig `shouldBe` "certbot"
+      certbotArguments certbotConfig `shouldBe` [Text.pack "certonly", Text.pack "--webroot"]
+      certbotConfig `shouldBe` certbotConfig
+      certbotConfig `shouldNotBe` otherCertbotConfig
+      acmeConfig `shouldBe` acmeConfig
+      acmeConfig `shouldNotBe` otherAcmeConfig
+      manualCertificateSource `shouldBe` manualCertificateSource
+      manualCertificateSource `shouldNotBe` acmeCertificateSource
+      acmeCertificateSource `shouldBe` acmeCertificateSource
+      acmeCertificateSource `shouldNotBe` AcmeCertificateSource otherAcmeConfig
+      tlsConfig `shouldBe` tlsConfig
+      tlsConfig `shouldNotBe` TlsConfig {certificateSource = acmeCertificateSource}
+      listenerConfig `shouldBe` listenerConfig
+      listenerConfig `shouldNotBe` secureListenerConfig
+      staticRoot `shouldBe` staticRoot
+      staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = Text.pack "/static", staticDirectory = "public"}
+      staticAssetsConfig `shouldBe` staticAssetsConfig
+      staticAssetsConfig `shouldNotBe` StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}
+      exporter `shouldBe` exporter
+      exporter `shouldNotBe` OtlpExporter {otlpEndpoint = Text.pack "http://other-collector:4318", otlpHeaders = []}
+      observabilityConfig `shouldBe` observabilityConfig
+      observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+      appConfig `shouldBe` appConfig
+      appConfig `shouldNotBe` appConfig {listenerConfigs = [listenerConfig]}
+      English `shouldNotBe` French
+      requestContext `shouldBe` requestContext
+      requestContext `shouldNotBe` defaultRequestContext
+      callToAction `shouldBe` callToAction
+      callToAction `shouldNotBe` callToAction {callToActionHref = Text.pack "/fr"}
+      homePageModel `shouldBe` homePageModel
+      homePageModel `shouldNotBe` homePageModel {homeHeading = Text.pack "Accueil"}
+      secondPageModel `shouldBe` secondPageModel
+      secondPageModel `shouldNotBe` secondPageModel {secondHighlights = [Text.pack "Different"]}
+      notFoundPageModel `shouldBe` notFoundPageModel
+      notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = Text.pack "Missing"}
+      HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
+      SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
+      UnsupportedLocalePrefix (Text.pack "de") `shouldNotBe` UnsupportedPath (Text.pack "/de")
+      HomeRoute `shouldNotBe` SecondRoute
+      SecondRoute `shouldNotBe` NotFoundRoute
+
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
