@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppLocale (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, defaultAppConfig, defaultRequestContext, matchRoute, parseRoute, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppLocale (..), AppMode (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), ConfigParseError (..), DatabaseConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, committedEnvDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultRequestContext, matchRoute, parseAppEnvironmentConfig, parseRoute, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -62,6 +62,148 @@ spec = do
                   metricsExporter = Nothing
                 }
           }
+
+  describe "defaultAppEnvironmentConfig" $ do
+    it "keeps committed .env defaults aligned with the parsed development config" $ do
+      committedEnvDefaults
+        `shouldBe` [ (Text.pack "APP_MODE", Text.pack "development"),
+                     (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
+                     (Text.pack "DATABASE_PORT", Text.pack "5432"),
+                     (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
+                     (Text.pack "DATABASE_USER", Text.pack "web_api"),
+                     (Text.pack "DATABASE_PASSWORD", Text.pack "web_api")
+                   ]
+      defaultAppEnvironmentConfig
+        `shouldBe` AppEnvironmentConfig
+          { appMode = Development,
+            databaseConfig =
+              DatabaseConfig
+                { databaseHost = Text.pack "127.0.0.1",
+                  databasePort = 5432,
+                  databaseName = Text.pack "web_api_dev",
+                  databaseUser = Text.pack "web_api",
+                  databasePassword = Text.pack "web_api"
+                }
+          }
+
+    it "covers the new app/database config selectors and derived instances" $ do
+      let productionDatabaseConfig =
+            DatabaseConfig
+              { databaseHost = Text.pack "db.internal",
+                databasePort = 6543,
+                databaseName = Text.pack "web_api_prod",
+                databaseUser = Text.pack "web_api_app",
+                databasePassword = Text.pack "super-secret"
+              }
+          productionEnvironmentConfig =
+            AppEnvironmentConfig
+              { appMode = Production,
+                databaseConfig = productionDatabaseConfig
+              }
+      appMode productionEnvironmentConfig `shouldBe` Production
+      databaseConfig productionEnvironmentConfig `shouldBe` productionDatabaseConfig
+      databaseHost productionDatabaseConfig `shouldBe` Text.pack "db.internal"
+      databasePort productionDatabaseConfig `shouldBe` 6543
+      databaseName productionDatabaseConfig `shouldBe` Text.pack "web_api_prod"
+      databaseUser productionDatabaseConfig `shouldBe` Text.pack "web_api_app"
+      databasePassword productionDatabaseConfig `shouldBe` Text.pack "super-secret"
+      Development `shouldNotBe` Test
+      Test `shouldNotBe` Production
+      productionDatabaseConfig `shouldBe` productionDatabaseConfig
+      productionDatabaseConfig
+        `shouldNotBe` productionDatabaseConfig
+          { databasePassword = Text.pack "different-secret"
+          }
+      productionEnvironmentConfig `shouldBe` productionEnvironmentConfig
+      productionEnvironmentConfig
+        `shouldNotBe` productionEnvironmentConfig
+          { appMode = Test
+          }
+      MissingConfigValue (Text.pack "DATABASE_PASSWORD")
+        `shouldNotBe` InvalidConfigValue (Text.pack "DATABASE_PASSWORD") (Text.pack "missing")
+      show Development `shouldBe` "Development"
+      show Test `shouldBe` "Test"
+      show Production `shouldBe` "Production"
+      show productionDatabaseConfig
+        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}"
+      show productionEnvironmentConfig
+        `shouldBe` "AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}"
+      show (MissingConfigValue (Text.pack "DATABASE_PASSWORD")) `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
+      show (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")) `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
+
+  describe "parseAppEnvironmentConfig" $ do
+    it "parses committed development defaults into the expected config" $
+      parseAppEnvironmentConfig committedEnvDefaults [] []
+        `shouldBe` Right defaultAppEnvironmentConfig
+
+    it "lets .env.local override committed .env defaults" $ do
+      let localOverrides =
+            [ (Text.pack "APP_MODE", Text.pack "production"),
+              (Text.pack "DATABASE_HOST", Text.pack "localhost"),
+              (Text.pack "DATABASE_PORT", Text.pack "6432"),
+              (Text.pack "DATABASE_NAME", Text.pack "web_api_local"),
+              (Text.pack "DATABASE_USER", Text.pack "local_user"),
+              (Text.pack "DATABASE_PASSWORD", Text.pack "local_password")
+            ]
+      parseAppEnvironmentConfig committedEnvDefaults localOverrides []
+        `shouldBe` Right
+          AppEnvironmentConfig
+            { appMode = Production,
+              databaseConfig =
+                DatabaseConfig
+                  { databaseHost = Text.pack "localhost",
+                    databasePort = 6432,
+                    databaseName = Text.pack "web_api_local",
+                    databaseUser = Text.pack "local_user",
+                    databasePassword = Text.pack "local_password"
+                  }
+            }
+
+    it "lets environment variables override .env.local values" $ do
+      let localOverrides =
+            [ (Text.pack "APP_MODE", Text.pack "production"),
+              (Text.pack "DATABASE_HOST", Text.pack "localhost"),
+              (Text.pack "DATABASE_PORT", Text.pack "6432"),
+              (Text.pack "DATABASE_NAME", Text.pack "web_api_local"),
+              (Text.pack "DATABASE_USER", Text.pack "local_user"),
+              (Text.pack "DATABASE_PASSWORD", Text.pack "local_password")
+            ]
+          environmentOverrides =
+            [ (Text.pack "APP_MODE", Text.pack "test"),
+              (Text.pack "DATABASE_PORT", Text.pack "7432"),
+              (Text.pack "DATABASE_PASSWORD", Text.pack "runtime_password")
+            ]
+      parseAppEnvironmentConfig committedEnvDefaults localOverrides environmentOverrides
+        `shouldBe` Right
+          AppEnvironmentConfig
+            { appMode = Test,
+              databaseConfig =
+                DatabaseConfig
+                  { databaseHost = Text.pack "localhost",
+                    databasePort = 7432,
+                    databaseName = Text.pack "web_api_local",
+                    databaseUser = Text.pack "local_user",
+                    databasePassword = Text.pack "runtime_password"
+                  }
+            }
+
+    it "fails missing required values with explicit errors" $
+      parseAppEnvironmentConfig
+        [ (Text.pack "APP_MODE", Text.pack "development"),
+          (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "DATABASE_PORT", Text.pack "5432"),
+          (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
+          (Text.pack "DATABASE_USER", Text.pack "web_api")
+        ]
+        []
+        []
+        `shouldBe` Left (MissingConfigValue (Text.pack "DATABASE_PASSWORD"))
+
+    it "fails invalid port or mode values with precise errors" $ do
+      parseAppEnvironmentConfig committedEnvDefaults [] [(Text.pack "APP_MODE", Text.pack "staging")]
+        `shouldBe` Left (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging"))
+      parseAppEnvironmentConfig committedEnvDefaults [] [(Text.pack "DATABASE_PORT", Text.pack "0")]
+        `shouldBe` Left (InvalidConfigValue (Text.pack "DATABASE_PORT") (Text.pack "0"))
 
     it "can represent manual certificates, certbot-backed ACME, and exporter endpoints" $ do
       let certbotConfig =

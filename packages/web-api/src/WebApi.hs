@@ -2,12 +2,16 @@ module WebApi
   ( AppConfig (..),
     AcmeChallengeBackend (..),
     AcmeConfig (..),
+    AppEnvironmentConfig (..),
     AppLocale (..),
+    AppMode (..),
     AppPageModel (..),
     AppRequestContext (..),
     AppRoute (..),
     CertbotConfig (..),
     CallToAction (..),
+    ConfigParseError (..),
+    DatabaseConfig (..),
     HomePageModel (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -21,10 +25,13 @@ module WebApi
     TlsCertificateSource (..),
     TlsConfig (..),
     buildApp,
+    committedEnvDefaults,
     defaultAppConfig,
+    defaultAppEnvironmentConfig,
     defaultRequestContext,
     buildPageModel,
     matchRoute,
+    parseAppEnvironmentConfig,
     parseRoute,
     renderPage,
     renderPageBody,
@@ -34,11 +41,13 @@ module WebApi
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Char (isAsciiLower)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import System.IO (Handle)
+import Text.Read (readMaybe)
 
 data ListenerScheme
   = Http
@@ -114,6 +123,32 @@ data AppConfig = AppConfig
     staticAssets :: StaticAssetsConfig,
     observability :: ObservabilityConfig
   }
+  deriving (Eq, Show)
+
+data AppMode
+  = Development
+  | Test
+  | Production
+  deriving (Eq, Show)
+
+data DatabaseConfig = DatabaseConfig
+  { databaseHost :: Text,
+    databasePort :: Int,
+    databaseName :: Text,
+    databaseUser :: Text,
+    databasePassword :: Text
+  }
+  deriving (Eq, Show)
+
+data AppEnvironmentConfig = AppEnvironmentConfig
+  { appMode :: AppMode,
+    databaseConfig :: DatabaseConfig
+  }
+  deriving (Eq, Show)
+
+data ConfigParseError
+  = MissingConfigValue Text
+  | InvalidConfigValue Text Text
   deriving (Eq, Show)
 
 data AppLocale
@@ -196,6 +231,82 @@ defaultAppConfig =
             metricsExporter = Nothing
           }
     }
+
+committedEnvDefaults :: [(Text, Text)]
+committedEnvDefaults =
+  [ (Text.pack "APP_MODE", Text.pack "development"),
+    (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
+    (Text.pack "DATABASE_PORT", Text.pack "5432"),
+    (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
+    (Text.pack "DATABASE_USER", Text.pack "web_api"),
+    (Text.pack "DATABASE_PASSWORD", Text.pack "web_api")
+  ]
+
+defaultAppEnvironmentConfig :: AppEnvironmentConfig
+defaultAppEnvironmentConfig =
+  AppEnvironmentConfig
+    { appMode = Development,
+      databaseConfig =
+        DatabaseConfig
+          { databaseHost = Text.pack "127.0.0.1",
+            databasePort = 5432,
+            databaseName = Text.pack "web_api_dev",
+            databaseUser = Text.pack "web_api",
+            databasePassword = Text.pack "web_api"
+          }
+    }
+
+parseAppEnvironmentConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppEnvironmentConfig
+parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides = do
+  parsedMode <- parseMode =<< requiredConfigValue (Text.pack "APP_MODE")
+  parsedDatabaseHost <- requiredConfigValue (Text.pack "DATABASE_HOST")
+  parsedDatabasePort <- parsePort =<< requiredConfigValue (Text.pack "DATABASE_PORT")
+  parsedDatabaseName <- requiredConfigValue (Text.pack "DATABASE_NAME")
+  parsedDatabaseUser <- requiredConfigValue (Text.pack "DATABASE_USER")
+  parsedDatabasePassword <- requiredConfigValue (Text.pack "DATABASE_PASSWORD")
+  pure
+    AppEnvironmentConfig
+      { appMode = parsedMode,
+        databaseConfig =
+          DatabaseConfig
+            { databaseHost = parsedDatabaseHost,
+              databasePort = parsedDatabasePort,
+              databaseName = parsedDatabaseName,
+              databaseUser = parsedDatabaseUser,
+              databasePassword = parsedDatabasePassword
+            }
+      }
+  where
+    requiredConfigValue key =
+      case lookupConfigValue key committedDefaults localOverrides environmentOverrides of
+        Just value -> Right value
+        Nothing -> Left (MissingConfigValue key)
+
+parseMode :: Text -> Either ConfigParseError AppMode
+parseMode value
+  | value == Text.pack "development" = Right Development
+  | value == Text.pack "test" = Right Test
+  | value == Text.pack "production" = Right Production
+  | otherwise = Left (InvalidConfigValue (Text.pack "APP_MODE") value)
+
+parsePort :: Text -> Either ConfigParseError Int
+parsePort value =
+  case readMaybe (Text.unpack value) of
+    Just port
+      | port > 0 -> Right port
+    _ -> Left (InvalidConfigValue (Text.pack "DATABASE_PORT") value)
+
+lookupConfigValue :: Text -> [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Maybe Text
+lookupConfigValue key committedDefaults localOverrides environmentOverrides =
+  lookupInLayer environmentOverrides
+    `orElse` lookupInLayer localOverrides
+    `orElse` lookupInLayer committedDefaults
+  where
+    lookupInLayer = lookup key . reverse
+
+orElse :: Maybe value -> Maybe value -> Maybe value
+orElse maybeValue fallbackValue =
+  maybeValue <|> fallbackValue
 
 defaultRequestContext :: AppRequestContext
 defaultRequestContext =
