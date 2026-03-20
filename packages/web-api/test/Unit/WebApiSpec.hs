@@ -626,6 +626,129 @@ spec = do
       shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix (Text.pack "de")) "")
       shouldBeParenthesized (showsPrec 11 (UnsupportedPath (Text.pack "/missing")) "")
 
+    it "covers derived list-show rendering for the remaining public types" $ do
+      let certbotConfig =
+            CertbotConfig
+              { certbotExecutable = "certbot",
+                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+              }
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = [Text.pack "ops@example.com"],
+                acmeChallengeBackend = CertbotHttp01 certbotConfig
+              }
+          manualCertificateSource =
+            ManualCertificateFiles
+              { certificateFile = "cert.pem",
+                privateKeyFile = "key.pem"
+              }
+          acmeCertificateSource = AcmeCertificateSource acmeConfig
+          tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
+          listenerConfig =
+            ListenerConfig
+              { listenerHost = Text.pack "0.0.0.0",
+                listenerPort = 5443,
+                listenerScheme = Https,
+                listenerTls = Just tlsConfig
+              }
+          staticRoot =
+            StaticAssetRoot
+              { staticUrlPrefix = Text.pack "/assets",
+                staticDirectory = "public"
+              }
+          staticAssetsConfig =
+            StaticAssetsConfig
+              { staticAssetRoots = [staticRoot],
+                staticCacheControlSeconds = Just 3600
+              }
+          exporter =
+            OtlpExporter
+              { otlpEndpoint = Text.pack "http://otel-collector:4318",
+                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              }
+          observabilityConfig =
+            ObservabilityConfig
+              { tracingExporter = Just exporter,
+                metricsExporter = Just exporter
+              }
+          appConfig =
+            AppConfig
+              { appTitlePrefix = Text.pack "test-app",
+                listenerConfigs = [listenerConfig],
+                staticAssets = staticAssetsConfig,
+                observability = observabilityConfig
+              }
+          requestContext =
+            AppRequestContext
+              { requestLocale = French,
+                requestCorrelationId = Just (Text.pack "req-list")
+              }
+          callToAction =
+            CallToAction
+              { callToActionLabel = Text.pack "Return home",
+                callToActionRoute = HomeRoute,
+                callToActionHref = Text.pack "/"
+              }
+          homePageModel =
+            HomePageModel
+              { homeHeading = Text.pack "Home",
+                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+                homePrimaryAction = callToAction
+              }
+          secondPageModel =
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = [Text.pack "Fast SSR"],
+                secondPrimaryAction = callToAction
+              }
+          notFoundPageModel =
+            NotFoundPageModel
+              { notFoundHeading = Text.pack "Not Found",
+                notFoundSummary = Text.pack "The requested page could not be found.",
+                notFoundPrimaryAction = callToAction
+              }
+      Http `shouldNotBe` Https
+      InProcessHttp01 `shouldNotBe` CertbotHttp01 certbotConfig
+      show [Http, Https] `shouldBe` "[Http,Https]"
+      show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
+      show [InProcessHttp01, CertbotHttp01 certbotConfig]
+        `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
+      show [acmeConfig]
+        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
+      show [manualCertificateSource, acmeCertificateSource]
+        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
+      show [tlsConfig]
+        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
+      show [listenerConfig]
+        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
+      show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
+      show [staticAssetsConfig]
+        `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
+      show [exporter]
+        `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
+      show [observabilityConfig]
+        `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
+      show [appConfig]
+        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
+      show [English, French] `shouldBe` "[English,French]"
+      show [requestContext]
+        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\"}]"
+      show [callToAction]
+        `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
+      show [homePageModel]
+        `shouldBe` "[HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
+      show [secondPageModel]
+        `shouldBe` "[SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
+      show [notFoundPageModel]
+        `shouldBe` "[NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
+      show [HomePage homePageModel, SecondPage secondPageModel, NotFoundPage notFoundPageModel]
+        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
+      show [UnsupportedLocalePrefix (Text.pack "de"), UnsupportedPath (Text.pack "/missing")]
+        `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
+      show [HomeRoute, SecondRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,NotFoundRoute]"
+
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
