@@ -297,6 +297,13 @@ spec = do
       show InProcessHttp01 `shouldBe` "InProcessHttp01"
       show (CertbotHttp01 certbotConfig)
         `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
+      show
+        AcmeConfig
+          { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+            acmeContactEmails = [Text.pack "ops@example.com"],
+            acmeChallengeBackend = CertbotHttp01 certbotConfig
+          }
+        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show acmeCertificateSource
         `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show (TlsConfig {certificateSource = manualCertificateSource})
