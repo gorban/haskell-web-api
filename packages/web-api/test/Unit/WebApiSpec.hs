@@ -320,6 +320,7 @@ spec = do
     it "rejects invalid trailing slashes while keeping the root path valid" $ do
       parseRoute defaultRequestContext (Text.pack "/") `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (Text.pack "/second/") `shouldBe` Nothing
+      selectRoute defaultRequestContext (Text.pack "/second/") `shouldBe` Left (UnsupportedPath (Text.pack "/second/"))
 
   describe "renderRoutePath" $ do
     it "round-trips known routes through the parser" $ do

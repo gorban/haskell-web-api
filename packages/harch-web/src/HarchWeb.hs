@@ -155,8 +155,8 @@ matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route 
 matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
 
 runServer :: Handle -> config -> Application route context -> IO ()
-runServer outputHandle _config _application =
-  hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+runServer outputHandle config webApplication =
+  config `seq` webApplication `seq` hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute

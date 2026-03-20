@@ -458,13 +458,14 @@ renderResponse config routeRequest = HarchWeb.PageResponse (renderPage config ro
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
-  HarchWeb.application
-    HarchWeb.Application
-      { HarchWeb.appName = Text.pack "web-api",
-        HarchWeb.routeCodec = routeCodec,
-        HarchWeb.renderResponse = renderResponse config,
-        HarchWeb.pageShell = appShell config
-      }
+  config `seq`
+    HarchWeb.application
+      HarchWeb.Application
+        { HarchWeb.appName = Text.pack "web-api",
+          HarchWeb.routeCodec = routeCodec,
+          HarchWeb.renderResponse = renderResponse config,
+          HarchWeb.pageShell = appShell config
+        }
 
 run :: Handle -> IO ()
 run outputHandle =
