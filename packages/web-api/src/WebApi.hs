@@ -369,13 +369,13 @@ parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parseRoutePath path
   | not (Text.isPrefixOf (Text.pack "/") path) = Left (UnsupportedPath path)
   | path /= Text.pack "/" && Text.isSuffixOf (Text.pack "/") path = Left (UnsupportedPath path)
-  | otherwise =
-      case drop 1 (Text.splitOn (Text.pack "/") path) of
-        [segment]
-          | Text.null segment -> Right (Nothing, HomeRoute)
-        [segment] -> parseSingleSegmentPath path segment
-        [prefix, segment] -> parsePrefixedPath path prefix segment
-        _ -> Left (UnsupportedPath path)
+parseRoutePath path =
+  case drop 1 (Text.splitOn (Text.pack "/") path) of
+    [segment]
+      | Text.null segment -> Right (Nothing, HomeRoute)
+    [segment] -> parseSingleSegmentPath path segment
+    [prefix, segment] -> parsePrefixedPath path prefix segment
+    _ -> Left (UnsupportedPath path)
 
 parseSingleSegmentPath :: Text -> Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parseSingleSegmentPath fullPath segment =
@@ -384,9 +384,10 @@ parseSingleSegmentPath fullPath segment =
     Nothing ->
       case localeFromPrefix segment of
         Just locale -> Right (Just locale, HomeRoute)
-        Nothing
-          | looksLikeLocalePrefix segment -> Left (UnsupportedLocalePrefix segment)
-          | otherwise -> Left (UnsupportedPath fullPath)
+        Nothing ->
+          if looksLikeLocalePrefix segment
+            then Left (UnsupportedLocalePrefix segment)
+            else Left (UnsupportedPath fullPath)
 
 parsePrefixedPath :: Text -> Text -> Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parsePrefixedPath fullPath prefix segment =
@@ -395,21 +396,22 @@ parsePrefixedPath fullPath prefix segment =
       case routeFromSegment segment of
         Just route -> Right (Just locale, route)
         Nothing -> Left (UnsupportedPath fullPath)
-    Nothing
-      | looksLikeLocalePrefix prefix -> Left (UnsupportedLocalePrefix prefix)
-      | otherwise -> Left (UnsupportedPath fullPath)
+    Nothing ->
+      if looksLikeLocalePrefix prefix
+        then Left (UnsupportedLocalePrefix prefix)
+        else Left (UnsupportedPath fullPath)
 
 routeFromSegment :: Text -> Maybe AppRoute
 routeFromSegment segment
   | segment == Text.pack "second" = Just SecondRoute
   | segment == Text.pack "404" = Just NotFoundRoute
-  | otherwise = Nothing
+routeFromSegment _ = Nothing
 
 localeFromPrefix :: Text -> Maybe AppLocale
 localeFromPrefix prefix
   | prefix == Text.pack "en" = Just English
   | prefix == Text.pack "fr" = Just French
-  | otherwise = Nothing
+localeFromPrefix _ = Nothing
 
 looksLikeLocalePrefix :: Text -> Bool
 looksLikeLocalePrefix prefix =
