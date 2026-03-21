@@ -80,7 +80,7 @@ understands the following values:
 
 | Config value | Description | Default |
 | --- | --- | --- |
-| `APP_MODE` | Application environment mode for app-level behavior. Supported values are `development`, `test`, and `production` (there is no `staging` mode by default). | (`development`) |
+| `APP_MODE` | Application environment mode for app-level behavior. Supported values are `development`, `test`, and `production`. | (`development`) |
 | `DATABASE_HOST` | Database host for app environment config. Using loopback addresses such as `127.0.0.1` or `::1` keeps the database reachable only from the local machine, not from external clients. | (`127.0.0.1`) |
 | `DATABASE_PORT` | Database port for app environment config. | (`5432`) |
 | `DATABASE_NAME` | Database name for app environment config. | (`web_api_dev`) |
@@ -105,6 +105,71 @@ understands the following values:
 | `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
 | `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
+
+To provide configuration overrides:
+
+1. Start from the committed defaults above.
+2. Create a local overrides file in simple `KEY=value` format.
+3. Add one entry per line. Blank lines are allowed, and lines starting with `#` are treated as comments.
+4. Override only the keys you need in that file; any key you omit will continue using its committed default.
+5. If you also set process environment variables, those should be treated as the highest-precedence layer: environment values override local file values, and local file values override committed defaults.
+
+The current `cabal run haskell-web-api` path still boots with the committed in-process defaults directly, but
+the config parsers themselves already follow that layering model. Keeping your overrides in this `KEY=value`
+shape means they match the format used by the parser/test seam today and the intended startup wiring as the
+runtime config path grows.
+
+Example fully populated override body:
+
+```dotenv
+# App environment values
+APP_MODE=production
+DATABASE_HOST=192.0.2.10
+DATABASE_PORT=55432
+DATABASE_NAME=web_api_prod
+DATABASE_USER=web_api_app
+DATABASE_PASSWORD=replace-me
+
+# App/runtime values
+APP_TITLE_PREFIX=web-api-prod
+
+# Listener 0: plain HTTP
+LISTENER_0_HOST=127.0.0.1
+LISTENER_0_PORT=5001
+LISTENER_0_SCHEME=http
+
+# Listener 1: HTTPS with manual certificate files
+LISTENER_1_HOST=0.0.0.0
+LISTENER_1_PORT=5443
+LISTENER_1_SCHEME=https
+LISTENER_1_TLS_SOURCE=manual
+LISTENER_1_TLS_CERTIFICATE_FILE=/etc/web-api/tls/fullchain.pem
+LISTENER_1_TLS_PRIVATE_KEY_FILE=/etc/web-api/tls/privkey.pem
+
+# Listener 2: HTTPS with ACME and certbot
+LISTENER_2_HOST=0.0.0.0
+LISTENER_2_PORT=8443
+LISTENER_2_SCHEME=https
+LISTENER_2_TLS_SOURCE=acme
+LISTENER_2_ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
+LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
+LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
+LISTENER_2_ACME_CERTBOT_EXECUTABLE=/usr/bin/certbot
+LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com
+
+# Static assets
+STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
+STATIC_ASSET_ROOT_0_DIRECTORY=public/assets
+STATIC_ASSET_ROOT_1_URL_PREFIX=/uploads
+STATIC_ASSET_ROOT_1_DIRECTORY=/var/lib/web-api/uploads
+STATIC_CACHE_CONTROL_SECONDS=3600
+
+# Observability
+OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
+OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
+```
 
 ### MacOS / Linux
 
