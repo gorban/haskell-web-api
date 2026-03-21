@@ -193,6 +193,137 @@ After that, the build command should at least have the required external build t
 cabal build all
 ```
 
+## Repository Runtime Prerequisites
+
+In addition to the Haskell toolchain, the current repository is easiest to work with when the following
+commands are also available on your `PATH`:
+
+- `node` for the current browser-harness-backed e2e spec. No Playwright install is required yet; the current
+  e2e path only needs a basic Node.js runtime.
+- `psql` plus a local PostgreSQL server if you want to exercise the PostgreSQL adapter, migrations, or seed
+  data locally.
+
+Example package-manager installs:
+
+### Ubuntu
+
+```bash
+sudo apt install -y nodejs postgresql postgresql-client
+```
+
+### Fedora
+
+```bash
+sudo dnf install -y nodejs postgresql-server postgresql
+```
+
+### MacOS
+
+```bash
+brew install node postgresql@17
+```
+
+If you only want to boot the example app with its current committed stub data, PostgreSQL is optional today.
+`cabal run haskell-web-api` still starts from `defaultAppConfig` and the in-process default database effect,
+so the local database only becomes necessary when you are explicitly exercising the PostgreSQL path.
+
+## Repository Configuration Layers
+
+The example app's intended configuration layout has three layers, all rooted at the repository root:
+
+1. Code defaults in source. These are the committed defaults in `packages/web-api/src/WebApi/Config.hs`.
+2. `./.env` for shared, checked-in, non-secret development overrides.
+3. `./.env.local` for machine-specific or deployed overrides. This file may contain secrets and is already
+   excluded by `.gitignore`.
+
+Both `./.env` and `./.env.local` use simple `KEY=value` lines. Blank lines are allowed, and lines beginning
+with `#` are comments.
+
+When the file-based startup path is wired in, the intended precedence is:
+
+1. Code defaults in source.
+2. `./.env`
+3. `./.env.local`
+
+Today, the parser seam and precedence rules already exist, but the default `cabal run haskell-web-api` path
+still starts directly from committed defaults. In other words, these two files describe the intended local
+layout now, even though the default executable path does not yet read them automatically.
+
+Practical steps:
+
+1. If the committed defaults are good enough, create neither file and just run the app.
+2. If your team wants shared non-secret development overrides, create `./.env` in the repository root.
+3. If your machine or deployment needs secrets or different values, create `./.env.local` in the repository
+   root.
+
+For the exhaustive list of supported keys and example file bodies, see the `Configuration` section in
+`README.md`.
+
+## Local PostgreSQL Startup Example
+
+If you want a local PostgreSQL instance that matches the current committed development defaults:
+
+- Host: `127.0.0.1`
+- Port: `5432`
+- Database: `web_api_dev`
+- User: `web_api`
+- Password: `web_api`
+
+One straightforward option is a local Docker container:
+
+```bash
+docker run --name web-api-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 \
+  -d postgres:17
+```
+
+Create the matching role and database:
+
+```bash
+psql -h 127.0.0.1 -U postgres -d postgres -c "CREATE ROLE web_api LOGIN PASSWORD 'web_api';"
+psql -h 127.0.0.1 -U postgres -d postgres -c "CREATE DATABASE web_api_dev OWNER web_api;"
+```
+
+Apply the current schema and seed statements expected by `WebApi.Postgres`:
+
+```bash
+PGPASSWORD=web_api psql -h 127.0.0.1 -U web_api -d web_api_dev <<'SQL'
+CREATE TABLE IF NOT EXISTS page_content (
+  route_slug TEXT NOT NULL,
+  locale TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  PRIMARY KEY (route_slug, locale)
+);
+
+CREATE TABLE IF NOT EXISTS page_highlights (
+  route_slug TEXT NOT NULL,
+  locale TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  highlight TEXT NOT NULL,
+  PRIMARY KEY (route_slug, locale, position)
+);
+
+DELETE FROM page_highlights;
+DELETE FROM page_content;
+
+INSERT INTO page_content (route_slug, locale, summary) VALUES
+  ('home', 'en', 'Server-rendered home page with stubbed content.'),
+  ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'),
+  ('second', 'en', 'Second page content with stubbed data ready for future loaders.'),
+  ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');
+SQL
+```
+
+Those commands mirror the current defaults and SQL in `WebApi.Config` and `WebApi.Postgres`. If you change
+the database connection values in your local config layers, adjust the `psql` commands to match.
+
+When you are done with the Docker example, you can stop and remove it with:
+
+```bash
+docker rm -f web-api-postgres
+```
+
 #### Additional Build Prerequisites for CI Builds
 
 The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
