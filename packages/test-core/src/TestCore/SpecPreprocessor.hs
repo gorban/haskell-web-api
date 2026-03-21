@@ -10,6 +10,8 @@ import System.Directory (makeAbsolute)
 import System.FilePath (normalise, splitDirectories, takeBaseName)
 import System.IO (IOMode (ReadMode), hGetContents, withFile)
 
+data SpecMode = E2ESpec | StandardSpec
+
 run :: [String] -> ExceptT String IO ()
 run args = do
   let (hsSourceDir, fileArgs) = parseArgs "test" [] args
@@ -43,7 +45,7 @@ runPure hsSourceDir absolutePath contents =
     process inputLine moduleName (header : rest) =
       let trimmed = dropWhile isSpace header
        in case stripSpecPragma trimmed of
-            Just remainder
+            Just (specMode, remainder)
               | all isSpace remainder ->
                   let (importCount, imports, remaining) = processTillEndOfImports rest
                       -- LINE pragma points to the first line of remaining content in the original file:
@@ -51,7 +53,7 @@ runPure hsSourceDir absolutePath contents =
                       originalLineOfRemaining = inputLine + 1 + importCount
                    in [ "module " ++ moduleName ++ " (spec) where",
                         "",
-                        "import TestCore.Prelude"
+                        "import " ++ specPreludeModule specMode
                       ]
                         ++ imports
                         ++ [ "spec :: Spec",
@@ -63,17 +65,26 @@ runPure hsSourceDir absolutePath contents =
     process _ _ [] = []
 
 -- We are making sure that for the line with {-# SPEC #-}, at most the rest is whitespace
-stripSpecPragma :: String -> Maybe String
+stripSpecPragma :: String -> Maybe (SpecMode, String)
 stripSpecPragma ('{' : '-' : '#' : xs) =
   let afterStart = dropWhile isSpace xs
-   in case afterStart of
-        'S' : 'P' : 'E' : 'C' : rest' ->
+   in case stripSpecMode afterStart of
+        Just (specMode, rest') ->
           let afterSpec = dropWhile isSpace rest'
            in case afterSpec of
-                '#' : '-' : '}' : r -> Just r
+                '#' : '-' : '}' : r -> Just (specMode, r)
                 _ -> Nothing
-        _ -> Nothing
+        Nothing -> Nothing
 stripSpecPragma _ = Nothing
+
+stripSpecMode :: String -> Maybe (SpecMode, String)
+stripSpecMode ('E' : '2' : 'E' : '_' : 'S' : 'P' : 'E' : 'C' : rest) = Just (E2ESpec, rest)
+stripSpecMode ('S' : 'P' : 'E' : 'C' : rest) = Just (StandardSpec, rest)
+stripSpecMode _ = Nothing
+
+specPreludeModule :: SpecMode -> String
+specPreludeModule E2ESpec = "TestCore.E2EPrelude"
+specPreludeModule StandardSpec = "TestCore.Prelude"
 
 -- Process lines until we reach a line that is not an import or comment or empty
 -- These are added after our added imports but before the spec definition

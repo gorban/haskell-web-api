@@ -27,6 +27,7 @@ description:
   spec-preprocessor,
   custom assertions,
   TestCore.Prelude,
+  TestCore.E2EPrelude,
   etc.
 
 -- URL for the project homepage or repository.
@@ -65,6 +66,7 @@ library
   -- Modules included in this library.
   exposed-modules:
     TestCore.CustomAssertions
+    TestCore.E2EPrelude
     TestCore.Prelude
     TestCore.SpecPreprocessor
 

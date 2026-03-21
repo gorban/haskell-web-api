@@ -7,6 +7,7 @@ import Control.Monad (forM_)
 import Control.Monad.Except (runExceptT)
 import Data.List (intercalate, isInfixOf)
 import System.FilePath (takeFileName, (</>))
+import qualified TestCore.E2EPrelude as E2EPrelude
 import TestCore.SpecPreprocessor (run, runPure)
 
 spec = do
@@ -55,10 +56,12 @@ spec = do
     [ "{-# SPECC #-}",
       "}-# SPEC #-}",
       "{-# SPEC #-{",
-      "{-# SPEC #-} extra"
+      "{-# SPEC #-} extra",
+      "{-# E2E_SPECC #-}",
+      "{-# E2E_SPEC #-} extra"
       ]
       `forM_` \malformedPragma ->
-        it ("ignores files with malformed SPEC pragma: " ++ show malformedPragma) $
+        it ("ignores files with malformed spec pragma: " ++ show malformedPragma) $
           withExampleSpecTemp defaultModuleSegments exampleModuleBase $ \(_, tempFile) -> do
             let outputFile = getOutputFile tempFile
             writeFile tempFile malformedPragma
@@ -92,6 +95,20 @@ spec = do
         outputContents <- readFile outputFile
         _ <- evaluate (length outputContents)
         outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.Prelude"
+
+    around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $ do
+      it "processes a simple e2e spec file (2 file args)" $ \(tempDir, tempFile) -> do
+        let expectedHeader = getModuleHeader $ getModuleName nestedModuleSegments exampleModuleBase
+            hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "{-# E2E_SPEC #-}"
+        result <- runExceptT $ run ["hs-source-dir=" ++ hsSourceDir, tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.E2EPrelude"
 
     around (withExampleSpecTemp defaultModuleSegments exampleModuleBase) $ do
       it "processes a simple spec file (3 file args like GHC calls it)" $ \(tempDir, tempFile) -> do
@@ -104,9 +121,10 @@ spec = do
         outputContents <- readFile outputFile
         _ <- evaluate (length outputContents)
         outputContents `shouldContain'` expectedHeader
+        outputContents `shouldContain'` "import TestCore.Prelude"
 
   describe "runPure" $ do
-    it "processes a simple spec file" $ do
+    it "keeps standard SPEC preprocessing unchanged" $ do
       let moduleBase = "PureSpec"
           hsRoot = "test-spec"
           inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
@@ -114,54 +132,72 @@ spec = do
           expectedHeader = getModuleHeader (getModuleName nestedModuleSegments moduleBase)
           output = runPure hsRoot absolutePath pureSpecContents
       output `shouldContain'` expectedHeader
+      output `shouldContain'` "import TestCore.Prelude"
 
-    [ ([], []),
-      ([], ["-- comment"]),
-      (["{-# LANGUAGE TemplateHaskell #-}"], ["-- comment"]),
-      (["{-# LANGUAGE TemplateHaskell #-}", ""], [])
+    it "emits the e2e prelude for E2E_SPEC" $ do
+      let moduleBase = "PureSpec"
+          hsRoot = "test-spec"
+          inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+          absolutePath = "" </> "abs" </> inputPath
+          expectedHeader = getModuleHeader (getModuleName nestedModuleSegments moduleBase)
+          output = runPure hsRoot absolutePath e2ePureSpecContents
+      output `shouldContain'` expectedHeader
+      output `shouldContain'` "import TestCore.E2EPrelude"
+
+    forM_
+      [ ("SPEC", pureSpecContents, "import TestCore.Prelude"),
+        ("E2E_SPEC", e2ePureSpecContents, "import TestCore.E2EPrelude")
       ]
-      `forM_` \(topSegments, importSegments) ->
-        it
-          ( "preserves existing imports and body (line "
-              ++ show (length topSegments + length importSegments + 4)
-              ++ ")"
-          )
-          $ do
-            let moduleBase = "PureSpec"
-                hsRoot = "test"
-                inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
-                absolutePath = "" </> "abs" </> inputPath
-                contents =
-                  unlines $
-                    topSegments
-                      ++ [ "{-# SPEC #-}",
-                           "import Data.List (nub)"
-                         ]
-                      ++ importSegments
-                      ++ [ "",
-                           "spec = describe \"example\" $ do",
-                           "  pure ()"
-                         ]
-                expectedFragments =
-                  topSegments
-                    ++ [ buildModuleHeader nestedModuleSegments moduleBase,
-                         "",
-                         "import TestCore.Prelude",
-                         "import Data.List (nub)"
-                       ]
-                    ++ importSegments
-                    ++ [ "",
-                         "spec :: Spec",
-                         "{-# LINE "
-                           ++ show (length topSegments + length importSegments + 4)
-                           ++ " \""
-                           ++ map (\c -> if c == '\\' then '/' else c) absolutePath
-                           ++ "\" #-}",
-                         "spec = describe \"example\" $ do",
-                         "  pure ()"
-                       ]
-                output = runPure hsRoot absolutePath contents
-             in lines output `shouldBe` expectedFragments
+      $ \(label, specPragma, preludeImport) ->
+        forM_
+          [ ([], []),
+            ([], ["-- comment"]),
+            (["{-# LANGUAGE TemplateHaskell #-}"], ["-- comment"]),
+            (["{-# LANGUAGE TemplateHaskell #-}", ""], [])
+          ]
+          $ \(topSegments, importSegments) ->
+            it
+              ( label
+                  ++ " preserves imports, module naming, and LINE pragmas (line "
+                  ++ show (length topSegments + length importSegments + 4)
+                  ++ ")"
+              )
+              $ do
+                let moduleBase = "PureSpec"
+                    hsRoot = "test"
+                    inputPath = hsRoot </> getRelativePath nestedModuleSegments moduleBase
+                    absolutePath = "" </> "abs" </> inputPath
+                    contents =
+                      unlines $
+                        topSegments
+                          ++ [ specPragma,
+                               "import Data.List (nub)"
+                             ]
+                          ++ importSegments
+                          ++ [ "",
+                               "spec = describe \"example\" $ do",
+                               "  pure ()"
+                             ]
+                    expectedFragments =
+                      topSegments
+                        ++ [ buildModuleHeader nestedModuleSegments moduleBase,
+                             "",
+                             preludeImport,
+                             "import Data.List (nub)"
+                           ]
+                        ++ importSegments
+                        ++ [ "",
+                             "spec :: Spec",
+                             "{-# LINE "
+                               ++ show (length topSegments + length importSegments + 4)
+                               ++ " \""
+                               ++ map (\c -> if c == '\\' then '/' else c) absolutePath
+                               ++ "\" #-}",
+                             "spec = describe \"example\" $ do",
+                             "  pure ()"
+                           ]
+                    output = runPure hsRoot absolutePath contents
+                 in lines output `shouldBe` expectedFragments
 
     it "infers modules when hs-source-dir is explicitly fallback value" $ do
       let moduleBase = "PureSpec"
@@ -218,6 +254,10 @@ spec = do
           expectedHeader = getModuleHeader moduleBase
           output = runPure hsRoot absolutePath pureSpecContents
       output `shouldContain'` expectedHeader
+
+  describe "TestCore.E2EPrelude" $
+    it "re-exports the standard test helpers for future browser specs" $
+      E2EPrelude.shouldBe True True
   where
     getHaskellName baseName = baseName ++ ".hs"
     getModuleName segments baseName = intercalate "." (segments ++ [baseName])
@@ -227,6 +267,7 @@ spec = do
     withExampleSpecTemp segments baseName = withTempFile "tst" segments (getHaskellName baseName)
     getOutputFile path = path ++ ".out"
     pureSpecContents = "{-# SPEC #-}"
+    e2ePureSpecContents = "{-# E2E_SPEC #-}"
     missingArgsError = "spec-preprocessor: expected input and output file arguments"
     nestedModuleSegments = ["Nested"]
     defaultModuleSegments = ["test"]

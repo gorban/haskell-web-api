@@ -3,6 +3,7 @@
 ## 0.1.1.0
 
 * Aligned changelog headings with the repository-wide version-first format used for the upcoming `0.1.1.0` work.
+* Added `{-# E2E_SPEC #-}` preprocessing and `TestCore.E2EPrelude` so browser-facing specs can grow from the same Haskell test flow.
 
 ## 0.1.0.1
 
