@@ -11,7 +11,6 @@ module WebApi.RouteData
 where
 
 import Data.Text (Text)
-import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.Database
   ( DatabaseEffect,

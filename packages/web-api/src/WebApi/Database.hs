@@ -13,7 +13,6 @@ module WebApi.Database
 where
 
 import Data.Text (Text)
-import Data.Text qualified as Text
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),

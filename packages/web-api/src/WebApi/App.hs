@@ -8,7 +8,6 @@ module WebApi.App
 where
 
 import Data.Text (Text)
-import Data.Text qualified as Text
 import HarchWeb qualified
 import System.IO (Handle)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
