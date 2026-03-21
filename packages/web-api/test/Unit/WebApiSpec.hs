@@ -21,7 +21,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
 import WebApi (buildApp, run)
-import WebApi.App (buildAppWithDatabase)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
@@ -186,6 +186,15 @@ withCurrentDirectory directory action = do
   previousDirectory <- getCurrentDirectory
   setCurrentDirectory directory
   action `finally` setCurrentDirectory previousDirectory
+
+withClearedAppEnvironment :: IO a -> IO a
+withClearedAppEnvironment =
+  withTemporaryEnvironment "APP_MODE" Nothing
+    . withTemporaryEnvironment "DATABASE_HOST" Nothing
+    . withTemporaryEnvironment "DATABASE_PORT" Nothing
+    . withTemporaryEnvironment "DATABASE_NAME" Nothing
+    . withTemporaryEnvironment "DATABASE_USER" Nothing
+    . withTemporaryEnvironment "DATABASE_PASSWORD" Nothing
 
 withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a
 withFakePsqlScriptResults commandResults action =
@@ -3078,9 +3087,70 @@ spec = do
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 
-  describe "run" $
-    it "writes startup output to the supplied handle for isolated tests" $
-      withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
-        run outputHandle
+  describe "buildRuntimeApp" $
+    it "builds the runtime database effect from the environment config" $ do
+      let runtimeEnvironmentConfig =
+            defaultAppEnvironmentConfig
+              { databaseConfig =
+                  postgresTestConfig
+                    { databaseName = "runtime_db",
+                      databaseUser = "runtime_user"
+                    }
+              }
+          runtimeApplication =
+            buildRuntimeAppWithDatabaseBuilder
+              defaultAppConfig
+              ( \databaseRuntimeConfig ->
+                  buildSeededDatabaseEffect
+                    defaultDatabaseSeed
+                      { englishSecondPageData =
+                          Right
+                            SecondPageData
+                              { secondPageDataSummary =
+                                  "runtime:" <> databaseName databaseRuntimeConfig <> ":" <> databaseUser databaseRuntimeConfig,
+                                secondPageDataHighlights = ["configured-from-environment"]
+                              }
+                      }
+              )
+              runtimeEnvironmentConfig
+      runtimeResponse <- HarchWeb.renderResponse runtimeApplication apiSecondRequest
+      case runtimeResponse of
+        HarchWeb.BodyResponse body ->
+          HarchWeb.responseBody body
+            `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
+        HarchWeb.PageResponse _ -> expectationFailure "expected body response"
+
+  describe "run" $ do
+    it "starts the runtime server from an explicit environment config" $
+      withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
+        runWithEnvironmentConfig outputHandle defaultAppEnvironmentConfig
         hClose outputHandle
         readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+
+    it "writes startup output to the supplied handle for isolated tests" $
+      withClearedAppEnvironment $
+        withSystemTempDirectory "web-api-run" $ \tempDirectory ->
+          withCurrentDirectory tempDirectory $
+            withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
+              run outputHandle
+              hClose outputHandle
+              readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+
+    it "fails explicitly when the runtime environment config is invalid" $
+      withClearedAppEnvironment $
+        withSystemTempDirectory "web-api-run-invalid" $ \tempDirectory ->
+          withCurrentDirectory tempDirectory $ do
+            writeFile ".env" "APP_MODE=staging\n"
+            result <-
+              ( try $
+                  withSystemTempFile "web-api-output.txt" $ \_ outputHandle -> do
+                    run outputHandle
+                    hClose outputHandle
+              ) ::
+                IO (Either IOException ())
+            case result of
+              Left exception ->
+                displayException exception
+                  `shouldContain` "Failed to load app environment config: AppEnvironmentConfigParseError (InvalidConfigValue \"APP_MODE\" \"staging\")"
+              Right () ->
+                expectationFailure "expected run to fail on invalid runtime environment config"
