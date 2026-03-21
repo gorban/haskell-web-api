@@ -18,7 +18,9 @@ module HarchWeb
     ManualTlsBindPlan (..),
     NavigationItem (..),
     ObservabilityConfig (..),
+    ObservabilityStartupPlan (..),
     OtlpExporter (..),
+    OtlpExporterStartup (..),
     Page (..),
     PageShell (..),
     Response (..),
@@ -30,6 +32,7 @@ module HarchWeb
     ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
+    TelemetrySignal (..),
     AcmeBindPlan (..),
     TlsCertificateSource (..),
     TlsConfig (..),
@@ -38,6 +41,7 @@ module HarchWeb
     buildNavigation,
     buildPageShell,
     matchRoute,
+    planObservabilityStartup,
     planServerStartup,
     routeHref,
     renderDocument,
@@ -131,6 +135,23 @@ data OtlpExporter = OtlpExporter
 data ObservabilityConfig = ObservabilityConfig
   { tracingExporter :: Maybe OtlpExporter,
     metricsExporter :: Maybe OtlpExporter
+  }
+  deriving (Eq, Show)
+
+data TelemetrySignal
+  = TracingSignal
+  | MetricsSignal
+  deriving (Eq, Show)
+
+data OtlpExporterStartup = OtlpExporterStartup
+  { startupSignal :: TelemetrySignal,
+    startupEndpoint :: Text,
+    startupHeaders :: [(Text, Text)]
+  }
+  deriving (Eq, Show)
+
+newtype ObservabilityStartupPlan = ObservabilityStartupPlan
+  { startupExporters :: [OtlpExporterStartup]
   }
   deriving (Eq, Show)
 
@@ -381,6 +402,7 @@ runServer outputHandle config webApplication =
   case planServerStartup config of
     Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
     Right startupPlan -> do
+      let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
       startupResponse <-
         fmap
           (toWaiResponse webApplication)
@@ -392,9 +414,10 @@ runServer outputHandle config webApplication =
                   "/"
               )
           )
-      startupPlan `seq`
-        Wai.responseStatus startupResponse `seq`
-          hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+      observabilityPlan `seq`
+        startupPlan `seq`
+          Wai.responseStatus startupResponse `seq`
+            hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
 
 startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
 startLocalTestServer webApplication = do
@@ -695,6 +718,21 @@ planServerStartup config = do
                     acmeListenerConfig = acmeConfig
                   }
             )
+
+planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
+planObservabilityStartup observabilityConfig =
+  ObservabilityStartupPlan
+    { startupExporters =
+        maybe [] (pure . buildStartup TracingSignal) (tracingExporter observabilityConfig)
+          ++ maybe [] (pure . buildStartup MetricsSignal) (metricsExporter observabilityConfig)
+    }
+  where
+    buildStartup signal exporter =
+      OtlpExporterStartup
+        { startupSignal = signal,
+          startupEndpoint = otlpEndpoint exporter,
+          startupHeaders = otlpHeaders exporter
+        }
 
 data PlannedListener
   = PlannedHttp ListenerEndpoint

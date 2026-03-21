@@ -267,6 +267,16 @@ spec = do
               { tracingExporter = Just tracingConfig,
                 metricsExporter = Nothing
               }
+          observabilityStartup =
+            OtlpExporterStartup
+              { startupSignal = TracingSignal,
+                startupEndpoint = "http://collector:4318/v1/traces",
+                startupHeaders = [("authorization", "Bearer token")]
+              }
+          observabilityPlan =
+            ObservabilityStartupPlan
+              { startupExporters = [observabilityStartup]
+              }
           serverConfig =
             ServerConfig
               { listenerConfigs =
@@ -307,6 +317,10 @@ spec = do
       tracingExporter observabilityConfig `shouldBe` Just tracingConfig
       metricsExporter observabilityConfig `shouldBe` Nothing
       observability serverConfig `shouldBe` observabilityConfig
+      startupSignal observabilityStartup `shouldBe` TracingSignal
+      startupEndpoint observabilityStartup `shouldBe` "http://collector:4318/v1/traces"
+      startupHeaders observabilityStartup `shouldBe` [("authorization", "Bearer token")]
+      startupExporters observabilityPlan `shouldBe` [observabilityStartup]
       toServerConfig serverConfig `shouldBe` serverConfig
 
     it "covers derived Eq and Show instances for the shared server config types" $ do
@@ -357,6 +371,19 @@ spec = do
               }
           otherTracingConfig = OtlpExporter {otlpEndpoint = "http://other-collector:4318/v1/traces", otlpHeaders = []}
           observabilityConfig = ObservabilityConfig {tracingExporter = Just tracingConfig, metricsExporter = Nothing}
+          exporterStartup =
+            OtlpExporterStartup
+              { startupSignal = TracingSignal,
+                startupEndpoint = "http://collector:4318/v1/traces",
+                startupHeaders = [("authorization", "Bearer token")]
+              }
+          otherExporterStartup =
+            OtlpExporterStartup
+              { startupSignal = MetricsSignal,
+                startupEndpoint = "http://collector:4318/v1/metrics",
+                startupHeaders = []
+              }
+          observabilityPlan = ObservabilityStartupPlan {startupExporters = [exporterStartup]}
           serverConfig =
             ServerConfig
               { listenerConfigs = [listenerConfig],
@@ -385,6 +412,12 @@ spec = do
       tracingConfig `shouldNotBe` otherTracingConfig
       observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+      TracingSignal `shouldBe` TracingSignal
+      TracingSignal `shouldNotBe` MetricsSignal
+      exporterStartup `shouldBe` exporterStartup
+      exporterStartup `shouldNotBe` otherExporterStartup
+      observabilityPlan `shouldBe` observabilityPlan
+      observabilityPlan `shouldNotBe` ObservabilityStartupPlan {startupExporters = []}
       serverConfig `shouldBe` serverConfig
       serverConfig `shouldNotBe` serverConfig {listenerConfigs = [otherListenerConfig]}
       show Http `shouldBe` "Http"
@@ -400,6 +433,9 @@ spec = do
       show staticAssetsConfig `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
+      show TracingSignal `shouldBe` "TracingSignal"
+      show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
+      show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
       show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
@@ -412,6 +448,8 @@ spec = do
       shouldBeParenthesized (showsPrec 11 staticAssetsConfig "")
       shouldBeParenthesized (showsPrec 11 tracingConfig "")
       shouldBeParenthesized (showsPrec 11 observabilityConfig "")
+      shouldBeParenthesized (showsPrec 11 exporterStartup "")
+      shouldBeParenthesized (showsPrec 11 observabilityPlan "")
       shouldBeParenthesized (showsPrec 11 serverConfig "")
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
@@ -424,6 +462,9 @@ spec = do
       show [staticAssetsConfig] `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
       show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityConfig] `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}]"
+      show [TracingSignal, MetricsSignal] `shouldBe` "[TracingSignal,MetricsSignal]"
+      show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
+      show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
       show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
 
   describe "public record coverage" $ do
@@ -985,6 +1026,42 @@ spec = do
         `shouldBe` "DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})"
       show [DuplicateListenerEndpoint duplicateEndpoint]
         `shouldBe` "[DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})]"
+
+  describe "planObservabilityStartup" $ do
+    it "produces no exporter startup actions when tracing and metrics are disabled" $
+      planObservabilityStartup ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+        `shouldBe` ObservabilityStartupPlan {startupExporters = []}
+
+    it "translates OTLP tracing and metrics exporters into deterministic startup parameters" $
+      planObservabilityStartup
+        ObservabilityConfig
+          { tracingExporter =
+              Just
+                OtlpExporter
+                  { otlpEndpoint = "http://collector:4318/v1/traces",
+                    otlpHeaders = [("authorization", "Bearer tracing")]
+                  },
+            metricsExporter =
+              Just
+                OtlpExporter
+                  { otlpEndpoint = "http://collector:4318/v1/metrics",
+                    otlpHeaders = [("x-scope", "metrics")]
+                  }
+          }
+        `shouldBe` ObservabilityStartupPlan
+          { startupExporters =
+              [ OtlpExporterStartup
+                  { startupSignal = TracingSignal,
+                    startupEndpoint = "http://collector:4318/v1/traces",
+                    startupHeaders = [("authorization", "Bearer tracing")]
+                  },
+                OtlpExporterStartup
+                  { startupSignal = MetricsSignal,
+                    startupEndpoint = "http://collector:4318/v1/metrics",
+                    startupHeaders = [("x-scope", "metrics")]
+                  }
+              ]
+          }
 
   describe "runServer" $ do
     it "writes the stub startup message to the supplied handle" $
