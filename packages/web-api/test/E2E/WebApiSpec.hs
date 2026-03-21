@@ -9,7 +9,7 @@ import WebApi (buildApp)
 import WebApi.Config (defaultAppConfig)
 
 spec =
-  describe "browser e2e" $
+  describe "browser e2e" $ do
     it "loads the home page through a real local HTTP listener and asserts SSR content" $
       withNodeBrowserRunner $ \browserConfig ->
         HarchWeb.withLocalTestServer (buildApp defaultAppConfig) $ \localTestServer ->
@@ -19,6 +19,14 @@ spec =
               AssertTextEquals "[data-page-title=\"true\"]" "Home"
             ]
             `shouldReturn` Right ()
+
+    it "keeps the same-origin click scenario authored in the browser DSL until the runtime lands" $
+      HarchWeb.withLocalTestServer (buildApp defaultAppConfig) $ \localTestServer ->
+        pendingWith
+          ( "Need a browser-backed runner that can prove same-document navigation rather than a fresh SSR load. Intended actions: "
+              <> show
+                (sameOriginNavigationActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
+          )
 
 withNodeBrowserRunner :: (BrowserConfig -> IO a) -> IO a
 withNodeBrowserRunner action =
@@ -31,6 +39,13 @@ withNodeBrowserRunner action =
             }
     writeFile scriptPath nodeBrowserRunnerSource
     action browserConfig
+
+sameOriginNavigationActions :: String -> [BrowserAction]
+sameOriginNavigationActions baseUrl =
+  [ VisitUrl (baseUrl <> "/"),
+    ClickLinkWithText "Browse the second page",
+    AssertTextEquals "[data-page-title=\"true\"]" "Second"
+  ]
 
 nodeBrowserRunnerSource :: String
 nodeBrowserRunnerSource =
