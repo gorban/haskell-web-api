@@ -61,6 +61,7 @@ library
     WebApi
     WebApi.App
     WebApi.Config
+    WebApi.Database
     WebApi.Page
     WebApi.Response
     WebApi.Route

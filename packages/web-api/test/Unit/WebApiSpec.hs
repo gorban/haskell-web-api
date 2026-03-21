@@ -15,6 +15,7 @@ import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import WebApi (buildApp, run)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
+import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, renderPage, renderPageBody)
 import WebApi.Response (selectResponse)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
@@ -592,6 +593,146 @@ spec = do
       show (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")) `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
       show [MissingConfigValue (Text.pack "DATABASE_PASSWORD"), InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")]
         `shouldBe` "[MissingConfigValue \"DATABASE_PASSWORD\",InvalidConfigValue \"APP_MODE\" \"staging\"]"
+
+  describe "defaultDatabaseSeed" $ do
+    it "defines deterministic page-facing seeded results for both locales" $
+      defaultDatabaseSeed
+        `shouldBe` DatabaseSeed
+          { englishHomePageData =
+              Right
+                HomePageData
+                  { homePageDataSummary = Text.pack "Server-rendered home page with seeded development data."
+                  },
+            frenchHomePageData =
+              Right
+                HomePageData
+                  { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                  },
+            englishSecondPageData =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = Text.pack "Second page content loaded from the seeded database effect.",
+                    secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"]
+                  },
+            frenchSecondPageData =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = Text.pack "Contenu de la seconde page charge depuis l'effet de base de donnees seedee.",
+                    secondPageDataHighlights = []
+                  }
+          }
+
+    it "keeps seeded database data serializable and stable for tests" $ do
+      let homePageData = HomePageData {homePageDataSummary = Text.pack "Seeded home"}
+          otherHomePageData = HomePageData {homePageDataSummary = Text.pack "Different home"}
+          secondPageData =
+            SecondPageData
+              { secondPageDataSummary = Text.pack "Seeded second",
+                secondPageDataHighlights = [Text.pack "One"]
+              }
+          otherSecondPageData =
+            SecondPageData
+              { secondPageDataSummary = Text.pack "Other second",
+                secondPageDataHighlights = []
+              }
+          homeError = HomePageDataError (Text.pack "home unavailable")
+          secondError = SecondPageDataError (Text.pack "second unavailable")
+          seededDatabase =
+            DatabaseSeed
+              { englishHomePageData = Right homePageData,
+                frenchHomePageData = Left homeError,
+                englishSecondPageData = Right secondPageData,
+                frenchSecondPageData = Left secondError
+              }
+      homePageData `shouldBe` homePageData
+      homePageData `shouldNotBe` otherHomePageData
+      secondPageData `shouldBe` secondPageData
+      secondPageData `shouldNotBe` otherSecondPageData
+      homeError `shouldBe` homeError
+      homeError `shouldNotBe` secondError
+      seededDatabase `shouldBe` seededDatabase
+      seededDatabase
+        `shouldNotBe` seededDatabase
+          { frenchSecondPageData = Right otherSecondPageData
+          }
+      show (HomePageData {homePageDataSummary = Text.pack "Seeded home"})
+        `shouldBe` "HomePageData {homePageDataSummary = \"Seeded home\"}"
+      show (SecondPageData {secondPageDataSummary = Text.pack "Seeded second", secondPageDataHighlights = [Text.pack "One"]})
+        `shouldBe` "SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}"
+      show (HomePageDataError (Text.pack "home unavailable"))
+        `shouldBe` "HomePageDataError \"home unavailable\""
+      show (SecondPageDataError (Text.pack "second unavailable"))
+        `shouldBe` "SecondPageDataError \"second unavailable\""
+      show seededDatabase
+        `shouldBe` "DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}"
+      show [HomePageData {homePageDataSummary = Text.pack "Seeded home"}]
+        `shouldBe` "[HomePageData {homePageDataSummary = \"Seeded home\"}]"
+      show [homeError, secondError]
+        `shouldBe` "[HomePageDataError \"home unavailable\",SecondPageDataError \"second unavailable\"]"
+      show
+        [ SecondPageData
+            { secondPageDataSummary = Text.pack "Seeded second",
+              secondPageDataHighlights = [Text.pack "One"]
+            }
+        ]
+        `shouldBe` "[SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}]"
+      show [seededDatabase]
+        `shouldBe` "[DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}]"
+
+  describe "buildSeededDatabaseEffect" $ do
+    it "loads page-oriented seeded data for both English and French requests" $ do
+      let englishEffect = buildSeededDatabaseEffect defaultDatabaseSeed
+      loadHomePageData englishEffect defaultRequestContext
+        `shouldBe` Right
+          HomePageData
+            { homePageDataSummary = Text.pack "Server-rendered home page with seeded development data."
+            }
+      loadSecondPageData englishEffect defaultRequestContext
+        `shouldBe` Right
+          SecondPageData
+            { secondPageDataSummary = Text.pack "Second page content loaded from the seeded database effect.",
+              secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"]
+            }
+      loadHomePageData englishEffect frenchRequestContext
+        `shouldBe` Right
+          HomePageData
+            { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            }
+      loadSecondPageData englishEffect frenchRequestContext
+        `shouldBe` Right
+          SecondPageData
+            { secondPageDataSummary = Text.pack "Contenu de la seconde page charge depuis l'effet de base de donnees seedee.",
+              secondPageDataHighlights = []
+            }
+
+    it "returns explicit seeded errors without collapsing page-specific failures" $ do
+      let seededEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData = Left (HomePageDataError (Text.pack "home seed unavailable")),
+                  frenchHomePageData =
+                    Right
+                      HomePageData
+                        { homePageDataSummary = Text.pack "Accueil seede"
+                        },
+                  englishSecondPageData =
+                    Right
+                      SecondPageData
+                        { secondPageDataSummary = Text.pack "Second seed",
+                          secondPageDataHighlights = [Text.pack "Known branch"]
+                        },
+                  frenchSecondPageData = Left (SecondPageDataError (Text.pack "second seed unavailable"))
+                }
+      loadHomePageData seededEffect defaultRequestContext
+        `shouldBe` Left (HomePageDataError (Text.pack "home seed unavailable"))
+      loadSecondPageData seededEffect frenchRequestContext
+        `shouldBe` Left (SecondPageDataError (Text.pack "second seed unavailable"))
+
+    it "keeps the default seeded interpreter deterministic for repeated requests" $ do
+      loadHomePageData defaultDatabaseEffect defaultRequestContext
+        `shouldBe` loadHomePageData defaultDatabaseEffect defaultRequestContext
+      loadSecondPageData defaultDatabaseEffect frenchRequestContext
+        `shouldBe` loadSecondPageData defaultDatabaseEffect frenchRequestContext
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
