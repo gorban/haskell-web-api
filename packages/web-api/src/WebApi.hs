@@ -26,12 +26,14 @@ module WebApi
     TlsConfig (..),
     buildApp,
     committedEnvDefaults,
+    committedRuntimeDefaults,
     defaultAppConfig,
     defaultAppEnvironmentConfig,
     defaultRequestContext,
     buildPageModel,
     matchRoute,
     parseAppEnvironmentConfig,
+    parseRuntimeAppConfig,
     parseRoute,
     renderPage,
     renderPageBody,
@@ -42,7 +44,9 @@ module WebApi
 where
 
 import Control.Applicative ((<|>))
-import Data.Char (isAsciiLower)
+import Data.Char (isAsciiLower, isDigit)
+import Data.List (nub, sort)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
@@ -232,6 +236,14 @@ defaultAppConfig =
           }
     }
 
+committedRuntimeDefaults :: [(Text, Text)]
+committedRuntimeDefaults =
+  [ (Text.pack "APP_TITLE_PREFIX", Text.pack "web-api"),
+    (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+    (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+    (Text.pack "LISTENER_0_SCHEME", Text.pack "http")
+  ]
+
 committedEnvDefaults :: [(Text, Text)]
 committedEnvDefaults =
   [ (Text.pack "APP_MODE", Text.pack "development"),
@@ -282,19 +294,235 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
         Just value -> Right value
         Nothing -> Left (MissingConfigValue key)
 
+parseRuntimeAppConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppConfig
+parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
+  parsedTitlePrefix <- requiredConfigValue (Text.pack "APP_TITLE_PREFIX")
+  parsedListeners <- parseListenerConfigs
+  parsedStaticAssets <- parseStaticAssetsConfig
+  parsedObservability <- parseObservabilityConfig
+  pure
+    AppConfig
+      { appTitlePrefix = parsedTitlePrefix,
+        listenerConfigs = parsedListeners,
+        staticAssets = parsedStaticAssets,
+        observability = parsedObservability
+      }
+  where
+    allConfigEntries = committedDefaults <> localOverrides <> environmentOverrides
+
+    requiredConfigValue key =
+      case lookupConfigValue key committedDefaults localOverrides environmentOverrides of
+        Just value -> Right value
+        Nothing -> Left (MissingConfigValue key)
+
+    optionalConfigValue key =
+      lookupConfigValue key committedDefaults localOverrides environmentOverrides
+
+    parseListenerConfigs =
+      case declaredIndices (Text.pack "LISTENER_") allConfigEntries of
+        [] -> Left (MissingConfigValue (Text.pack "LISTENER_0_HOST"))
+        listenerIndices -> traverse parseListenerConfig listenerIndices
+
+    parseListenerConfig listenerIndex = do
+      parsedHost <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "HOST")
+      parsedPort <-
+        parsePositiveInt (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "PORT"))
+          =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "PORT")
+      parsedScheme <-
+        parseListenerScheme
+          (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "SCHEME"))
+          =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "SCHEME")
+      parsedTls <- parseListenerTlsConfig listenerIndex parsedScheme
+      pure
+        ListenerConfig
+          { listenerHost = parsedHost,
+            listenerPort = parsedPort,
+            listenerScheme = parsedScheme,
+            listenerTls = parsedTls
+          }
+
+    parseListenerTlsConfig _ Http = Right Nothing
+    parseListenerTlsConfig listenerIndex Https = do
+      tlsSource <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_SOURCE")
+      parsedCertificateSource <- parseTlsCertificateSource listenerIndex tlsSource
+      pure (Just (TlsConfig {certificateSource = parsedCertificateSource}))
+
+    parseTlsCertificateSource listenerIndex tlsSource =
+      case Text.unpack tlsSource of
+        "manual" ->
+          ManualCertificateFiles
+            <$> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_CERTIFICATE_FILE")
+            <*> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_PRIVATE_KEY_FILE")
+        "acme" -> parseAcmeCertificateSource listenerIndex
+        _ ->
+          Left
+            ( InvalidConfigValue
+                (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_SOURCE"))
+                tlsSource
+            )
+
+    parseAcmeCertificateSource listenerIndex =
+      AcmeCertificateSource
+        <$> ( AcmeConfig
+                <$> requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_DIRECTORY_URL")
+                <*> ( parseDelimitedTexts
+                        (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CONTACT_EMAILS"))
+                        =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CONTACT_EMAILS")
+                    )
+                <*> parseAcmeChallengeBackend listenerIndex
+            )
+
+    parseAcmeChallengeBackend listenerIndex = do
+      backendValue <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CHALLENGE_BACKEND")
+      if backendValue == Text.pack "in-process-http01"
+        then Right InProcessHttp01
+        else
+          if backendValue == Text.pack "certbot-http01"
+            then
+              CertbotHttp01
+                <$> ( CertbotConfig
+                        <$> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CERTBOT_EXECUTABLE")
+                        <*> pure
+                          ( maybe
+                              []
+                              (parseDelimitedTextsUnsafe (Text.pack ","))
+                              (optionalIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CERTBOT_ARGUMENTS"))
+                          )
+                    )
+            else
+              Left
+                ( InvalidConfigValue
+                    (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CHALLENGE_BACKEND"))
+                    backendValue
+                )
+
+    parseStaticAssetsConfig =
+      StaticAssetsConfig
+        <$> traverse parseStaticAssetRoot (declaredIndices (Text.pack "STATIC_ASSET_ROOT_") allConfigEntries)
+        <*> traverse
+          (parseNonNegativeInt (Text.pack "STATIC_CACHE_CONTROL_SECONDS"))
+          (optionalConfigValue (Text.pack "STATIC_CACHE_CONTROL_SECONDS"))
+
+    parseStaticAssetRoot staticRootIndex =
+      StaticAssetRoot
+        <$> requiredIndexedConfigValue (Text.pack "STATIC_ASSET_ROOT") staticRootIndex (Text.pack "URL_PREFIX")
+        <*> requiredIndexedFilePathValue (Text.pack "STATIC_ASSET_ROOT") staticRootIndex (Text.pack "DIRECTORY")
+
+    parseObservabilityConfig =
+      ObservabilityConfig
+        <$> parseOptionalOtlpExporter (Text.pack "OTLP_TRACING")
+        <*> parseOptionalOtlpExporter (Text.pack "OTLP_METRICS")
+
+    parseOptionalOtlpExporter exporterPrefix =
+      case optionalConfigValue (exporterPrefix <> Text.pack "_ENDPOINT") of
+        Just endpoint ->
+          Right
+            ( Just
+                OtlpExporter
+                  { otlpEndpoint = endpoint,
+                    otlpHeaders =
+                      maybe
+                        []
+                        (parseHeadersUnsafe . Text.strip)
+                        (optionalConfigValue (exporterPrefix <> Text.pack "_HEADERS"))
+                  }
+            )
+        Nothing ->
+          case optionalConfigValue (exporterPrefix <> Text.pack "_HEADERS") of
+            Just _ -> Left (MissingConfigValue (exporterPrefix <> Text.pack "_ENDPOINT"))
+            Nothing -> Right Nothing
+
+    requiredIndexedConfigValue prefix configIndex suffix =
+      requiredConfigValue (indexedConfigKey prefix configIndex suffix)
+
+    optionalIndexedConfigValue prefix configIndex suffix =
+      optionalConfigValue (indexedConfigKey prefix configIndex suffix)
+
+    requiredIndexedFilePathValue prefix configIndex suffix =
+      Text.unpack <$> requiredIndexedConfigValue prefix configIndex suffix
+
 parseMode :: Text -> Either ConfigParseError AppMode
-parseMode value
-  | value == Text.pack "development" = Right Development
-  | value == Text.pack "test" = Right Test
-  | value == Text.pack "production" = Right Production
-  | otherwise = Left (InvalidConfigValue (Text.pack "APP_MODE") value)
+parseMode value =
+  maybe
+    (Left (InvalidConfigValue (Text.pack "APP_MODE") value))
+    Right
+    ( lookup
+        value
+        [ (Text.pack "development", Development),
+          (Text.pack "test", Test),
+          (Text.pack "production", Production)
+        ]
+    )
 
 parsePort :: Text -> Either ConfigParseError Int
-parsePort value =
+parsePort = parsePositiveInt (Text.pack "DATABASE_PORT")
+
+parsePositiveInt :: Text -> Text -> Either ConfigParseError Int
+parsePositiveInt key value =
   case readMaybe (Text.unpack value) of
-    Just port
-      | port > 0 -> Right port
-    _ -> Left (InvalidConfigValue (Text.pack "DATABASE_PORT") value)
+    Just parsedInt
+      | parsedInt > 0 -> Right parsedInt
+    _ -> Left (InvalidConfigValue key value)
+
+parseNonNegativeInt :: Text -> Text -> Either ConfigParseError Int
+parseNonNegativeInt key value =
+  case readMaybe (Text.unpack value) of
+    Just parsedInt
+      | parsedInt >= 0 -> Right parsedInt
+    _ -> Left (InvalidConfigValue key value)
+
+parseListenerScheme :: Text -> Text -> Either ConfigParseError ListenerScheme
+parseListenerScheme key value =
+  maybe
+    (Left (InvalidConfigValue key value))
+    Right
+    ( lookup
+        value
+        [ (Text.pack "http", Http),
+          (Text.pack "https", Https)
+        ]
+    )
+
+parseDelimitedTexts :: Text -> Text -> Either ConfigParseError [Text]
+parseDelimitedTexts key value =
+  case parseDelimitedTextsUnsafe (Text.pack ",") value of
+    [] -> Left (InvalidConfigValue key value)
+    parsedValues -> Right parsedValues
+
+parseDelimitedTextsUnsafe :: Text -> Text -> [Text]
+parseDelimitedTextsUnsafe delimiter =
+  filter (not . Text.null)
+    . map Text.strip
+    . Text.splitOn delimiter
+
+parseHeadersUnsafe :: Text -> [(Text, Text)]
+parseHeadersUnsafe value =
+  mapMaybe parseHeaderPair (parseDelimitedTextsUnsafe (Text.pack ";") value)
+  where
+    parseHeaderPair headerEntry =
+      let (headerName, headerValueWithSeparator) = Text.breakOn (Text.pack "=") headerEntry
+       in if Text.null headerName || Text.null headerValueWithSeparator
+            then Nothing
+            else Just (Text.strip headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
+
+declaredIndices :: Text -> [(Text, Text)] -> [Int]
+declaredIndices entryPrefix =
+  sort . nub . mapMaybe (extractIndexedKey entryPrefix . fst)
+
+extractIndexedKey :: Text -> Text -> Maybe Int
+extractIndexedKey entryPrefix entryKey =
+  if Text.isPrefixOf entryPrefix entryKey
+    then
+      let indexedSuffix = Text.drop (Text.length entryPrefix) entryKey
+          (indexDigits, remainder) = Text.span isDigit indexedSuffix
+       in if Text.null indexDigits || not (Text.isPrefixOf (Text.pack "_") remainder)
+            then Nothing
+            else readMaybe (Text.unpack indexDigits)
+    else Nothing
+
+indexedConfigKey :: Text -> Int -> Text -> Text
+indexedConfigKey prefix configIndex suffix =
+  prefix <> Text.pack "_" <> Text.pack (show configIndex) <> Text.pack "_" <> suffix
 
 lookupConfigValue :: Text -> [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Maybe Text
 lookupConfigValue key committedDefaults localOverrides environmentOverrides =

@@ -5,7 +5,7 @@ import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppLocale (..), AppMode (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), ConfigParseError (..), DatabaseConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, committedEnvDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultRequestContext, matchRoute, parseAppEnvironmentConfig, parseRoute, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
+import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppLocale (..), AppMode (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), ConfigParseError (..), DatabaseConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultRequestContext, matchRoute, parseAppEnvironmentConfig, parseRoute, parseRuntimeAppConfig, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -62,6 +62,393 @@ spec = do
                   metricsExporter = Nothing
                 }
           }
+
+  describe "parseRuntimeAppConfig" $ do
+    it "parses committed runtime defaults into the expected app config" $
+      parseRuntimeAppConfig committedRuntimeDefaults [] []
+        `shouldBe` Right defaultAppConfig
+
+    it "fails when no listeners are configured" $
+      parseRuntimeAppConfig
+        [(Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test")]
+        []
+        []
+        `shouldBe` Left (MissingConfigValue (Text.pack "LISTENER_0_HOST"))
+
+    it "parses multiple listeners in deterministic index order" $ do
+      let committedDefaults =
+            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+              (Text.pack "LISTENER_2_SCHEME", Text.pack "http"),
+              (Text.pack "LISTENER_1_PORT", Text.pack "5002"),
+              (Text.pack "LISTENER_2_PORT", Text.pack "5003"),
+              (Text.pack "LISTENER_1_HOST", Text.pack "127.0.0.2"),
+              (Text.pack "LISTENER_2_HOST", Text.pack "127.0.0.3"),
+              (Text.pack "LISTENER_1_SCHEME", Text.pack "http")
+            ]
+      parseRuntimeAppConfig committedDefaults [] []
+        `shouldBe` Right
+          AppConfig
+            { appTitlePrefix = Text.pack "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = Text.pack "127.0.0.2",
+                      listenerPort = 5002,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    },
+                  ListenerConfig
+                    { listenerHost = Text.pack "127.0.0.3",
+                      listenerPort = 5003,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    }
+                ],
+              staticAssets =
+                StaticAssetsConfig
+                  { staticAssetRoots = [],
+                    staticCacheControlSeconds = Nothing
+                  },
+              observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter = Nothing
+                  }
+            }
+
+    it "requires HTTPS listeners to specify a TLS source" $
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "https")
+        ]
+        []
+        []
+        `shouldBe` Left (MissingConfigValue (Text.pack "LISTENER_0_TLS_SOURCE"))
+
+    it "parses manual and ACME-backed HTTPS listeners distinctly" $ do
+      let committedDefaults =
+            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+              (Text.pack "LISTENER_BAD_HOST", Text.pack "ignored-host"),
+              (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
+              (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
+              (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
+              (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "manual"),
+              (Text.pack "LISTENER_0_TLS_CERTIFICATE_FILE", Text.pack "cert.pem"),
+              (Text.pack "LISTENER_0_TLS_PRIVATE_KEY_FILE", Text.pack "key.pem"),
+              (Text.pack "LISTENER_1_HOST", Text.pack "0.0.0.0"),
+              (Text.pack "LISTENER_1_PORT", Text.pack "5444"),
+              (Text.pack "LISTENER_1_SCHEME", Text.pack "https"),
+              (Text.pack "LISTENER_1_TLS_SOURCE", Text.pack "acme"),
+              (Text.pack "LISTENER_1_ACME_DIRECTORY_URL", Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory"),
+              (Text.pack "LISTENER_1_ACME_CONTACT_EMAILS", Text.pack "ops@example.com,alerts@example.com"),
+              (Text.pack "LISTENER_1_ACME_CHALLENGE_BACKEND", Text.pack "in-process-http01"),
+              (Text.pack "LISTENER_2_HOST", Text.pack "0.0.0.0"),
+              (Text.pack "LISTENER_2_PORT", Text.pack "5445"),
+              (Text.pack "LISTENER_2_SCHEME", Text.pack "https"),
+              (Text.pack "LISTENER_2_TLS_SOURCE", Text.pack "acme"),
+              (Text.pack "LISTENER_2_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
+              (Text.pack "LISTENER_2_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
+              (Text.pack "LISTENER_2_ACME_CHALLENGE_BACKEND", Text.pack "certbot-http01"),
+              (Text.pack "LISTENER_2_ACME_CERTBOT_EXECUTABLE", Text.pack "certbot"),
+              (Text.pack "LISTENER_2_ACME_CERTBOT_ARGUMENTS", Text.pack "certonly,--webroot,--agree-tos")
+            ]
+      parseRuntimeAppConfig committedDefaults [] []
+        `shouldBe` Right
+          AppConfig
+            { appTitlePrefix = Text.pack "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = Text.pack "0.0.0.0",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "cert.pem",
+                                    privateKeyFile = "key.pem"
+                                  }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = Text.pack "0.0.0.0",
+                      listenerPort = 5444,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = [Text.pack "ops@example.com", Text.pack "alerts@example.com"],
+                                      acmeChallengeBackend = InProcessHttp01
+                                    }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = Text.pack "0.0.0.0",
+                      listenerPort = 5445,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = [Text.pack "ops@example.com"],
+                                      acmeChallengeBackend =
+                                        CertbotHttp01
+                                          CertbotConfig
+                                            { certbotExecutable = "certbot",
+                                              certbotArguments = [Text.pack "certonly", Text.pack "--webroot", Text.pack "--agree-tos"]
+                                            }
+                                    }
+                            }
+                    }
+                ],
+              staticAssets =
+                StaticAssetsConfig
+                  { staticAssetRoots = [],
+                    staticCacheControlSeconds = Nothing
+                  },
+              observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter = Nothing
+                  }
+            }
+
+    it "rejects invalid listener scheme and TLS source values" $ do
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "tcp")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_SCHEME") (Text.pack "tcp"))
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
+          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "vault")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_TLS_SOURCE") (Text.pack "vault"))
+
+    it "parses static asset roots and cache policy into the expected config" $ do
+      let committedDefaults =
+            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+              (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+              (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+              (Text.pack "LISTENER_0_SCHEME", Text.pack "http"),
+              (Text.pack "STATIC_ASSET_ROOT_2_DIRECTORY", Text.pack "vendor/public"),
+              (Text.pack "STATIC_ASSET_ROOT_1_URL_PREFIX", Text.pack "/assets"),
+              (Text.pack "STATIC_ASSET_ROOT_2_URL_PREFIX", Text.pack "/vendor"),
+              (Text.pack "STATIC_ASSET_ROOT_1_DIRECTORY", Text.pack "public"),
+              (Text.pack "STATIC_CACHE_CONTROL_SECONDS", Text.pack "3600")
+            ]
+      parseRuntimeAppConfig committedDefaults [] []
+        `shouldBe` Right
+          AppConfig
+            { appTitlePrefix = Text.pack "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = Text.pack "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    }
+                ],
+              staticAssets =
+                StaticAssetsConfig
+                  { staticAssetRoots =
+                      [ StaticAssetRoot
+                          { staticUrlPrefix = Text.pack "/assets",
+                            staticDirectory = "public"
+                          },
+                        StaticAssetRoot
+                          { staticUrlPrefix = Text.pack "/vendor",
+                            staticDirectory = "vendor/public"
+                          }
+                      ],
+                    staticCacheControlSeconds = Just 3600
+                  },
+              observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter = Nothing
+                  }
+            }
+
+    it "parses tracing and metrics exporters independently while preserving header order" $ do
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ (Text.pack "OTLP_TRACING_ENDPOINT", Text.pack "http://collector:4318/v1/traces"),
+          (Text.pack "OTLP_TRACING_HEADERS", Text.pack "authorization=Bearer token;x-api-key=secret")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter =
+                      Just
+                        OtlpExporter
+                          { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
+                            otlpHeaders =
+                              [ (Text.pack "authorization", Text.pack "Bearer token"),
+                                (Text.pack "x-api-key", Text.pack "secret")
+                              ]
+                          },
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [(Text.pack "OTLP_TRACING_ENDPOINT", Text.pack "http://collector:4318/v1/traces")]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter =
+                      Just
+                        OtlpExporter
+                          { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
+                            otlpHeaders = []
+                          },
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ (Text.pack "OTLP_METRICS_ENDPOINT", Text.pack "http://collector:4318/v1/metrics"),
+          (Text.pack "OTLP_METRICS_HEADERS", Text.pack "x-scope=metrics;broken-entry")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter =
+                      Just
+                        OtlpExporter
+                          { otlpEndpoint = Text.pack "http://collector:4318/v1/metrics",
+                            otlpHeaders = [(Text.pack "x-scope", Text.pack "metrics")]
+                          }
+                  }
+            }
+
+    it "fails invalid runtime values with explicit errors" $ do
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "0"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "http")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_PORT") (Text.pack "0"))
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
+          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
+          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
+          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack ""),
+          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "shell-script")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS") (Text.pack ""))
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
+          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
+          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
+          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
+          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "shell-script")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND") (Text.pack "shell-script"))
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
+          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
+          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
+          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
+          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "certbot-http01"),
+          (Text.pack "LISTENER_0_ACME_CERTBOT_EXECUTABLE", Text.pack "certbot")
+        ]
+        []
+        []
+        `shouldBe` Right
+          AppConfig
+            { appTitlePrefix = Text.pack "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = Text.pack "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = [Text.pack "ops@example.com"],
+                                      acmeChallengeBackend =
+                                        CertbotHttp01
+                                          CertbotConfig
+                                            { certbotExecutable = "certbot",
+                                              certbotArguments = []
+                                            }
+                                    }
+                            }
+                    }
+                ],
+              staticAssets =
+                StaticAssetsConfig
+                  { staticAssetRoots = [],
+                    staticCacheControlSeconds = Nothing
+                  },
+              observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
+          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
+          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
+          (Text.pack "LISTENER_0_SCHEME", Text.pack "http"),
+          (Text.pack "STATIC_CACHE_CONTROL_SECONDS", Text.pack "-1")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue (Text.pack "STATIC_CACHE_CONTROL_SECONDS") (Text.pack "-1"))
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [(Text.pack "OTLP_TRACING_HEADERS", Text.pack "authorization=Bearer token")]
+        `shouldBe` Left (MissingConfigValue (Text.pack "OTLP_TRACING_ENDPOINT"))
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults aligned with the parsed development config" $ do
@@ -124,12 +511,19 @@ spec = do
       show Development `shouldBe` "Development"
       show Test `shouldBe` "Test"
       show Production `shouldBe` "Production"
+      show [Development, Test, Production] `shouldBe` "[Development,Test,Production]"
       show productionDatabaseConfig
         `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}"
+      show [productionDatabaseConfig]
+        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}]"
       show productionEnvironmentConfig
         `shouldBe` "AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}"
+      show [productionEnvironmentConfig]
+        `shouldBe` "[AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}]"
       show (MissingConfigValue (Text.pack "DATABASE_PASSWORD")) `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")) `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
+      show [MissingConfigValue (Text.pack "DATABASE_PASSWORD"), InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")]
+        `shouldBe` "[MissingConfigValue \"DATABASE_PASSWORD\",InvalidConfigValue \"APP_MODE\" \"staging\"]"
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
