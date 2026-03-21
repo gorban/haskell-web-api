@@ -106,20 +106,28 @@ understands the following values:
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
 | `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
 
-To provide configuration overrides:
+If you want a concrete local override file convention, create `./.env.local` in the repository root,
+next to `README.md` and `cabal.project`.
 
-1. Start from the committed defaults above.
-2. Create a local overrides file in simple `KEY=value` format.
-3. Add one entry per line. Blank lines are allowed, and lines starting with `#` are treated as comments.
-4. Override only the keys you need in that file; any key you omit will continue using its committed default.
-5. If you also set process environment variables, those should be treated as the highest-precedence layer: environment values override local file values, and local file values override committed defaults.
+1. Create `./.env.local`.
+2. Add one `KEY=value` entry per line.
+3. Blank lines are allowed, and lines starting with `#` are treated as comments.
+4. Add only the keys you want to change; any key you omit will continue using its committed default.
 
-The current `cabal run haskell-web-api` path still boots with the committed in-process defaults directly, but
-the config parsers themselves already follow that layering model. Keeping your overrides in this `KEY=value`
-shape means they match the format used by the parser/test seam today and the intended startup wiring as the
-runtime config path grows.
+Today, `./.env.local` is a documented convention for the parser/test seam, not an auto-loaded runtime
+file. The current `cabal run haskell-web-api` path does not yet read `./.env.local` or process
+environment variables automatically; it still boots with the committed in-process defaults directly.
 
-Example fully populated override body:
+In practice, that means:
+
+1. To run the default localhost setup, just use `cabal run haskell-web-api` and do not create any
+   override file unless you want one for future wiring.
+2. To prepare overrides in the format already supported by the config parser, put them in
+   `./.env.local`.
+3. Once startup wiring loads overrides, the intended precedence is: committed defaults in source,
+   then `./.env.local`, then process environment variables.
+
+Example fully populated `./.env.local` body:
 
 ```dotenv
 # App environment values
