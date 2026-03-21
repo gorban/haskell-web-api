@@ -39,8 +39,9 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
+    Cabal,
     base ^>=4.22.0.0,
-    core,
+    directory,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -76,8 +77,6 @@ test-suite harch-web-tests
   -- Directories containing source files.
   hs-source-dirs: test
   ghc-options:
-    -F
-    -pgmF=spec-preprocessor
     -Wno-missing-home-modules
     -rtsopts
     -threaded
@@ -85,8 +84,7 @@ test-suite harch-web-tests
 
   build-tool-depends:
     -- Discovers hspec *Spec.hs tests
-    hspec-discover:hspec-discover,
-    test-core:spec-preprocessor,
+    hspec-discover:hspec-discover
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
@@ -101,6 +99,5 @@ test-suite harch-web-tests
     hspec,
     http-types,
     temporary,
-    test-core,
     text,
     wai,

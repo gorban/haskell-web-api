@@ -1,10 +1,18 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 
 module HarchWeb
-  ( Application (..),
+  ( AcmeChallengeBackend (..),
+    AcmeConfig (..),
+    AppConfig (..),
+    Application (..),
+    CertbotConfig (..),
     Document (..),
     HtmlAttribute (..),
+    ListenerConfig (..),
+    ListenerScheme (..),
     NavigationItem (..),
+    ObservabilityConfig (..),
+    OtlpExporter (..),
     Page (..),
     PageShell (..),
     Response (..),
@@ -12,6 +20,10 @@ module HarchWeb
     ResolvedNavigationItem (..),
     RouteCodec (..),
     RouteRequest (..),
+    StaticAssetRoot (..),
+    StaticAssetsConfig (..),
+    TlsCertificateSource (..),
+    TlsConfig (..),
     application,
     buildDocument,
     buildNavigation,
@@ -33,6 +45,82 @@ import Data.Text.Encoding qualified as TextEncoding
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.IO (Handle, hPutStrLn)
+
+data ListenerScheme
+  = Http
+  | Https
+  deriving (Eq, Show)
+
+data CertbotConfig = CertbotConfig
+  { certbotExecutable :: FilePath,
+    certbotArguments :: [Text]
+  }
+  deriving (Eq, Show)
+
+data AcmeChallengeBackend
+  = InProcessHttp01
+  | CertbotHttp01 CertbotConfig
+  deriving (Eq, Show)
+
+data AcmeConfig = AcmeConfig
+  { acmeDirectoryUrl :: Text,
+    acmeContactEmails :: [Text],
+    acmeChallengeBackend :: AcmeChallengeBackend
+  }
+  deriving (Eq, Show)
+
+data TlsCertificateSource
+  = ManualCertificateFiles
+      { certificateFile :: FilePath,
+        privateKeyFile :: FilePath
+      }
+  | AcmeCertificateSource AcmeConfig
+  deriving (Eq, Show)
+
+newtype TlsConfig = TlsConfig
+  { certificateSource :: TlsCertificateSource
+  }
+  deriving (Eq, Show)
+
+data ListenerConfig = ListenerConfig
+  { listenerHost :: Text,
+    listenerPort :: Int,
+    listenerScheme :: ListenerScheme,
+    listenerTls :: Maybe TlsConfig
+  }
+  deriving (Eq, Show)
+
+data StaticAssetRoot = StaticAssetRoot
+  { staticUrlPrefix :: Text,
+    staticDirectory :: FilePath
+  }
+  deriving (Eq, Show)
+
+data StaticAssetsConfig = StaticAssetsConfig
+  { staticAssetRoots :: [StaticAssetRoot],
+    staticCacheControlSeconds :: Maybe Int
+  }
+  deriving (Eq, Show)
+
+data OtlpExporter = OtlpExporter
+  { otlpEndpoint :: Text,
+    otlpHeaders :: [(Text, Text)]
+  }
+  deriving (Eq, Show)
+
+data ObservabilityConfig = ObservabilityConfig
+  { tracingExporter :: Maybe OtlpExporter,
+    metricsExporter :: Maybe OtlpExporter
+  }
+  deriving (Eq, Show)
+
+data AppConfig = AppConfig
+  { appTitlePrefix :: Text,
+    listenerConfigs :: [ListenerConfig],
+    staticAssets :: StaticAssetsConfig,
+    observability :: ObservabilityConfig
+  }
+  deriving (Eq, Show)
 
 data RouteRequest route context = RouteRequest
   { requestRoute :: route,

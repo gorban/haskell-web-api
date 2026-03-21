@@ -345,6 +345,13 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
   for search_dir in ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; do
     report_args+=("--hpcdir" "$search_dir")
   done
+  while IFS= read -r spec_path; do
+    [ -z "$spec_path" ] && continue
+    spec_module="${spec_path#packages/*/test/}"
+    spec_module="${spec_module%.hs}"
+    spec_module="${spec_module//\//.}"
+    report_args+=("--exclude=$spec_module")
+  done < <(find packages -path "*/test/*Spec.hs" -type f -print | sort)
 
   echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then

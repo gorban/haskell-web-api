@@ -4,5 +4,6 @@
 -- Names are chosen carefully to avoid conflicts with other packages.
 module Core.Prelude (module X) where
 
+import Core.Config as X
 import Core.Control.Error as X
 import Core.System.Temp as X

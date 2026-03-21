@@ -57,6 +57,7 @@ library
   exposed: True
   -- Modules included in this library.
   exposed-modules:
+    Core.Config
     Core.Control.Error
     Core.Prelude
     Core.Setup
@@ -71,8 +72,10 @@ library
     base ^>=4.22.0.0,
     directory,
     filepath,
+    harch-web,
     mtl,
     temporary,
+    text,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -132,6 +135,10 @@ test-suite core-tests
     -- For testing framework:
     base ^>=4.22.0.0,
     core,
+    directory,
+    harch-web,
     hspec,
     hspec-expectations-match,
     mtl,
+    temporary,
+    text,
