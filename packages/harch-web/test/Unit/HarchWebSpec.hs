@@ -11,8 +11,9 @@ import HarchWeb
 import qualified Network.HTTP.Types as Http
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
+import System.Directory (createDirectoryIfMissing)
 import System.IO (hClose)
-import System.IO.Temp (withSystemTempFile)
+import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import Test.Hspec
 
 newtype TestContext = TestContext
@@ -99,15 +100,27 @@ sampleShell =
       shellMainId = Text.pack "app-main"
     }
 
-sampleApplication :: Application TestRoute TestContext
-sampleApplication =
+emptyStaticAssets :: StaticAssetsConfig
+emptyStaticAssets =
+  StaticAssetsConfig
+    { staticAssetRoots = [],
+      staticCacheControlSeconds = Nothing
+    }
+
+sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute TestContext
+sampleApplicationWithStaticAssets staticAssetsConfig =
   Application
     { appName = Text.pack "sample",
       defaultRequestContext = defaultContext,
+      applicationStaticAssets = staticAssetsConfig,
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
       pageShell = buildPageShell sampleCodec sampleShell
     }
+
+sampleApplication :: Application TestRoute TestContext
+sampleApplication =
+  sampleApplicationWithStaticAssets emptyStaticAssets
 
 sampleServerConfig :: ServerConfig
 sampleServerConfig =
@@ -143,6 +156,7 @@ rootPathApplication =
   Application
     { appName = Text.pack "root-path",
       defaultRequestContext = defaultContext,
+      applicationStaticAssets = emptyStaticAssets,
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
       pageShell = buildPageShell rootPathCodec sampleShell
@@ -499,6 +513,7 @@ spec = do
 
       appName sampleApplication `shouldBe` Text.pack "sample"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
+      applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
       parseRoute codec defaultContext (Text.pack "/known") `shouldBe` Just request
       parseRoute codec defaultContext (Text.pack "/data") `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       renderRoute codec request `shouldBe` Text.pack "/known"
@@ -539,6 +554,15 @@ spec = do
     it "reuses route rendering for app-provided navigation targets" $ do
       routeHref sampleCodec defaultContext KnownRoute `shouldBe` Text.pack "/known"
       routeHref sampleCodec spanishContext KnownRoute `shouldBe` Text.pack "/es/known"
+
+  describe "staticAssetHref" $
+    it "renders asset URLs from the configured static prefix" $ do
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = "public"}) "app.js"
+        `shouldBe` Text.pack "/assets/app.js"
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/assets/", staticDirectory = "public"}) "/css/app.css"
+        `shouldBe` Text.pack "/assets/css/app.css"
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/", staticDirectory = "public"}) "/img/logo.svg"
+        `shouldBe` Text.pack "/img/logo.svg"
 
   describe "buildNavigation" $
     it "resolves hrefs and active state from the current page context" $
@@ -618,6 +642,121 @@ spec = do
       Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
       readResponseBody response `shouldReturn` Text.pack "{\"route\":\"data\"}"
+
+    it "serves configured static assets with deterministic cache-control headers" $
+      withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = assetDirectory}],
+                  staticCacheControlSeconds = Just 3600
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/app.js") "console.log('asset');"
+        firstResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "app.js"])
+        secondResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "app.js"])
+        Wai.responseStatus firstResponse `shouldBe` Http.status200
+        lookup Http.hContentType (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/javascript; charset=utf-8"))
+        lookup Http.hCacheControl (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "public, max-age=3600"))
+        Wai.responseHeaders secondResponse `shouldBe` Wai.responseHeaders firstResponse
+        readResponseBody firstResponse `shouldReturn` Text.pack "console.log('asset');"
+        readResponseBody secondResponse `shouldReturn` Text.pack "console.log('asset');"
+
+    it "serves root-prefixed static assets with the expected content types and no cache header" $
+      withSystemTempDirectory "harch-web-static-root" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/", staticDirectory = assetDirectory}],
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            expectedResponses =
+              [ ([Text.pack "styles.css"], Text.pack "body{}", Text.pack "text/css; charset=utf-8"),
+                ([Text.pack "index.html"], Text.pack "<h1>Home</h1>", Text.pack "text/html; charset=utf-8"),
+                ([Text.pack "data.json"], Text.pack "{\"ok\":true}", Text.pack "application/json; charset=utf-8"),
+                ([Text.pack "logo.svg"], Text.pack "<svg></svg>", Text.pack "image/svg+xml"),
+                ([Text.pack "note.txt"], Text.pack "hello", Text.pack "text/plain; charset=utf-8"),
+                ([Text.pack "blob.bin"], Text.pack "0101", Text.pack "application/octet-stream")
+              ]
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/styles.css") "body{}"
+        writeFile (assetDirectory <> "/index.html") "<h1>Home</h1>"
+        writeFile (assetDirectory <> "/data.json") "{\"ok\":true}"
+        writeFile (assetDirectory <> "/logo.svg") "<svg></svg>"
+        writeFile (assetDirectory <> "/note.txt") "hello"
+        writeFile (assetDirectory <> "/blob.bin") "0101"
+        mapM_
+          ( \(segments, expectedBody, expectedContentType) -> do
+              response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest segments)
+              Wai.responseStatus response `shouldBe` Http.status200
+              Wai.responseHeaders response
+                `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 expectedContentType)]
+              readResponseBody response `shouldReturn` expectedBody
+          )
+          expectedResponses
+        rootResponse <- performWaiRequest (toWaiApplication staticApplication) Wai.defaultRequest
+        Wai.responseStatus rootResponse `shouldBe` Http.status404
+        Wai.responseHeaders rootResponse
+          `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))]
+        readResponseBody rootResponse `shouldReturn` Text.pack "Not Found"
+
+    it "uses the most specific matching static root when multiple prefixes overlap" $
+      withSystemTempDirectory "harch-web-static-overlap" $ \tempDirectory -> do
+        let publicDirectory = tempDirectory <> "/public"
+            adminDirectory = tempDirectory <> "/admin"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots =
+                    [ StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = publicDirectory},
+                      StaticAssetRoot {staticUrlPrefix = Text.pack "/assets/admin", staticDirectory = adminDirectory}
+                    ],
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True (publicDirectory <> "/admin")
+        createDirectoryIfMissing True adminDirectory
+        writeFile (publicDirectory <> "/admin/panel.js") "console.log('general');"
+        writeFile (adminDirectory <> "/panel.js") "console.log('admin');"
+        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "admin", Text.pack "panel.js"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        readResponseBody response `shouldReturn` Text.pack "console.log('admin');"
+
+    it "returns plain 404 responses for missing or invalid matched static asset paths" $
+      withSystemTempDirectory "harch-web-static-missing" $ \tempDirectory -> do
+        let assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = tempDirectory <> "/public"}],
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "missing.js"])
+        Wai.responseStatus missingResponse `shouldBe` Http.status404
+        lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))
+        readResponseBody missingResponse `shouldReturn` Text.pack "Not Found"
+        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "..", Text.pack "secret.txt"])
+        Wai.responseStatus invalidResponse `shouldBe` Http.status404
+        readResponseBody invalidResponse `shouldReturn` Text.pack "Not Found"
+        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets"])
+        Wai.responseStatus rootResponse `shouldBe` Http.status404
+        readResponseBody rootResponse `shouldReturn` Text.pack "Not Found"
+
+    it "keeps cache-control headers on missing static asset responses when configured" $
+      withSystemTempDirectory "harch-web-static-missing-cache" $ \tempDirectory -> do
+        let assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = tempDirectory <> "/public"}],
+                  staticCacheControlSeconds = Just 60
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            expectedCacheControl = Just (TextEncoding.encodeUtf8 (Text.pack "public, max-age=60"))
+        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "missing.js"])
+        lookup Http.hCacheControl (Wai.responseHeaders missingResponse) `shouldBe` expectedCacheControl
+        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "..", Text.pack "secret.txt"])
+        lookup Http.hCacheControl (Wai.responseHeaders invalidResponse) `shouldBe` expectedCacheControl
+        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets"])
+        lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` expectedCacheControl
 
   describe "planServerStartup" $ do
     it "groups HTTP listeners into the expected bind plan" $ do

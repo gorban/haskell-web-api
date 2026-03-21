@@ -51,6 +51,7 @@ buildAppWithDatabase config databaseEffect =
       HarchWeb.Application
         { HarchWeb.appName = Text.pack "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
+          HarchWeb.applicationStaticAssets = staticAssets config,
           HarchWeb.routeCodec = routeCodec,
           HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
           HarchWeb.pageShell = appShell config

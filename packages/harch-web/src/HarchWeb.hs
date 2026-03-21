@@ -40,18 +40,22 @@ module HarchWeb
     routeHref,
     renderDocument,
     runServer,
+    staticAssetHref,
     toWaiApplication,
   )
 where
 
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.List (maximumBy)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import System.Directory (doesFileExist)
+import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hPutStrLn)
 
 data ListenerScheme
@@ -242,6 +246,7 @@ data RouteCodec route context = RouteCodec
 data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
+    applicationStaticAssets :: StaticAssetsConfig,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
     pageShell :: Page route context -> Text
@@ -253,6 +258,19 @@ application = id
 routeHref :: RouteCodec route context -> context -> route -> Text
 routeHref codec context route =
   renderRoute codec RouteRequest {requestRoute = route, requestContext = context}
+
+staticAssetHref :: StaticAssetRoot -> FilePath -> Text
+staticAssetHref staticRoot assetPath =
+  let normalizedPrefix = normalizeStaticPrefix (staticUrlPrefix staticRoot)
+      normalizedAssetPath = trimLeadingSlash (Text.pack assetPath)
+   in if Text.null normalizedPrefix
+        then Text.pack "/" <> normalizedAssetPath
+        else
+          Text.concat
+            [ normalizedPrefix,
+              Text.pack "/",
+              normalizedAssetPath
+            ]
 
 buildNavigation :: (Eq route) => RouteCodec route context -> Page route context -> [NavigationItem route] -> [ResolvedNavigationItem route]
 buildNavigation codec page =
@@ -300,14 +318,19 @@ matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parse
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
 toWaiApplication webApplication request respond =
-  renderResponse
-    webApplication
-    ( matchRoute
-        (routeCodec webApplication)
-        (defaultRequestContext webApplication)
-        (waiRequestPath request)
-    )
-    >>= respond . toWaiResponse webApplication
+  do
+    maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
+    case maybeStaticResponse of
+      Just staticResponse -> respond staticResponse
+      Nothing ->
+        renderResponse
+          webApplication
+          ( matchRoute
+              (routeCodec webApplication)
+              (defaultRequestContext webApplication)
+              (waiRequestPath request)
+          )
+          >>= respond . toWaiResponse webApplication
 
 runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
@@ -382,6 +405,118 @@ waiRequestPath request =
 
 htmlContentType :: Text
 htmlContentType = Text.pack "text/html; charset=utf-8"
+
+serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe Wai.Response)
+serveStaticAssetResponse staticAssetsConfig requestPath =
+  case matchStaticAssetRoot staticAssetsConfig requestPath of
+    Nothing -> pure Nothing
+    Just (matchedRoot, relativeAssetPath) ->
+      case sanitizeStaticAssetPath relativeAssetPath of
+        Nothing -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+        Just safeAssetPath -> do
+          let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
+          assetExists <- doesFileExist assetFilePath
+          case assetExists of
+            True -> do
+              assetContents <- ByteString.readFile assetFilePath
+              pure
+                ( Just
+                    ( Wai.responseLBS
+                        Http.status200
+                        (staticAssetHeaders staticAssetsConfig assetFilePath)
+                        (LazyByteString.fromStrict assetContents)
+                    )
+                )
+            False -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+
+matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, FilePath)
+matchStaticAssetRoot staticAssetsConfig requestPath =
+  case matchedRoots of
+    [] -> Nothing
+    _ -> Just (maximumBy compareStaticPrefixLength matchedRoots)
+  where
+    matchedRoots =
+      [ (staticRoot, Text.unpack assetPath)
+      | staticRoot <- staticAssetRoots staticAssetsConfig,
+        Just assetPath <- [stripStaticPrefix (staticUrlPrefix staticRoot) requestPath]
+      ]
+
+    compareStaticPrefixLength (leftRoot, _) (rightRoot, _) =
+      compare (Text.length (staticUrlPrefix leftRoot)) (Text.length (staticUrlPrefix rightRoot))
+
+stripStaticPrefix :: Text -> Text -> Maybe Text
+stripStaticPrefix configuredPrefix requestPath =
+  let normalizedPrefix = normalizeStaticPrefix configuredPrefix
+   in if Text.null normalizedPrefix
+        then
+          if requestPath == Text.pack "/"
+            then Just Text.empty
+            else Text.stripPrefix (Text.pack "/") requestPath
+        else
+          if requestPath == normalizedPrefix
+            then Just Text.empty
+            else
+              Text.stripPrefix
+                (normalizedPrefix <> Text.pack "/")
+                requestPath
+
+sanitizeStaticAssetPath :: FilePath -> Maybe FilePath
+sanitizeStaticAssetPath assetPath =
+  case splitDirectories assetPath of
+    [] -> Nothing
+    segments ->
+      if all isSafeSegment segments
+        then Just assetPath
+        else Nothing
+  where
+    isSafeSegment segment =
+      not (null segment)
+        && segment /= "."
+        && segment /= ".."
+
+staticAssetHeaders :: StaticAssetsConfig -> FilePath -> Http.ResponseHeaders
+staticAssetHeaders staticAssetsConfig assetFilePath =
+  (Http.hContentType, TextEncoding.encodeUtf8 (staticAssetContentType assetFilePath))
+    : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
+
+staticCacheControlHeaderValue :: StaticAssetsConfig -> Maybe Text
+staticCacheControlHeaderValue staticAssetsConfig =
+  fmap
+    (\seconds -> Text.pack ("public, max-age=" <> show seconds))
+    (staticCacheControlSeconds staticAssetsConfig)
+
+staticAssetContentType :: FilePath -> Text
+staticAssetContentType assetFilePath =
+  case takeExtension assetFilePath of
+    ".css" -> Text.pack "text/css; charset=utf-8"
+    ".html" -> Text.pack "text/html; charset=utf-8"
+    ".js" -> Text.pack "application/javascript; charset=utf-8"
+    ".json" -> Text.pack "application/json; charset=utf-8"
+    ".svg" -> Text.pack "image/svg+xml"
+    ".txt" -> Text.pack "text/plain; charset=utf-8"
+    _ -> Text.pack "application/octet-stream"
+
+missingStaticAssetResponse :: StaticAssetsConfig -> Wai.Response
+missingStaticAssetResponse staticAssetsConfig =
+  Wai.responseLBS
+    Http.status404
+    ( (Http.hContentType, TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))
+        : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
+    )
+    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Text.pack "Not Found")))
+
+normalizeStaticPrefix :: Text -> Text
+normalizeStaticPrefix prefix =
+  case Text.stripSuffix (Text.pack "/") prefix of
+    Just trimmedPrefix ->
+      if Text.null trimmedPrefix
+        then Text.empty
+        else trimmedPrefix
+    Nothing -> prefix
+
+trimLeadingSlash :: Text -> Text
+trimLeadingSlash assetPath =
+  fromMaybe assetPath (Text.stripPrefix (Text.pack "/") assetPath)
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do

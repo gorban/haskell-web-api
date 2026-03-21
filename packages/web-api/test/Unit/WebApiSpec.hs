@@ -2573,6 +2573,9 @@ spec = do
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
 
+    it "stores the configured static assets used by the WAI adapter" $
+      HarchWeb.applicationStaticAssets pureApplication `shouldBe` staticAssets defaultAppConfig
+
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/") `shouldBe` parseRoute defaultRequestContext (Text.pack "/")
