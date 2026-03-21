@@ -14,6 +14,7 @@ module HarchWeb
     ListenerEndpoint (..),
     ListenerScheme (..),
     ListenerStartupError (..),
+    LocalTestServer (..),
     ManualTlsBindPlan (..),
     NavigationItem (..),
     ObservabilityConfig (..),
@@ -43,18 +44,24 @@ module HarchWeb
     runServer,
     staticAssetHref,
     toWaiApplication,
+    withLocalTestServer,
   )
 where
 
+import Control.Concurrent (ThreadId, forkIO, killThread, newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (bracket)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List (maximumBy)
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Network.HTTP.Types qualified as Http
+import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import System.Directory (doesFileExist)
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hPutStrLn)
@@ -259,6 +266,19 @@ data Application route context = Application
     pageShell :: Page route context -> Text
   }
 
+data LocalTestServer = LocalTestServer
+  { localServerHost :: Text,
+    localServerPort :: Int,
+    localServerBaseUrl :: Text
+  }
+  deriving (Eq, Show)
+
+data RunningLocalTestServer = RunningLocalTestServer
+  { runningLocalServerInfo :: LocalTestServer,
+    runningLocalServerSocket :: Socket.Socket,
+    runningLocalServerThreadId :: ThreadId
+  }
+
 application :: Application route context -> Application route context
 application = id
 
@@ -348,6 +368,11 @@ toWaiApplication webApplication request respond =
           )
           >>= respond . toWaiResponse webApplication
 
+withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
+withLocalTestServer webApplication useLocalServer =
+  bracket (startLocalTestServer webApplication) stopLocalTestServer $
+    useLocalServer . runningLocalServerInfo
+
 runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
   case planServerStartup config of
@@ -367,6 +392,66 @@ runServer outputHandle config webApplication =
       startupPlan `seq`
         Wai.responseStatus startupResponse `seq`
           hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+
+startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
+startLocalTestServer webApplication = do
+  listeningSocket <- openLoopbackSocket
+  readySignal <- newEmptyMVar
+  localPort <- socketPort listeningSocket
+  let signalReady = putMVar readySignal localPort
+  serverThreadId <-
+    forkIO $
+      Warp.runSettingsSocket
+        ( Warp.setPort localPort $
+            Warp.setBeforeMainLoop signalReady Warp.defaultSettings
+        )
+        listeningSocket
+        (toWaiApplication webApplication)
+  readyPort <- takeMVar readySignal
+  readyPort `seq`
+    pure
+      RunningLocalTestServer
+        { runningLocalServerInfo =
+            LocalTestServer
+              { localServerHost = "127.0.0.1",
+                localServerPort = localPort,
+                localServerBaseUrl = Text.pack ("http://127.0.0.1:" <> show localPort)
+              },
+          runningLocalServerSocket = listeningSocket,
+          runningLocalServerThreadId = serverThreadId
+        }
+
+stopLocalTestServer :: RunningLocalTestServer -> IO ()
+stopLocalTestServer runningServer = do
+  Socket.close (runningLocalServerSocket runningServer)
+  killThread (runningLocalServerThreadId runningServer)
+
+openLoopbackSocket :: IO Socket.Socket
+openLoopbackSocket = do
+  addressInfo :| _ <-
+    ( Socket.getAddrInfo
+        (Just hints)
+        (Just "127.0.0.1")
+        (Just "0") ::
+        IO (NonEmpty Socket.AddrInfo)
+    )
+  listeningSocket <- Socket.openSocket addressInfo
+  Socket.setSocketOption listeningSocket Socket.ReuseAddr 1
+  Socket.bind listeningSocket (Socket.addrAddress addressInfo)
+  Socket.listen listeningSocket Socket.maxListenQueue
+  pure listeningSocket
+  where
+    hints =
+      Socket.defaultHints
+        { Socket.addrFlags = [Socket.AI_NUMERICHOST, Socket.AI_NUMERICSERV],
+          Socket.addrFamily = Socket.AF_INET,
+          Socket.addrSocketType = Socket.Stream
+        }
+
+socketPort :: Socket.Socket -> IO Int
+socketPort listeningSocket = do
+  Socket.SockAddrInet portNumber _ <- Socket.getSocketName listeningSocket
+  pure (fromIntegral portNumber)
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute

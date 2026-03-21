@@ -2,7 +2,9 @@
 
 module Unit.HarchWebSpec (spec) where
 
+import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
+import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
@@ -11,9 +13,12 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import HarchWeb
 import qualified Network.HTTP.Types as Http
+import qualified Network.Socket as Socket
+import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import System.Directory (createDirectoryIfMissing)
+import System.FilePath ((</>))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import Test.Hspec
@@ -425,6 +430,7 @@ spec = do
           attribute = HtmlAttribute {attributeName = "data-app", attributeValue = "sample"}
           navigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "primary"}
           mainAttribute = HtmlAttribute {attributeName = "data-navigation-content", attributeValue = "true"}
+          localTestServer = LocalTestServer {localServerHost = "127.0.0.1", localServerPort = 5001, localServerBaseUrl = "http://127.0.0.1:5001"}
           page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>"}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
@@ -462,6 +468,9 @@ spec = do
       shellMainId shell `shouldBe` "app-main"
       shellMainAttributes shell `shouldBe` [mainAttribute]
       shellScriptSources shell `shouldBe` ["/assets/navigation.js"]
+      localServerHost localTestServer `shouldBe` "127.0.0.1"
+      localServerPort localTestServer `shouldBe` 5001
+      localServerBaseUrl localTestServer `shouldBe` "http://127.0.0.1:5001"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       responseStatus responseBodyValue `shouldBe` 202
       responseContentType responseBodyValue `shouldBe` "application/json"
@@ -478,6 +487,8 @@ spec = do
           otherNavigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "secondary"}
           mainAttribute = HtmlAttribute {attributeName = "data-navigation-content", attributeValue = "true"}
           otherMainAttribute = HtmlAttribute {attributeName = "data-navigation-content", attributeValue = "false"}
+          localTestServer = LocalTestServer {localServerHost = "127.0.0.1", localServerPort = 5001, localServerBaseUrl = "http://127.0.0.1:5001"}
+          otherLocalTestServer = LocalTestServer {localServerHost = "127.0.0.1", localServerPort = 5002, localServerBaseUrl = "http://127.0.0.1:5002"}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           otherNavigationItem = NavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
@@ -518,6 +529,10 @@ spec = do
       (document /= otherDocument) `shouldBe` True
       show document `shouldBe` "Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentScriptSources = [\"/assets/navigation.js\"]}"
       show [document] `shouldBe` "[Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentScriptSources = [\"/assets/navigation.js\"]}]"
+      (localTestServer == localTestServer) `shouldBe` True
+      (localTestServer /= otherLocalTestServer) `shouldBe` True
+      show localTestServer `shouldBe` "LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}"
+      show [localTestServer] `shouldBe` "[LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}]"
       (shell == shell) `shouldBe` True
       (shell /= otherShell) `shouldBe` True
       show shell `shouldBe` "PageShell {shellBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], shellNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], shellNavigationItems = [NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}], shellMainId = \"app-main\", shellMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], shellScriptSources = [\"/assets/navigation.js\"]}"
@@ -972,3 +987,68 @@ spec = do
                 ]
         runServer outputHandle invalidConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Invalid listener startup plan: InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Nothing}))")
+
+  describe "withLocalTestServer" $ do
+    it "serves the rendered application over a real loopback HTTP listener" $
+      withLocalTestServer sampleApplication $ \localTestServer -> do
+        localServerHost localTestServer `shouldBe` "127.0.0.1"
+        localServerPort localTestServer `shouldSatisfy` (> 0)
+        localServerBaseUrl localTestServer `shouldBe` Text.pack ("http://127.0.0.1:" <> show (localServerPort localTestServer))
+        responseText <- readLocalTestServerResponse localTestServer "/known"
+        Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+        Text.isInfixOf "<nav data-navigation-region=\"primary\">" responseText `shouldBe` True
+
+    it "serves static assets through the same loopback HTTP listener" $
+      withSystemTempDirectory "harch-web-local-static" $ \tempDirectory -> do
+        let assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots =
+                    [ StaticAssetRoot
+                        { staticUrlPrefix = "/assets",
+                          staticDirectory = tempDirectory
+                        }
+                    ],
+                  staticCacheControlSeconds = Just 60
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            assetDirectory = tempDirectory </> "styles"
+            assetPath = assetDirectory </> "site.css"
+        createDirectoryIfMissing True assetDirectory
+        writeFile assetPath "body { color: red; }"
+        withLocalTestServer staticApplication $ \localTestServer -> do
+          responseText <- readLocalTestServerResponse localTestServer "/assets/styles/site.css"
+          Text.isInfixOf "body { color: red; }" responseText `shouldBe` True
+
+readLocalTestServerResponse :: LocalTestServer -> Text -> IO Text
+readLocalTestServerResponse localTestServer path = do
+  responseBytes <- readLocalTestServerResponseBytes localTestServer path
+  pure (TextEncoding.decodeUtf8 responseBytes)
+
+readLocalTestServerResponseBytes :: LocalTestServer -> Text -> IO ByteString.ByteString
+readLocalTestServerResponseBytes localTestServer path =
+  Socket.withSocketsDo $ do
+    clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral (localServerPort localTestServer)) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+    SocketByteString.sendAll clientSocket (buildHttpRequest path)
+    responseBytes <- readAllSocketChunks clientSocket
+    Socket.close clientSocket
+    pure (extractHttpBody responseBytes)
+
+buildHttpRequest :: Text -> ByteString.ByteString
+buildHttpRequest path =
+  ByteStringChar8.pack $
+    "GET "
+      <> Text.unpack path
+      <> " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+
+readAllSocketChunks :: Socket.Socket -> IO ByteString.ByteString
+readAllSocketChunks clientSocket = do
+  chunk <- SocketByteString.recv clientSocket 4096
+  if ByteString.null chunk
+    then pure ByteString.empty
+    else fmap (chunk <>) (readAllSocketChunks clientSocket)
+
+extractHttpBody :: ByteString.ByteString -> ByteString.ByteString
+extractHttpBody responseBytes =
+  let (_, withSeparator) = ByteStringChar8.breakSubstring "\r\n\r\n" responseBytes
+   in ByteString.drop 4 withSeparator

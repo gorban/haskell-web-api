@@ -66,8 +66,10 @@ library
     directory,
     filepath,
     http-types,
+    network,
     text,
     wai,
+    warp,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -98,9 +100,11 @@ test-suite harch-web-tests
     base ^>=4.22.0.0,
     bytestring,
     directory,
+    filepath,
     harch-web,
     hspec,
     http-types,
+    network,
     temporary,
     text,
     wai,
