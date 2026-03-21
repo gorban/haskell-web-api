@@ -109,11 +109,10 @@ sampleApplication =
       pageShell = buildPageShell sampleCodec sampleShell
     }
 
-sampleAppConfig :: AppConfig
-sampleAppConfig =
-  AppConfig
-    { appTitlePrefix = Text.pack "sample-app",
-      listenerConfigs =
+sampleServerConfig :: ServerConfig
+sampleServerConfig =
+  ServerConfig
+    { listenerConfigs =
         [ ListenerConfig
             { listenerHost = Text.pack "127.0.0.1",
               listenerPort = 5001,
@@ -133,9 +132,9 @@ sampleAppConfig =
           }
     }
 
-appConfigWithListeners :: [ListenerConfig] -> AppConfig
-appConfigWithListeners listeners =
-  sampleAppConfig
+serverConfigWithListeners :: [ListenerConfig] -> ServerConfig
+serverConfigWithListeners listeners =
+  sampleServerConfig
     { listenerConfigs = listeners
     }
 
@@ -210,7 +209,7 @@ waiRequest segments =
 spec :: Spec
 spec = do
   describe "shared config coverage" $ do
-    it "reads exported selectors from the shared app config records" $ do
+    it "reads exported selectors from the shared server config records" $ do
       let certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]}
           challengeBackend = CertbotHttp01 certbotConfig
           acmeConfig =
@@ -232,10 +231,9 @@ spec = do
               { tracingExporter = Just tracingConfig,
                 metricsExporter = Nothing
               }
-          appConfig =
-            AppConfig
-              { appTitlePrefix = Text.pack "sample-app",
-                listenerConfigs =
+          serverConfig =
+            ServerConfig
+              { listenerConfigs =
                   [ ListenerConfig
                       { listenerHost = Text.pack "127.0.0.1",
                         listenerPort = 5001,
@@ -251,7 +249,7 @@ spec = do
                 observability = observabilityConfig
               }
           listenerConfig =
-            case listenerConfigs appConfig of
+            case listenerConfigs serverConfig of
               [singleListenerConfig] -> singleListenerConfig
               _ -> error "expected exactly one listener config"
       certbotExecutable certbotConfig `shouldBe` "certbot"
@@ -266,16 +264,16 @@ spec = do
       listenerTls listenerConfig `shouldBe` Just tlsConfig
       staticUrlPrefix staticRoot `shouldBe` Text.pack "/assets"
       staticDirectory staticRoot `shouldBe` "public"
-      staticAssetRoots (staticAssets appConfig) `shouldBe` [staticRoot]
-      staticCacheControlSeconds (staticAssets appConfig) `shouldBe` Just 3600
+      staticAssetRoots (staticAssets serverConfig) `shouldBe` [staticRoot]
+      staticCacheControlSeconds (staticAssets serverConfig) `shouldBe` Just 3600
       otlpEndpoint tracingConfig `shouldBe` Text.pack "http://collector:4318/v1/traces"
       otlpHeaders tracingConfig `shouldBe` [(Text.pack "authorization", Text.pack "Bearer token")]
       tracingExporter observabilityConfig `shouldBe` Just tracingConfig
       metricsExporter observabilityConfig `shouldBe` Nothing
-      appTitlePrefix appConfig `shouldBe` Text.pack "sample-app"
-      observability appConfig `shouldBe` observabilityConfig
+      observability serverConfig `shouldBe` observabilityConfig
+      toServerConfig serverConfig `shouldBe` serverConfig
 
-    it "covers derived Eq and Show instances for the shared app config types" $ do
+    it "covers derived Eq and Show instances for the shared server config types" $ do
       let shouldBeParenthesized rendered = do
             case rendered of
               '(' : rest ->
@@ -323,10 +321,9 @@ spec = do
               }
           otherTracingConfig = OtlpExporter {otlpEndpoint = Text.pack "http://other-collector:4318/v1/traces", otlpHeaders = []}
           observabilityConfig = ObservabilityConfig {tracingExporter = Just tracingConfig, metricsExporter = Nothing}
-          appConfig =
-            AppConfig
-              { appTitlePrefix = Text.pack "sample-app",
-                listenerConfigs = [listenerConfig],
+          serverConfig =
+            ServerConfig
+              { listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
                 observability = observabilityConfig
               }
@@ -352,8 +349,8 @@ spec = do
       tracingConfig `shouldNotBe` otherTracingConfig
       observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
-      appConfig `shouldBe` appConfig
-      appConfig `shouldNotBe` appConfig {listenerConfigs = [otherListenerConfig]}
+      serverConfig `shouldBe` serverConfig
+      serverConfig `shouldNotBe` serverConfig {listenerConfigs = [otherListenerConfig]}
       show Http `shouldBe` "Http"
       show Https `shouldBe` "Https"
       show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
@@ -367,7 +364,7 @@ spec = do
       show staticAssetsConfig `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
-      show appConfig `shouldBe` "AppConfig {appTitlePrefix = \"sample-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
+      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
@@ -379,7 +376,7 @@ spec = do
       shouldBeParenthesized (showsPrec 11 staticAssetsConfig "")
       shouldBeParenthesized (showsPrec 11 tracingConfig "")
       shouldBeParenthesized (showsPrec 11 observabilityConfig "")
-      shouldBeParenthesized (showsPrec 11 appConfig "")
+      shouldBeParenthesized (showsPrec 11 serverConfig "")
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [InProcessHttp01, CertbotHttp01 certbotConfig] `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
@@ -391,7 +388,7 @@ spec = do
       show [staticAssetsConfig] `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
       show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityConfig] `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}]"
-      show [appConfig] `shouldBe` "[AppConfig {appTitlePrefix = \"sample-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
+      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
@@ -635,7 +632,7 @@ spec = do
                 manualTlsBindPlans = [],
                 acmeBindPlans = []
               }
-      planServerStartup (appConfigWithListeners [firstListener, secondListener]) `shouldBe` Right startupPlan
+      planServerStartup (serverConfigWithListeners [firstListener, secondListener]) `shouldBe` Right startupPlan
       firstEndpoint `shouldBe` firstEndpoint
       firstEndpoint `shouldNotBe` secondEndpoint
       httpBindPlan `shouldBe` httpBindPlan
@@ -665,7 +662,7 @@ spec = do
                 tlsCertificateFile = "cert.pem",
                 tlsPrivateKeyFile = "key.pem"
               }
-      planServerStartup (appConfigWithListeners [listener])
+      planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
           ServerStartupPlan
             { httpBindPlan = HttpBindPlan {httpEndpoints = []},
@@ -710,7 +707,7 @@ spec = do
               { acmeEndpoint = endpoint,
                 acmeListenerConfig = acmeConfig
               }
-      planServerStartup (appConfigWithListeners [httpListener, listener])
+      planServerStartup (serverConfigWithListeners [httpListener, listener])
         `shouldBe` Right
           ServerStartupPlan
             { httpBindPlan = HttpBindPlan {httpEndpoints = [httpEndpoint]},
@@ -737,9 +734,9 @@ spec = do
                 listenerScheme = Https,
                 listenerTls = Nothing
               }
-      planServerStartup (appConfigWithListeners [httpTlsListener])
+      planServerStartup (serverConfigWithListeners [httpTlsListener])
         `shouldBe` Left (InvalidListenerTlsConfiguration httpTlsListener)
-      planServerStartup (appConfigWithListeners [httpsWithoutTls])
+      planServerStartup (serverConfigWithListeners [httpsWithoutTls])
         `shouldBe` Left (InvalidListenerTlsConfiguration httpsWithoutTls)
       InvalidListenerTlsConfiguration httpTlsListener `shouldNotBe` InvalidListenerTlsConfiguration httpsWithoutTls
       show (InvalidListenerTlsConfiguration httpTlsListener)
@@ -767,7 +764,7 @@ spec = do
                       }
               }
           duplicateEndpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5001}
-      planServerStartup (appConfigWithListeners [httpListener, httpsListener])
+      planServerStartup (serverConfigWithListeners [httpListener, httpsListener])
         `shouldBe` Left (DuplicateListenerEndpoint duplicateEndpoint)
       DuplicateListenerEndpoint duplicateEndpoint `shouldBe` DuplicateListenerEndpoint duplicateEndpoint
       DuplicateListenerEndpoint duplicateEndpoint `shouldNotBe` DuplicateListenerEndpoint ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
@@ -779,14 +776,14 @@ spec = do
   describe "runServer" $ do
     it "writes the stub startup message to the supplied handle" $
       withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
-        runServer outputHandle sampleAppConfig sampleApplication
+        runServer outputHandle sampleServerConfig sampleApplication
         hClose outputHandle
         readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
 
     it "fails before startup when the listener plan is invalid" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
         let invalidConfig =
-              appConfigWithListeners
+              serverConfigWithListeners
                 [ ListenerConfig
                     { listenerHost = Text.pack "127.0.0.1",
                       listenerPort = 5001,

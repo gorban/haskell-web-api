@@ -3,10 +3,10 @@
 module HarchWeb
   ( AcmeChallengeBackend (..),
     AcmeConfig (..),
-    AppConfig (..),
     Application (..),
     CertbotConfig (..),
     Document (..),
+    HasServerConfig (..),
     HtmlAttribute (..),
     HttpBindPlan (..),
     ListenerConfig (..),
@@ -24,6 +24,7 @@ module HarchWeb
     ResolvedNavigationItem (..),
     RouteCodec (..),
     RouteRequest (..),
+    ServerConfig (..),
     ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
@@ -121,13 +122,18 @@ data ObservabilityConfig = ObservabilityConfig
   }
   deriving (Eq, Show)
 
-data AppConfig = AppConfig
-  { appTitlePrefix :: Text,
-    listenerConfigs :: [ListenerConfig],
+data ServerConfig = ServerConfig
+  { listenerConfigs :: [ListenerConfig],
     staticAssets :: StaticAssetsConfig,
     observability :: ObservabilityConfig
   }
   deriving (Eq, Show)
+
+class HasServerConfig config where
+  toServerConfig :: config -> ServerConfig
+
+instance HasServerConfig ServerConfig where
+  toServerConfig = id
 
 data ListenerEndpoint = ListenerEndpoint
   { endpointHost :: Text,
@@ -305,7 +311,7 @@ toWaiApplication webApplication request respond =
         )
     )
 
-runServer :: (Eq route) => Handle -> AppConfig -> Application route context -> IO ()
+runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
   let startupResponse =
         toWaiResponse
@@ -377,9 +383,9 @@ waiRequestPath request =
 htmlContentType :: Text
 htmlContentType = Text.pack "text/html; charset=utf-8"
 
-planServerStartup :: AppConfig -> Either ListenerStartupError ServerStartupPlan
+planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do
-  plannedListeners <- traverse classifyListener (listenerConfigs config)
+  plannedListeners <- traverse classifyListener (listenerConfigs (toServerConfig config))
   case firstDuplicate (map plannedEndpoint plannedListeners) of
     Just duplicateEndpoint -> Left (DuplicateListenerEndpoint duplicateEndpoint)
     Nothing ->

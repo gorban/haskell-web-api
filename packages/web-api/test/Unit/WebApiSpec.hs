@@ -77,7 +77,7 @@ waiRequest segments =
 
 spec = do
   describe "defaultAppConfig" $ do
-    it "reserves structured listener, static asset, and observability settings" $
+    it "reserves structured listener, static asset, and observability settings" $ do
       defaultAppConfig
         `shouldBe` AppConfig
           { appTitlePrefix = Text.pack "web-api",
@@ -100,6 +100,10 @@ spec = do
                   metricsExporter = Nothing
                 }
           }
+      let serverConfig = HarchWeb.toServerConfig defaultAppConfig
+      HarchWeb.listenerConfigs serverConfig `shouldBe` listenerConfigs defaultAppConfig
+      HarchWeb.staticAssets serverConfig `shouldBe` staticAssets defaultAppConfig
+      HarchWeb.observability serverConfig `shouldBe` observability defaultAppConfig
 
   describe "parseRuntimeAppConfig" $ do
     it "parses committed runtime defaults into the expected app config" $
