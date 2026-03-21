@@ -9,7 +9,7 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import System.IO (Handle)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
-import WebApi.Page (renderPage)
+import WebApi.Response (selectResponse)
 import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
@@ -42,9 +42,6 @@ appShellConfig config =
       HarchWeb.shellMainId = Text.pack "app-main"
     }
 
-renderResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext
-renderResponse config routeRequest = HarchWeb.PageResponse (renderPage config routeRequest)
-
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
   config `seq`
@@ -53,7 +50,7 @@ buildApp config =
         { HarchWeb.appName = Text.pack "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
           HarchWeb.routeCodec = routeCodec,
-          HarchWeb.renderResponse = renderResponse config,
+          HarchWeb.renderResponse = selectResponse config,
           HarchWeb.pageShell = appShell config
         }
 

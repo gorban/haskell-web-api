@@ -70,7 +70,7 @@ routeTitle route =
   case route of
     HomeRoute -> Text.pack "Home"
     SecondRoute -> Text.pack "Second"
-    NotFoundRoute -> Text.pack "Not Found"
+    _ -> Text.pack "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
 buildPageModel routeRequest =
@@ -90,7 +90,7 @@ buildPageModel routeRequest =
             secondHighlights = [],
             secondPrimaryAction = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
           }
-    NotFoundRoute ->
+    _ ->
       NotFoundPage
         NotFoundPageModel
           { notFoundHeading = Text.pack "Not Found",

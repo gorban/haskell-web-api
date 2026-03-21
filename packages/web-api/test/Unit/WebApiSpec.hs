@@ -16,7 +16,8 @@ import System.IO.Temp (withSystemTempFile)
 import WebApi (buildApp, run)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, renderPage, renderPageBody)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
+import WebApi.Response (selectResponse)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
@@ -37,8 +38,29 @@ frenchHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, Ha
 frenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 frenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = frenchRequestContext}
 
+frenchApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+frenchApiStatusRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = StatusApiRoute,
+      HarchWeb.requestContext = frenchRequestContext {requestSurface = ApiSurface}
+    }
+
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 notFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = defaultRequestContext}
+
+apiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+apiStatusRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = StatusApiRoute,
+      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+    }
+
+apiNotFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+apiNotFoundRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = NotFoundRoute,
+      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+    }
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 pureRouteMatcher = WebApi.Route.matchRoute WebApi.Route.defaultRequestContext
@@ -720,7 +742,8 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-456")
+                requestCorrelationId = Just (Text.pack "req-456"),
+                requestSurface = PageSurface
               }
           callToAction =
             CallToAction
@@ -866,8 +889,11 @@ spec = do
       staticRoot `shouldBe` staticRoot
       English `shouldBe` English
       French `shouldBe` French
+      PageSurface `shouldBe` PageSurface
+      ApiSurface `shouldBe` ApiSurface
       HomeRoute `shouldBe` HomeRoute
       SecondRoute `shouldBe` SecondRoute
+      StatusApiRoute `shouldBe` StatusApiRoute
       NotFoundRoute `shouldBe` NotFoundRoute
       UnsupportedLocalePrefix (Text.pack "de") `shouldBe` UnsupportedLocalePrefix (Text.pack "de")
       UnsupportedPath (Text.pack "/missing") `shouldBe` UnsupportedPath (Text.pack "/missing")
@@ -917,10 +943,11 @@ spec = do
       show
         ( AppRequestContext
             { requestLocale = French,
-              requestCorrelationId = Just (Text.pack "req-789")
+              requestCorrelationId = Just (Text.pack "req-789"),
+              requestSurface = PageSurface
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\"}"
+        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface}"
       show
         ( CallToAction
             { callToActionLabel = Text.pack "Return home",
@@ -931,6 +958,8 @@ spec = do
         `shouldBe` "CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}"
       show English `shouldBe` "English"
       show French `shouldBe` "French"
+      show PageSurface `shouldBe` "PageSurface"
+      show ApiSurface `shouldBe` "ApiSurface"
       show (UnsupportedLocalePrefix (Text.pack "de")) `shouldBe` "UnsupportedLocalePrefix \"de\""
       show (UnsupportedPath (Text.pack "/missing")) `shouldBe` "UnsupportedPath \"/missing\""
       show homePageModel
@@ -1029,7 +1058,8 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-123")
+                requestCorrelationId = Just (Text.pack "req-123"),
+                requestSurface = PageSurface
               }
           callToAction =
             CallToAction
@@ -1094,6 +1124,7 @@ spec = do
       HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
       UnsupportedLocalePrefix (Text.pack "de") `shouldNotBe` UnsupportedPath (Text.pack "/de")
+      PageSurface `shouldNotBe` ApiSurface
       HomeRoute `shouldNotBe` SecondRoute
       SecondRoute `shouldNotBe` NotFoundRoute
 
@@ -1160,7 +1191,8 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-999")
+                requestCorrelationId = Just (Text.pack "req-999"),
+                requestSurface = PageSurface
               }
           callToAction =
             CallToAction
@@ -1191,6 +1223,7 @@ spec = do
       show Https `shouldBe` "Https"
       show HomeRoute `shouldBe` "HomeRoute"
       show SecondRoute `shouldBe` "SecondRoute"
+      show StatusApiRoute `shouldBe` "StatusApiRoute"
       show NotFoundRoute `shouldBe` "NotFoundRoute"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
@@ -1271,7 +1304,8 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-list")
+                requestCorrelationId = Just (Text.pack "req-list"),
+                requestSurface = PageSurface
               }
           callToAction =
             CallToAction
@@ -1322,8 +1356,9 @@ spec = do
       show [appConfig]
         `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
       show [English, French] `shouldBe` "[English,French]"
+      show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\"}]"
+        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -1336,13 +1371,20 @@ spec = do
         `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix (Text.pack "de"), UnsupportedPath (Text.pack "/missing")]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
-      show [HomeRoute, SecondRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,NotFoundRoute]"
+      show [HomeRoute, SecondRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,StatusApiRoute,NotFoundRoute]"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/en")) `shouldBe` Just HomeRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/404")) `shouldBe` Just NotFoundRoute
+
+    it "parses API routes with the API response surface" $ do
+      parseRoute defaultRequestContext (Text.pack "/api/status") `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext (Text.pack "/api") `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext (Text.pack "/api/404") `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext (Text.pack "/api/missing") `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext (Text.pack "/api/status/extra") `shouldBe` Just apiNotFoundRequest
 
     it "parses the second page path" $
       parseRoute defaultRequestContext (Text.pack "/second") `shouldBe` Just secondRequest
@@ -1390,12 +1432,17 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath frenchSecondRequest) `shouldBe` Just frenchSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
     it "renders locale prefixes only for non-default locales" $ do
       renderRoutePath homeRequest `shouldBe` Text.pack "/"
       renderRoutePath frenchHomeRequest `shouldBe` Text.pack "/fr"
       renderRoutePath secondRequest `shouldBe` Text.pack "/second"
       renderRoutePath frenchSecondRequest `shouldBe` Text.pack "/fr/second"
+      renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` Text.pack "/404"
+      renderRoutePath apiStatusRequest `shouldBe` Text.pack "/api/status"
+      renderRoutePath apiNotFoundRequest `shouldBe` Text.pack "/api/404"
       renderRoutePath notFoundRequest `shouldBe` Text.pack "/404"
 
   describe "matchRoute" $ do
@@ -1411,6 +1458,10 @@ spec = do
 
     it "matches locale-prefixed paths with the merged request context" $
       pureRouteMatcher (Text.pack "/fr") `shouldBe` frenchHomeRequest
+
+    it "matches API paths with the API response surface" $ do
+      pureRouteMatcher (Text.pack "/api/status") `shouldBe` apiStatusRequest
+      pureRouteMatcher (Text.pack "/api/missing") `shouldBe` apiNotFoundRequest
 
     it "falls back to the stable not-found route for unknown paths" $
       pureRouteMatcher (Text.pack "/missing") `shouldBe` notFoundRequest
@@ -1468,10 +1519,45 @@ spec = do
               }
       show config
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
       show (renderPage config secondRequest)
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
       renderPage config secondRequest `shouldBe` renderPage config secondRequest
+
+  describe "selectResponse" $ do
+    it "resolves page routes to page responses that still flow through the shared shell" $
+      selectResponse defaultAppConfig secondRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig secondRequest)
+
+    it "resolves API-only routes to explicit status, content type, and body values" $
+      selectResponse defaultAppConfig apiStatusRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+            }
+
+    it "keeps API payload rendering locale-aware without touching page routing" $
+      selectResponse defaultAppConfig frenchApiStatusRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"fr\"}"
+            }
+
+    it "keeps not-found handling consistent across page and non-page responses" $ do
+      selectResponse defaultAppConfig notFoundRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig notFoundRequest)
+      selectResponse defaultAppConfig apiNotFoundRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 404,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"error\":\"not-found\"}"
+            }
+
+    it "is deterministic for repeated requests" $
+      selectResponse defaultAppConfig apiStatusRequest `shouldBe` selectResponse defaultAppConfig apiStatusRequest
 
   describe "buildPageModel" $ do
     it "builds stubbed home page data with a navigation affordance" $
@@ -1570,17 +1656,22 @@ spec = do
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/") `shouldBe` parseRoute defaultRequestContext (Text.pack "/")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/fr") `shouldBe` parseRoute defaultRequestContext (Text.pack "/fr")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/second")
+      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/api/status") `shouldBe` parseRoute defaultRequestContext (Text.pack "/api/status")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
       HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
       HarchWeb.renderRoute codec frenchSecondRequest `shouldBe` renderRoutePath frenchSecondRequest
       HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
+      HarchWeb.renderRoute codec apiStatusRequest `shouldBe` renderRoutePath apiStatusRequest
+      HarchWeb.renderRoute codec apiNotFoundRequest `shouldBe` renderRoutePath apiNotFoundRequest
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
 
-    it "stores the same page rendering behavior used by direct page tests" $ do
-      HarchWeb.renderResponse pureApplication homeRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig homeRequest)
-      HarchWeb.renderResponse pureApplication secondRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig secondRequest)
-      HarchWeb.renderResponse pureApplication notFoundRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig notFoundRequest)
+    it "stores the same response-selection behavior used by direct response tests" $ do
+      HarchWeb.renderResponse pureApplication homeRequest `shouldBe` selectResponse defaultAppConfig homeRequest
+      HarchWeb.renderResponse pureApplication secondRequest `shouldBe` selectResponse defaultAppConfig secondRequest
+      HarchWeb.renderResponse pureApplication apiStatusRequest `shouldBe` selectResponse defaultAppConfig apiStatusRequest
+      HarchWeb.renderResponse pureApplication notFoundRequest `shouldBe` selectResponse defaultAppConfig notFoundRequest
+      HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldBe` selectResponse defaultAppConfig apiNotFoundRequest
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "fr", Text.pack "second"])
@@ -1589,11 +1680,23 @@ spec = do
       readResponseBody secondResponse
         `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig frenchSecondRequest)
 
+      apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "status"])
+      Wai.responseStatus apiStatusResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders apiStatusResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      readResponseBody apiStatusResponse
+        `shouldReturn` Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+
       missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "missing"])
       Wai.responseStatus missingResponse `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
       readResponseBody missingResponse
         `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig notFoundRequest)
+
+      apiMissingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "missing"])
+      Wai.responseStatus apiMissingResponse `shouldBe` Http.status404
+      lookup Http.hContentType (Wai.responseHeaders apiMissingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      readResponseBody apiMissingResponse
+        `shouldReturn` Text.pack "{\"error\":\"not-found\"}"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       let homePage = renderPage defaultAppConfig homeRequest
@@ -1607,9 +1710,9 @@ spec = do
         `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "can grow from page responses to API responses without changing route matching" $
-      case HarchWeb.renderResponse pureApplication homeRequest of
-        HarchWeb.PageResponse page -> HarchWeb.pageRoute page `shouldBe` HomeRoute
-        HarchWeb.BodyResponse _ -> expectationFailure "expected page response"
+      case HarchWeb.renderResponse pureApplication apiStatusRequest of
+        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+        HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 
   describe "run" $
     it "writes startup output to the supplied handle for isolated tests" $
