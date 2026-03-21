@@ -1,5 +1,6 @@
 module WebApi.App
-  ( buildApp,
+  ( buildAppWithDatabase,
+    buildApp,
     run,
   )
 where
@@ -9,7 +10,8 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import System.IO (Handle)
 import WebApi.Config (AppConfig (..), defaultAppConfig)
-import WebApi.Response (selectResponse)
+import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
+import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
@@ -42,17 +44,21 @@ appShellConfig config =
       HarchWeb.shellMainId = Text.pack "app-main"
     }
 
-buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
-buildApp config =
+buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabase config databaseEffect =
   config `seq`
     HarchWeb.application
       HarchWeb.Application
         { HarchWeb.appName = Text.pack "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
           HarchWeb.routeCodec = routeCodec,
-          HarchWeb.renderResponse = selectResponse config,
+          HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
           HarchWeb.pageShell = appShell config
         }
+
+buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
+buildApp config =
+  buildAppWithDatabase config defaultDatabaseEffect
 
 run :: Handle -> IO ()
 run outputHandle =

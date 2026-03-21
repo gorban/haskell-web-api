@@ -63,6 +63,7 @@ library
     WebApi.Config
     WebApi.Database
     WebApi.Page
+    WebApi.Postgres
     WebApi.Response
     WebApi.Route
     WebApi.RouteData
@@ -74,6 +75,7 @@ library
     base ^>=4.22.0.0,
     core,
     harch-web,
+    process,
     text,
 
   -- Directories containing source files.

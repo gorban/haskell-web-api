@@ -49,32 +49,36 @@ data RouteDataResult
   | NotFoundRouteDataResult
   deriving (Eq, Show)
 
-selectRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult
+selectRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteData =
   selectRouteDataWithDatabase defaultDatabaseEffect
 
-selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult
+selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteDataWithDatabase databaseEffect routeRequest =
   case HarchWeb.requestRoute routeRequest of
     HomeRoute ->
-      HomeRouteDataResult
-        HomeRouteData
-          { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
-          }
+      pure $
+        HomeRouteDataResult
+          HomeRouteData
+            { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
+            }
     SecondRoute ->
-      SecondRouteDataResult $
-        fmap
-          ( \secondPageData ->
-              SecondRouteData
-                { secondRouteSummary = secondPageDataSummary secondPageData,
-                  secondRouteHighlights = secondPageDataHighlights secondPageData
-                }
-          )
-          (loadSecondPageData databaseEffect (HarchWeb.requestContext routeRequest))
+      fmap
+        ( SecondRouteDataResult
+            . fmap
+              ( \secondPageData ->
+                  SecondRouteData
+                    { secondRouteSummary = secondPageDataSummary secondPageData,
+                      secondRouteHighlights = secondPageDataHighlights secondPageData
+                    }
+              )
+        )
+        (loadSecondPageData databaseEffect (HarchWeb.requestContext routeRequest))
     StatusApiRoute ->
-      StatusApiDataResult
-        StatusApiData
-          { statusApiLocale = requestLocale (HarchWeb.requestContext routeRequest)
-          }
+      pure $
+        StatusApiDataResult
+          StatusApiData
+            { statusApiLocale = requestLocale (HarchWeb.requestContext routeRequest)
+            }
     NotFoundRoute ->
-      NotFoundRouteDataResult
+      pure NotFoundRouteDataResult

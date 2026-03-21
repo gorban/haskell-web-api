@@ -1,5 +1,6 @@
 {-# SPEC #-}
 
+import Control.Exception (finally)
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -11,12 +12,17 @@ import qualified HarchWeb
 import qualified Network.HTTP.Types as Http
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
+import System.Environment (getEnv, lookupEnv, setEnv, unsetEnv)
+import System.Exit (ExitCode (..))
 import System.IO (hClose)
-import System.IO.Temp (withSystemTempFile)
+import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
+import System.Process (callProcess)
 import WebApi (buildApp, run)
+import WebApi.App (buildAppWithDatabase)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatements, runPostgresMigrations, runPostgresMigrationsWithRunner, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
@@ -81,11 +87,11 @@ apiNotFoundRequest =
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 pureRouteMatcher = WebApi.Route.matchRoute WebApi.Route.defaultRequestContext
 
-renderedShell :: AppConfig -> AppRoute -> Text
-renderedShell config route =
+renderedShell :: AppConfig -> AppRoute -> IO Text
+renderedShell config route = do
   let application = buildApp config
-      page = renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
-   in HarchWeb.pageShell application page
+  page <- renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
+  pure (HarchWeb.pageShell application page)
 
 performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
 performWaiRequest webApplication request = do
@@ -116,6 +122,120 @@ waiRequest segments =
       case segments of
         [] -> Text.pack "/"
         _ -> Text.pack "/" <> Text.intercalate (Text.pack "/") segments
+
+postgresTestConfig :: DatabaseConfig
+postgresTestConfig =
+  DatabaseConfig
+    { databaseHost = Text.pack "db.internal",
+      databasePort = 6543,
+      databaseName = Text.pack "web_api_prod",
+      databaseUser = Text.pack "web_api_app",
+      databasePassword = Text.pack "super-secret"
+    }
+
+successfulPostgresResult :: Text -> PostgresCommandResult
+successfulPostgresResult stdoutText =
+  PostgresCommandResult
+    { postgresExitCode = ExitSuccess,
+      postgresStdout = stdoutText,
+      postgresStderr = Text.empty
+    }
+
+failingPostgresResult :: Text -> PostgresCommandResult
+failingPostgresResult stderrText =
+  PostgresCommandResult
+    { postgresExitCode = ExitFailure 1,
+      postgresStdout = Text.empty,
+      postgresStderr = stderrText
+    }
+
+commandSql :: PostgresCommand -> Text
+commandSql command =
+  case reverse (postgresArguments command) of
+    sqlArgument : _ -> Text.pack sqlArgument
+    [] -> Text.empty
+
+withTemporaryEnvironment :: String -> Maybe String -> IO a -> IO a
+withTemporaryEnvironment key maybeValue action = do
+  previousValue <- lookupEnv key
+  case maybeValue of
+    Just value -> setEnv key value
+    Nothing -> unsetEnv key
+  let restore =
+        case previousValue of
+          Just value -> setEnv key value
+          Nothing -> unsetEnv key
+  action `finally` restore
+
+withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a
+withFakePsqlScriptResults commandResults action =
+  withSystemTempDirectory "fake-psql" $ \tempDirectory -> do
+    originalPath <- getEnv "PATH"
+    let scriptPath = tempDirectory <> "/psql"
+        argsLogPath = tempDirectory <> "/psql-args.log"
+        scriptBody =
+          unlines
+            ( [ "#!/usr/bin/env bash",
+                "set -euo pipefail",
+                "printf '%s\\n' \"$*\" >> \"$PSQL_ARGS_LOG\"",
+                "sql=''",
+                "while [ \"$#\" -gt 0 ]; do",
+                "  case \"$1\" in",
+                "    --command)",
+                "      sql=\"$2\"",
+                "      shift 2",
+                "      ;;",
+                "    *)",
+                "      shift",
+                "      ;;",
+                "  esac",
+                "done",
+                "case \"$sql\" in"
+              ]
+                ++ concatMap renderCase commandResults
+                ++ [ "  *)",
+                     "    exit 0",
+                     "    ;;",
+                     "esac"
+                   ]
+            )
+    writeFile scriptPath scriptBody
+    callProcess "chmod" ["+x", scriptPath]
+    withTemporaryEnvironment "PSQL_ARGS_LOG" (Just argsLogPath) $
+      withTemporaryEnvironment "PATH" (Just (tempDirectory <> ":" <> originalPath)) $
+        action argsLogPath
+  where
+    renderCase (sqlText, commandResult) =
+      [ "  " <> show (Text.unpack sqlText) <> ")"
+      ]
+        ++ renderStdoutLines (postgresStdout commandResult)
+        ++ renderStderrLines (postgresStderr commandResult)
+        ++ [ "    exit " <> renderExitCode (postgresExitCode commandResult),
+             "    ;;"
+           ]
+
+    renderStdoutLines stdoutText =
+      case Text.unpack stdoutText of
+        "" -> []
+        stdoutValue -> ["    printf %s\\\\n " <> show stdoutValue]
+
+    renderStderrLines stderrText =
+      case Text.unpack stderrText of
+        "" -> []
+        stderrValue -> ["    printf %s\\\\n " <> show stderrValue <> " >&2"]
+
+    renderExitCode exitCode =
+      case exitCode of
+        ExitSuccess -> "0"
+        ExitFailure code -> show code
+
+withFakePsqlScript :: [(Text, Text)] -> (FilePath -> IO a) -> IO a
+withFakePsqlScript commandOutputs =
+  withFakePsqlScriptResults
+    (map toSuccessfulCommandResult commandOutputs)
+  where
+    toSuccessfulCommandResult (sqlText, stdoutText) =
+      (sqlText, successfulPostgresResult stdoutText)
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -698,23 +818,23 @@ spec = do
     it "loads page-oriented seeded data for both English and French requests" $ do
       let englishEffect = buildSeededDatabaseEffect defaultDatabaseSeed
       loadHomePageData englishEffect defaultRequestContext
-        `shouldBe` Right
+        `shouldReturn` Right
           HomePageData
             { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
             }
       loadSecondPageData englishEffect defaultRequestContext
-        `shouldBe` Right
+        `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
       loadHomePageData englishEffect frenchRequestContext
-        `shouldBe` Right
+        `shouldReturn` Right
           HomePageData
             { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
             }
       loadSecondPageData englishEffect frenchRequestContext
-        `shouldBe` Right
+        `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
@@ -739,15 +859,17 @@ spec = do
                   frenchSecondPageData = Left (SecondPageDataError (Text.pack "second seed unavailable"))
                 }
       loadHomePageData seededEffect defaultRequestContext
-        `shouldBe` Left (HomePageDataError (Text.pack "home seed unavailable"))
+        `shouldReturn` Left (HomePageDataError (Text.pack "home seed unavailable"))
       loadSecondPageData seededEffect frenchRequestContext
-        `shouldBe` Left (SecondPageDataError (Text.pack "second seed unavailable"))
+        `shouldReturn` Left (SecondPageDataError (Text.pack "second seed unavailable"))
 
     it "keeps the default seeded interpreter deterministic for repeated requests" $ do
-      loadHomePageData defaultDatabaseEffect defaultRequestContext
-        `shouldBe` loadHomePageData defaultDatabaseEffect defaultRequestContext
-      loadSecondPageData defaultDatabaseEffect frenchRequestContext
-        `shouldBe` loadSecondPageData defaultDatabaseEffect frenchRequestContext
+      firstHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
+      secondHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
+      firstHome `shouldBe` secondHome
+      firstSecond <- loadSecondPageData defaultDatabaseEffect frenchRequestContext
+      secondSecond <- loadSecondPageData defaultDatabaseEffect frenchRequestContext
+      firstSecond `shouldBe` secondSecond
 
   describe "selectRouteData" $ do
     it "selects the same second-route domain data for page and API surfaces" $ do
@@ -764,7 +886,7 @@ spec = do
                         },
                   frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
                 }
-          selectedRouteData = selectRouteDataWithDatabase seededDatabaseEffect secondRequest
+      selectedRouteData <- selectRouteDataWithDatabase seededDatabaseEffect secondRequest
       selectedRouteData
         `shouldBe` SecondRouteDataResult
           ( Right
@@ -773,7 +895,7 @@ spec = do
                   secondRouteHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
                 }
           )
-      selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldBe` selectedRouteData
+      selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldReturn` selectedRouteData
 
     it "keeps route-data selectors and derived instances deterministic for tests" $ do
       let homeRouteData =
@@ -823,12 +945,12 @@ spec = do
 
     it "selects default stubbed and status route data without extra wiring" $ do
       selectRouteData homeRequest
-        `shouldBe` HomeRouteDataResult
+        `shouldReturn` HomeRouteDataResult
           HomeRouteData
             { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
             }
       selectRouteData secondRequest
-        `shouldBe` SecondRouteDataResult
+        `shouldReturn` SecondRouteDataResult
           ( Right
               SecondRouteData
                 { secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
@@ -836,11 +958,384 @@ spec = do
                 }
           )
       selectRouteData frenchApiStatusRequest
-        `shouldBe` StatusApiDataResult
+        `shouldReturn` StatusApiDataResult
           StatusApiData
             { statusApiLocale = French
             }
-      selectRouteData apiNotFoundRequest `shouldBe` NotFoundRouteDataResult
+      selectRouteData apiNotFoundRequest `shouldReturn` NotFoundRouteDataResult
+
+  describe "WebApi.Postgres" $ do
+    it "translates database config into psql commands for page queries" $ do
+      recordedCommandsReference <- newIORef []
+      let runner command = do
+            modifyIORef' recordedCommandsReference (<> [command])
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf (Text.pack "route_slug = 'home'") sql ->
+                      successfulPostgresResult $
+                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
+                          then Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                          else Text.pack "Server-rendered home page with stubbed content."
+                  | Text.isInfixOf (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second'") sql ->
+                      successfulPostgresResult $
+                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
+                          then Text.pack "Charge depuis PostgreSQL."
+                          else Text.pack "Loaded from PostgreSQL."
+                  | Text.isInfixOf (Text.pack "SELECT highlight FROM page_highlights") sql ->
+                      successfulPostgresResult $
+                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
+                          then Text.pack "SSR rapide\nDonnees partagees"
+                          else Text.pack "Fast SSR\nShared route data"
+                  | otherwise ->
+                      failingPostgresResult (Text.pack "unexpected query")
+          postgresEffect = buildPostgresDatabaseEffectWithRunner runner postgresTestConfig
+      loadHomePageData postgresEffect defaultRequestContext
+        `shouldReturn` Right
+          HomePageData
+            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
+            }
+      loadSecondPageData postgresEffect defaultRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = Text.pack "Loaded from PostgreSQL.",
+              secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Shared route data"]
+            }
+      loadHomePageData postgresEffect frenchRequestContext
+        `shouldReturn` Right
+          HomePageData
+            { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            }
+      loadSecondPageData postgresEffect frenchRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = Text.pack "Charge depuis PostgreSQL.",
+              secondPageDataHighlights = [Text.pack "SSR rapide", Text.pack "Donnees partagees"]
+            }
+      recordedCommands <- readIORef recordedCommandsReference
+      recordedCommands
+        `shouldBe` [ PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       },
+                     PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       },
+                     PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       },
+                     PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'fr';"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       },
+                     PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'fr';"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       },
+                     PostgresCommand
+                       { postgresExecutable = "psql",
+                         postgresArguments =
+                           [ "--host",
+                             "db.internal",
+                             "--port",
+                             "6543",
+                             "--dbname",
+                             "web_api_prod",
+                             "--username",
+                             "web_api_app",
+                             "--no-password",
+                             "--set",
+                             "ON_ERROR_STOP=1",
+                             "--tuples-only",
+                             "--no-align",
+                             "--quiet",
+                             "--command",
+                             "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+                           ],
+                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                       }
+                   ]
+
+    it "maps missing rows and command failures into database errors" $ do
+      let missingRunner command =
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf (Text.pack "route_slug = 'home'") sql ->
+                      successfulPostgresResult Text.empty
+                  | otherwise ->
+                      failingPostgresResult (Text.pack "relation does not exist")
+          postgresEffect = buildPostgresDatabaseEffectWithRunner missingRunner postgresTestConfig
+      loadHomePageData postgresEffect defaultRequestContext
+        `shouldReturn` Left (HomePageDataError (Text.pack "expected exactly one row: "))
+      loadSecondPageData postgresEffect defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError (Text.pack "relation does not exist"))
+
+    it "maps scalar query failures, malformed rows, and highlight query failures into explicit errors" $ do
+      let homeFailureRunner command =
+            pure $
+              if Text.isInfixOf (Text.pack "route_slug = 'home'") (commandSql command)
+                then
+                  PostgresCommandResult
+                    { postgresExitCode = ExitFailure 2,
+                      postgresStdout = Text.empty,
+                      postgresStderr = Text.empty
+                    }
+                else successfulPostgresResult Text.empty
+          malformedScalarRunner command =
+            pure $
+              if Text.isInfixOf (Text.pack "route_slug = 'home'") (commandSql command)
+                then successfulPostgresResult (Text.pack "first\nsecond")
+                else successfulPostgresResult Text.empty
+          highlightFailureRunner command =
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second'") sql ->
+                      successfulPostgresResult (Text.pack "Loaded from PostgreSQL.")
+                  | Text.isInfixOf (Text.pack "SELECT highlight FROM page_highlights") sql ->
+                      failingPostgresResult (Text.pack "highlights unavailable")
+                  | otherwise ->
+                      successfulPostgresResult Text.empty
+      loadHomePageData (buildPostgresDatabaseEffectWithRunner homeFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (HomePageDataError (Text.pack "psql command failed"))
+      loadHomePageData (buildPostgresDatabaseEffectWithRunner malformedScalarRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (HomePageDataError (Text.pack "expected exactly one row: first, second"))
+      loadSecondPageData (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError (Text.pack "highlights unavailable"))
+
+    it "runs migrations and seed statements in order through the provided runner" $ do
+      recordedCommandsReference <- newIORef []
+      let runner command = modifyIORef' recordedCommandsReference (<> [command]) >> pure (successfulPostgresResult Text.empty)
+      runPostgresMigrationsWithRunner runner postgresTestConfig `shouldReturn` Right ()
+      runPostgresSeedWithRunner runner postgresTestConfig `shouldReturn` Right ()
+      recordedCommands <- readIORef recordedCommandsReference
+      map commandSql recordedCommands `shouldBe` migrationStatements <> seedStatements
+
+    it "stops database setup when a migration or seed command fails" $ do
+      case seedStatements of
+        failingSeedStatement : _ -> do
+          let runner command =
+                pure $
+                  if commandSql command == failingSeedStatement
+                    then failingPostgresResult (Text.pack "seed failed")
+                    else successfulPostgresResult Text.empty
+          runPostgresSeedWithRunner runner postgresTestConfig
+            `shouldReturn` Left
+              ( PostgresCommandFailed
+                  PostgresCommand
+                    { postgresExecutable = "psql",
+                      postgresArguments =
+                        [ "--host",
+                          "db.internal",
+                          "--port",
+                          "6543",
+                          "--dbname",
+                          "web_api_prod",
+                          "--username",
+                          "web_api_app",
+                          "--no-password",
+                          "--set",
+                          "ON_ERROR_STOP=1",
+                          "--command",
+                          "DELETE FROM page_highlights;"
+                        ],
+                      postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                    }
+                  PostgresCommandResult
+                    { postgresExitCode = ExitFailure 1,
+                      postgresStdout = Text.empty,
+                      postgresStderr = Text.pack "seed failed"
+                    }
+              )
+        [] -> expectationFailure "expected at least one seed statement"
+
+    it "keeps postgres command, result, and error values serializable and stable" $ do
+      let command =
+            PostgresCommand
+              { postgresExecutable = "psql",
+                postgresArguments = ["--command", "SELECT 1;"],
+                postgresEnvironment = [("PGPASSWORD", "secret")]
+              }
+          commandResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitSuccess,
+                postgresStdout = Text.pack "1",
+                postgresStderr = Text.empty
+              }
+          failedCommandResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 3,
+                postgresStdout = Text.empty,
+                postgresStderr = Text.pack "boom"
+              }
+          runnerError = PostgresCommandFailed command commandResult
+          unexpectedRowsError = UnexpectedQueryRows (Text.pack "expected exactly one row") [Text.pack "first", Text.pack "second"]
+      command `shouldBe` command
+      command `shouldNotBe` command {postgresArguments = ["--command", "SELECT 2;"]}
+      commandResult `shouldBe` commandResult
+      commandResult `shouldNotBe` commandResult {postgresStdout = Text.pack "2"}
+      runnerError `shouldBe` runnerError
+      runnerError `shouldNotBe` PostgresCommandFailed command failedCommandResult
+      unexpectedRowsError `shouldBe` unexpectedRowsError
+      unexpectedRowsError `shouldNotBe` UnexpectedQueryRows (Text.pack "expected exactly one row") [Text.pack "first"]
+      show command
+        `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}"
+      show commandResult
+        `shouldBe` "PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}"
+      show failedCommandResult
+        `shouldBe` "PostgresCommandResult {postgresExitCode = ExitFailure 3, postgresStdout = \"\", postgresStderr = \"boom\"}"
+      show runnerError
+        `shouldBe` "PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})"
+      show unexpectedRowsError
+        `shouldBe` "UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
+      show [command]
+        `shouldBe` "[PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}]"
+      show [commandResult]
+        `shouldBe` "[PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}]"
+      show [runnerError]
+        `shouldBe` "[PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})]"
+
+    it "uses the default psql runner for effect loading and database setup when psql is on PATH"
+      $ withFakePsqlScript
+        [ (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';", Text.pack "Server-rendered home page with stubbed content."),
+          (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';", Text.pack "Second page content with stubbed data ready for future loaders."),
+          (Text.pack "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
+          (Text.pack "CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+          (Text.pack "CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+          (Text.pack "DELETE FROM page_highlights;", Text.empty),
+          (Text.pack "DELETE FROM page_content;", Text.empty),
+          (Text.pack "INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+        ]
+      $ \argsLogPath -> do
+        let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
+        HarchWeb.renderResponse application secondRequest
+          `shouldReturn` HarchWeb.PageResponse
+            ( HarchWeb.Page
+                { HarchWeb.pageTitle = Text.pack "web-api: Second",
+                  HarchWeb.pageRoute = SecondRoute,
+                  HarchWeb.pageContext = defaultRequestContext,
+                  HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+                }
+            )
+        runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
+        runPostgresSeed postgresTestConfig `shouldReturn` Right ()
+        readFile argsLogPath
+          `shouldReturn` unlines
+            [ "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_highlights;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_content;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+            ]
+
+    it "uses stderr from the default psql runner when a command fails"
+      $ withFakePsqlScriptResults
+        [ ( Text.pack "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';",
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 4,
+                postgresStdout = Text.empty,
+                postgresStderr = Text.pack "default runner failed"
+              }
+          )
+        ]
+      $ \_ ->
+        loadHomePageData (buildPostgresDatabaseEffect postgresTestConfig) defaultRequestContext
+          `shouldReturn` Left (HomePageDataError (Text.pack "default runner failed"))
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
@@ -1727,7 +2222,7 @@ spec = do
   describe "renderPage" $ do
     it "selects the expected home page model" $
       renderPage defaultAppConfig homeRequest
-        `shouldBe` HarchWeb.Page
+        `shouldReturn` HarchWeb.Page
           { HarchWeb.pageTitle = Text.pack "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
@@ -1736,7 +2231,7 @@ spec = do
 
     it "selects a distinct second page model" $
       renderPage defaultAppConfig secondRequest
-        `shouldBe` HarchWeb.Page
+        `shouldReturn` HarchWeb.Page
           { HarchWeb.pageTitle = Text.pack "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
@@ -1745,7 +2240,7 @@ spec = do
 
     it "selects a stable not-found page model" $
       renderPage defaultAppConfig notFoundRequest
-        `shouldBe` HarchWeb.Page
+        `shouldReturn` HarchWeb.Page
           { HarchWeb.pageTitle = Text.pack "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
@@ -1780,11 +2275,11 @@ spec = do
                 observability = observability defaultAppConfig
               }
       renderedShell config HomeRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
+        `shouldReturn` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       renderedShell config SecondRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       renderedShell config NotFoundRoute
-        `shouldBe` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do
       let config =
@@ -1797,24 +2292,25 @@ spec = do
       show config
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
-      show (renderPage config secondRequest)
+      show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
-      renderPage config secondRequest `shouldBe` renderPage config secondRequest
+      renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
-    it "resolves page routes to page responses that still flow through the shared shell" $
-      selectResponse defaultAppConfig secondRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig secondRequest)
+    it "resolves page routes to page responses that still flow through the shared shell" $ do
+      renderedPage <- renderPage defaultAppConfig secondRequest
+      selectResponse defaultAppConfig secondRequest `shouldReturn` HarchWeb.PageResponse renderedPage
 
     it "resolves API-only routes to explicit status, content type, and body values" $ do
       selectResponse defaultAppConfig apiStatusRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
             }
       selectResponse defaultAppConfig apiSecondRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = Text.pack "application/json",
@@ -1823,14 +2319,14 @@ spec = do
 
     it "keeps API payload rendering locale-aware without touching page routing" $ do
       selectResponse defaultAppConfig frenchApiStatusRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"fr\"}"
             }
       selectResponse defaultAppConfig frenchApiSecondRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = Text.pack "application/json",
@@ -1838,9 +2334,10 @@ spec = do
             }
 
     it "keeps not-found handling consistent across page and non-page responses" $ do
-      selectResponse defaultAppConfig notFoundRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig notFoundRequest)
+      renderedPage <- renderPage defaultAppConfig notFoundRequest
+      selectResponse defaultAppConfig notFoundRequest `shouldReturn` HarchWeb.PageResponse renderedPage
       selectResponse defaultAppConfig apiNotFoundRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 404,
               HarchWeb.responseContentType = Text.pack "application/json",
@@ -1859,20 +2356,22 @@ spec = do
               }
         )
         apiSecondRequest
-        `shouldBe` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 503,
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"error\":\"second-page-unavailable\"}"
             }
 
-    it "is deterministic for repeated requests" $
-      selectResponse defaultAppConfig apiStatusRequest `shouldBe` selectResponse defaultAppConfig apiStatusRequest
+    it "is deterministic for repeated requests" $ do
+      firstResponse <- selectResponse defaultAppConfig apiStatusRequest
+      secondResponse <- selectResponse defaultAppConfig apiStatusRequest
+      firstResponse `shouldBe` secondResponse
 
   describe "buildPageModel" $ do
     it "builds stubbed home page data with a navigation affordance" $
       buildPageModel homeRequest
-        `shouldBe` HomePage
+        `shouldReturn` HomePage
           HomePageModel
             { homeHeading = Text.pack "Home",
               homeSummary = Text.pack "Server-rendered home page with stubbed content.",
@@ -1886,7 +2385,7 @@ spec = do
 
     it "keeps locale-aware action paths in stubbed page data" $
       buildPageModel frenchHomeRequest
-        `shouldBe` HomePage
+        `shouldReturn` HomePage
           HomePageModel
             { homeHeading = Text.pack "Home",
               homeSummary = Text.pack "Server-rendered home page with stubbed content.",
@@ -1944,7 +2443,7 @@ spec = do
               }
         )
         secondRequest
-        `shouldBe` SecondPage
+        `shouldReturn` SecondPage
           SecondPageModel
             { secondHeading = Text.pack "Second",
               secondSummary = Text.pack "Loaded from the seeded database effect.",
@@ -1969,7 +2468,7 @@ spec = do
               }
         )
         secondRequest
-        `shouldBe` SecondPage
+        `shouldReturn` SecondPage
           SecondPageModel
             { secondHeading = Text.pack "Second",
               secondSummary = Text.pack "Second page content is temporarily unavailable.",
@@ -1984,21 +2483,25 @@ spec = do
             }
 
   describe "renderPageBody" $ do
-    it "renders the home page heading and navigation affordance" $
-      renderPageBody (buildPageModel homeRequest)
+    it "renders the home page heading and navigation affordance" $ do
+      homePageModel <- buildPageModel homeRequest
+      renderPageBody homePageModel
         `shouldBe` Text.pack "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
 
     it "renders the second page with distinct content while the shared shell stays the same" $ do
-      let homeShell = renderedShell defaultAppConfig HomeRoute
-          secondShell = renderedShell defaultAppConfig SecondRoute
-      renderPageBody (buildPageModel secondRequest)
+      homeShell <- renderedShell defaultAppConfig HomeRoute
+      secondShell <- renderedShell defaultAppConfig SecondRoute
+      secondPageModel <- buildPageModel secondRequest
+      renderPageBody secondPageModel
         `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
       Text.isInfixOf (Text.pack "<nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\">") homeShell `shouldBe` True
       Text.isInfixOf (Text.pack "<nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\">") secondShell `shouldBe` True
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
-      let homeBody = renderPageBody (buildPageModel homeRequest)
-          secondBody = renderPageBody (buildPageModel secondRequest)
+      homePageModel <- buildPageModel homeRequest
+      secondPageModel <- buildPageModel secondRequest
+      let homeBody = renderPageBody homePageModel
+          secondBody = renderPageBody secondPageModel
       Text.isInfixOf (Text.pack "<section data-page=\"home\">") homeBody `shouldBe` True
       Text.isInfixOf (Text.pack "<section data-page=\"second\">") secondBody `shouldBe` True
       Text.isInfixOf (Text.pack "data-page-title=\"true\"") homeBody `shouldBe` True
@@ -2007,7 +2510,8 @@ spec = do
       Text.isInfixOf (Text.pack "<body") secondBody `shouldBe` False
 
     it "covers empty and populated highlight rendering branches" $ do
-      Text.isInfixOf (Text.pack "<p data-empty-state=\"true\">No highlights yet.</p>") (renderPageBody (buildPageModel secondRequest)) `shouldBe` True
+      secondPageModel <- buildPageModel secondRequest
+      Text.isInfixOf (Text.pack "<p data-empty-state=\"true\">No highlights yet.</p>") (renderPageBody secondPageModel) `shouldBe` True
       renderPageBody
         ( SecondPage
             SecondPageModel
@@ -2037,7 +2541,7 @@ spec = do
               }
         )
         secondRequest
-        `shouldBe` HarchWeb.Page
+        `shouldReturn` HarchWeb.Page
           { HarchWeb.pageTitle = Text.pack "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
@@ -2046,18 +2550,21 @@ spec = do
 
   describe "page shell integration" $ do
     it "marks the active navigation item for each routed page" $ do
-      Text.isInfixOf (Text.pack "<a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a>") (renderedShell defaultAppConfig HomeRoute) `shouldBe` True
-      Text.isInfixOf (Text.pack "<a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a>") (renderedShell defaultAppConfig SecondRoute) `shouldBe` True
-      Text.isInfixOf (Text.pack "aria-current=\"page\"") (renderedShell defaultAppConfig NotFoundRoute) `shouldBe` False
+      homeShell <- renderedShell defaultAppConfig HomeRoute
+      secondShell <- renderedShell defaultAppConfig SecondRoute
+      notFoundShell <- renderedShell defaultAppConfig NotFoundRoute
+      Text.isInfixOf (Text.pack "<a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a>") homeShell `shouldBe` True
+      Text.isInfixOf (Text.pack "<a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a>") secondShell `shouldBe` True
+      Text.isInfixOf (Text.pack "aria-current=\"page\"") notFoundShell `shouldBe` False
 
     it "keeps shell output identical for repeated renders of the same page input" $ do
       let application = buildApp defaultAppConfig
-          page = renderPage defaultAppConfig frenchSecondRequest
+      page <- renderPage defaultAppConfig frenchSecondRequest
       HarchWeb.pageShell application page `shouldBe` HarchWeb.pageShell application page
 
     it "keeps not-found pages inside the shared shell" $
       renderedShell defaultAppConfig NotFoundRoute
-        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
@@ -2084,19 +2591,26 @@ spec = do
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
 
     it "stores the same response-selection behavior used by direct response tests" $ do
-      HarchWeb.renderResponse pureApplication homeRequest `shouldBe` selectResponse defaultAppConfig homeRequest
-      HarchWeb.renderResponse pureApplication secondRequest `shouldBe` selectResponse defaultAppConfig secondRequest
-      HarchWeb.renderResponse pureApplication apiStatusRequest `shouldBe` selectResponse defaultAppConfig apiStatusRequest
-      HarchWeb.renderResponse pureApplication apiSecondRequest `shouldBe` selectResponse defaultAppConfig apiSecondRequest
-      HarchWeb.renderResponse pureApplication notFoundRequest `shouldBe` selectResponse defaultAppConfig notFoundRequest
-      HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldBe` selectResponse defaultAppConfig apiNotFoundRequest
+      expectedHomeResponse <- selectResponse defaultAppConfig homeRequest
+      expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
+      expectedApiStatusResponse <- selectResponse defaultAppConfig apiStatusRequest
+      expectedApiSecondResponse <- selectResponse defaultAppConfig apiSecondRequest
+      expectedNotFoundResponse <- selectResponse defaultAppConfig notFoundRequest
+      expectedApiNotFoundResponse <- selectResponse defaultAppConfig apiNotFoundRequest
+      HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` expectedHomeResponse
+      HarchWeb.renderResponse pureApplication secondRequest `shouldReturn` expectedSecondResponse
+      HarchWeb.renderResponse pureApplication apiStatusRequest `shouldReturn` expectedApiStatusResponse
+      HarchWeb.renderResponse pureApplication apiSecondRequest `shouldReturn` expectedApiSecondResponse
+      HarchWeb.renderResponse pureApplication notFoundRequest `shouldReturn` expectedNotFoundResponse
+      HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldReturn` expectedApiNotFoundResponse
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "fr", Text.pack "second"])
       Wai.responseStatus secondResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      renderedPage <- renderPage defaultAppConfig frenchSecondRequest
       readResponseBody secondResponse
-        `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig frenchSecondRequest)
+        `shouldReturn` HarchWeb.pageShell pureApplication renderedPage
 
       apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "status"])
       Wai.responseStatus apiStatusResponse `shouldBe` Http.status200
@@ -2113,8 +2627,9 @@ spec = do
       missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "missing"])
       Wai.responseStatus missingResponse `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      notFoundPage <- renderPage defaultAppConfig notFoundRequest
       readResponseBody missingResponse
-        `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig notFoundRequest)
+        `shouldReturn` HarchWeb.pageShell pureApplication notFoundPage
 
       apiMissingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "missing"])
       Wai.responseStatus apiMissingResponse `shouldBe` Http.status404
@@ -2123,9 +2638,9 @@ spec = do
         `shouldReturn` Text.pack "{\"error\":\"not-found\"}"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
-      let homePage = renderPage defaultAppConfig homeRequest
-          secondPage = renderPage defaultAppConfig secondRequest
-          notFoundPage = renderPage defaultAppConfig notFoundRequest
+      homePage <- renderPage defaultAppConfig homeRequest
+      secondPage <- renderPage defaultAppConfig secondRequest
+      notFoundPage <- renderPage defaultAppConfig notFoundRequest
       HarchWeb.pageShell pureApplication homePage
         `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication secondPage
@@ -2133,8 +2648,9 @@ spec = do
       HarchWeb.pageShell pureApplication notFoundPage
         `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
-    it "can grow from page responses to API responses without changing route matching" $
-      case HarchWeb.renderResponse pureApplication apiSecondRequest of
+    it "can grow from page responses to API responses without changing route matching" $ do
+      renderedResponse <- HarchWeb.renderResponse pureApplication apiSecondRequest
+      case renderedResponse of
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 

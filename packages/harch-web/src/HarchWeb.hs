@@ -243,7 +243,7 @@ data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
     routeCodec :: RouteCodec route context,
-    renderResponse :: RouteRequest route context -> Response route context,
+    renderResponse :: RouteRequest route context -> IO (Response route context),
     pageShell :: Page route context -> Text
   }
 
@@ -300,34 +300,34 @@ matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parse
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
 toWaiApplication webApplication request respond =
-  respond
-    ( toWaiResponse
-        webApplication
-        ( renderResponse webApplication $
-            matchRoute
-              (routeCodec webApplication)
-              (defaultRequestContext webApplication)
-              (waiRequestPath request)
-        )
+  renderResponse
+    webApplication
+    ( matchRoute
+        (routeCodec webApplication)
+        (defaultRequestContext webApplication)
+        (waiRequestPath request)
     )
+    >>= respond . toWaiResponse webApplication
 
 runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
-  let startupResponse =
-        toWaiResponse
-          webApplication
-          ( renderResponse webApplication $
-              matchRoute
-                (routeCodec webApplication)
-                (defaultRequestContext webApplication)
-                (Text.pack "/")
+  case planServerStartup config of
+    Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
+    Right startupPlan -> do
+      startupResponse <-
+        fmap
+          (toWaiResponse webApplication)
+          ( renderResponse
+              webApplication
+              ( matchRoute
+                  (routeCodec webApplication)
+                  (defaultRequestContext webApplication)
+                  (Text.pack "/")
+              )
           )
-   in case planServerStartup config of
-        Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
-        Right startupPlan ->
-          startupPlan `seq`
-            Wai.responseStatus startupResponse `seq`
-              hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+      startupPlan `seq`
+        Wai.responseStatus startupResponse `seq`
+          hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute

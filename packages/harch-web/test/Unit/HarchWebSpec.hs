@@ -105,7 +105,7 @@ sampleApplication =
     { appName = Text.pack "sample",
       defaultRequestContext = defaultContext,
       routeCodec = sampleCodec,
-      renderResponse = renderSampleResponse,
+      renderResponse = pure . renderSampleResponse,
       pageShell = buildPageShell sampleCodec sampleShell
     }
 
@@ -144,7 +144,7 @@ rootPathApplication =
     { appName = Text.pack "root-path",
       defaultRequestContext = defaultContext,
       routeCodec = rootPathCodec,
-      renderResponse = PageResponse . samplePage,
+      renderResponse = pure . PageResponse . samplePage,
       pageShell = buildPageShell rootPathCodec sampleShell
     }
 
@@ -503,7 +503,7 @@ spec = do
       parseRoute codec defaultContext (Text.pack "/data") `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       renderRoute codec request `shouldBe` Text.pack "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
-      renderResponse sampleApplication request `shouldBe` PageResponse (samplePage request)
+      renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
       pageShell sampleApplication (samplePage request)
         `shouldBe` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
@@ -513,7 +513,7 @@ spec = do
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldBe` BodyResponse ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
+        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
 
   describe "matchRoute" $ do
     it "returns parsed routes for supported paths" $

@@ -24,18 +24,21 @@ import WebApi.RouteData
     selectRouteDataWithDatabase,
   )
 
-selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext
+selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponse config =
   selectResponseWithDatabase config defaultDatabaseEffect
 
-selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Response AppRoute AppRequestContext
+selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponseWithDatabase config databaseEffect routeRequest =
-  let routeData = selectRouteDataWithDatabase databaseEffect routeRequest
-   in case requestSurface (HarchWeb.requestContext routeRequest) of
-        ApiSurface ->
-          HarchWeb.BodyResponse (renderApiResponseFromRouteData routeData)
-        PageSurface ->
-          HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
+  fmap
+    ( \routeData ->
+        case requestSurface (HarchWeb.requestContext routeRequest) of
+          ApiSurface ->
+            HarchWeb.BodyResponse (renderApiResponseFromRouteData routeData)
+          PageSurface ->
+            HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
+    )
+    (selectRouteDataWithDatabase databaseEffect routeRequest)
 
 renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
 renderApiResponseFromRouteData routeData =

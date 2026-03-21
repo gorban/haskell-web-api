@@ -49,8 +49,8 @@ data DatabaseSeed = DatabaseSeed
   deriving (Eq, Show)
 
 data DatabaseEffect = DatabaseEffect
-  { loadHomePageData :: AppRequestContext -> Either DatabaseError HomePageData,
-    loadSecondPageData :: AppRequestContext -> Either DatabaseError SecondPageData
+  { loadHomePageData :: AppRequestContext -> IO (Either DatabaseError HomePageData),
+    loadSecondPageData :: AppRequestContext -> IO (Either DatabaseError SecondPageData)
   }
 
 defaultDatabaseSeed :: DatabaseSeed
@@ -88,12 +88,14 @@ buildSeededDatabaseEffect seed =
   DatabaseEffect
     { loadHomePageData =
         \requestContext ->
-          case requestLocale requestContext of
-            English -> englishHomePageData seed
-            French -> frenchHomePageData seed,
+          pure $
+            case requestLocale requestContext of
+              English -> englishHomePageData seed
+              French -> frenchHomePageData seed,
       loadSecondPageData =
         \requestContext ->
-          case requestLocale requestContext of
-            English -> englishSecondPageData seed
-            French -> frenchSecondPageData seed
+          pure $
+            case requestLocale requestContext of
+              English -> englishSecondPageData seed
+              French -> frenchSecondPageData seed
     }

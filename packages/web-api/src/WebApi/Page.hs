@@ -70,13 +70,15 @@ data AppPageModel
   | NotFoundPage NotFoundPageModel
   deriving (Eq, Show)
 
-renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
+renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
 renderPage config =
   renderPageWithDatabase config defaultDatabaseEffect
 
-renderPageWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
+renderPageWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
 renderPageWithDatabase config databaseEffect routeRequest =
-  renderPageFromRouteData config routeRequest (selectRouteDataWithDatabase databaseEffect routeRequest)
+  fmap
+    (renderPageFromRouteData config routeRequest)
+    (selectRouteDataWithDatabase databaseEffect routeRequest)
 
 renderPageFromRouteData :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> HarchWeb.Page AppRoute AppRequestContext
 renderPageFromRouteData config routeRequest routeData =
@@ -95,12 +97,14 @@ routeTitle route =
     SecondRoute -> Text.pack "Second"
     _ -> Text.pack "Not Found"
 
-buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
+buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
 buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect
 
-buildPageModelWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
+buildPageModelWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
 buildPageModelWithDatabase databaseEffect routeRequest =
-  buildPageModelFromRouteData routeRequest (selectRouteDataWithDatabase databaseEffect routeRequest)
+  fmap
+    (buildPageModelFromRouteData routeRequest)
+    (selectRouteDataWithDatabase databaseEffect routeRequest)
 
 buildPageModelFromRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> AppPageModel
 buildPageModelFromRouteData routeRequest routeData =
