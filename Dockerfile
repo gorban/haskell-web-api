@@ -59,6 +59,7 @@ WORKDIR /app
 # Copy cabal files first for better layer caching
 COPY cabal.project ./
 COPY packages/core/core.cabal packages/core/
+COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
 COPY packages/test-core/test-core.cabal packages/test-core/
 COPY packages/web-api/web-api.cabal packages/web-api/
@@ -140,6 +141,10 @@ WORKDIR /app
 
 # Copy the compiled binary from build stage
 COPY --from=build-and-test --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+
+# Copy the app's bundled public assets so runtime images keep the same asset layout
+# as the repository even before runtime config is expanded further.
+COPY --from=build-and-test --chown=app:app /app/packages/web-api/public /app/public
 
 # Switch to non-root user
 USER app
