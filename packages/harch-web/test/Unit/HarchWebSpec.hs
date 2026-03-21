@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Unit.HarchWebSpec (spec) where
 
 import qualified Data.ByteString.Builder as Builder
@@ -28,10 +30,10 @@ data TestRoute
   deriving (Eq, Show)
 
 defaultContext :: TestContext
-defaultContext = TestContext {requestLanguage = Text.pack "en"}
+defaultContext = TestContext {requestLanguage = "en"}
 
 spanishContext :: TestContext
-spanishContext = TestContext {requestLanguage = Text.pack "es"}
+spanishContext = TestContext {requestLanguage = "es"}
 
 sampleCodec :: RouteCodec TestRoute TestContext
 sampleCodec =
@@ -43,11 +45,11 @@ sampleCodec =
 
 parseSampleRoute :: TestContext -> Text -> Maybe (RouteRequest TestRoute TestContext)
 parseSampleRoute routeContext path
-  | path == Text.pack "/known" =
+  | path == "/known" =
       Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
-  | path == Text.pack "/es/known" =
+  | path == "/es/known" =
       Just RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
-  | path == Text.pack "/data" =
+  | path == "/data" =
       Just RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
   | otherwise = Nothing
 
@@ -55,27 +57,27 @@ renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
 renderSampleRoute request =
   case (requestLanguage (requestContext request), requestRoute request) of
     (language, KnownRoute)
-      | language == Text.pack "es" -> Text.pack "/es/known"
-      | otherwise -> Text.pack "/known"
-    (_, DataRoute) -> Text.pack "/data"
-    (_, MissingRoute) -> Text.pack "/404"
+      | language == "es" -> "/es/known"
+      | otherwise -> "/known"
+    (_, DataRoute) -> "/data"
+    (_, MissingRoute) -> "/404"
 
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 samplePage request =
   Page
-    { pageTitle = Text.pack "Known",
+    { pageTitle = "Known",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = Text.pack "<h1>Known</h1>"
+      pageBody = "<h1>Known</h1>"
     }
 
 sampleMissingPage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 sampleMissingPage request =
   Page
-    { pageTitle = Text.pack "Missing",
+    { pageTitle = "Missing",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = Text.pack "<h1>Missing</h1>"
+      pageBody = "<h1>Missing</h1>"
     }
 
 sampleShell :: PageShell TestRoute TestContext
@@ -83,21 +85,21 @@ sampleShell =
   PageShell
     { shellBodyAttributes =
         [ HtmlAttribute
-            { attributeName = Text.pack "data-app",
-              attributeValue = Text.pack "sample"
+            { attributeName = "data-app",
+              attributeValue = "sample"
             }
         ],
       shellNavigationItems =
         [ NavigationItem
-            { navigationLabel = Text.pack "Known",
+            { navigationLabel = "Known",
               navigationRoute = KnownRoute
             },
           NavigationItem
-            { navigationLabel = Text.pack "Missing",
+            { navigationLabel = "Missing",
               navigationRoute = MissingRoute
             }
         ],
-      shellMainId = Text.pack "app-main"
+      shellMainId = "app-main"
     }
 
 emptyStaticAssets :: StaticAssetsConfig
@@ -110,7 +112,7 @@ emptyStaticAssets =
 sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute TestContext
 sampleApplicationWithStaticAssets staticAssetsConfig =
   Application
-    { appName = Text.pack "sample",
+    { appName = "sample",
       defaultRequestContext = defaultContext,
       applicationStaticAssets = staticAssetsConfig,
       routeCodec = sampleCodec,
@@ -127,7 +129,7 @@ sampleServerConfig =
   ServerConfig
     { listenerConfigs =
         [ ListenerConfig
-            { listenerHost = Text.pack "127.0.0.1",
+            { listenerHost = "127.0.0.1",
               listenerPort = 5001,
               listenerScheme = Http,
               listenerTls = Nothing
@@ -154,7 +156,7 @@ serverConfigWithListeners listeners =
 rootPathApplication :: Application TestRoute TestContext
 rootPathApplication =
   Application
-    { appName = Text.pack "root-path",
+    { appName = "root-path",
       defaultRequestContext = defaultContext,
       applicationStaticAssets = emptyStaticAssets,
       routeCodec = rootPathCodec,
@@ -166,14 +168,14 @@ rootPathCodec :: RouteCodec TestRoute TestContext
 rootPathCodec =
   RouteCodec
     { parseRoute = \routeContext path ->
-        if path == Text.pack "/"
+        if path == "/"
           then Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
           else Nothing,
       renderRoute = \request ->
         case requestRoute request of
-          KnownRoute -> Text.pack "/"
-          DataRoute -> Text.pack "/data"
-          MissingRoute -> Text.pack "/404",
+          KnownRoute -> "/"
+          DataRoute -> "/data"
+          MissingRoute -> "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
 
@@ -185,8 +187,8 @@ renderSampleResponse request =
       BodyResponse
         ResponseBody
           { responseStatus = 202,
-            responseContentType = Text.pack "application/json",
-            responseBody = Text.pack "{\"route\":\"data\"}"
+            responseContentType = "application/json",
+            responseBody = "{\"route\":\"data\"}"
           }
     MissingRoute -> PageResponse (sampleMissingPage request)
 
@@ -217,28 +219,28 @@ waiRequest segments =
   where
     renderedPath =
       case segments of
-        [] -> Text.pack "/"
-        _ -> Text.pack "/" <> Text.intercalate (Text.pack "/") segments
+        [] -> "/"
+        _ -> "/" <> Text.intercalate "/" segments
 
 spec :: Spec
 spec = do
   describe "shared config coverage" $ do
     it "reads exported selectors from the shared server config records" $ do
-      let certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]}
+      let certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
           challengeBackend = CertbotHttp01 certbotConfig
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = challengeBackend
               }
           tlsSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = tlsSource}
-          staticRoot = StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = "public"}
+          staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
           tracingConfig =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://collector:4318/v1/traces",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
           observabilityConfig =
             ObservabilityConfig
@@ -249,7 +251,7 @@ spec = do
             ServerConfig
               { listenerConfigs =
                   [ ListenerConfig
-                      { listenerHost = Text.pack "127.0.0.1",
+                      { listenerHost = "127.0.0.1",
                         listenerPort = 5001,
                         listenerScheme = Https,
                         listenerTls = Just tlsConfig
@@ -267,21 +269,21 @@ spec = do
               [singleListenerConfig] -> singleListenerConfig
               _ -> error "expected exactly one listener config"
       certbotExecutable certbotConfig `shouldBe` "certbot"
-      certbotArguments certbotConfig `shouldBe` [Text.pack "certonly", Text.pack "--webroot"]
-      acmeDirectoryUrl acmeConfig `shouldBe` Text.pack "https://acme-v02.api.letsencrypt.org/directory"
-      acmeContactEmails acmeConfig `shouldBe` [Text.pack "ops@example.com"]
+      certbotArguments certbotConfig `shouldBe` ["certonly", "--webroot"]
+      acmeDirectoryUrl acmeConfig `shouldBe` "https://acme-v02.api.letsencrypt.org/directory"
+      acmeContactEmails acmeConfig `shouldBe` ["ops@example.com"]
       acmeChallengeBackend acmeConfig `shouldBe` challengeBackend
       certificateSource tlsConfig `shouldBe` tlsSource
-      listenerHost listenerConfig `shouldBe` Text.pack "127.0.0.1"
+      listenerHost listenerConfig `shouldBe` "127.0.0.1"
       listenerPort listenerConfig `shouldBe` 5001
       listenerScheme listenerConfig `shouldBe` Https
       listenerTls listenerConfig `shouldBe` Just tlsConfig
-      staticUrlPrefix staticRoot `shouldBe` Text.pack "/assets"
+      staticUrlPrefix staticRoot `shouldBe` "/assets"
       staticDirectory staticRoot `shouldBe` "public"
       staticAssetRoots (staticAssets serverConfig) `shouldBe` [staticRoot]
       staticCacheControlSeconds (staticAssets serverConfig) `shouldBe` Just 3600
-      otlpEndpoint tracingConfig `shouldBe` Text.pack "http://collector:4318/v1/traces"
-      otlpHeaders tracingConfig `shouldBe` [(Text.pack "authorization", Text.pack "Bearer token")]
+      otlpEndpoint tracingConfig `shouldBe` "http://collector:4318/v1/traces"
+      otlpHeaders tracingConfig `shouldBe` [("authorization", "Bearer token")]
       tracingExporter observabilityConfig `shouldBe` Just tracingConfig
       metricsExporter observabilityConfig `shouldBe` Nothing
       observability serverConfig `shouldBe` observabilityConfig
@@ -295,18 +297,18 @@ spec = do
                   ')' : _ -> pure ()
                   _ -> expectationFailure "expected parenthesized rendering"
               _ -> expectationFailure "expected parenthesized rendering"
-          certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]}
-          otherCertbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = [Text.pack "renew"]}
+          certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
+          otherCertbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["renew"]}
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           otherAcmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = InProcessHttp01
               }
           manualCertificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
@@ -314,26 +316,26 @@ spec = do
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "127.0.0.1",
+              { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Https,
                 listenerTls = Just tlsConfig
               }
           otherListenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Just (TlsConfig {certificateSource = manualCertificateSource})
               }
-          staticRoot = StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = "public"}
+          staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
           staticAssetsConfig = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600}
           tracingConfig =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://collector:4318/v1/traces",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
-          otherTracingConfig = OtlpExporter {otlpEndpoint = Text.pack "http://other-collector:4318/v1/traces", otlpHeaders = []}
+          otherTracingConfig = OtlpExporter {otlpEndpoint = "http://other-collector:4318/v1/traces", otlpHeaders = []}
           observabilityConfig = ObservabilityConfig {tracingExporter = Just tracingConfig, metricsExporter = Nothing}
           serverConfig =
             ServerConfig
@@ -356,7 +358,7 @@ spec = do
       listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` otherListenerConfig
       staticRoot `shouldBe` staticRoot
-      staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = Text.pack "/static", staticDirectory = "public"}
+      staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
       staticAssetsConfig `shouldBe` staticAssetsConfig
       staticAssetsConfig `shouldNotBe` StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}
       tracingConfig `shouldBe` tracingConfig
@@ -407,60 +409,60 @@ spec = do
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
-          attribute = HtmlAttribute {attributeName = Text.pack "data-app", attributeValue = Text.pack "sample"}
-          page = Page {pageTitle = Text.pack "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = Text.pack "<h1>Known</h1>"}
-          navigationItem = NavigationItem {navigationLabel = Text.pack "Known", navigationRoute = KnownRoute}
-          resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = Text.pack "Known", navigationRoute = KnownRoute, navigationHref = Text.pack "/known", navigationIsActive = True}
-          document = Document {documentTitle = Text.pack "Known", documentBodyAttributes = [attribute], documentNavigation = [resolvedNavigationItem], documentMainId = Text.pack "app-main", documentMainContent = Text.pack "<h1>Known</h1>"}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = Text.pack "app-main"}
-          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
+          attribute = HtmlAttribute {attributeName = "data-app", attributeValue = "sample"}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>"}
+          navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
+          resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainContent = "<h1>Known</h1>"}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = "app-main"}
+          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
       requestRoute request `shouldBe` KnownRoute
       requestContext request `shouldBe` defaultContext
-      attributeName attribute `shouldBe` Text.pack "data-app"
-      attributeValue attribute `shouldBe` Text.pack "sample"
-      pageTitle page `shouldBe` Text.pack "Known"
+      attributeName attribute `shouldBe` "data-app"
+      attributeValue attribute `shouldBe` "sample"
+      pageTitle page `shouldBe` "Known"
       pageRoute page `shouldBe` KnownRoute
       pageContext page `shouldBe` defaultContext
-      pageBody page `shouldBe` Text.pack "<h1>Known</h1>"
-      navigationItemLabel `shouldBe` Text.pack "Known"
+      pageBody page `shouldBe` "<h1>Known</h1>"
+      navigationItemLabel `shouldBe` "Known"
       navigationItemRoute `shouldBe` KnownRoute
-      resolvedNavigationItemLabel `shouldBe` Text.pack "Known"
+      resolvedNavigationItemLabel `shouldBe` "Known"
       resolvedNavigationItemRoute `shouldBe` KnownRoute
-      resolvedNavigationItemHref `shouldBe` Text.pack "/known"
+      resolvedNavigationItemHref `shouldBe` "/known"
       resolvedNavigationItemIsActive `shouldBe` True
-      documentTitle document `shouldBe` Text.pack "Known"
+      documentTitle document `shouldBe` "Known"
       documentBodyAttributes document `shouldBe` [attribute]
       documentNavigation document `shouldBe` [resolvedNavigationItem]
-      documentMainId document `shouldBe` Text.pack "app-main"
-      documentMainContent document `shouldBe` Text.pack "<h1>Known</h1>"
+      documentMainId document `shouldBe` "app-main"
+      documentMainContent document `shouldBe` "<h1>Known</h1>"
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
-      shellMainId shell `shouldBe` Text.pack "app-main"
+      shellMainId shell `shouldBe` "app-main"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       responseStatus responseBodyValue `shouldBe` 202
-      responseContentType responseBodyValue `shouldBe` Text.pack "application/json"
-      responseBody responseBodyValue `shouldBe` Text.pack "{\"route\":\"data\"}"
+      responseContentType responseBodyValue `shouldBe` "application/json"
+      responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
 
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
           otherRequest = RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
-          page = Page {pageTitle = Text.pack "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = Text.pack "<h1>Known</h1>"}
-          otherPage = Page {pageTitle = Text.pack "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = Text.pack "<h1>Missing</h1>"}
-          attribute = HtmlAttribute {attributeName = Text.pack "data-app", attributeValue = Text.pack "sample"}
-          otherAttribute = HtmlAttribute {attributeName = Text.pack "lang", attributeValue = Text.pack "en"}
-          navigationItem = NavigationItem {navigationLabel = Text.pack "Known", navigationRoute = KnownRoute}
-          otherNavigationItem = NavigationItem {navigationLabel = Text.pack "Missing", navigationRoute = MissingRoute}
-          resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = Text.pack "Known", navigationRoute = KnownRoute, navigationHref = Text.pack "/known", navigationIsActive = True}
-          otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = Text.pack "Missing", navigationRoute = MissingRoute, navigationHref = Text.pack "/404", navigationIsActive = False}
-          document = Document {documentTitle = Text.pack "Known", documentBodyAttributes = [attribute], documentNavigation = [resolvedNavigationItem], documentMainId = Text.pack "app-main", documentMainContent = Text.pack "<h1>Known</h1>"}
-          otherDocument = Document {documentTitle = Text.pack "Missing", documentBodyAttributes = [otherAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = Text.pack "other-main", documentMainContent = Text.pack "<h1>Missing</h1>"}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = Text.pack "app-main"}
-          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = Text.pack "other-main"}
-          body = ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
-          otherBody = ResponseBody {responseStatus = 200, responseContentType = Text.pack "text/html", responseBody = Text.pack "<h1>OK</h1>"}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>"}
+          otherPage = Page {pageTitle = "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = "<h1>Missing</h1>"}
+          attribute = HtmlAttribute {attributeName = "data-app", attributeValue = "sample"}
+          otherAttribute = HtmlAttribute {attributeName = "lang", attributeValue = "en"}
+          navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
+          otherNavigationItem = NavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute}
+          resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
+          otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainContent = "<h1>Known</h1>"}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainContent = "<h1>Missing</h1>"}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = "app-main"}
+          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main"}
+          body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
+          otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>"}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
           otherPageResponse :: Response TestRoute TestContext
@@ -511,72 +513,72 @@ spec = do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
           codec = routeCodec sampleApplication
 
-      appName sampleApplication `shouldBe` Text.pack "sample"
+      appName sampleApplication `shouldBe` "sample"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
-      parseRoute codec defaultContext (Text.pack "/known") `shouldBe` Just request
-      parseRoute codec defaultContext (Text.pack "/data") `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
-      renderRoute codec request `shouldBe` Text.pack "/known"
+      parseRoute codec defaultContext "/known" `shouldBe` Just request
+      parseRoute codec defaultContext "/data" `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
+      renderRoute codec request `shouldBe` "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
       renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
       pageShell sampleApplication (samplePage request)
-        `shouldBe` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+        `shouldBe` "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
   describe "application" $ do
     it "preserves the supplied application description" $
-      appName (application sampleApplication) `shouldBe` Text.pack "sample"
+      appName (application sampleApplication) `shouldBe` "sample"
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
+        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
 
   describe "matchRoute" $ do
     it "returns parsed routes for supported paths" $
-      matchRoute sampleCodec defaultContext (Text.pack "/known")
+      matchRoute sampleCodec defaultContext "/known"
         `shouldBe` RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
 
     it "can derive route context from the matched path" $
-      matchRoute sampleCodec defaultContext (Text.pack "/es/known")
+      matchRoute sampleCodec defaultContext "/es/known"
         `shouldBe` RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
 
     it "falls back to the stable not-found route for unsupported paths" $
-      matchRoute sampleCodec defaultContext (Text.pack "/missing")
+      matchRoute sampleCodec defaultContext "/missing"
         `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
 
   describe "renderRoute" $
     it "can include route context in generated paths" $ do
       renderRoute sampleCodec (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})
-        `shouldBe` Text.pack "/known"
+        `shouldBe` "/known"
       renderRoute sampleCodec (RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext})
-        `shouldBe` Text.pack "/es/known"
+        `shouldBe` "/es/known"
 
   describe "routeHref" $
     it "reuses route rendering for app-provided navigation targets" $ do
-      routeHref sampleCodec defaultContext KnownRoute `shouldBe` Text.pack "/known"
-      routeHref sampleCodec spanishContext KnownRoute `shouldBe` Text.pack "/es/known"
+      routeHref sampleCodec defaultContext KnownRoute `shouldBe` "/known"
+      routeHref sampleCodec spanishContext KnownRoute `shouldBe` "/es/known"
 
   describe "staticAssetHref" $
     it "renders asset URLs from the configured static prefix" $ do
-      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = "public"}) "app.js"
-        `shouldBe` Text.pack "/assets/app.js"
-      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/assets/", staticDirectory = "public"}) "/css/app.css"
-        `shouldBe` Text.pack "/assets/css/app.css"
-      staticAssetHref (StaticAssetRoot {staticUrlPrefix = Text.pack "/", staticDirectory = "public"}) "/img/logo.svg"
-        `shouldBe` Text.pack "/img/logo.svg"
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+        `shouldBe` "/assets/app.js"
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/assets/", staticDirectory = "public"}) "/css/app.css"
+        `shouldBe` "/assets/css/app.css"
+      staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) "/img/logo.svg"
+        `shouldBe` "/img/logo.svg"
 
   describe "buildNavigation" $
     it "resolves hrefs and active state from the current page context" $
       buildNavigation sampleCodec (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext})) (shellNavigationItems sampleShell)
         `shouldBe` [ ResolvedNavigationItem
-                       { navigationLabel = Text.pack "Known",
+                       { navigationLabel = "Known",
                          navigationRoute = KnownRoute,
-                         navigationHref = Text.pack "/es/known",
+                         navigationHref = "/es/known",
                          navigationIsActive = True
                        },
                      ResolvedNavigationItem
-                       { navigationLabel = Text.pack "Missing",
+                       { navigationLabel = "Missing",
                          navigationRoute = MissingRoute,
-                         navigationHref = Text.pack "/404",
+                         navigationHref = "/404",
                          navigationIsActive = False
                        }
                    ]
@@ -585,100 +587,100 @@ spec = do
     it "preserves the generic shell contract separately from app-specific page content" $
       buildDocument sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
         `shouldBe` Document
-          { documentTitle = Text.pack "Known",
+          { documentTitle = "Known",
             documentBodyAttributes =
               [ HtmlAttribute
-                  { attributeName = Text.pack "data-app",
-                    attributeValue = Text.pack "sample"
+                  { attributeName = "data-app",
+                    attributeValue = "sample"
                   }
               ],
             documentNavigation =
               [ ResolvedNavigationItem
-                  { navigationLabel = Text.pack "Known",
+                  { navigationLabel = "Known",
                     navigationRoute = KnownRoute,
-                    navigationHref = Text.pack "/known",
+                    navigationHref = "/known",
                     navigationIsActive = True
                   },
                 ResolvedNavigationItem
-                  { navigationLabel = Text.pack "Missing",
+                  { navigationLabel = "Missing",
                     navigationRoute = MissingRoute,
-                    navigationHref = Text.pack "/404",
+                    navigationHref = "/404",
                     navigationIsActive = False
                   }
               ],
-            documentMainId = Text.pack "app-main",
-            documentMainContent = Text.pack "<h1>Known</h1>"
+            documentMainId = "app-main",
+            documentMainContent = "<h1>Known</h1>"
           }
 
   describe "buildPageShell" $
     it "renders the shared HTML document for the supplied page and shell options" $
       buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
-        `shouldBe` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+        `shouldBe` "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
   describe "toWaiApplication" $ do
     it "selects request paths through the stored route parser and returns HTML pages" $ do
-      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "es", Text.pack "known"])
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["es", "known"])
       Wai.responseStatus response `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       readResponseBody response
-        `shouldReturn` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/es/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+        `shouldReturn` "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/es/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
     it "treats an empty raw path as the root path" $ do
       response <- performWaiRequest (toWaiApplication rootPathApplication) Wai.defaultRequest
       Wai.responseStatus response `shouldBe` Http.status200
       readResponseBody response
-        `shouldReturn` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+        `shouldReturn` "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
 
     it "renders the not-found page through the shared shell with a 404 status" $ do
-      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "missing"])
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
-      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       readResponseBody response
-        `shouldReturn` Text.pack "<html><head><title>Missing</title></head><body data-app=\"sample\"><nav><a href=\"/known\">Known</a><a href=\"/404\" aria-current=\"page\">Missing</a></nav><main id=\"app-main\"><h1>Missing</h1></main></body></html>"
+        `shouldReturn` "<html><head><title>Missing</title></head><body data-app=\"sample\"><nav><a href=\"/known\">Known</a><a href=\"/404\" aria-current=\"page\">Missing</a></nav><main id=\"app-main\"><h1>Missing</h1></main></body></html>"
 
     it "preserves body-response status, content type, and body" $ do
-      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "data"])
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["data"])
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
-      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
-      readResponseBody response `shouldReturn` Text.pack "{\"route\":\"data\"}"
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
+      readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
 
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
         let assetDirectory = tempDirectory <> "/public"
             assetConfig =
               StaticAssetsConfig
-                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = assetDirectory}],
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
                   staticCacheControlSeconds = Just 3600
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/app.js") "console.log('asset');"
-        firstResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "app.js"])
-        secondResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "app.js"])
+        firstResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "app.js"])
+        secondResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "app.js"])
         Wai.responseStatus firstResponse `shouldBe` Http.status200
-        lookup Http.hContentType (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/javascript; charset=utf-8"))
-        lookup Http.hCacheControl (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "public, max-age=3600"))
+        lookup Http.hContentType (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/javascript; charset=utf-8")
+        lookup Http.hCacheControl (Wai.responseHeaders firstResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "public, max-age=3600")
         Wai.responseHeaders secondResponse `shouldBe` Wai.responseHeaders firstResponse
-        readResponseBody firstResponse `shouldReturn` Text.pack "console.log('asset');"
-        readResponseBody secondResponse `shouldReturn` Text.pack "console.log('asset');"
+        readResponseBody firstResponse `shouldReturn` "console.log('asset');"
+        readResponseBody secondResponse `shouldReturn` "console.log('asset');"
 
     it "serves root-prefixed static assets with the expected content types and no cache header" $
       withSystemTempDirectory "harch-web-static-root" $ \tempDirectory -> do
         let assetDirectory = tempDirectory <> "/public"
             assetConfig =
               StaticAssetsConfig
-                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/", staticDirectory = assetDirectory}],
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = assetDirectory}],
                   staticCacheControlSeconds = Nothing
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
             expectedResponses =
-              [ ([Text.pack "styles.css"], Text.pack "body{}", Text.pack "text/css; charset=utf-8"),
-                ([Text.pack "index.html"], Text.pack "<h1>Home</h1>", Text.pack "text/html; charset=utf-8"),
-                ([Text.pack "data.json"], Text.pack "{\"ok\":true}", Text.pack "application/json; charset=utf-8"),
-                ([Text.pack "logo.svg"], Text.pack "<svg></svg>", Text.pack "image/svg+xml"),
-                ([Text.pack "note.txt"], Text.pack "hello", Text.pack "text/plain; charset=utf-8"),
-                ([Text.pack "blob.bin"], Text.pack "0101", Text.pack "application/octet-stream")
+              [ (["styles.css"], "body{}", "text/css; charset=utf-8"),
+                (["index.html"], "<h1>Home</h1>", "text/html; charset=utf-8"),
+                (["data.json"], "{\"ok\":true}", "application/json; charset=utf-8"),
+                (["logo.svg"], "<svg></svg>", "image/svg+xml"),
+                (["note.txt"], "hello", "text/plain; charset=utf-8"),
+                (["blob.bin"], "0101", "application/octet-stream")
               ]
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/styles.css") "body{}"
@@ -699,8 +701,8 @@ spec = do
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) Wai.defaultRequest
         Wai.responseStatus rootResponse `shouldBe` Http.status404
         Wai.responseHeaders rootResponse
-          `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))]
-        readResponseBody rootResponse `shouldReturn` Text.pack "Not Found"
+          `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 "text/plain; charset=utf-8")]
+        readResponseBody rootResponse `shouldReturn` "Not Found"
 
     it "uses the most specific matching static root when multiple prefixes overlap" $
       withSystemTempDirectory "harch-web-static-overlap" $ \tempDirectory -> do
@@ -709,8 +711,8 @@ spec = do
             assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots =
-                    [ StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = publicDirectory},
-                      StaticAssetRoot {staticUrlPrefix = Text.pack "/assets/admin", staticDirectory = adminDirectory}
+                    [ StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = publicDirectory},
+                      StaticAssetRoot {staticUrlPrefix = "/assets/admin", staticDirectory = adminDirectory}
                     ],
                   staticCacheControlSeconds = Nothing
                 }
@@ -719,49 +721,49 @@ spec = do
         createDirectoryIfMissing True adminDirectory
         writeFile (publicDirectory <> "/admin/panel.js") "console.log('general');"
         writeFile (adminDirectory <> "/panel.js") "console.log('admin');"
-        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "admin", Text.pack "panel.js"])
+        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "admin", "panel.js"])
         Wai.responseStatus response `shouldBe` Http.status200
-        readResponseBody response `shouldReturn` Text.pack "console.log('admin');"
+        readResponseBody response `shouldReturn` "console.log('admin');"
 
     it "returns plain 404 responses for missing or invalid matched static asset paths" $
       withSystemTempDirectory "harch-web-static-missing" $ \tempDirectory -> do
         let assetConfig =
               StaticAssetsConfig
-                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = tempDirectory <> "/public"}],
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = tempDirectory <> "/public"}],
                   staticCacheControlSeconds = Nothing
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
-        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "missing.js"])
+        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "missing.js"])
         Wai.responseStatus missingResponse `shouldBe` Http.status404
-        lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))
-        readResponseBody missingResponse `shouldReturn` Text.pack "Not Found"
-        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "..", Text.pack "secret.txt"])
+        lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+        readResponseBody missingResponse `shouldReturn` "Not Found"
+        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "..", "secret.txt"])
         Wai.responseStatus invalidResponse `shouldBe` Http.status404
-        readResponseBody invalidResponse `shouldReturn` Text.pack "Not Found"
-        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets"])
+        readResponseBody invalidResponse `shouldReturn` "Not Found"
+        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         Wai.responseStatus rootResponse `shouldBe` Http.status404
-        readResponseBody rootResponse `shouldReturn` Text.pack "Not Found"
+        readResponseBody rootResponse `shouldReturn` "Not Found"
 
     it "keeps cache-control headers on missing static asset responses when configured" $
       withSystemTempDirectory "harch-web-static-missing-cache" $ \tempDirectory -> do
         let assetConfig =
               StaticAssetsConfig
-                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = Text.pack "/assets", staticDirectory = tempDirectory <> "/public"}],
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = tempDirectory <> "/public"}],
                   staticCacheControlSeconds = Just 60
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
-            expectedCacheControl = Just (TextEncoding.encodeUtf8 (Text.pack "public, max-age=60"))
-        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "missing.js"])
+            expectedCacheControl = Just (TextEncoding.encodeUtf8 "public, max-age=60")
+        missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "missing.js"])
         lookup Http.hCacheControl (Wai.responseHeaders missingResponse) `shouldBe` expectedCacheControl
-        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets", Text.pack "..", Text.pack "secret.txt"])
+        invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "..", "secret.txt"])
         lookup Http.hCacheControl (Wai.responseHeaders invalidResponse) `shouldBe` expectedCacheControl
-        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest [Text.pack "assets"])
+        rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` expectedCacheControl
 
   describe "planServerStartup" $ do
     it "groups HTTP listeners into the expected bind plan" $ do
-      let firstEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
-          secondEndpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5002}
+      let firstEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
+          secondEndpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5002}
           firstListener = ListenerConfig {listenerHost = endpointHost firstEndpoint, listenerPort = endpointPort firstEndpoint, listenerScheme = Http, listenerTls = Nothing}
           secondListener = ListenerConfig {listenerHost = endpointHost secondEndpoint, listenerPort = endpointPort secondEndpoint, listenerScheme = Http, listenerTls = Nothing}
           httpBindPlan = HttpBindPlan {httpEndpoints = [firstEndpoint, secondEndpoint]}
@@ -786,7 +788,7 @@ spec = do
       show [startupPlan] `shouldBe` "[ServerStartupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}, manualTlsBindPlans = [], acmeBindPlans = []}]"
 
     it "translates manual certificate files into TLS startup parameters" $ do
-      let endpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5443}
+      let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5443}
           certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
           listener =
             ListenerConfig
@@ -814,8 +816,8 @@ spec = do
       show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\"}]"
 
     it "translates ACME-backed HTTPS listeners into certificate-management plans" $ do
-      let httpEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
-          endpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5444}
+      let httpEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
+          endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5444}
           httpListener =
             ListenerConfig
               { listenerHost = endpointHost httpEndpoint,
@@ -825,13 +827,13 @@ spec = do
               }
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend =
                   CertbotHttp01
                     CertbotConfig
                       { certbotExecutable = "certbot",
-                        certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                        certbotArguments = ["certonly", "--webroot"]
                       }
               }
           listener =
@@ -854,21 +856,21 @@ spec = do
               acmeBindPlans = [acmePlan]
             }
       acmePlan `shouldBe` acmePlan
-      acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5444}}
+      acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5444}}
       show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}"
       show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}]"
 
     it "rejects listeners whose TLS mode does not match their scheme" $ do
       let httpTlsListener =
             ListenerConfig
-              { listenerHost = Text.pack "127.0.0.1",
+              { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
                 listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}})
               }
           httpsWithoutTls =
             ListenerConfig
-              { listenerHost = Text.pack "127.0.0.1",
+              { listenerHost = "127.0.0.1",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Nothing
@@ -886,14 +888,14 @@ spec = do
     it "rejects invalid mixed listener configurations before startup" $ do
       let httpListener =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5001,
                 listenerScheme = Http,
                 listenerTls = Nothing
               }
           httpsListener =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5001,
                 listenerScheme = Https,
                 listenerTls =
@@ -902,11 +904,11 @@ spec = do
                       { certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
                       }
               }
-          duplicateEndpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5001}
+          duplicateEndpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5001}
       planServerStartup (serverConfigWithListeners [httpListener, httpsListener])
         `shouldBe` Left (DuplicateListenerEndpoint duplicateEndpoint)
       DuplicateListenerEndpoint duplicateEndpoint `shouldBe` DuplicateListenerEndpoint duplicateEndpoint
-      DuplicateListenerEndpoint duplicateEndpoint `shouldNotBe` DuplicateListenerEndpoint ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
+      DuplicateListenerEndpoint duplicateEndpoint `shouldNotBe` DuplicateListenerEndpoint ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
       show (DuplicateListenerEndpoint duplicateEndpoint)
         `shouldBe` "DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})"
       show [DuplicateListenerEndpoint duplicateEndpoint]
@@ -924,7 +926,7 @@ spec = do
         let invalidConfig =
               serverConfigWithListeners
                 [ ListenerConfig
-                    { listenerHost = Text.pack "127.0.0.1",
+                    { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Https,
                       listenerTls = Nothing

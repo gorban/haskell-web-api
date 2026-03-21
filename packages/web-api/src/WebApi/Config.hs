@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.Config
   ( AcmeChallengeBackend (..),
@@ -94,20 +95,20 @@ instance HasServerConfig AppConfig where
 
 committedEnvDefaults :: [(Text, Text)]
 committedEnvDefaults =
-  [ (Text.pack "APP_MODE", Text.pack "development"),
-    (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
-    (Text.pack "DATABASE_PORT", Text.pack "5432"),
-    (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
-    (Text.pack "DATABASE_USER", Text.pack "web_api"),
-    (Text.pack "DATABASE_PASSWORD", Text.pack "web_api")
+  [ ("APP_MODE", "development"),
+    ("DATABASE_HOST", "127.0.0.1"),
+    ("DATABASE_PORT", "5432"),
+    ("DATABASE_NAME", "web_api_dev"),
+    ("DATABASE_USER", "web_api"),
+    ("DATABASE_PASSWORD", "web_api")
   ]
 
 committedRuntimeDefaults :: [(Text, Text)]
 committedRuntimeDefaults =
-  [ (Text.pack "APP_TITLE_PREFIX", Text.pack "web-api"),
-    (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-    (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-    (Text.pack "LISTENER_0_SCHEME", Text.pack "http")
+  [ ("APP_TITLE_PREFIX", "web-api"),
+    ("LISTENER_0_HOST", "127.0.0.1"),
+    ("LISTENER_0_PORT", "5001"),
+    ("LISTENER_0_SCHEME", "http")
   ]
 
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
@@ -116,21 +117,21 @@ defaultAppEnvironmentConfig =
     { appMode = Development,
       databaseConfig =
         DatabaseConfig
-          { databaseHost = Text.pack "127.0.0.1",
+          { databaseHost = "127.0.0.1",
             databasePort = 5432,
-            databaseName = Text.pack "web_api_dev",
-            databaseUser = Text.pack "web_api",
-            databasePassword = Text.pack "web_api"
+            databaseName = "web_api_dev",
+            databaseUser = "web_api",
+            databasePassword = "web_api"
           }
     }
 
 defaultAppConfig :: AppConfig
 defaultAppConfig =
   AppConfig
-    { appTitlePrefix = Text.pack "web-api",
+    { appTitlePrefix = "web-api",
       listenerConfigs =
         [ ListenerConfig
-            { listenerHost = Text.pack "127.0.0.1",
+            { listenerHost = "127.0.0.1",
               listenerPort = 5001,
               listenerScheme = Http,
               listenerTls = Nothing
@@ -150,12 +151,12 @@ defaultAppConfig =
 
 parseAppEnvironmentConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppEnvironmentConfig
 parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides = do
-  parsedMode <- parseMode =<< requiredConfigValue (Text.pack "APP_MODE")
-  parsedDatabaseHost <- requiredConfigValue (Text.pack "DATABASE_HOST")
-  parsedDatabasePort <- parsePort =<< requiredConfigValue (Text.pack "DATABASE_PORT")
-  parsedDatabaseName <- requiredConfigValue (Text.pack "DATABASE_NAME")
-  parsedDatabaseUser <- requiredConfigValue (Text.pack "DATABASE_USER")
-  parsedDatabasePassword <- requiredConfigValue (Text.pack "DATABASE_PASSWORD")
+  parsedMode <- parseMode =<< requiredConfigValue "APP_MODE"
+  parsedDatabaseHost <- requiredConfigValue "DATABASE_HOST"
+  parsedDatabasePort <- parsePort =<< requiredConfigValue "DATABASE_PORT"
+  parsedDatabaseName <- requiredConfigValue "DATABASE_NAME"
+  parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
+  parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
@@ -177,22 +178,22 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
 parseMode :: Text -> Either ConfigParseError AppMode
 parseMode value =
   maybe
-    (Left (InvalidConfigValue (Text.pack "APP_MODE") value))
+    (Left (InvalidConfigValue "APP_MODE" value))
     Right
     ( lookup
         value
-        [ (Text.pack "development", Development),
-          (Text.pack "test", Test),
-          (Text.pack "production", Production)
+        [ ("development", Development),
+          ("test", Test),
+          ("production", Production)
         ]
     )
 
 parsePort :: Text -> Either ConfigParseError Int
-parsePort = parsePositiveInt (Text.pack "DATABASE_PORT")
+parsePort = parsePositiveInt "DATABASE_PORT"
 
 parseRuntimeAppConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppConfig
 parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
-  parsedTitlePrefix <- requiredConfigValue (Text.pack "APP_TITLE_PREFIX")
+  parsedTitlePrefix <- requiredConfigValue "APP_TITLE_PREFIX"
   parsedListeners <- parseListenerConfigs
   parsedStaticAssets <- parseStaticAssetsConfig
   parsedObservability <- parseObservabilityConfig
@@ -215,19 +216,19 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
       lookupConfigValue key committedDefaults localOverrides environmentOverrides
 
     parseListenerConfigs =
-      case declaredIndices (Text.pack "LISTENER_") allConfigEntries of
-        [] -> Left (MissingConfigValue (Text.pack "LISTENER_0_HOST"))
+      case declaredIndices "LISTENER_" allConfigEntries of
+        [] -> Left (MissingConfigValue "LISTENER_0_HOST")
         listenerIndices -> traverse parseListenerConfig listenerIndices
 
     parseListenerConfig listenerIndex = do
-      parsedHost <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "HOST")
+      parsedHost <- requiredIndexedConfigValue "LISTENER" listenerIndex "HOST"
       parsedPort <-
-        parsePositiveInt (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "PORT"))
-          =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "PORT")
+        parsePositiveInt (indexedConfigKey "LISTENER" listenerIndex "PORT")
+          =<< requiredIndexedConfigValue "LISTENER" listenerIndex "PORT"
       parsedScheme <-
         parseListenerScheme
-          (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "SCHEME"))
-          =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "SCHEME")
+          (indexedConfigKey "LISTENER" listenerIndex "SCHEME")
+          =<< requiredIndexedConfigValue "LISTENER" listenerIndex "SCHEME"
       parsedTls <- parseListenerTlsConfig listenerIndex parsedScheme
       pure
         ListenerConfig
@@ -239,7 +240,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     parseListenerTlsConfig _ Http = Right Nothing
     parseListenerTlsConfig listenerIndex Https = do
-      tlsSource <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_SOURCE")
+      tlsSource <- requiredIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE"
       parsedCertificateSource <- parseTlsCertificateSource listenerIndex tlsSource
       pure (Just (TlsConfig {certificateSource = parsedCertificateSource}))
 
@@ -247,70 +248,70 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
       case Text.unpack tlsSource of
         "manual" ->
           ManualCertificateFiles
-            <$> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_CERTIFICATE_FILE")
-            <*> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_PRIVATE_KEY_FILE")
+            <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE"
+            <*> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
         "acme" -> parseAcmeCertificateSource listenerIndex
         _ ->
           Left
             ( InvalidConfigValue
-                (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "TLS_SOURCE"))
+                (indexedConfigKey "LISTENER" listenerIndex "TLS_SOURCE")
                 tlsSource
             )
 
     parseAcmeCertificateSource listenerIndex =
       AcmeCertificateSource
         <$> ( AcmeConfig
-                <$> requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_DIRECTORY_URL")
+                <$> requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
                 <*> ( parseDelimitedTexts
-                        (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CONTACT_EMAILS"))
-                        =<< requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CONTACT_EMAILS")
+                        (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
+                        =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
                     )
                 <*> parseAcmeChallengeBackend listenerIndex
             )
 
     parseAcmeChallengeBackend listenerIndex = do
-      backendValue <- requiredIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CHALLENGE_BACKEND")
-      if backendValue == Text.pack "in-process-http01"
+      backendValue <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"
+      if backendValue == "in-process-http01"
         then Right InProcessHttp01
         else
-          if backendValue == Text.pack "certbot-http01"
+          if backendValue == "certbot-http01"
             then
               CertbotHttp01
                 <$> ( CertbotConfig
-                        <$> requiredIndexedFilePathValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CERTBOT_EXECUTABLE")
+                        <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"
                         <*> pure
                           ( maybe
                               []
-                              (parseDelimitedTextsUnsafe (Text.pack ","))
-                              (optionalIndexedConfigValue (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CERTBOT_ARGUMENTS"))
+                              (parseDelimitedTextsUnsafe ",")
+                              (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
                           )
                     )
             else
               Left
                 ( InvalidConfigValue
-                    (indexedConfigKey (Text.pack "LISTENER") listenerIndex (Text.pack "ACME_CHALLENGE_BACKEND"))
+                    (indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND")
                     backendValue
                 )
 
     parseStaticAssetsConfig =
       StaticAssetsConfig
-        <$> traverse parseStaticAssetRoot (declaredIndices (Text.pack "STATIC_ASSET_ROOT_") allConfigEntries)
+        <$> traverse parseStaticAssetRoot (declaredIndices "STATIC_ASSET_ROOT_" allConfigEntries)
         <*> traverse
-          (parseNonNegativeInt (Text.pack "STATIC_CACHE_CONTROL_SECONDS"))
-          (optionalConfigValue (Text.pack "STATIC_CACHE_CONTROL_SECONDS"))
+          (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS")
+          (optionalConfigValue "STATIC_CACHE_CONTROL_SECONDS")
 
     parseStaticAssetRoot staticRootIndex =
       StaticAssetRoot
-        <$> requiredIndexedConfigValue (Text.pack "STATIC_ASSET_ROOT") staticRootIndex (Text.pack "URL_PREFIX")
-        <*> requiredIndexedFilePathValue (Text.pack "STATIC_ASSET_ROOT") staticRootIndex (Text.pack "DIRECTORY")
+        <$> requiredIndexedConfigValue "STATIC_ASSET_ROOT" staticRootIndex "URL_PREFIX"
+        <*> requiredIndexedFilePathValue "STATIC_ASSET_ROOT" staticRootIndex "DIRECTORY"
 
     parseObservabilityConfig =
       ObservabilityConfig
-        <$> parseOptionalOtlpExporter (Text.pack "OTLP_TRACING")
-        <*> parseOptionalOtlpExporter (Text.pack "OTLP_METRICS")
+        <$> parseOptionalOtlpExporter "OTLP_TRACING"
+        <*> parseOptionalOtlpExporter "OTLP_METRICS"
 
     parseOptionalOtlpExporter exporterPrefix =
-      case optionalConfigValue (exporterPrefix <> Text.pack "_ENDPOINT") of
+      case optionalConfigValue (exporterPrefix <> "_ENDPOINT") of
         Just endpoint ->
           Right
             ( Just
@@ -320,12 +321,12 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
                       maybe
                         []
                         (parseHeadersUnsafe . Text.strip)
-                        (optionalConfigValue (exporterPrefix <> Text.pack "_HEADERS"))
+                        (optionalConfigValue (exporterPrefix <> "_HEADERS"))
                   }
             )
         Nothing ->
-          case optionalConfigValue (exporterPrefix <> Text.pack "_HEADERS") of
-            Just _ -> Left (MissingConfigValue (exporterPrefix <> Text.pack "_ENDPOINT"))
+          case optionalConfigValue (exporterPrefix <> "_HEADERS") of
+            Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
             Nothing -> Right Nothing
 
     requiredIndexedConfigValue prefix configIndex suffix =
@@ -344,7 +345,7 @@ parseListenerScheme key value =
     Right
     ( lookup
         value
-        [ (Text.pack "http", Http),
-          (Text.pack "https", Https)
+        [ ("http", Http),
+          ("https", Https)
         ]
     )

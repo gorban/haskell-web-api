@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Core.Config
   ( ConfigOverridesFileError (..),
     ConfigParseError (..),
@@ -49,10 +51,10 @@ parseConfigOverridesFile =
   where
     parseLine (lineNumber, rawLine) =
       let strippedLine = Text.strip rawLine
-       in if Text.null strippedLine || Text.isPrefixOf (Text.pack "#") strippedLine
+       in if Text.null strippedLine || Text.isPrefixOf "#" strippedLine
             then Right []
             else
-              let (rawKey, rawValueWithSeparator) = Text.breakOn (Text.pack "=") strippedLine
+              let (rawKey, rawValueWithSeparator) = Text.breakOn "=" strippedLine
                   strippedKey = Text.strip rawKey
                in if Text.null rawValueWithSeparator || Text.null strippedKey
                     then Left (InvalidConfigOverridesLine lineNumber rawLine)
@@ -86,7 +88,7 @@ parseNonNegativeInt key value =
 
 parseDelimitedTexts :: Text -> Text -> Either ConfigParseError [Text]
 parseDelimitedTexts key value =
-  case parseDelimitedTextsUnsafe (Text.pack ",") value of
+  case parseDelimitedTextsUnsafe "," value of
     [] -> Left (InvalidConfigValue key value)
     parsedValues -> Right parsedValues
 
@@ -98,10 +100,10 @@ parseDelimitedTextsUnsafe delimiter =
 
 parseHeadersUnsafe :: Text -> [(Text, Text)]
 parseHeadersUnsafe value =
-  mapMaybe parseHeaderPair (parseDelimitedTextsUnsafe (Text.pack ";") value)
+  mapMaybe parseHeaderPair (parseDelimitedTextsUnsafe ";" value)
   where
     parseHeaderPair headerEntry =
-      let (headerName, headerValueWithSeparator) = Text.breakOn (Text.pack "=") headerEntry
+      let (headerName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
        in if Text.null headerName || Text.null headerValueWithSeparator
             then Nothing
             else Just (Text.strip headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
@@ -116,11 +118,11 @@ extractIndexedKey entryPrefix entryKey =
     then
       let indexedSuffix = Text.drop (Text.length entryPrefix) entryKey
           (indexDigits, remainder) = Text.span isDigit indexedSuffix
-       in if Text.null indexDigits || not (Text.isPrefixOf (Text.pack "_") remainder)
+       in if Text.null indexDigits || not (Text.isPrefixOf "_" remainder)
             then Nothing
             else readMaybe (Text.unpack indexDigits)
     else Nothing
 
 indexedConfigKey :: Text -> Int -> Text -> Text
 indexedConfigKey prefix configIndex suffix =
-  prefix <> Text.pack "_" <> Text.pack (show configIndex) <> Text.pack "_" <> suffix
+  prefix <> "_" <> Text.pack (show configIndex) <> "_" <> suffix

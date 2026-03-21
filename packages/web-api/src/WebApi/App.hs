@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.App
   ( buildAppWithDatabase,
     buildApp,
@@ -27,21 +29,21 @@ appShellConfig config =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = Text.pack "data-app",
+            { HarchWeb.attributeName = "data-app",
               HarchWeb.attributeValue = appTitlePrefix config
             }
         ],
       HarchWeb.shellNavigationItems =
         [ HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = Text.pack "Home",
+            { HarchWeb.navigationLabel = "Home",
               HarchWeb.navigationRoute = HomeRoute
             },
           HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = Text.pack "Second",
+            { HarchWeb.navigationLabel = "Second",
               HarchWeb.navigationRoute = SecondRoute
             }
         ],
-      HarchWeb.shellMainId = Text.pack "app-main"
+      HarchWeb.shellMainId = "app-main"
     }
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
@@ -49,7 +51,7 @@ buildAppWithDatabase config databaseEffect =
   config `seq`
     HarchWeb.application
       HarchWeb.Application
-        { HarchWeb.appName = Text.pack "web-api",
+        { HarchWeb.appName = "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
           HarchWeb.applicationStaticAssets = staticAssets config,
           HarchWeb.routeCodec = routeCodec,

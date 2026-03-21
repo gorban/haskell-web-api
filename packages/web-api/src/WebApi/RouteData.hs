@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.RouteData
   ( HomeRouteData (..),
     RouteDataResult (..),
@@ -60,7 +62,7 @@ selectRouteDataWithDatabase databaseEffect routeRequest =
       pure $
         HomeRouteDataResult
           HomeRouteData
-            { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
+            { homeRouteSummary = "Server-rendered home page with stubbed content."
             }
     SecondRoute ->
       fmap

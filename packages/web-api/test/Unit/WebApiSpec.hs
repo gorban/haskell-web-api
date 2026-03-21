@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 {-# SPEC #-}
 
 import Control.Exception (finally)
@@ -120,17 +122,17 @@ waiRequest segments =
   where
     renderedPath =
       case segments of
-        [] -> Text.pack "/"
-        _ -> Text.pack "/" <> Text.intercalate (Text.pack "/") segments
+        [] -> "/"
+        _ -> "/" <> Text.intercalate "/" segments
 
 postgresTestConfig :: DatabaseConfig
 postgresTestConfig =
   DatabaseConfig
-    { databaseHost = Text.pack "db.internal",
+    { databaseHost = "db.internal",
       databasePort = 6543,
-      databaseName = Text.pack "web_api_prod",
-      databaseUser = Text.pack "web_api_app",
-      databasePassword = Text.pack "super-secret"
+      databaseName = "web_api_prod",
+      databaseUser = "web_api_app",
+      databasePassword = "super-secret"
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult
@@ -242,10 +244,10 @@ spec = do
     it "reserves structured listener, static asset, and observability settings" $ do
       defaultAppConfig
         `shouldBe` AppConfig
-          { appTitlePrefix = Text.pack "web-api",
+          { appTitlePrefix = "web-api",
             listenerConfigs =
               [ ListenerConfig
-                  { listenerHost = Text.pack "127.0.0.1",
+                  { listenerHost = "127.0.0.1",
                     listenerPort = 5001,
                     listenerScheme = Http,
                     listenerTls = Nothing
@@ -274,34 +276,34 @@ spec = do
 
     it "fails when no listeners are configured" $
       parseRuntimeAppConfig
-        [(Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test")]
+        [("APP_TITLE_PREFIX", "runtime-test")]
         []
         []
-        `shouldBe` Left (MissingConfigValue (Text.pack "LISTENER_0_HOST"))
+        `shouldBe` Left (MissingConfigValue "LISTENER_0_HOST")
 
     it "parses multiple listeners in deterministic index order" $ do
       let committedDefaults =
-            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-              (Text.pack "LISTENER_2_SCHEME", Text.pack "http"),
-              (Text.pack "LISTENER_1_PORT", Text.pack "5002"),
-              (Text.pack "LISTENER_2_PORT", Text.pack "5003"),
-              (Text.pack "LISTENER_1_HOST", Text.pack "127.0.0.2"),
-              (Text.pack "LISTENER_2_HOST", Text.pack "127.0.0.3"),
-              (Text.pack "LISTENER_1_SCHEME", Text.pack "http")
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_2_SCHEME", "http"),
+              ("LISTENER_1_PORT", "5002"),
+              ("LISTENER_2_PORT", "5003"),
+              ("LISTENER_1_HOST", "127.0.0.2"),
+              ("LISTENER_2_HOST", "127.0.0.3"),
+              ("LISTENER_1_SCHEME", "http")
             ]
       parseRuntimeAppConfig committedDefaults [] []
         `shouldBe` Right
           AppConfig
-            { appTitlePrefix = Text.pack "runtime-test",
+            { appTitlePrefix = "runtime-test",
               listenerConfigs =
                 [ ListenerConfig
-                    { listenerHost = Text.pack "127.0.0.2",
+                    { listenerHost = "127.0.0.2",
                       listenerPort = 5002,
                       listenerScheme = Http,
                       listenerTls = Nothing
                     },
                   ListenerConfig
-                    { listenerHost = Text.pack "127.0.0.3",
+                    { listenerHost = "127.0.0.3",
                       listenerPort = 5003,
                       listenerScheme = Http,
                       listenerTls = Nothing
@@ -321,49 +323,49 @@ spec = do
 
     it "requires HTTPS listeners to specify a TLS source" $
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "https")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "0.0.0.0"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https")
         ]
         []
         []
-        `shouldBe` Left (MissingConfigValue (Text.pack "LISTENER_0_TLS_SOURCE"))
+        `shouldBe` Left (MissingConfigValue "LISTENER_0_TLS_SOURCE")
 
     it "parses manual and ACME-backed HTTPS listeners distinctly" $ do
       let committedDefaults =
-            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-              (Text.pack "LISTENER_BAD_HOST", Text.pack "ignored-host"),
-              (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
-              (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
-              (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
-              (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "manual"),
-              (Text.pack "LISTENER_0_TLS_CERTIFICATE_FILE", Text.pack "cert.pem"),
-              (Text.pack "LISTENER_0_TLS_PRIVATE_KEY_FILE", Text.pack "key.pem"),
-              (Text.pack "LISTENER_1_HOST", Text.pack "0.0.0.0"),
-              (Text.pack "LISTENER_1_PORT", Text.pack "5444"),
-              (Text.pack "LISTENER_1_SCHEME", Text.pack "https"),
-              (Text.pack "LISTENER_1_TLS_SOURCE", Text.pack "acme"),
-              (Text.pack "LISTENER_1_ACME_DIRECTORY_URL", Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory"),
-              (Text.pack "LISTENER_1_ACME_CONTACT_EMAILS", Text.pack "ops@example.com,alerts@example.com"),
-              (Text.pack "LISTENER_1_ACME_CHALLENGE_BACKEND", Text.pack "in-process-http01"),
-              (Text.pack "LISTENER_2_HOST", Text.pack "0.0.0.0"),
-              (Text.pack "LISTENER_2_PORT", Text.pack "5445"),
-              (Text.pack "LISTENER_2_SCHEME", Text.pack "https"),
-              (Text.pack "LISTENER_2_TLS_SOURCE", Text.pack "acme"),
-              (Text.pack "LISTENER_2_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
-              (Text.pack "LISTENER_2_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
-              (Text.pack "LISTENER_2_ACME_CHALLENGE_BACKEND", Text.pack "certbot-http01"),
-              (Text.pack "LISTENER_2_ACME_CERTBOT_EXECUTABLE", Text.pack "certbot"),
-              (Text.pack "LISTENER_2_ACME_CERTBOT_ARGUMENTS", Text.pack "certonly,--webroot,--agree-tos")
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_BAD_HOST", "ignored-host"),
+              ("LISTENER_0_HOST", "0.0.0.0"),
+              ("LISTENER_0_PORT", "5443"),
+              ("LISTENER_0_SCHEME", "https"),
+              ("LISTENER_0_TLS_SOURCE", "manual"),
+              ("LISTENER_0_TLS_CERTIFICATE_FILE", "cert.pem"),
+              ("LISTENER_0_TLS_PRIVATE_KEY_FILE", "key.pem"),
+              ("LISTENER_1_HOST", "0.0.0.0"),
+              ("LISTENER_1_PORT", "5444"),
+              ("LISTENER_1_SCHEME", "https"),
+              ("LISTENER_1_TLS_SOURCE", "acme"),
+              ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
+              ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com,alerts@example.com"),
+              ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01"),
+              ("LISTENER_2_HOST", "0.0.0.0"),
+              ("LISTENER_2_PORT", "5445"),
+              ("LISTENER_2_SCHEME", "https"),
+              ("LISTENER_2_TLS_SOURCE", "acme"),
+              ("LISTENER_2_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+              ("LISTENER_2_ACME_CONTACT_EMAILS", "ops@example.com"),
+              ("LISTENER_2_ACME_CHALLENGE_BACKEND", "certbot-http01"),
+              ("LISTENER_2_ACME_CERTBOT_EXECUTABLE", "certbot"),
+              ("LISTENER_2_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--agree-tos")
             ]
       parseRuntimeAppConfig committedDefaults [] []
         `shouldBe` Right
           AppConfig
-            { appTitlePrefix = Text.pack "runtime-test",
+            { appTitlePrefix = "runtime-test",
               listenerConfigs =
                 [ ListenerConfig
-                    { listenerHost = Text.pack "0.0.0.0",
+                    { listenerHost = "0.0.0.0",
                       listenerPort = 5443,
                       listenerScheme = Https,
                       listenerTls =
@@ -377,7 +379,7 @@ spec = do
                             }
                     },
                   ListenerConfig
-                    { listenerHost = Text.pack "0.0.0.0",
+                    { listenerHost = "0.0.0.0",
                       listenerPort = 5444,
                       listenerScheme = Https,
                       listenerTls =
@@ -386,14 +388,14 @@ spec = do
                             { certificateSource =
                                 AcmeCertificateSource
                                   AcmeConfig
-                                    { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
-                                      acmeContactEmails = [Text.pack "ops@example.com", Text.pack "alerts@example.com"],
+                                    { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com", "alerts@example.com"],
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
                     },
                   ListenerConfig
-                    { listenerHost = Text.pack "0.0.0.0",
+                    { listenerHost = "0.0.0.0",
                       listenerPort = 5445,
                       listenerScheme = Https,
                       listenerTls =
@@ -402,13 +404,13 @@ spec = do
                             { certificateSource =
                                 AcmeCertificateSource
                                   AcmeConfig
-                                    { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                                      acmeContactEmails = [Text.pack "ops@example.com"],
+                                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
                                             { certbotExecutable = "certbot",
-                                              certbotArguments = [Text.pack "certonly", Text.pack "--webroot", Text.pack "--agree-tos"]
+                                              certbotArguments = ["certonly", "--webroot", "--agree-tos"]
                                             }
                                     }
                             }
@@ -428,44 +430,44 @@ spec = do
 
     it "rejects invalid listener scheme and TLS source values" $ do
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "tcp")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "0.0.0.0"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "tcp")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_SCHEME") (Text.pack "tcp"))
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_SCHEME" "tcp")
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "0.0.0.0"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5443"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
-          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "vault")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "0.0.0.0"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "vault")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_TLS_SOURCE") (Text.pack "vault"))
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_SOURCE" "vault")
 
     it "parses static asset roots and cache policy into the expected config" $ do
       let committedDefaults =
-            [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-              (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-              (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-              (Text.pack "LISTENER_0_SCHEME", Text.pack "http"),
-              (Text.pack "STATIC_ASSET_ROOT_2_DIRECTORY", Text.pack "vendor/public"),
-              (Text.pack "STATIC_ASSET_ROOT_1_URL_PREFIX", Text.pack "/assets"),
-              (Text.pack "STATIC_ASSET_ROOT_2_URL_PREFIX", Text.pack "/vendor"),
-              (Text.pack "STATIC_ASSET_ROOT_1_DIRECTORY", Text.pack "public"),
-              (Text.pack "STATIC_CACHE_CONTROL_SECONDS", Text.pack "3600")
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_0_HOST", "127.0.0.1"),
+              ("LISTENER_0_PORT", "5001"),
+              ("LISTENER_0_SCHEME", "http"),
+              ("STATIC_ASSET_ROOT_2_DIRECTORY", "vendor/public"),
+              ("STATIC_ASSET_ROOT_1_URL_PREFIX", "/assets"),
+              ("STATIC_ASSET_ROOT_2_URL_PREFIX", "/vendor"),
+              ("STATIC_ASSET_ROOT_1_DIRECTORY", "public"),
+              ("STATIC_CACHE_CONTROL_SECONDS", "3600")
             ]
       parseRuntimeAppConfig committedDefaults [] []
         `shouldBe` Right
           AppConfig
-            { appTitlePrefix = Text.pack "runtime-test",
+            { appTitlePrefix = "runtime-test",
               listenerConfigs =
                 [ ListenerConfig
-                    { listenerHost = Text.pack "127.0.0.1",
+                    { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Http,
                       listenerTls = Nothing
@@ -475,11 +477,11 @@ spec = do
                 StaticAssetsConfig
                   { staticAssetRoots =
                       [ StaticAssetRoot
-                          { staticUrlPrefix = Text.pack "/assets",
+                          { staticUrlPrefix = "/assets",
                             staticDirectory = "public"
                           },
                         StaticAssetRoot
-                          { staticUrlPrefix = Text.pack "/vendor",
+                          { staticUrlPrefix = "/vendor",
                             staticDirectory = "vendor/public"
                           }
                       ],
@@ -496,8 +498,8 @@ spec = do
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
-        [ (Text.pack "OTLP_TRACING_ENDPOINT", Text.pack "http://collector:4318/v1/traces"),
-          (Text.pack "OTLP_TRACING_HEADERS", Text.pack "authorization=Bearer token;x-api-key=secret")
+        [ ("OTLP_TRACING_ENDPOINT", "http://collector:4318/v1/traces"),
+          ("OTLP_TRACING_HEADERS", "authorization=Bearer token;x-api-key=secret")
         ]
         `shouldBe` Right
           defaultAppConfig
@@ -506,10 +508,10 @@ spec = do
                   { tracingExporter =
                       Just
                         OtlpExporter
-                          { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
+                          { otlpEndpoint = "http://collector:4318/v1/traces",
                             otlpHeaders =
-                              [ (Text.pack "authorization", Text.pack "Bearer token"),
-                                (Text.pack "x-api-key", Text.pack "secret")
+                              [ ("authorization", "Bearer token"),
+                                ("x-api-key", "secret")
                               ]
                           },
                     metricsExporter = Nothing
@@ -518,7 +520,7 @@ spec = do
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
-        [(Text.pack "OTLP_TRACING_ENDPOINT", Text.pack "http://collector:4318/v1/traces")]
+        [("OTLP_TRACING_ENDPOINT", "http://collector:4318/v1/traces")]
         `shouldBe` Right
           defaultAppConfig
             { observability =
@@ -526,7 +528,7 @@ spec = do
                   { tracingExporter =
                       Just
                         OtlpExporter
-                          { otlpEndpoint = Text.pack "http://collector:4318/v1/traces",
+                          { otlpEndpoint = "http://collector:4318/v1/traces",
                             otlpHeaders = []
                           },
                     metricsExporter = Nothing
@@ -535,8 +537,8 @@ spec = do
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
-        [ (Text.pack "OTLP_METRICS_ENDPOINT", Text.pack "http://collector:4318/v1/metrics"),
-          (Text.pack "OTLP_METRICS_HEADERS", Text.pack "x-scope=metrics;broken-entry")
+        [ ("OTLP_METRICS_ENDPOINT", "http://collector:4318/v1/metrics"),
+          ("OTLP_METRICS_HEADERS", "x-scope=metrics;broken-entry")
         ]
         `shouldBe` Right
           defaultAppConfig
@@ -546,67 +548,67 @@ spec = do
                     metricsExporter =
                       Just
                         OtlpExporter
-                          { otlpEndpoint = Text.pack "http://collector:4318/v1/metrics",
-                            otlpHeaders = [(Text.pack "x-scope", Text.pack "metrics")]
+                          { otlpEndpoint = "http://collector:4318/v1/metrics",
+                            otlpHeaders = [("x-scope", "metrics")]
                           }
                   }
             }
 
     it "fails invalid runtime values with explicit errors" $ do
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "0"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "http")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "0"),
+          ("LISTENER_0_SCHEME", "http")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_PORT") (Text.pack "0"))
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_PORT" "0")
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
-          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
-          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
-          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack ""),
-          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "shell-script")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "acme"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", ""),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS") (Text.pack ""))
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_ACME_CONTACT_EMAILS" "")
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
-          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
-          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
-          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
-          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "shell-script")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "acme"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND") (Text.pack "shell-script"))
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_ACME_CHALLENGE_BACKEND" "shell-script")
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "https"),
-          (Text.pack "LISTENER_0_TLS_SOURCE", Text.pack "acme"),
-          (Text.pack "LISTENER_0_ACME_DIRECTORY_URL", Text.pack "https://acme-v02.api.letsencrypt.org/directory"),
-          (Text.pack "LISTENER_0_ACME_CONTACT_EMAILS", Text.pack "ops@example.com"),
-          (Text.pack "LISTENER_0_ACME_CHALLENGE_BACKEND", Text.pack "certbot-http01"),
-          (Text.pack "LISTENER_0_ACME_CERTBOT_EXECUTABLE", Text.pack "certbot")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "acme"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
+          ("LISTENER_0_ACME_CERTBOT_EXECUTABLE", "certbot")
         ]
         []
         []
         `shouldBe` Right
           AppConfig
-            { appTitlePrefix = Text.pack "runtime-test",
+            { appTitlePrefix = "runtime-test",
               listenerConfigs =
                 [ ListenerConfig
-                    { listenerHost = Text.pack "127.0.0.1",
+                    { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Https,
                       listenerTls =
@@ -615,8 +617,8 @@ spec = do
                             { certificateSource =
                                 AcmeCertificateSource
                                   AcmeConfig
-                                    { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                                      acmeContactEmails = [Text.pack "ops@example.com"],
+                                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -639,52 +641,52 @@ spec = do
                   }
             }
       parseRuntimeAppConfig
-        [ (Text.pack "APP_TITLE_PREFIX", Text.pack "runtime-test"),
-          (Text.pack "LISTENER_0_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "LISTENER_0_PORT", Text.pack "5001"),
-          (Text.pack "LISTENER_0_SCHEME", Text.pack "http"),
-          (Text.pack "STATIC_CACHE_CONTROL_SECONDS", Text.pack "-1")
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "http"),
+          ("STATIC_CACHE_CONTROL_SECONDS", "-1")
         ]
         []
         []
-        `shouldBe` Left (InvalidConfigValue (Text.pack "STATIC_CACHE_CONTROL_SECONDS") (Text.pack "-1"))
+        `shouldBe` Left (InvalidConfigValue "STATIC_CACHE_CONTROL_SECONDS" "-1")
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
-        [(Text.pack "OTLP_TRACING_HEADERS", Text.pack "authorization=Bearer token")]
-        `shouldBe` Left (MissingConfigValue (Text.pack "OTLP_TRACING_ENDPOINT"))
+        [("OTLP_TRACING_HEADERS", "authorization=Bearer token")]
+        `shouldBe` Left (MissingConfigValue "OTLP_TRACING_ENDPOINT")
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults aligned with the parsed development config" $ do
       committedEnvDefaults
-        `shouldBe` [ (Text.pack "APP_MODE", Text.pack "development"),
-                     (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
-                     (Text.pack "DATABASE_PORT", Text.pack "5432"),
-                     (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
-                     (Text.pack "DATABASE_USER", Text.pack "web_api"),
-                     (Text.pack "DATABASE_PASSWORD", Text.pack "web_api")
+        `shouldBe` [ ("APP_MODE", "development"),
+                     ("DATABASE_HOST", "127.0.0.1"),
+                     ("DATABASE_PORT", "5432"),
+                     ("DATABASE_NAME", "web_api_dev"),
+                     ("DATABASE_USER", "web_api"),
+                     ("DATABASE_PASSWORD", "web_api")
                    ]
       defaultAppEnvironmentConfig
         `shouldBe` AppEnvironmentConfig
           { appMode = Development,
             databaseConfig =
               DatabaseConfig
-                { databaseHost = Text.pack "127.0.0.1",
+                { databaseHost = "127.0.0.1",
                   databasePort = 5432,
-                  databaseName = Text.pack "web_api_dev",
-                  databaseUser = Text.pack "web_api",
-                  databasePassword = Text.pack "web_api"
+                  databaseName = "web_api_dev",
+                  databaseUser = "web_api",
+                  databasePassword = "web_api"
                 }
           }
 
     it "covers the new app/database config selectors and derived instances" $ do
       let productionDatabaseConfig =
             DatabaseConfig
-              { databaseHost = Text.pack "db.internal",
+              { databaseHost = "db.internal",
                 databasePort = 6543,
-                databaseName = Text.pack "web_api_prod",
-                databaseUser = Text.pack "web_api_app",
-                databasePassword = Text.pack "super-secret"
+                databaseName = "web_api_prod",
+                databaseUser = "web_api_app",
+                databasePassword = "super-secret"
               }
           productionEnvironmentConfig =
             AppEnvironmentConfig
@@ -693,25 +695,25 @@ spec = do
               }
       appMode productionEnvironmentConfig `shouldBe` Production
       databaseConfig productionEnvironmentConfig `shouldBe` productionDatabaseConfig
-      databaseHost productionDatabaseConfig `shouldBe` Text.pack "db.internal"
+      databaseHost productionDatabaseConfig `shouldBe` "db.internal"
       databasePort productionDatabaseConfig `shouldBe` 6543
-      databaseName productionDatabaseConfig `shouldBe` Text.pack "web_api_prod"
-      databaseUser productionDatabaseConfig `shouldBe` Text.pack "web_api_app"
-      databasePassword productionDatabaseConfig `shouldBe` Text.pack "super-secret"
+      databaseName productionDatabaseConfig `shouldBe` "web_api_prod"
+      databaseUser productionDatabaseConfig `shouldBe` "web_api_app"
+      databasePassword productionDatabaseConfig `shouldBe` "super-secret"
       Development `shouldNotBe` Test
       Test `shouldNotBe` Production
       productionDatabaseConfig `shouldBe` productionDatabaseConfig
       productionDatabaseConfig
         `shouldNotBe` productionDatabaseConfig
-          { databasePassword = Text.pack "different-secret"
+          { databasePassword = "different-secret"
           }
       productionEnvironmentConfig `shouldBe` productionEnvironmentConfig
       productionEnvironmentConfig
         `shouldNotBe` productionEnvironmentConfig
           { appMode = Test
           }
-      MissingConfigValue (Text.pack "DATABASE_PASSWORD")
-        `shouldNotBe` InvalidConfigValue (Text.pack "DATABASE_PASSWORD") (Text.pack "missing")
+      MissingConfigValue "DATABASE_PASSWORD"
+        `shouldNotBe` InvalidConfigValue "DATABASE_PASSWORD" "missing"
       show Development `shouldBe` "Development"
       show Test `shouldBe` "Test"
       show Production `shouldBe` "Production"
@@ -724,9 +726,9 @@ spec = do
         `shouldBe` "AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}"
       show [productionEnvironmentConfig]
         `shouldBe` "[AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}]"
-      show (MissingConfigValue (Text.pack "DATABASE_PASSWORD")) `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
-      show (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")) `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
-      show [MissingConfigValue (Text.pack "DATABASE_PASSWORD"), InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging")]
+      show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
+      show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
+      show [MissingConfigValue "DATABASE_PASSWORD", InvalidConfigValue "APP_MODE" "staging"]
         `shouldBe` "[MissingConfigValue \"DATABASE_PASSWORD\",InvalidConfigValue \"APP_MODE\" \"staging\"]"
 
   describe "defaultDatabaseSeed" $ do
@@ -736,42 +738,42 @@ spec = do
           { englishHomePageData =
               Right
                 HomePageData
-                  { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
+                  { homePageDataSummary = "Server-rendered home page with stubbed content."
                   },
             frenchHomePageData =
               Right
                 HomePageData
-                  { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                  { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
                   },
             englishSecondPageData =
               Right
                 SecondPageData
-                  { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                     secondPageDataHighlights = []
                   },
             frenchSecondPageData =
               Right
                 SecondPageData
-                  { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                     secondPageDataHighlights = []
                   }
           }
 
     it "keeps seeded database data serializable and stable for tests" $ do
-      let homePageData = HomePageData {homePageDataSummary = Text.pack "Seeded home"}
-          otherHomePageData = HomePageData {homePageDataSummary = Text.pack "Different home"}
+      let homePageData = HomePageData {homePageDataSummary = "Seeded home"}
+          otherHomePageData = HomePageData {homePageDataSummary = "Different home"}
           secondPageData =
             SecondPageData
-              { secondPageDataSummary = Text.pack "Seeded second",
-                secondPageDataHighlights = [Text.pack "One"]
+              { secondPageDataSummary = "Seeded second",
+                secondPageDataHighlights = ["One"]
               }
           otherSecondPageData =
             SecondPageData
-              { secondPageDataSummary = Text.pack "Other second",
+              { secondPageDataSummary = "Other second",
                 secondPageDataHighlights = []
               }
-          homeError = HomePageDataError (Text.pack "home unavailable")
-          secondError = SecondPageDataError (Text.pack "second unavailable")
+          homeError = HomePageDataError "home unavailable"
+          secondError = SecondPageDataError "second unavailable"
           seededDatabase =
             DatabaseSeed
               { englishHomePageData = Right homePageData,
@@ -790,24 +792,24 @@ spec = do
         `shouldNotBe` seededDatabase
           { frenchSecondPageData = Right otherSecondPageData
           }
-      show (HomePageData {homePageDataSummary = Text.pack "Seeded home"})
+      show (HomePageData {homePageDataSummary = "Seeded home"})
         `shouldBe` "HomePageData {homePageDataSummary = \"Seeded home\"}"
-      show (SecondPageData {secondPageDataSummary = Text.pack "Seeded second", secondPageDataHighlights = [Text.pack "One"]})
+      show (SecondPageData {secondPageDataSummary = "Seeded second", secondPageDataHighlights = ["One"]})
         `shouldBe` "SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}"
-      show (HomePageDataError (Text.pack "home unavailable"))
+      show (HomePageDataError "home unavailable")
         `shouldBe` "HomePageDataError \"home unavailable\""
-      show (SecondPageDataError (Text.pack "second unavailable"))
+      show (SecondPageDataError "second unavailable")
         `shouldBe` "SecondPageDataError \"second unavailable\""
       show seededDatabase
         `shouldBe` "DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}"
-      show [HomePageData {homePageDataSummary = Text.pack "Seeded home"}]
+      show [HomePageData {homePageDataSummary = "Seeded home"}]
         `shouldBe` "[HomePageData {homePageDataSummary = \"Seeded home\"}]"
       show [homeError, secondError]
         `shouldBe` "[HomePageDataError \"home unavailable\",SecondPageDataError \"second unavailable\"]"
       show
         [ SecondPageData
-            { secondPageDataSummary = Text.pack "Seeded second",
-              secondPageDataHighlights = [Text.pack "One"]
+            { secondPageDataSummary = "Seeded second",
+              secondPageDataHighlights = ["One"]
             }
         ]
         `shouldBe` "[SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}]"
@@ -820,23 +822,23 @@ spec = do
       loadHomePageData englishEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
+            { homePageDataSummary = "Server-rendered home page with stubbed content."
             }
       loadSecondPageData englishEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+            { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
       loadHomePageData englishEffect frenchRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
             }
       loadSecondPageData englishEffect frenchRequestContext
         `shouldReturn` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+            { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
 
@@ -844,24 +846,24 @@ spec = do
       let seededEffect =
             buildSeededDatabaseEffect
               DatabaseSeed
-                { englishHomePageData = Left (HomePageDataError (Text.pack "home seed unavailable")),
+                { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
                   frenchHomePageData =
                     Right
                       HomePageData
-                        { homePageDataSummary = Text.pack "Accueil seede"
+                        { homePageDataSummary = "Accueil seede"
                         },
                   englishSecondPageData =
                     Right
                       SecondPageData
-                        { secondPageDataSummary = Text.pack "Second seed",
-                          secondPageDataHighlights = [Text.pack "Known branch"]
+                        { secondPageDataSummary = "Second seed",
+                          secondPageDataHighlights = ["Known branch"]
                         },
-                  frenchSecondPageData = Left (SecondPageDataError (Text.pack "second seed unavailable"))
+                  frenchSecondPageData = Left (SecondPageDataError "second seed unavailable")
                 }
       loadHomePageData seededEffect defaultRequestContext
-        `shouldReturn` Left (HomePageDataError (Text.pack "home seed unavailable"))
+        `shouldReturn` Left (HomePageDataError "home seed unavailable")
       loadSecondPageData seededEffect frenchRequestContext
-        `shouldReturn` Left (SecondPageDataError (Text.pack "second seed unavailable"))
+        `shouldReturn` Left (SecondPageDataError "second seed unavailable")
 
     it "keeps the default seeded interpreter deterministic for repeated requests" $ do
       firstHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
@@ -881,8 +883,8 @@ spec = do
                   englishSecondPageData =
                     Right
                       SecondPageData
-                        { secondPageDataSummary = Text.pack "Shared domain summary.",
-                          secondPageDataHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                        { secondPageDataSummary = "Shared domain summary.",
+                          secondPageDataHighlights = ["Shared loader", "Shared renderer"]
                         },
                   frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
                 }
@@ -891,8 +893,8 @@ spec = do
         `shouldBe` SecondRouteDataResult
           ( Right
               SecondRouteData
-                { secondRouteSummary = Text.pack "Shared domain summary.",
-                  secondRouteHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                { secondRouteSummary = "Shared domain summary.",
+                  secondRouteHighlights = ["Shared loader", "Shared renderer"]
                 }
           )
       selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldReturn` selectedRouteData
@@ -900,25 +902,25 @@ spec = do
     it "keeps route-data selectors and derived instances deterministic for tests" $ do
       let homeRouteData =
             HomeRouteData
-              { homeRouteSummary = Text.pack "Stubbed home summary"
+              { homeRouteSummary = "Stubbed home summary"
               }
           otherHomeRouteData =
             HomeRouteData
-              { homeRouteSummary = Text.pack "Different home summary"
+              { homeRouteSummary = "Different home summary"
               }
           secondRouteData =
             SecondRouteData
-              { secondRouteSummary = Text.pack "Shared domain summary",
-                secondRouteHighlights = [Text.pack "Shared loader"]
+              { secondRouteSummary = "Shared domain summary",
+                secondRouteHighlights = ["Shared loader"]
               }
           statusApiData =
             StatusApiData
               { statusApiLocale = French
               }
           routeDataResult = HomeRouteDataResult homeRouteData
-      homeRouteSummary homeRouteData `shouldBe` Text.pack "Stubbed home summary"
-      secondRouteSummary secondRouteData `shouldBe` Text.pack "Shared domain summary"
-      secondRouteHighlights secondRouteData `shouldBe` [Text.pack "Shared loader"]
+      homeRouteSummary homeRouteData `shouldBe` "Stubbed home summary"
+      secondRouteSummary secondRouteData `shouldBe` "Shared domain summary"
+      secondRouteHighlights secondRouteData `shouldBe` ["Shared loader"]
       statusApiLocale statusApiData `shouldBe` French
       homeRouteData `shouldBe` homeRouteData
       homeRouteData `shouldNotBe` otherHomeRouteData
@@ -947,13 +949,13 @@ spec = do
       selectRouteData homeRequest
         `shouldReturn` HomeRouteDataResult
           HomeRouteData
-            { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
+            { homeRouteSummary = "Server-rendered home page with stubbed content."
             }
       selectRouteData secondRequest
         `shouldReturn` SecondRouteDataResult
           ( Right
               SecondRouteData
-                { secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                { secondRouteSummary = "Second page content with stubbed data ready for future loaders.",
                   secondRouteHighlights = []
                 }
           )
@@ -972,45 +974,45 @@ spec = do
             pure $
               case commandSql command of
                 sql
-                  | Text.isInfixOf (Text.pack "route_slug = 'home'") sql ->
+                  | Text.isInfixOf "route_slug = 'home'" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
-                          then Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
-                          else Text.pack "Server-rendered home page with stubbed content."
-                  | Text.isInfixOf (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second'") sql ->
+                        if Text.isInfixOf "locale = 'fr'" sql
+                          then "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                          else "Server-rendered home page with stubbed content."
+                  | Text.isInfixOf "SELECT summary FROM page_content WHERE route_slug = 'second'" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
-                          then Text.pack "Charge depuis PostgreSQL."
-                          else Text.pack "Loaded from PostgreSQL."
-                  | Text.isInfixOf (Text.pack "SELECT highlight FROM page_highlights") sql ->
+                        if Text.isInfixOf "locale = 'fr'" sql
+                          then "Charge depuis PostgreSQL."
+                          else "Loaded from PostgreSQL."
+                  | Text.isInfixOf "SELECT highlight FROM page_highlights" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf (Text.pack "locale = 'fr'") sql
-                          then Text.pack "SSR rapide\nDonnees partagees"
-                          else Text.pack "Fast SSR\nShared route data"
+                        if Text.isInfixOf "locale = 'fr'" sql
+                          then "SSR rapide\nDonnees partagees"
+                          else "Fast SSR\nShared route data"
                   | otherwise ->
-                      failingPostgresResult (Text.pack "unexpected query")
+                      failingPostgresResult "unexpected query"
           postgresEffect = buildPostgresDatabaseEffectWithRunner runner postgresTestConfig
       loadHomePageData postgresEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
+            { homePageDataSummary = "Server-rendered home page with stubbed content."
             }
       loadSecondPageData postgresEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Loaded from PostgreSQL.",
-              secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Shared route data"]
+            { secondPageDataSummary = "Loaded from PostgreSQL.",
+              secondPageDataHighlights = ["Fast SSR", "Shared route data"]
             }
       loadHomePageData postgresEffect frenchRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
             }
       loadSecondPageData postgresEffect frenchRequestContext
         `shouldReturn` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Charge depuis PostgreSQL.",
-              secondPageDataHighlights = [Text.pack "SSR rapide", Text.pack "Donnees partagees"]
+            { secondPageDataSummary = "Charge depuis PostgreSQL.",
+              secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
             }
       recordedCommands <- readIORef recordedCommandsReference
       recordedCommands
@@ -1153,20 +1155,20 @@ spec = do
             pure $
               case commandSql command of
                 sql
-                  | Text.isInfixOf (Text.pack "route_slug = 'home'") sql ->
+                  | Text.isInfixOf "route_slug = 'home'" sql ->
                       successfulPostgresResult Text.empty
                   | otherwise ->
-                      failingPostgresResult (Text.pack "relation does not exist")
+                      failingPostgresResult "relation does not exist"
           postgresEffect = buildPostgresDatabaseEffectWithRunner missingRunner postgresTestConfig
       loadHomePageData postgresEffect defaultRequestContext
-        `shouldReturn` Left (HomePageDataError (Text.pack "expected exactly one row: "))
+        `shouldReturn` Left (HomePageDataError "expected exactly one row: ")
       loadSecondPageData postgresEffect defaultRequestContext
-        `shouldReturn` Left (SecondPageDataError (Text.pack "relation does not exist"))
+        `shouldReturn` Left (SecondPageDataError "relation does not exist")
 
     it "maps scalar query failures, malformed rows, and highlight query failures into explicit errors" $ do
       let homeFailureRunner command =
             pure $
-              if Text.isInfixOf (Text.pack "route_slug = 'home'") (commandSql command)
+              if Text.isInfixOf "route_slug = 'home'" (commandSql command)
                 then
                   PostgresCommandResult
                     { postgresExitCode = ExitFailure 2,
@@ -1176,25 +1178,25 @@ spec = do
                 else successfulPostgresResult Text.empty
           malformedScalarRunner command =
             pure $
-              if Text.isInfixOf (Text.pack "route_slug = 'home'") (commandSql command)
-                then successfulPostgresResult (Text.pack "first\nsecond")
+              if Text.isInfixOf "route_slug = 'home'" (commandSql command)
+                then successfulPostgresResult "first\nsecond"
                 else successfulPostgresResult Text.empty
           highlightFailureRunner command =
             pure $
               case commandSql command of
                 sql
-                  | Text.isInfixOf (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second'") sql ->
-                      successfulPostgresResult (Text.pack "Loaded from PostgreSQL.")
-                  | Text.isInfixOf (Text.pack "SELECT highlight FROM page_highlights") sql ->
-                      failingPostgresResult (Text.pack "highlights unavailable")
+                  | Text.isInfixOf "SELECT summary FROM page_content WHERE route_slug = 'second'" sql ->
+                      successfulPostgresResult "Loaded from PostgreSQL."
+                  | Text.isInfixOf "SELECT highlight FROM page_highlights" sql ->
+                      failingPostgresResult "highlights unavailable"
                   | otherwise ->
                       successfulPostgresResult Text.empty
       loadHomePageData (buildPostgresDatabaseEffectWithRunner homeFailureRunner postgresTestConfig) defaultRequestContext
-        `shouldReturn` Left (HomePageDataError (Text.pack "psql command failed"))
+        `shouldReturn` Left (HomePageDataError "psql command failed")
       loadHomePageData (buildPostgresDatabaseEffectWithRunner malformedScalarRunner postgresTestConfig) defaultRequestContext
-        `shouldReturn` Left (HomePageDataError (Text.pack "expected exactly one row: first, second"))
+        `shouldReturn` Left (HomePageDataError "expected exactly one row: first, second")
       loadSecondPageData (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
-        `shouldReturn` Left (SecondPageDataError (Text.pack "highlights unavailable"))
+        `shouldReturn` Left (SecondPageDataError "highlights unavailable")
 
     it "runs migrations and seed statements in order through the provided runner" $ do
       recordedCommandsReference <- newIORef []
@@ -1210,7 +1212,7 @@ spec = do
           let runner command =
                 pure $
                   if commandSql command == failingSeedStatement
-                    then failingPostgresResult (Text.pack "seed failed")
+                    then failingPostgresResult "seed failed"
                     else successfulPostgresResult Text.empty
           runPostgresSeedWithRunner runner postgresTestConfig
             `shouldReturn` Left
@@ -1237,7 +1239,7 @@ spec = do
                   PostgresCommandResult
                     { postgresExitCode = ExitFailure 1,
                       postgresStdout = Text.empty,
-                      postgresStderr = Text.pack "seed failed"
+                      postgresStderr = "seed failed"
                     }
               )
         [] -> expectationFailure "expected at least one seed statement"
@@ -1252,25 +1254,25 @@ spec = do
           commandResult =
             PostgresCommandResult
               { postgresExitCode = ExitSuccess,
-                postgresStdout = Text.pack "1",
+                postgresStdout = "1",
                 postgresStderr = Text.empty
               }
           failedCommandResult =
             PostgresCommandResult
               { postgresExitCode = ExitFailure 3,
                 postgresStdout = Text.empty,
-                postgresStderr = Text.pack "boom"
+                postgresStderr = "boom"
               }
           runnerError = PostgresCommandFailed command commandResult
-          unexpectedRowsError = UnexpectedQueryRows (Text.pack "expected exactly one row") [Text.pack "first", Text.pack "second"]
+          unexpectedRowsError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
       command `shouldBe` command
       command `shouldNotBe` command {postgresArguments = ["--command", "SELECT 2;"]}
       commandResult `shouldBe` commandResult
-      commandResult `shouldNotBe` commandResult {postgresStdout = Text.pack "2"}
+      commandResult `shouldNotBe` commandResult {postgresStdout = "2"}
       runnerError `shouldBe` runnerError
       runnerError `shouldNotBe` PostgresCommandFailed command failedCommandResult
       unexpectedRowsError `shouldBe` unexpectedRowsError
-      unexpectedRowsError `shouldNotBe` UnexpectedQueryRows (Text.pack "expected exactly one row") [Text.pack "first"]
+      unexpectedRowsError `shouldNotBe` UnexpectedQueryRows "expected exactly one row" ["first"]
       show command
         `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}"
       show commandResult
@@ -1290,24 +1292,24 @@ spec = do
 
     it "uses the default psql runner for effect loading and database setup when psql is on PATH"
       $ withFakePsqlScript
-        [ (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';", Text.pack "Server-rendered home page with stubbed content."),
-          (Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';", Text.pack "Second page content with stubbed data ready for future loaders."),
-          (Text.pack "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
-          (Text.pack "CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-          (Text.pack "CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-          (Text.pack "DELETE FROM page_highlights;", Text.empty),
-          (Text.pack "DELETE FROM page_content;", Text.empty),
-          (Text.pack "INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+        [ ("SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
+          ("SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
+          ("SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
+          ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+          ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+          ("DELETE FROM page_highlights;", Text.empty),
+          ("DELETE FROM page_content;", Text.empty),
+          ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
         ]
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
         HarchWeb.renderResponse application secondRequest
           `shouldReturn` HarchWeb.PageResponse
             ( HarchWeb.Page
-                { HarchWeb.pageTitle = Text.pack "web-api: Second",
+                { HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
                   HarchWeb.pageContext = defaultRequestContext,
-                  HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+                  HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
                 }
             )
         runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
@@ -1325,17 +1327,17 @@ spec = do
 
     it "uses stderr from the default psql runner when a command fails"
       $ withFakePsqlScriptResults
-        [ ( Text.pack "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';",
+        [ ( "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';",
             PostgresCommandResult
               { postgresExitCode = ExitFailure 4,
                 postgresStdout = Text.empty,
-                postgresStderr = Text.pack "default runner failed"
+                postgresStderr = "default runner failed"
               }
           )
         ]
       $ \_ ->
         loadHomePageData (buildPostgresDatabaseEffect postgresTestConfig) defaultRequestContext
-          `shouldReturn` Left (HomePageDataError (Text.pack "default runner failed"))
+          `shouldReturn` Left (HomePageDataError "default runner failed")
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
@@ -1344,12 +1346,12 @@ spec = do
 
     it "lets .env.local override committed .env defaults" $ do
       let localOverrides =
-            [ (Text.pack "APP_MODE", Text.pack "production"),
-              (Text.pack "DATABASE_HOST", Text.pack "localhost"),
-              (Text.pack "DATABASE_PORT", Text.pack "6432"),
-              (Text.pack "DATABASE_NAME", Text.pack "web_api_local"),
-              (Text.pack "DATABASE_USER", Text.pack "local_user"),
-              (Text.pack "DATABASE_PASSWORD", Text.pack "local_password")
+            [ ("APP_MODE", "production"),
+              ("DATABASE_HOST", "localhost"),
+              ("DATABASE_PORT", "6432"),
+              ("DATABASE_NAME", "web_api_local"),
+              ("DATABASE_USER", "local_user"),
+              ("DATABASE_PASSWORD", "local_password")
             ]
       parseAppEnvironmentConfig committedEnvDefaults localOverrides []
         `shouldBe` Right
@@ -1357,27 +1359,27 @@ spec = do
             { appMode = Production,
               databaseConfig =
                 DatabaseConfig
-                  { databaseHost = Text.pack "localhost",
+                  { databaseHost = "localhost",
                     databasePort = 6432,
-                    databaseName = Text.pack "web_api_local",
-                    databaseUser = Text.pack "local_user",
-                    databasePassword = Text.pack "local_password"
+                    databaseName = "web_api_local",
+                    databaseUser = "local_user",
+                    databasePassword = "local_password"
                   }
             }
 
     it "lets environment variables override .env.local values" $ do
       let localOverrides =
-            [ (Text.pack "APP_MODE", Text.pack "production"),
-              (Text.pack "DATABASE_HOST", Text.pack "localhost"),
-              (Text.pack "DATABASE_PORT", Text.pack "6432"),
-              (Text.pack "DATABASE_NAME", Text.pack "web_api_local"),
-              (Text.pack "DATABASE_USER", Text.pack "local_user"),
-              (Text.pack "DATABASE_PASSWORD", Text.pack "local_password")
+            [ ("APP_MODE", "production"),
+              ("DATABASE_HOST", "localhost"),
+              ("DATABASE_PORT", "6432"),
+              ("DATABASE_NAME", "web_api_local"),
+              ("DATABASE_USER", "local_user"),
+              ("DATABASE_PASSWORD", "local_password")
             ]
           environmentOverrides =
-            [ (Text.pack "APP_MODE", Text.pack "test"),
-              (Text.pack "DATABASE_PORT", Text.pack "7432"),
-              (Text.pack "DATABASE_PASSWORD", Text.pack "runtime_password")
+            [ ("APP_MODE", "test"),
+              ("DATABASE_PORT", "7432"),
+              ("DATABASE_PASSWORD", "runtime_password")
             ]
       parseAppEnvironmentConfig committedEnvDefaults localOverrides environmentOverrides
         `shouldBe` Right
@@ -1385,49 +1387,49 @@ spec = do
             { appMode = Test,
               databaseConfig =
                 DatabaseConfig
-                  { databaseHost = Text.pack "localhost",
+                  { databaseHost = "localhost",
                     databasePort = 7432,
-                    databaseName = Text.pack "web_api_local",
-                    databaseUser = Text.pack "local_user",
-                    databasePassword = Text.pack "runtime_password"
+                    databaseName = "web_api_local",
+                    databaseUser = "local_user",
+                    databasePassword = "runtime_password"
                   }
             }
 
     it "fails missing required values with explicit errors" $
       parseAppEnvironmentConfig
-        [ (Text.pack "APP_MODE", Text.pack "development"),
-          (Text.pack "DATABASE_HOST", Text.pack "127.0.0.1"),
-          (Text.pack "DATABASE_PORT", Text.pack "5432"),
-          (Text.pack "DATABASE_NAME", Text.pack "web_api_dev"),
-          (Text.pack "DATABASE_USER", Text.pack "web_api")
+        [ ("APP_MODE", "development"),
+          ("DATABASE_HOST", "127.0.0.1"),
+          ("DATABASE_PORT", "5432"),
+          ("DATABASE_NAME", "web_api_dev"),
+          ("DATABASE_USER", "web_api")
         ]
         []
         []
-        `shouldBe` Left (MissingConfigValue (Text.pack "DATABASE_PASSWORD"))
+        `shouldBe` Left (MissingConfigValue "DATABASE_PASSWORD")
 
     it "fails invalid port or mode values with precise errors" $ do
-      parseAppEnvironmentConfig committedEnvDefaults [] [(Text.pack "APP_MODE", Text.pack "staging")]
-        `shouldBe` Left (InvalidConfigValue (Text.pack "APP_MODE") (Text.pack "staging"))
-      parseAppEnvironmentConfig committedEnvDefaults [] [(Text.pack "DATABASE_PORT", Text.pack "0")]
-        `shouldBe` Left (InvalidConfigValue (Text.pack "DATABASE_PORT") (Text.pack "0"))
+      parseAppEnvironmentConfig committedEnvDefaults [] [("APP_MODE", "staging")]
+        `shouldBe` Left (InvalidConfigValue "APP_MODE" "staging")
+      parseAppEnvironmentConfig committedEnvDefaults [] [("DATABASE_PORT", "0")]
+        `shouldBe` Left (InvalidConfigValue "DATABASE_PORT" "0")
 
     it "can represent manual certificates, certbot-backed ACME, and exporter endpoints" $ do
       let certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                certbotArguments = ["certonly", "--webroot"]
               }
           tlsSource =
             AcmeCertificateSource
               AcmeConfig
-                { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                  acmeContactEmails = [Text.pack "ops@example.com"],
+                { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                  acmeContactEmails = ["ops@example.com"],
                   acmeChallengeBackend = CertbotHttp01 certbotConfig
                 }
           exporter =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                otlpHeaders = [(Text.pack "x-api-key", Text.pack "secret")]
+              { otlpEndpoint = "http://otel-collector:4318",
+                otlpHeaders = [("x-api-key", "secret")]
               }
       TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
         `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
@@ -1444,21 +1446,21 @@ spec = do
               }
           inProcessAcmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com", Text.pack "alerts@example.com"],
+              { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com", "alerts@example.com"],
                 acmeChallengeBackend = InProcessHttp01
               }
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Just tlsConfig
               }
           staticRoot =
             StaticAssetRoot
-              { staticUrlPrefix = Text.pack "/assets",
+              { staticUrlPrefix = "/assets",
                 staticDirectory = "public"
               }
           staticConfig =
@@ -1468,8 +1470,8 @@ spec = do
               }
           exporter =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://otel-collector:4318",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
           observabilityConfig =
             ObservabilityConfig
@@ -1478,7 +1480,7 @@ spec = do
               }
           appConfig =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticConfig,
                 observability = observabilityConfig
@@ -1486,37 +1488,37 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-456"),
+                requestCorrelationId = Just "req-456",
                 requestSurface = PageSurface
               }
           callToAction =
             CallToAction
-              { callToActionLabel = Text.pack "Return home",
+              { callToActionLabel = "Return home",
                 callToActionRoute = HomeRoute,
-                callToActionHref = Text.pack "/fr"
+                callToActionHref = "/fr"
               }
           notFoundPageModel =
             NotFoundPageModel
-              { notFoundHeading = Text.pack "Not Found",
-                notFoundSummary = Text.pack "The requested page could not be found.",
+              { notFoundHeading = "Not Found",
+                notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
           homePageModel =
             HomePageModel
-              { homeHeading = Text.pack "Home",
-                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              { homeHeading = "Home",
+                homeSummary = "Server-rendered home page with stubbed content.",
                 homePrimaryAction =
                   CallToAction
-                    { callToActionLabel = Text.pack "Browse the second page",
+                    { callToActionLabel = "Browse the second page",
                       callToActionRoute = SecondRoute,
-                      callToActionHref = Text.pack "/fr/second"
+                      callToActionHref = "/fr/second"
                     }
               }
           secondPageModel =
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR", "Progressive enhancement"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
@@ -1525,52 +1527,52 @@ spec = do
           certificateFile source `shouldBe` "cert.pem"
           privateKeyFile source `shouldBe` "key.pem"
         AcmeCertificateSource _ -> expectationFailure "expected manual certificate files"
-      acmeDirectoryUrl inProcessAcmeConfig `shouldBe` Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory"
-      acmeContactEmails inProcessAcmeConfig `shouldBe` [Text.pack "ops@example.com", Text.pack "alerts@example.com"]
+      acmeDirectoryUrl inProcessAcmeConfig `shouldBe` "https://acme-staging-v02.api.letsencrypt.org/directory"
+      acmeContactEmails inProcessAcmeConfig `shouldBe` ["ops@example.com", "alerts@example.com"]
       acmeChallengeBackend inProcessAcmeConfig `shouldBe` InProcessHttp01
       certificateSource tlsConfig `shouldBe` manualCertificateSource
-      listenerHost listenerConfig `shouldBe` Text.pack "0.0.0.0"
+      listenerHost listenerConfig `shouldBe` "0.0.0.0"
       listenerPort listenerConfig `shouldBe` 5443
       listenerScheme listenerConfig `shouldBe` Https
       listenerTls listenerConfig `shouldBe` Just tlsConfig
-      staticUrlPrefix staticRoot `shouldBe` Text.pack "/assets"
+      staticUrlPrefix staticRoot `shouldBe` "/assets"
       staticDirectory staticRoot `shouldBe` "public"
       staticAssetRoots staticConfig `shouldBe` [staticRoot]
       staticCacheControlSeconds staticConfig `shouldBe` Just 3600
-      otlpEndpoint exporter `shouldBe` Text.pack "http://otel-collector:4318"
-      otlpHeaders exporter `shouldBe` [(Text.pack "authorization", Text.pack "Bearer token")]
+      otlpEndpoint exporter `shouldBe` "http://otel-collector:4318"
+      otlpHeaders exporter `shouldBe` [("authorization", "Bearer token")]
       tracingExporter observabilityConfig `shouldBe` Just exporter
       metricsExporter observabilityConfig `shouldBe` Just exporter
-      appTitlePrefix appConfig `shouldBe` Text.pack "test-app"
+      appTitlePrefix appConfig `shouldBe` "test-app"
       listenerConfigs appConfig `shouldBe` [listenerConfig]
       staticAssets appConfig `shouldBe` staticConfig
       observability appConfig `shouldBe` observabilityConfig
       requestLocale requestContext `shouldBe` French
-      requestCorrelationId requestContext `shouldBe` Just (Text.pack "req-456")
-      callToActionLabel callToAction `shouldBe` Text.pack "Return home"
+      requestCorrelationId requestContext `shouldBe` Just "req-456"
+      callToActionLabel callToAction `shouldBe` "Return home"
       callToActionRoute callToAction `shouldBe` HomeRoute
-      callToActionHref callToAction `shouldBe` Text.pack "/fr"
-      homeHeading homePageModel `shouldBe` Text.pack "Home"
-      homeSummary homePageModel `shouldBe` Text.pack "Server-rendered home page with stubbed content."
+      callToActionHref callToAction `shouldBe` "/fr"
+      homeHeading homePageModel `shouldBe` "Home"
+      homeSummary homePageModel `shouldBe` "Server-rendered home page with stubbed content."
       homePrimaryAction homePageModel
         `shouldBe` CallToAction
-          { callToActionLabel = Text.pack "Browse the second page",
+          { callToActionLabel = "Browse the second page",
             callToActionRoute = SecondRoute,
-            callToActionHref = Text.pack "/fr/second"
+            callToActionHref = "/fr/second"
           }
-      secondHeading secondPageModel `shouldBe` Text.pack "Second"
-      secondSummary secondPageModel `shouldBe` Text.pack "Second page content with stubbed data ready for future loaders."
-      secondHighlights secondPageModel `shouldBe` [Text.pack "Fast SSR", Text.pack "Progressive enhancement"]
+      secondHeading secondPageModel `shouldBe` "Second"
+      secondSummary secondPageModel `shouldBe` "Second page content with stubbed data ready for future loaders."
+      secondHighlights secondPageModel `shouldBe` ["Fast SSR", "Progressive enhancement"]
       secondPrimaryAction secondPageModel `shouldBe` callToAction
-      notFoundHeading notFoundPageModel `shouldBe` Text.pack "Not Found"
-      notFoundSummary notFoundPageModel `shouldBe` Text.pack "The requested page could not be found."
+      notFoundHeading notFoundPageModel `shouldBe` "Not Found"
+      notFoundSummary notFoundPageModel `shouldBe` "The requested page could not be found."
       notFoundPrimaryAction notFoundPageModel `shouldBe` callToAction
 
     it "directly exercises the remaining derived eq and show instances" $ do
       let certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                certbotArguments = ["certonly", "--webroot"]
               }
           manualCertificateSource =
             ManualCertificateFiles
@@ -1580,48 +1582,48 @@ spec = do
           acmeCertificateSource =
             AcmeCertificateSource
               AcmeConfig
-                { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                  acmeContactEmails = [Text.pack "ops@example.com"],
+                { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                  acmeContactEmails = ["ops@example.com"],
                   acmeChallengeBackend = CertbotHttp01 certbotConfig
                 }
           staticRoot =
             StaticAssetRoot
-              { staticUrlPrefix = Text.pack "/assets",
+              { staticUrlPrefix = "/assets",
                 staticDirectory = "public"
               }
           secondPageModel =
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction =
                   CallToAction
-                    { callToActionLabel = Text.pack "Return home",
+                    { callToActionLabel = "Return home",
                       callToActionRoute = HomeRoute,
-                      callToActionHref = Text.pack "/"
+                      callToActionHref = "/"
                     }
               }
           notFoundPageModel =
             NotFoundPageModel
-              { notFoundHeading = Text.pack "Not Found",
-                notFoundSummary = Text.pack "The requested page could not be found.",
+              { notFoundHeading = "Not Found",
+                notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction =
                   CallToAction
-                    { callToActionLabel = Text.pack "Return home",
+                    { callToActionLabel = "Return home",
                       callToActionRoute = HomeRoute,
-                      callToActionHref = Text.pack "/"
+                      callToActionHref = "/"
                     }
               }
           homePageModel =
             HomePageModel
-              { homeHeading = Text.pack "Home",
-                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              { homeHeading = "Home",
+                homeSummary = "Server-rendered home page with stubbed content.",
                 homePrimaryAction =
                   CallToAction
-                    { callToActionLabel = Text.pack "Browse the second page",
+                    { callToActionLabel = "Browse the second page",
                       callToActionRoute = SecondRoute,
-                      callToActionHref = Text.pack "/second"
+                      callToActionHref = "/second"
                     }
               }
       Http `shouldBe` Http
@@ -1641,8 +1643,8 @@ spec = do
       SecondRoute `shouldBe` SecondRoute
       StatusApiRoute `shouldBe` StatusApiRoute
       NotFoundRoute `shouldBe` NotFoundRoute
-      UnsupportedLocalePrefix (Text.pack "de") `shouldBe` UnsupportedLocalePrefix (Text.pack "de")
-      UnsupportedPath (Text.pack "/missing") `shouldBe` UnsupportedPath (Text.pack "/missing")
+      UnsupportedLocalePrefix "de" `shouldBe` UnsupportedLocalePrefix "de"
+      UnsupportedPath "/missing" `shouldBe` UnsupportedPath "/missing"
       HomePage homePageModel `shouldBe` HomePage homePageModel
       SecondPage secondPageModel `shouldBe` SecondPage secondPageModel
       NotFoundPage notFoundPageModel `shouldBe` NotFoundPage notFoundPageModel
@@ -1653,8 +1655,8 @@ spec = do
         `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
       show
         AcmeConfig
-          { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-            acmeContactEmails = [Text.pack "ops@example.com"],
+          { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+            acmeContactEmails = ["ops@example.com"],
             acmeChallengeBackend = CertbotHttp01 certbotConfig
           }
         `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
@@ -1664,7 +1666,7 @@ spec = do
         `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
       show manualCertificateSource
         `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
-      show (ListenerConfig {listenerHost = Text.pack "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})
+      show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})
         `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
       show
@@ -1679,8 +1681,8 @@ spec = do
             { tracingExporter =
                 Just
                   OtlpExporter
-                    { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                      otlpHeaders = [(Text.pack "x-api-key", Text.pack "secret")]
+                    { otlpEndpoint = "http://otel-collector:4318",
+                      otlpHeaders = [("x-api-key", "secret")]
                     },
               metricsExporter = Nothing
             }
@@ -1689,16 +1691,16 @@ spec = do
       show
         ( AppRequestContext
             { requestLocale = French,
-              requestCorrelationId = Just (Text.pack "req-789"),
+              requestCorrelationId = Just "req-789",
               requestSurface = PageSurface
             }
         )
         `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface}"
       show
         ( CallToAction
-            { callToActionLabel = Text.pack "Return home",
+            { callToActionLabel = "Return home",
               callToActionRoute = HomeRoute,
-              callToActionHref = Text.pack "/"
+              callToActionHref = "/"
             }
         )
         `shouldBe` "CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}"
@@ -1706,8 +1708,8 @@ spec = do
       show French `shouldBe` "French"
       show PageSurface `shouldBe` "PageSurface"
       show ApiSurface `shouldBe` "ApiSurface"
-      show (UnsupportedLocalePrefix (Text.pack "de")) `shouldBe` "UnsupportedLocalePrefix \"de\""
-      show (UnsupportedPath (Text.pack "/missing")) `shouldBe` "UnsupportedPath \"/missing\""
+      show (UnsupportedLocalePrefix "de") `shouldBe` "UnsupportedLocalePrefix \"de\""
+      show (UnsupportedPath "/missing") `shouldBe` "UnsupportedPath \"/missing\""
       show homePageModel
         `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}}"
       show secondPageModel
@@ -1722,8 +1724,8 @@ spec = do
         `shouldBe` "NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
       show
         ( AppConfig
-            { appTitlePrefix = Text.pack "test-app",
-              listenerConfigs = [ListenerConfig {listenerHost = Text.pack "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}],
+            { appTitlePrefix = "test-app",
+              listenerConfigs = [ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}],
               staticAssets = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600},
               observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
             }
@@ -1734,23 +1736,23 @@ spec = do
       let certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                certbotArguments = ["certonly", "--webroot"]
               }
           otherCertbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "renew"]
+                certbotArguments = ["renew"]
               }
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           otherAcmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-staging-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = InProcessHttp01
               }
           manualCertificateSource =
@@ -1762,21 +1764,21 @@ spec = do
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "127.0.0.1",
+              { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
                 listenerTls = Nothing
               }
           secureListenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Just tlsConfig
               }
           staticRoot =
             StaticAssetRoot
-              { staticUrlPrefix = Text.pack "/assets",
+              { staticUrlPrefix = "/assets",
                 staticDirectory = "public"
               }
           staticAssetsConfig =
@@ -1786,8 +1788,8 @@ spec = do
               }
           exporter =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://otel-collector:4318",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
           observabilityConfig =
             ObservabilityConfig
@@ -1796,7 +1798,7 @@ spec = do
               }
           appConfig =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig, secureListenerConfig],
                 staticAssets = staticAssetsConfig,
                 observability = observabilityConfig
@@ -1804,37 +1806,37 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-123"),
+                requestCorrelationId = Just "req-123",
                 requestSurface = PageSurface
               }
           callToAction =
             CallToAction
-              { callToActionLabel = Text.pack "Return home",
+              { callToActionLabel = "Return home",
                 callToActionRoute = HomeRoute,
-                callToActionHref = Text.pack "/"
+                callToActionHref = "/"
               }
           homePageModel =
             HomePageModel
-              { homeHeading = Text.pack "Home",
-                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              { homeHeading = "Home",
+                homeSummary = "Server-rendered home page with stubbed content.",
                 homePrimaryAction = callToAction
               }
           secondPageModel =
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
             NotFoundPageModel
-              { notFoundHeading = Text.pack "Not Found",
-                notFoundSummary = Text.pack "The requested page could not be found.",
+              { notFoundHeading = "Not Found",
+                notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
       certbotExecutable certbotConfig `shouldBe` "certbot"
-      certbotArguments certbotConfig `shouldBe` [Text.pack "certonly", Text.pack "--webroot"]
+      certbotArguments certbotConfig `shouldBe` ["certonly", "--webroot"]
       certbotConfig `shouldBe` certbotConfig
       certbotConfig `shouldNotBe` otherCertbotConfig
       acmeConfig `shouldBe` acmeConfig
@@ -1848,11 +1850,11 @@ spec = do
       listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` secureListenerConfig
       staticRoot `shouldBe` staticRoot
-      staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = Text.pack "/static", staticDirectory = "public"}
+      staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
       staticAssetsConfig `shouldBe` staticAssetsConfig
       staticAssetsConfig `shouldNotBe` StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}
       exporter `shouldBe` exporter
-      exporter `shouldNotBe` OtlpExporter {otlpEndpoint = Text.pack "http://other-collector:4318", otlpHeaders = []}
+      exporter `shouldNotBe` OtlpExporter {otlpEndpoint = "http://other-collector:4318", otlpHeaders = []}
       observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
       appConfig `shouldBe` appConfig
@@ -1861,16 +1863,16 @@ spec = do
       requestContext `shouldBe` requestContext
       requestContext `shouldNotBe` defaultRequestContext
       callToAction `shouldBe` callToAction
-      callToAction `shouldNotBe` callToAction {callToActionHref = Text.pack "/fr"}
+      callToAction `shouldNotBe` callToAction {callToActionHref = "/fr"}
       homePageModel `shouldBe` homePageModel
-      homePageModel `shouldNotBe` homePageModel {homeHeading = Text.pack "Accueil"}
+      homePageModel `shouldNotBe` homePageModel {homeHeading = "Accueil"}
       secondPageModel `shouldBe` secondPageModel
-      secondPageModel `shouldNotBe` secondPageModel {secondHighlights = [Text.pack "Different"]}
+      secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
       notFoundPageModel `shouldBe` notFoundPageModel
-      notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = Text.pack "Missing"}
+      notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = "Missing"}
       HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
-      UnsupportedLocalePrefix (Text.pack "de") `shouldNotBe` UnsupportedPath (Text.pack "/de")
+      UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
       PageSurface `shouldNotBe` ApiSurface
       HomeRoute `shouldNotBe` SecondRoute
       SecondRoute `shouldNotBe` NotFoundRoute
@@ -1886,12 +1888,12 @@ spec = do
           certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                certbotArguments = ["certonly", "--webroot"]
               }
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           manualCertificateSource =
@@ -1903,14 +1905,14 @@ spec = do
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Just tlsConfig
               }
           staticRoot =
             StaticAssetRoot
-              { staticUrlPrefix = Text.pack "/assets",
+              { staticUrlPrefix = "/assets",
                 staticDirectory = "public"
               }
           staticAssetsConfig =
@@ -1920,8 +1922,8 @@ spec = do
               }
           exporter =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://otel-collector:4318",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
           observabilityConfig =
             ObservabilityConfig
@@ -1930,7 +1932,7 @@ spec = do
               }
           appConfig =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
                 observability = observabilityConfig
@@ -1938,33 +1940,33 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-999"),
+                requestCorrelationId = Just "req-999",
                 requestSurface = PageSurface
               }
           callToAction =
             CallToAction
-              { callToActionLabel = Text.pack "Return home",
+              { callToActionLabel = "Return home",
                 callToActionRoute = HomeRoute,
-                callToActionHref = Text.pack "/"
+                callToActionHref = "/"
               }
           homePageModel =
             HomePageModel
-              { homeHeading = Text.pack "Home",
-                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              { homeHeading = "Home",
+                homeSummary = "Server-rendered home page with stubbed content.",
                 homePrimaryAction = callToAction
               }
           secondPageModel =
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
             NotFoundPageModel
-              { notFoundHeading = Text.pack "Not Found",
-                notFoundSummary = Text.pack "The requested page could not be found.",
+              { notFoundHeading = "Not Found",
+                notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
       show Http `shouldBe` "Http"
@@ -1993,19 +1995,19 @@ spec = do
       shouldBeParenthesized (showsPrec 11 (HomePage homePageModel) "")
       shouldBeParenthesized (showsPrec 11 (SecondPage secondPageModel) "")
       shouldBeParenthesized (showsPrec 11 (NotFoundPage notFoundPageModel) "")
-      shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix (Text.pack "de")) "")
-      shouldBeParenthesized (showsPrec 11 (UnsupportedPath (Text.pack "/missing")) "")
+      shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix "de") "")
+      shouldBeParenthesized (showsPrec 11 (UnsupportedPath "/missing") "")
 
     it "covers derived list-show rendering for the remaining public types" $ do
       let certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
-                certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                certbotArguments = ["certonly", "--webroot"]
               }
           acmeConfig =
             AcmeConfig
-              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
-                acmeContactEmails = [Text.pack "ops@example.com"],
+              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = ["ops@example.com"],
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           manualCertificateSource =
@@ -2017,14 +2019,14 @@ spec = do
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
             ListenerConfig
-              { listenerHost = Text.pack "0.0.0.0",
+              { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
                 listenerTls = Just tlsConfig
               }
           staticRoot =
             StaticAssetRoot
-              { staticUrlPrefix = Text.pack "/assets",
+              { staticUrlPrefix = "/assets",
                 staticDirectory = "public"
               }
           staticAssetsConfig =
@@ -2034,8 +2036,8 @@ spec = do
               }
           exporter =
             OtlpExporter
-              { otlpEndpoint = Text.pack "http://otel-collector:4318",
-                otlpHeaders = [(Text.pack "authorization", Text.pack "Bearer token")]
+              { otlpEndpoint = "http://otel-collector:4318",
+                otlpHeaders = [("authorization", "Bearer token")]
               }
           observabilityConfig =
             ObservabilityConfig
@@ -2044,7 +2046,7 @@ spec = do
               }
           appConfig =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
                 observability = observabilityConfig
@@ -2052,33 +2054,33 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = French,
-                requestCorrelationId = Just (Text.pack "req-list"),
+                requestCorrelationId = Just "req-list",
                 requestSurface = PageSurface
               }
           callToAction =
             CallToAction
-              { callToActionLabel = Text.pack "Return home",
+              { callToActionLabel = "Return home",
                 callToActionRoute = HomeRoute,
-                callToActionHref = Text.pack "/"
+                callToActionHref = "/"
               }
           homePageModel =
             HomePageModel
-              { homeHeading = Text.pack "Home",
-                homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+              { homeHeading = "Home",
+                homeSummary = "Server-rendered home page with stubbed content.",
                 homePrimaryAction = callToAction
               }
           secondPageModel =
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
             NotFoundPageModel
-              { notFoundHeading = Text.pack "Not Found",
-                notFoundSummary = Text.pack "The requested page could not be found.",
+              { notFoundHeading = "Not Found",
+                notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
       Http `shouldNotBe` Https
@@ -2118,64 +2120,64 @@ spec = do
         `shouldBe` "[NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [HomePage homePageModel, SecondPage secondPageModel, NotFoundPage notFoundPageModel]
         `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
-      show [UnsupportedLocalePrefix (Text.pack "de"), UnsupportedPath (Text.pack "/missing")]
+      show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
       show [HomeRoute, SecondRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,StatusApiRoute,NotFoundRoute]"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
-      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/")) `shouldBe` Just HomeRoute
-      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/en")) `shouldBe` Just HomeRoute
-      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext (Text.pack "/404")) `shouldBe` Just NotFoundRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/") `shouldBe` Just HomeRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/en") `shouldBe` Just HomeRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/404") `shouldBe` Just NotFoundRoute
 
     it "parses API routes with the API response surface" $ do
-      parseRoute defaultRequestContext (Text.pack "/api/status") `shouldBe` Just apiStatusRequest
-      parseRoute defaultRequestContext (Text.pack "/api/second") `shouldBe` Just apiSecondRequest
-      parseRoute defaultRequestContext (Text.pack "/api") `shouldBe` Just apiNotFoundRequest
-      parseRoute defaultRequestContext (Text.pack "/api/404") `shouldBe` Just apiNotFoundRequest
-      parseRoute defaultRequestContext (Text.pack "/api/missing") `shouldBe` Just apiNotFoundRequest
-      parseRoute defaultRequestContext (Text.pack "/api/status/extra") `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/status" `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
+      parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/missing" `shouldBe` Just apiNotFoundRequest
+      parseRoute defaultRequestContext "/api/status/extra" `shouldBe` Just apiNotFoundRequest
 
     it "parses the second page path" $
-      parseRoute defaultRequestContext (Text.pack "/second") `shouldBe` Just secondRequest
+      parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
     it "lets explicit locale prefixes override the incoming request context" $ do
-      parseRoute defaultRequestContext (Text.pack "/fr/second") `shouldBe` Just frenchSecondRequest
-      parseRoute frenchRequestContext (Text.pack "/en/second") `shouldBe` Just secondRequest
+      parseRoute defaultRequestContext "/fr/second" `shouldBe` Just frenchSecondRequest
+      parseRoute frenchRequestContext "/en/second" `shouldBe` Just secondRequest
 
     it "returns an unsupported-route representation for unknown paths" $
-      parseRoute defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
+      parseRoute defaultRequestContext "/missing" `shouldBe` Nothing
 
     it "fails unsupported locale prefixes with a precise route-selection error" $ do
-      selectRoute defaultRequestContext (Text.pack "/de") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
-      selectRoute defaultRequestContext (Text.pack "/de/second") `shouldBe` Left (UnsupportedLocalePrefix (Text.pack "de"))
+      selectRoute defaultRequestContext "/de" `shouldBe` Left (UnsupportedLocalePrefix "de")
+      selectRoute defaultRequestContext "/de/second" `shouldBe` Left (UnsupportedLocalePrefix "de")
 
     it "rejects paths that do not start with a slash" $
-      selectRoute defaultRequestContext (Text.pack "second") `shouldBe` Left (UnsupportedPath (Text.pack "second"))
+      selectRoute defaultRequestContext "second" `shouldBe` Left (UnsupportedPath "second")
 
     it "rejects unsupported multi-segment paths" $
-      selectRoute defaultRequestContext (Text.pack "/fr/second/extra") `shouldBe` Left (UnsupportedPath (Text.pack "/fr/second/extra"))
+      selectRoute defaultRequestContext "/fr/second/extra" `shouldBe` Left (UnsupportedPath "/fr/second/extra")
 
     it "rejects unsupported single-segment non-locale paths" $
-      selectRoute defaultRequestContext (Text.pack "/missing") `shouldBe` Left (UnsupportedPath (Text.pack "/missing"))
+      selectRoute defaultRequestContext "/missing" `shouldBe` Left (UnsupportedPath "/missing")
 
     it "rejects locale-prefixed paths whose trailing segment is unsupported" $ do
-      selectRoute defaultRequestContext (Text.pack "/fr/missing") `shouldBe` Left (UnsupportedPath (Text.pack "/fr/missing"))
-      selectRoute defaultRequestContext (Text.pack "/other/second") `shouldBe` Left (UnsupportedPath (Text.pack "/other/second"))
+      selectRoute defaultRequestContext "/fr/missing" `shouldBe` Left (UnsupportedPath "/fr/missing")
+      selectRoute defaultRequestContext "/other/second" `shouldBe` Left (UnsupportedPath "/other/second")
 
     it "merges middleware-supplied and path-derived request inputs deterministically" $ do
       let middlewareContext =
             defaultRequestContext
               { requestLocale = English,
-                requestCorrelationId = Just (Text.pack "req-123")
+                requestCorrelationId = Just "req-123"
               }
-      parseRoute middlewareContext (Text.pack "/fr")
+      parseRoute middlewareContext "/fr"
         `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = French}})
 
     it "rejects invalid trailing slashes while keeping the root path valid" $ do
-      parseRoute defaultRequestContext (Text.pack "/") `shouldBe` Just homeRequest
-      parseRoute defaultRequestContext (Text.pack "/second/") `shouldBe` Nothing
-      selectRoute defaultRequestContext (Text.pack "/second/") `shouldBe` Left (UnsupportedPath (Text.pack "/second/"))
+      parseRoute defaultRequestContext "/" `shouldBe` Just homeRequest
+      parseRoute defaultRequestContext "/second/" `shouldBe` Nothing
+      selectRoute defaultRequestContext "/second/" `shouldBe` Left (UnsupportedPath "/second/")
 
   describe "renderRoutePath" $ do
     it "round-trips known routes through the parser" $ do
@@ -2187,64 +2189,64 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
     it "renders locale prefixes only for non-default locales" $ do
-      renderRoutePath homeRequest `shouldBe` Text.pack "/"
-      renderRoutePath frenchHomeRequest `shouldBe` Text.pack "/fr"
-      renderRoutePath secondRequest `shouldBe` Text.pack "/second"
-      renderRoutePath frenchSecondRequest `shouldBe` Text.pack "/fr/second"
-      renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` Text.pack "/404"
-      renderRoutePath apiStatusRequest `shouldBe` Text.pack "/api/status"
-      renderRoutePath apiSecondRequest `shouldBe` Text.pack "/api/second"
-      renderRoutePath apiNotFoundRequest `shouldBe` Text.pack "/api/404"
-      renderRoutePath notFoundRequest `shouldBe` Text.pack "/404"
+      renderRoutePath homeRequest `shouldBe` "/"
+      renderRoutePath frenchHomeRequest `shouldBe` "/fr"
+      renderRoutePath secondRequest `shouldBe` "/second"
+      renderRoutePath frenchSecondRequest `shouldBe` "/fr/second"
+      renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
+      renderRoutePath apiStatusRequest `shouldBe` "/api/status"
+      renderRoutePath apiSecondRequest `shouldBe` "/api/second"
+      renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
+      renderRoutePath notFoundRequest `shouldBe` "/404"
 
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $
-      WebApi.Route.matchRoute WebApi.Route.defaultRequestContext (Text.pack "/second")
-        `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext (Text.pack "/second")
+      WebApi.Route.matchRoute WebApi.Route.defaultRequestContext "/second"
+        `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext "/second"
 
     it "matches the home path" $
-      pureRouteMatcher (Text.pack "/") `shouldBe` homeRequest
+      pureRouteMatcher "/" `shouldBe` homeRequest
 
     it "matches the second page path" $
-      pureRouteMatcher (Text.pack "/second") `shouldBe` secondRequest
+      pureRouteMatcher "/second" `shouldBe` secondRequest
 
     it "matches locale-prefixed paths with the merged request context" $
-      pureRouteMatcher (Text.pack "/fr") `shouldBe` frenchHomeRequest
+      pureRouteMatcher "/fr" `shouldBe` frenchHomeRequest
 
     it "matches API paths with the API response surface" $ do
-      pureRouteMatcher (Text.pack "/api/status") `shouldBe` apiStatusRequest
-      pureRouteMatcher (Text.pack "/api/second") `shouldBe` apiSecondRequest
-      pureRouteMatcher (Text.pack "/api/missing") `shouldBe` apiNotFoundRequest
+      pureRouteMatcher "/api/status" `shouldBe` apiStatusRequest
+      pureRouteMatcher "/api/second" `shouldBe` apiSecondRequest
+      pureRouteMatcher "/api/missing" `shouldBe` apiNotFoundRequest
 
     it "falls back to the stable not-found route for unknown paths" $
-      pureRouteMatcher (Text.pack "/missing") `shouldBe` notFoundRequest
+      pureRouteMatcher "/missing" `shouldBe` notFoundRequest
 
   describe "renderPage" $ do
     it "selects the expected home page model" $
       renderPage defaultAppConfig homeRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = Text.pack "web-api: Home",
+          { HarchWeb.pageTitle = "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
           }
 
     it "selects a distinct second page model" $
       renderPage defaultAppConfig secondRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = Text.pack "web-api: Second",
+          { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "selects a stable not-found page model" $
       renderPage defaultAppConfig notFoundRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = Text.pack "web-api: Not Found",
+          { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "renders selected route data without reloading it" $
@@ -2254,37 +2256,37 @@ spec = do
         ( SecondRouteDataResult
             ( Right
                 SecondRouteData
-                  { secondRouteSummary = Text.pack "Shared domain summary.",
-                    secondRouteHighlights = [Text.pack "Shared loader"]
+                  { secondRouteSummary = "Shared domain summary.",
+                    secondRouteHighlights = ["Shared loader"]
                   }
             )
         )
         `shouldBe` HarchWeb.Page
-          { HarchWeb.pageTitle = Text.pack "web-api: Second",
+          { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "keeps shared layout data consistent across all routes" $ do
       let config =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = listenerConfigs defaultAppConfig,
                 staticAssets = staticAssets defaultAppConfig,
                 observability = observability defaultAppConfig
               }
       renderedShell config HomeRoute
-        `shouldReturn` Text.pack "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
+        `shouldReturn` "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       renderedShell config SecondRoute
-        `shouldReturn` Text.pack "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       renderedShell config NotFoundRoute
-        `shouldReturn` Text.pack "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do
       let config =
             AppConfig
-              { appTitlePrefix = Text.pack "test-app",
+              { appTitlePrefix = "test-app",
                 listenerConfigs = listenerConfigs defaultAppConfig,
                 staticAssets = staticAssets defaultAppConfig,
                 observability = observability defaultAppConfig
@@ -2292,9 +2294,9 @@ spec = do
       show config
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
-      show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
+      show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
-      renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
+      renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
     it "resolves page routes to page responses that still flow through the shared shell" $ do
@@ -2306,15 +2308,15 @@ spec = do
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}"
             }
       selectResponse defaultAppConfig apiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
             }
 
     it "keeps API payload rendering locale-aware without touching page routing" $ do
@@ -2322,15 +2324,15 @@ spec = do
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"fr\"}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"fr\"}"
             }
       selectResponse defaultAppConfig frenchApiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
             }
 
     it "keeps not-found handling consistent across page and non-page responses" $ do
@@ -2340,8 +2342,8 @@ spec = do
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 404,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"error\":\"not-found\"}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"error\":\"not-found\"}"
             }
 
     it "maps shared second-page load failures into explicit API error responses" $
@@ -2351,7 +2353,7 @@ spec = do
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
-                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                 frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
               }
         )
@@ -2359,8 +2361,8 @@ spec = do
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 503,
-              HarchWeb.responseContentType = Text.pack "application/json",
-              HarchWeb.responseBody = Text.pack "{\"error\":\"second-page-unavailable\"}"
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}"
             }
 
     it "is deterministic for repeated requests" $ do
@@ -2373,13 +2375,13 @@ spec = do
       buildPageModel homeRequest
         `shouldReturn` HomePage
           HomePageModel
-            { homeHeading = Text.pack "Home",
-              homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+            { homeHeading = "Home",
+              homeSummary = "Server-rendered home page with stubbed content.",
               homePrimaryAction =
                 CallToAction
-                  { callToActionLabel = Text.pack "Browse the second page",
+                  { callToActionLabel = "Browse the second page",
                     callToActionRoute = SecondRoute,
-                    callToActionHref = Text.pack "/second"
+                    callToActionHref = "/second"
                   }
             }
 
@@ -2387,13 +2389,13 @@ spec = do
       buildPageModel frenchHomeRequest
         `shouldReturn` HomePage
           HomePageModel
-            { homeHeading = Text.pack "Home",
-              homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+            { homeHeading = "Home",
+              homeSummary = "Server-rendered home page with stubbed content.",
               homePrimaryAction =
                 CallToAction
-                  { callToActionLabel = Text.pack "Browse the second page",
+                  { callToActionLabel = "Browse the second page",
                     callToActionRoute = SecondRoute,
-                    callToActionHref = Text.pack "/fr/second"
+                    callToActionHref = "/fr/second"
                   }
             }
 
@@ -2402,29 +2404,29 @@ spec = do
             SecondRouteDataResult
               ( Right
                   SecondRouteData
-                    { secondRouteSummary = Text.pack "Shared domain summary.",
-                      secondRouteHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                    { secondRouteSummary = "Shared domain summary.",
+                      secondRouteHighlights = ["Shared loader", "Shared renderer"]
                     }
               )
       buildPageModelFromRouteData secondRequest selectedRouteData
         `shouldBe` SecondPage
           SecondPageModel
-            { secondHeading = Text.pack "Second",
-              secondSummary = Text.pack "Shared domain summary.",
-              secondHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"],
+            { secondHeading = "Second",
+              secondSummary = "Shared domain summary.",
+              secondHighlights = ["Shared loader", "Shared renderer"],
               secondErrorMessage = Nothing,
               secondPrimaryAction =
                 CallToAction
-                  { callToActionLabel = Text.pack "Return home",
+                  { callToActionLabel = "Return home",
                     callToActionRoute = HomeRoute,
-                    callToActionHref = Text.pack "/"
+                    callToActionHref = "/"
                   }
             }
       renderApiResponseFromRouteData selectedRouteData
         `shouldBe` HarchWeb.ResponseBody
           { HarchWeb.responseStatus = 200,
-            HarchWeb.responseContentType = Text.pack "application/json",
-            HarchWeb.responseBody = Text.pack "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}"
+            HarchWeb.responseContentType = "application/json",
+            HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}"
           }
 
     it "loads second-page content from the database effect when provided" $
@@ -2436,8 +2438,8 @@ spec = do
                 englishSecondPageData =
                   Right
                     SecondPageData
-                      { secondPageDataSummary = Text.pack "Loaded from the seeded database effect.",
-                        secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"]
+                      { secondPageDataSummary = "Loaded from the seeded database effect.",
+                        secondPageDataHighlights = ["Fast SSR", "Progressive enhancement"]
                       },
                 frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
               }
@@ -2445,15 +2447,15 @@ spec = do
         secondRequest
         `shouldReturn` SecondPage
           SecondPageModel
-            { secondHeading = Text.pack "Second",
-              secondSummary = Text.pack "Loaded from the seeded database effect.",
-              secondHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"],
+            { secondHeading = "Second",
+              secondSummary = "Loaded from the seeded database effect.",
+              secondHighlights = ["Fast SSR", "Progressive enhancement"],
               secondErrorMessage = Nothing,
               secondPrimaryAction =
                 CallToAction
-                  { callToActionLabel = Text.pack "Return home",
+                  { callToActionLabel = "Return home",
                     callToActionRoute = HomeRoute,
-                    callToActionHref = Text.pack "/"
+                    callToActionHref = "/"
                   }
             }
 
@@ -2463,22 +2465,22 @@ spec = do
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
-                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                 frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
               }
         )
         secondRequest
         `shouldReturn` SecondPage
           SecondPageModel
-            { secondHeading = Text.pack "Second",
-              secondSummary = Text.pack "Second page content is temporarily unavailable.",
+            { secondHeading = "Second",
+              secondSummary = "Second page content is temporarily unavailable.",
               secondHighlights = [],
-              secondErrorMessage = Just (Text.pack "Could not load second page data."),
+              secondErrorMessage = Just "Could not load second page data.",
               secondPrimaryAction =
                 CallToAction
-                  { callToActionLabel = Text.pack "Return home",
+                  { callToActionLabel = "Return home",
                     callToActionRoute = HomeRoute,
-                    callToActionHref = Text.pack "/"
+                    callToActionHref = "/"
                   }
             }
 
@@ -2486,48 +2488,48 @@ spec = do
     it "renders the home page heading and navigation affordance" $ do
       homePageModel <- buildPageModel homeRequest
       renderPageBody homePageModel
-        `shouldBe` Text.pack "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
+        `shouldBe` "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
 
     it "renders the second page with distinct content while the shared shell stays the same" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute
       secondShell <- renderedShell defaultAppConfig SecondRoute
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
-        `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf (Text.pack "<nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\">") homeShell `shouldBe` True
-      Text.isInfixOf (Text.pack "<nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\">") secondShell `shouldBe` True
+        `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+      Text.isInfixOf "<nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\">" secondShell `shouldBe` True
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       homePageModel <- buildPageModel homeRequest
       secondPageModel <- buildPageModel secondRequest
       let homeBody = renderPageBody homePageModel
           secondBody = renderPageBody secondPageModel
-      Text.isInfixOf (Text.pack "<section data-page=\"home\">") homeBody `shouldBe` True
-      Text.isInfixOf (Text.pack "<section data-page=\"second\">") secondBody `shouldBe` True
-      Text.isInfixOf (Text.pack "data-page-title=\"true\"") homeBody `shouldBe` True
-      Text.isInfixOf (Text.pack "data-page-link=\"true\"") secondBody `shouldBe` True
-      Text.isInfixOf (Text.pack "<main") homeBody `shouldBe` False
-      Text.isInfixOf (Text.pack "<body") secondBody `shouldBe` False
+      Text.isInfixOf "<section data-page=\"home\">" homeBody `shouldBe` True
+      Text.isInfixOf "<section data-page=\"second\">" secondBody `shouldBe` True
+      Text.isInfixOf "data-page-title=\"true\"" homeBody `shouldBe` True
+      Text.isInfixOf "data-page-link=\"true\"" secondBody `shouldBe` True
+      Text.isInfixOf "<main" homeBody `shouldBe` False
+      Text.isInfixOf "<body" secondBody `shouldBe` False
 
     it "covers empty and populated highlight rendering branches" $ do
       secondPageModel <- buildPageModel secondRequest
-      Text.isInfixOf (Text.pack "<p data-empty-state=\"true\">No highlights yet.</p>") (renderPageBody secondPageModel) `shouldBe` True
+      Text.isInfixOf "<p data-empty-state=\"true\">No highlights yet.</p>" (renderPageBody secondPageModel) `shouldBe` True
       renderPageBody
         ( SecondPage
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-                secondHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"],
+              { secondHeading = "Second",
+                secondSummary = "Second page content with stubbed data ready for future loaders.",
+                secondHighlights = ["Fast SSR", "Stable routes"],
                 secondErrorMessage = Nothing,
                 secondPrimaryAction =
                   CallToAction
-                    { callToActionLabel = Text.pack "Return home",
+                    { callToActionLabel = "Return home",
                       callToActionRoute = HomeRoute,
-                      callToActionHref = Text.pack "/"
+                      callToActionHref = "/"
                     }
               }
         )
-        `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+        `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
 
     it "renders an explicit error state when the second-page load fails" $
       renderPageWithDatabase
@@ -2536,16 +2538,16 @@ spec = do
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
-                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                 frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
               }
         )
         secondRequest
         `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = Text.pack "web-api: Second",
+          { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
   describe "page shell integration" $ do
@@ -2553,9 +2555,9 @@ spec = do
       homeShell <- renderedShell defaultAppConfig HomeRoute
       secondShell <- renderedShell defaultAppConfig SecondRoute
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute
-      Text.isInfixOf (Text.pack "<a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a>") homeShell `shouldBe` True
-      Text.isInfixOf (Text.pack "<a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a>") secondShell `shouldBe` True
-      Text.isInfixOf (Text.pack "aria-current=\"page\"") notFoundShell `shouldBe` False
+      Text.isInfixOf "<a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a>" homeShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a>" secondShell `shouldBe` True
+      Text.isInfixOf "aria-current=\"page\"" notFoundShell `shouldBe` False
 
     it "keeps shell output identical for repeated renders of the same page input" $ do
       let application = buildApp defaultAppConfig
@@ -2564,11 +2566,11 @@ spec = do
 
     it "keeps not-found pages inside the shared shell" $
       renderedShell defaultAppConfig NotFoundRoute
-        `shouldReturn` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
-      HarchWeb.appName pureApplication `shouldBe` Text.pack "web-api"
+      HarchWeb.appName pureApplication `shouldBe` "web-api"
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
@@ -2578,12 +2580,12 @@ spec = do
 
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/") `shouldBe` parseRoute defaultRequestContext (Text.pack "/")
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/fr") `shouldBe` parseRoute defaultRequestContext (Text.pack "/fr")
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/second")
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/api/status") `shouldBe` parseRoute defaultRequestContext (Text.pack "/api/status")
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/api/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/api/second")
-      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
+      HarchWeb.parseRoute codec defaultRequestContext "/" `shouldBe` parseRoute defaultRequestContext "/"
+      HarchWeb.parseRoute codec defaultRequestContext "/fr" `shouldBe` parseRoute defaultRequestContext "/fr"
+      HarchWeb.parseRoute codec defaultRequestContext "/second" `shouldBe` parseRoute defaultRequestContext "/second"
+      HarchWeb.parseRoute codec defaultRequestContext "/api/status" `shouldBe` parseRoute defaultRequestContext "/api/status"
+      HarchWeb.parseRoute codec defaultRequestContext "/api/second" `shouldBe` parseRoute defaultRequestContext "/api/second"
+      HarchWeb.parseRoute codec defaultRequestContext "/missing" `shouldBe` Nothing
       HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
       HarchWeb.renderRoute codec frenchSecondRequest `shouldBe` renderRoutePath frenchSecondRequest
       HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
@@ -2608,53 +2610,53 @@ spec = do
       HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldReturn` expectedApiNotFoundResponse
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
-      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "fr", Text.pack "second"])
+      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["fr", "second"])
       Wai.responseStatus secondResponse `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       renderedPage <- renderPage defaultAppConfig frenchSecondRequest
       readResponseBody secondResponse
         `shouldReturn` HarchWeb.pageShell pureApplication renderedPage
 
-      apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "status"])
+      apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "status"])
       Wai.responseStatus apiStatusResponse `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders apiStatusResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      lookup Http.hContentType (Wai.responseHeaders apiStatusResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody apiStatusResponse
-        `shouldReturn` Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+        `shouldReturn` "{\"status\":\"ok\",\"locale\":\"en\"}"
 
-      apiSecondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "second"])
+      apiSecondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "second"])
       Wai.responseStatus apiSecondResponse `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders apiSecondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      lookup Http.hContentType (Wai.responseHeaders apiSecondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody apiSecondResponse
-        `shouldReturn` Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+        `shouldReturn` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
 
-      missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "missing"])
+      missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["missing"])
       Wai.responseStatus missingResponse `shouldBe` Http.status404
-      lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       notFoundPage <- renderPage defaultAppConfig notFoundRequest
       readResponseBody missingResponse
         `shouldReturn` HarchWeb.pageShell pureApplication notFoundPage
 
-      apiMissingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "missing"])
+      apiMissingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "missing"])
       Wai.responseStatus apiMissingResponse `shouldBe` Http.status404
-      lookup Http.hContentType (Wai.responseHeaders apiMissingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      lookup Http.hContentType (Wai.responseHeaders apiMissingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody apiMissingResponse
-        `shouldReturn` Text.pack "{\"error\":\"not-found\"}"
+        `shouldReturn` "{\"error\":\"not-found\"}"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       homePage <- renderPage defaultAppConfig homeRequest
       secondPage <- renderPage defaultAppConfig secondRequest
       notFoundPage <- renderPage defaultAppConfig notFoundRequest
       HarchWeb.pageShell pureApplication homePage
-        `shouldBe` Text.pack "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
+        `shouldBe` "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication secondPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldBe` "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication notFoundPage
-        `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldBe` "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "can grow from page responses to API responses without changing route matching" $ do
       renderedResponse <- HarchWeb.renderResponse pureApplication apiSecondRequest
       case renderedResponse of
-        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 
   describe "run" $

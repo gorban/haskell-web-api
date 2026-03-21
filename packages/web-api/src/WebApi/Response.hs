@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.Response
   ( renderApiResponseFromRouteData,
     selectResponseWithDatabase,
@@ -46,60 +48,60 @@ renderApiResponseFromRouteData routeData =
     StatusApiDataResult statusApiData ->
       HarchWeb.ResponseBody
         { HarchWeb.responseStatus = 200,
-          HarchWeb.responseContentType = Text.pack "application/json",
+          HarchWeb.responseContentType = "application/json",
           HarchWeb.responseBody = statusApiBody statusApiData
         }
     SecondRouteDataResult (Right secondRouteData) ->
       HarchWeb.ResponseBody
         { HarchWeb.responseStatus = 200,
-          HarchWeb.responseContentType = Text.pack "application/json",
+          HarchWeb.responseContentType = "application/json",
           HarchWeb.responseBody = secondRouteApiBody secondRouteData
         }
     SecondRouteDataResult (Left _) ->
       HarchWeb.ResponseBody
         { HarchWeb.responseStatus = 503,
-          HarchWeb.responseContentType = Text.pack "application/json",
-          HarchWeb.responseBody = Text.pack "{\"error\":\"second-page-unavailable\"}"
+          HarchWeb.responseContentType = "application/json",
+          HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}"
         }
     _ ->
       HarchWeb.ResponseBody
         { HarchWeb.responseStatus = 404,
-          HarchWeb.responseContentType = Text.pack "application/json",
-          HarchWeb.responseBody = Text.pack "{\"error\":\"not-found\"}"
+          HarchWeb.responseContentType = "application/json",
+          HarchWeb.responseBody = "{\"error\":\"not-found\"}"
         }
 
 statusApiBody :: StatusApiData -> Text
 statusApiBody statusApiData =
   Text.concat
-    [ Text.pack "{\"status\":\"ok\",\"locale\":\"",
+    [ "{\"status\":\"ok\",\"locale\":\"",
       renderLocale (statusApiLocale statusApiData),
-      Text.pack "\"}"
+      "\"}"
     ]
 
 secondRouteApiBody :: SecondRouteData -> Text
 secondRouteApiBody secondRouteData =
   Text.concat
-    [ Text.pack "{\"summary\":",
+    [ "{\"summary\":",
       renderJsonString (secondRouteSummary secondRouteData),
-      Text.pack ",\"highlights\":",
+      ",\"highlights\":",
       renderJsonStringList (secondRouteHighlights secondRouteData),
-      Text.pack "}"
+      "}"
     ]
 
 renderJsonStringList :: [Text] -> Text
 renderJsonStringList values =
   Text.concat
-    [ Text.pack "[",
-      Text.intercalate (Text.pack ",") (map renderJsonString values),
-      Text.pack "]"
+    [ "[",
+      Text.intercalate "," (map renderJsonString values),
+      "]"
     ]
 
 renderJsonString :: Text -> Text
 renderJsonString value =
-  Text.concat [Text.pack "\"", value, Text.pack "\""]
+  Text.concat ["\"", value, "\""]
 
 renderLocale :: AppLocale -> Text
 renderLocale locale =
   case locale of
-    English -> Text.pack "en"
-    French -> Text.pack "fr"
+    English -> "en"
+    French -> "fr"

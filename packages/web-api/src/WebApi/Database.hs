@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.Database
   ( DatabaseEffect (..),
     DatabaseError (..),
@@ -59,23 +61,23 @@ defaultDatabaseSeed =
     { englishHomePageData =
         Right
           HomePageData
-            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
+            { homePageDataSummary = "Server-rendered home page with stubbed content."
             },
       frenchHomePageData =
         Right
           HomePageData
-            { homePageDataSummary = Text.pack "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
             },
       englishSecondPageData =
         Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+            { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             },
       frenchSecondPageData =
         Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+            { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
     }

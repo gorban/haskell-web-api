@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -83,7 +85,7 @@ renderRoutePath routeRequest =
     ApiSurface -> renderApiRoutePath (HarchWeb.requestRoute routeRequest)
     PageSurface ->
       let renderedPath = Text.concat [renderLocalePrefix (requestLocale (HarchWeb.requestContext routeRequest)), renderPageRouteSuffix (HarchWeb.requestRoute routeRequest)]
-       in if Text.null renderedPath then Text.pack "/" else renderedPath
+       in if Text.null renderedPath then "/" else renderedPath
 
 matchRoute :: AppRequestContext -> Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 matchRoute = HarchWeb.matchRoute routeCodec
@@ -100,20 +102,20 @@ mergeRequestContext requestContext maybeLocale pathSurface =
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
 parseRoutePath path
-  | not (Text.isPrefixOf (Text.pack "/") path) = Left (UnsupportedPath path)
-  | path /= Text.pack "/" && Text.isSuffixOf (Text.pack "/") path = Left (UnsupportedPath path)
+  | not (Text.isPrefixOf "/" path) = Left (UnsupportedPath path)
+  | path /= "/" && Text.isSuffixOf "/" path = Left (UnsupportedPath path)
 parseRoutePath path =
-  case drop 1 (Text.splitOn (Text.pack "/") path) of
+  case drop 1 (Text.splitOn "/" path) of
     [segment]
       | Text.null segment -> Right (Nothing, PageSurface, HomeRoute)
     [segment]
-      | segment == Text.pack "api" -> Right (Nothing, ApiSurface, NotFoundRoute)
+      | segment == "api" -> Right (Nothing, ApiSurface, NotFoundRoute)
     [segment] -> parseSingleSegmentPath path segment
     [prefix, segment]
-      | prefix == Text.pack "api" -> parseApiPath segment
+      | prefix == "api" -> parseApiPath segment
     [prefix, segment] -> parsePrefixedPath path prefix segment
     apiPrefix : _
-      | apiPrefix == Text.pack "api" -> Right (Nothing, ApiSurface, NotFoundRoute)
+      | apiPrefix == "api" -> Right (Nothing, ApiSurface, NotFoundRoute)
     _ -> Left (UnsupportedPath path)
 
 parseSingleSegmentPath :: Text -> Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
@@ -142,21 +144,21 @@ parsePrefixedPath fullPath prefix segment =
 
 parseApiPath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
 parseApiPath segment
-  | segment == Text.pack "status" = Right (Nothing, ApiSurface, StatusApiRoute)
-  | segment == Text.pack "second" = Right (Nothing, ApiSurface, SecondRoute)
-  | segment == Text.pack "404" = Right (Nothing, ApiSurface, NotFoundRoute)
+  | segment == "status" = Right (Nothing, ApiSurface, StatusApiRoute)
+  | segment == "second" = Right (Nothing, ApiSurface, SecondRoute)
+  | segment == "404" = Right (Nothing, ApiSurface, NotFoundRoute)
 parseApiPath _ = Right (Nothing, ApiSurface, NotFoundRoute)
 
 routeFromSegment :: Text -> Maybe AppRoute
 routeFromSegment segment
-  | segment == Text.pack "second" = Just SecondRoute
-  | segment == Text.pack "404" = Just NotFoundRoute
+  | segment == "second" = Just SecondRoute
+  | segment == "404" = Just NotFoundRoute
 routeFromSegment _ = Nothing
 
 localeFromPrefix :: Text -> Maybe AppLocale
 localeFromPrefix prefix
-  | prefix == Text.pack "en" = Just English
-  | prefix == Text.pack "fr" = Just French
+  | prefix == "en" = Just English
+  | prefix == "fr" = Just French
 localeFromPrefix _ = Nothing
 
 looksLikeLocalePrefix :: Text -> Bool
@@ -167,19 +169,19 @@ renderLocalePrefix :: AppLocale -> Text
 renderLocalePrefix locale =
   case locale of
     English -> Text.empty
-    French -> Text.pack "/fr"
+    French -> "/fr"
 
 renderPageRouteSuffix :: AppRoute -> Text
 renderPageRouteSuffix route =
   case route of
     HomeRoute -> Text.empty
-    SecondRoute -> Text.pack "/second"
-    NotFoundRoute -> Text.pack "/404"
-    StatusApiRoute -> Text.pack "/404"
+    SecondRoute -> "/second"
+    NotFoundRoute -> "/404"
+    StatusApiRoute -> "/404"
 
 renderApiRoutePath :: AppRoute -> Text
 renderApiRoutePath route =
   case route of
-    StatusApiRoute -> Text.pack "/api/status"
-    SecondRoute -> Text.pack "/api/second"
-    _ -> Text.pack "/api/404"
+    StatusApiRoute -> "/api/status"
+    SecondRoute -> "/api/second"
+    _ -> "/api/404"

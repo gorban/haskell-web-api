@@ -1,4 +1,5 @@
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb
   ( AcmeChallengeBackend (..),
@@ -264,11 +265,11 @@ staticAssetHref staticRoot assetPath =
   let normalizedPrefix = normalizeStaticPrefix (staticUrlPrefix staticRoot)
       normalizedAssetPath = trimLeadingSlash (Text.pack assetPath)
    in if Text.null normalizedPrefix
-        then Text.pack "/" <> normalizedAssetPath
+        then "/" <> normalizedAssetPath
         else
           Text.concat
             [ normalizedPrefix,
-              Text.pack "/",
+              "/",
               normalizedAssetPath
             ]
 
@@ -297,17 +298,17 @@ buildDocument codec shell page =
 renderDocument :: Document route -> Text
 renderDocument document =
   Text.concat
-    [ Text.pack "<html><head><title>",
+    [ "<html><head><title>",
       documentTitle document,
-      Text.pack "</title></head><body",
+      "</title></head><body",
       renderAttributes (documentBodyAttributes document),
-      Text.pack "><nav>",
+      "><nav>",
       Text.concat (map renderNavigationItem (documentNavigation document)),
-      Text.pack "</nav><main id=\"",
+      "</nav><main id=\"",
       documentMainId document,
-      Text.pack "\">",
+      "\">",
       documentMainContent document,
-      Text.pack "</main></body></html>"
+      "</main></body></html>"
     ]
 
 buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Text
@@ -345,7 +346,7 @@ runServer outputHandle config webApplication =
               ( matchRoute
                   (routeCodec webApplication)
                   (defaultRequestContext webApplication)
-                  (Text.pack "/")
+                  "/"
               )
           )
       startupPlan `seq`
@@ -358,23 +359,23 @@ renderAttributes = Text.concat . map renderAttribute
 renderAttribute :: HtmlAttribute -> Text
 renderAttribute attribute =
   Text.concat
-    [ Text.pack " ",
+    [ " ",
       attributeName attribute,
-      Text.pack "=\"",
+      "=\"",
       attributeValue attribute,
-      Text.pack "\""
+      "\""
     ]
 
 renderNavigationItem :: ResolvedNavigationItem route -> Text
 renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, navigationHref = itemHref, navigationIsActive = itemIsActive} =
   Text.concat
-    [ Text.pack "<a href=\"",
+    [ "<a href=\"",
       itemHref,
-      Text.pack "\"",
-      if itemIsActive then Text.pack " aria-current=\"page\"" else Text.empty,
-      Text.pack ">",
+      "\"",
+      if itemIsActive then " aria-current=\"page\"" else Text.empty,
+      ">",
       itemLabel,
-      Text.pack "</a>"
+      "</a>"
     ]
 
 toWaiResponse :: (Eq route) => Application route context -> Response route context -> Wai.Response
@@ -400,11 +401,11 @@ isNotFoundPage webApplication page =
 waiRequestPath :: Wai.Request -> Text
 waiRequestPath request =
   if ByteString.null (Wai.rawPathInfo request)
-    then Text.pack "/"
+    then "/"
     else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
 
 htmlContentType :: Text
-htmlContentType = Text.pack "text/html; charset=utf-8"
+htmlContentType = "text/html; charset=utf-8"
 
 serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe Wai.Response)
 serveStaticAssetResponse staticAssetsConfig requestPath =
@@ -449,15 +450,15 @@ stripStaticPrefix configuredPrefix requestPath =
   let normalizedPrefix = normalizeStaticPrefix configuredPrefix
    in if Text.null normalizedPrefix
         then
-          if requestPath == Text.pack "/"
+          if requestPath == "/"
             then Just Text.empty
-            else Text.stripPrefix (Text.pack "/") requestPath
+            else Text.stripPrefix "/" requestPath
         else
           if requestPath == normalizedPrefix
             then Just Text.empty
             else
               Text.stripPrefix
-                (normalizedPrefix <> Text.pack "/")
+                (normalizedPrefix <> "/")
                 requestPath
 
 sanitizeStaticAssetPath :: FilePath -> Maybe FilePath
@@ -488,26 +489,26 @@ staticCacheControlHeaderValue staticAssetsConfig =
 staticAssetContentType :: FilePath -> Text
 staticAssetContentType assetFilePath =
   case takeExtension assetFilePath of
-    ".css" -> Text.pack "text/css; charset=utf-8"
-    ".html" -> Text.pack "text/html; charset=utf-8"
-    ".js" -> Text.pack "application/javascript; charset=utf-8"
-    ".json" -> Text.pack "application/json; charset=utf-8"
-    ".svg" -> Text.pack "image/svg+xml"
-    ".txt" -> Text.pack "text/plain; charset=utf-8"
-    _ -> Text.pack "application/octet-stream"
+    ".css" -> "text/css; charset=utf-8"
+    ".html" -> "text/html; charset=utf-8"
+    ".js" -> "application/javascript; charset=utf-8"
+    ".json" -> "application/json; charset=utf-8"
+    ".svg" -> "image/svg+xml"
+    ".txt" -> "text/plain; charset=utf-8"
+    _ -> "application/octet-stream"
 
 missingStaticAssetResponse :: StaticAssetsConfig -> Wai.Response
 missingStaticAssetResponse staticAssetsConfig =
   Wai.responseLBS
     Http.status404
-    ( (Http.hContentType, TextEncoding.encodeUtf8 (Text.pack "text/plain; charset=utf-8"))
+    ( (Http.hContentType, TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
         : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
     )
-    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Text.pack "Not Found")))
+    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 "Not Found"))
 
 normalizeStaticPrefix :: Text -> Text
 normalizeStaticPrefix prefix =
-  case Text.stripSuffix (Text.pack "/") prefix of
+  case Text.stripSuffix "/" prefix of
     Just trimmedPrefix ->
       if Text.null trimmedPrefix
         then Text.empty
@@ -516,7 +517,7 @@ normalizeStaticPrefix prefix =
 
 trimLeadingSlash :: Text -> Text
 trimLeadingSlash assetPath =
-  fromMaybe assetPath (Text.stripPrefix (Text.pack "/") assetPath)
+  fromMaybe assetPath (Text.stripPrefix "/" assetPath)
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do

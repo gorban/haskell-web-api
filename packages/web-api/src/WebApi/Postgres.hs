@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.Postgres
   ( PostgresCommand (..),
     PostgresCommandResult (..),
@@ -89,15 +91,15 @@ runPostgresSeedWithRunner runCommand databaseConfig =
 
 migrationStatements :: [Text]
 migrationStatements =
-  [ Text.pack "CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-    Text.pack "CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));"
+  [ "CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+    "CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));"
   ]
 
 seedStatements :: [Text]
 seedStatements =
-  [ Text.pack "DELETE FROM page_highlights;",
-    Text.pack "DELETE FROM page_content;",
-    Text.pack "INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+  [ "DELETE FROM page_highlights;",
+    "DELETE FROM page_content;",
+    "INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
   ]
 
 runRequiredScalarQuery :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> (Text -> DatabaseError) -> IO (Either DatabaseError Text)
@@ -199,25 +201,25 @@ passwordEnvironment databaseConfig =
 homeSummaryQuery :: AppLocale -> Text
 homeSummaryQuery locale =
   Text.concat
-    [ Text.pack "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = '",
+    [ "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = '",
       renderLocaleCode locale,
-      Text.pack "';"
+      "';"
     ]
 
 secondSummaryQuery :: AppLocale -> Text
 secondSummaryQuery locale =
   Text.concat
-    [ Text.pack "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = '",
+    [ "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = '",
       renderLocaleCode locale,
-      Text.pack "';"
+      "';"
     ]
 
 secondHighlightsQuery :: AppLocale -> Text
 secondHighlightsQuery locale =
   Text.concat
-    [ Text.pack "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = '",
+    [ "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = '",
       renderLocaleCode locale,
-      Text.pack "' ORDER BY position ASC;"
+      "' ORDER BY position ASC;"
     ]
 
 normalizeQueryResult :: Text -> PostgresCommandResult -> Either PostgresRunnerError [Text]
@@ -230,7 +232,7 @@ parseRequiredScalarRows :: [Text] -> Either PostgresRunnerError Text
 parseRequiredScalarRows rows =
   case rows of
     [value] -> Right value
-    _ -> Left (UnexpectedQueryRows (Text.pack "expected exactly one row") rows)
+    _ -> Left (UnexpectedQueryRows "expected exactly one row" rows)
 
 queryRows :: PostgresCommandResult -> [Text]
 queryRows commandResult =
@@ -250,8 +252,8 @@ mergeEnvironment inheritedEnvironment additionalEnvironment =
 renderLocaleCode :: AppLocale -> Text
 renderLocaleCode locale =
   case locale of
-    English -> Text.pack "en"
-    French -> Text.pack "fr"
+    English -> "en"
+    French -> "fr"
 
 renderRunnerError :: PostgresRunnerError -> Text
 renderRunnerError runnerError =
@@ -265,11 +267,11 @@ renderRunnerError runnerError =
        in commandSummary `seq`
             environmentSummary `seq`
               if Text.null stderrText
-                then Text.pack "psql command failed"
+                then "psql command failed"
                 else stderrText
     UnexpectedQueryRows message rows ->
       Text.concat
         [ message,
-          Text.pack ": ",
-          Text.intercalate (Text.pack ", ") rows
+          ": ",
+          Text.intercalate ", " rows
         ]

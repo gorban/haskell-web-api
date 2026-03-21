@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.Page
   ( AppPageModel (..),
     CallToAction (..),
@@ -84,7 +86,7 @@ renderPageFromRouteData :: AppConfig -> HarchWeb.RouteRequest AppRoute AppReques
 renderPageFromRouteData config routeRequest routeData =
   let pageModel = buildPageModelFromRouteData routeRequest routeData
    in HarchWeb.Page
-        { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, Text.pack ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
+        { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
           HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
           HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
           HarchWeb.pageBody = renderPageBody pageModel
@@ -93,9 +95,9 @@ renderPageFromRouteData config routeRequest routeData =
 routeTitle :: AppRoute -> Text
 routeTitle route =
   case route of
-    HomeRoute -> Text.pack "Home"
-    SecondRoute -> Text.pack "Second"
-    _ -> Text.pack "Not Found"
+    HomeRoute -> "Home"
+    SecondRoute -> "Second"
+    _ -> "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
 buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect
@@ -112,28 +114,28 @@ buildPageModelFromRouteData routeRequest routeData =
     HomeRouteDataResult homeRouteData ->
       HomePage
         HomePageModel
-          { homeHeading = Text.pack "Home",
+          { homeHeading = "Home",
             homeSummary = homeRouteSummary homeRouteData,
-            homePrimaryAction = buildCallToAction routeRequest SecondRoute (Text.pack "Browse the second page")
+            homePrimaryAction = buildCallToAction routeRequest SecondRoute "Browse the second page"
           }
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
     _ ->
       NotFoundPage
         NotFoundPageModel
-          { notFoundHeading = Text.pack "Not Found",
-            notFoundSummary = Text.pack "The requested page could not be found.",
-            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
+          { notFoundHeading = "Not Found",
+            notFoundSummary = "The requested page could not be found.",
+            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute "Return home"
           }
 
 buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
 buildSecondPageModel routeRequest secondRouteDataResult =
-  let returnHome = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
+  let returnHome = buildCallToAction routeRequest HomeRoute "Return home"
    in case secondRouteDataResult of
         Right secondRouteData ->
           SecondPage
             SecondPageModel
-              { secondHeading = Text.pack "Second",
+              { secondHeading = "Second",
                 secondSummary = secondRouteSummary secondRouteData,
                 secondHighlights = secondRouteHighlights secondRouteData,
                 secondErrorMessage = Nothing,
@@ -142,10 +144,10 @@ buildSecondPageModel routeRequest secondRouteDataResult =
         Left _ ->
           SecondPage
             SecondPageModel
-              { secondHeading = Text.pack "Second",
-                secondSummary = Text.pack "Second page content is temporarily unavailable.",
+              { secondHeading = "Second",
+                secondSummary = "Second page content is temporarily unavailable.",
                 secondHighlights = [],
-                secondErrorMessage = Just (Text.pack "Could not load second page data."),
+                secondErrorMessage = Just "Could not load second page data.",
                 secondPrimaryAction = returnHome
               }
 
@@ -167,52 +169,52 @@ renderPageBody pageModel =
   case pageModel of
     HomePage homePage ->
       Text.concat
-        [ Text.pack "<section data-page=\"home\">",
-          Text.pack "<h1 data-page-title=\"true\">",
+        [ "<section data-page=\"home\">",
+          "<h1 data-page-title=\"true\">",
           homeHeading homePage,
-          Text.pack "</h1>",
-          Text.pack "<p>",
+          "</h1>",
+          "<p>",
           homeSummary homePage,
-          Text.pack "</p>",
+          "</p>",
           renderCallToAction (homePrimaryAction homePage),
-          Text.pack "</section>"
+          "</section>"
         ]
     SecondPage secondPage ->
       Text.concat
-        [ Text.pack "<section data-page=\"second\">",
-          Text.pack "<h1 data-page-title=\"true\">",
+        [ "<section data-page=\"second\">",
+          "<h1 data-page-title=\"true\">",
           secondHeading secondPage,
-          Text.pack "</h1>",
+          "</h1>",
           renderSecondPageError (secondErrorMessage secondPage),
-          Text.pack "<p>",
+          "<p>",
           secondSummary secondPage,
-          Text.pack "</p>",
+          "</p>",
           renderSecondPageHighlights secondPage,
           renderCallToAction (secondPrimaryAction secondPage),
-          Text.pack "</section>"
+          "</section>"
         ]
     NotFoundPage notFoundPage ->
       Text.concat
-        [ Text.pack "<section data-page=\"not-found\">",
-          Text.pack "<h1 data-page-title=\"true\">",
+        [ "<section data-page=\"not-found\">",
+          "<h1 data-page-title=\"true\">",
           notFoundHeading notFoundPage,
-          Text.pack "</h1>",
-          Text.pack "<p>",
+          "</h1>",
+          "<p>",
           notFoundSummary notFoundPage,
-          Text.pack "</p>",
+          "</p>",
           renderCallToAction (notFoundPrimaryAction notFoundPage),
-          Text.pack "</section>"
+          "</section>"
         ]
 
 renderHighlights :: [Text] -> Text
 renderHighlights highlights =
   case highlights of
-    [] -> Text.pack "<p data-empty-state=\"true\">No highlights yet.</p>"
+    [] -> "<p data-empty-state=\"true\">No highlights yet.</p>"
     _ ->
       Text.concat
-        [ Text.pack "<ul>",
+        [ "<ul>",
           Text.concat (map renderHighlight highlights),
-          Text.pack "</ul>"
+          "</ul>"
         ]
 
 renderSecondPageError :: Maybe Text -> Text
@@ -221,9 +223,9 @@ renderSecondPageError maybeErrorMessage =
     Nothing -> Text.empty
     Just errorMessage ->
       Text.concat
-        [ Text.pack "<p data-error-state=\"true\">",
+        [ "<p data-error-state=\"true\">",
           errorMessage,
-          Text.pack "</p>"
+          "</p>"
         ]
 
 renderSecondPageHighlights :: SecondPageModel -> Text
@@ -234,14 +236,14 @@ renderSecondPageHighlights secondPage =
 
 renderHighlight :: Text -> Text
 renderHighlight highlight =
-  Text.concat [Text.pack "<li>", highlight, Text.pack "</li>"]
+  Text.concat ["<li>", highlight, "</li>"]
 
 renderCallToAction :: CallToAction -> Text
 renderCallToAction callToAction =
   Text.concat
-    [ Text.pack "<p><a href=\"",
+    [ "<p><a href=\"",
       callToActionHref callToAction,
-      Text.pack "\" data-page-link=\"true\">",
+      "\" data-page-link=\"true\">",
       callToActionLabel callToAction,
-      Text.pack "</a></p>"
+      "</a></p>"
     ]
