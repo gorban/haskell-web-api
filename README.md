@@ -106,28 +106,46 @@ understands the following values:
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
 | `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
 
-If you want a concrete local override file convention, create `./.env.local` in the repository root,
-next to `README.md` and `cabal.project`.
+The intended configuration model has three layers:
 
-1. Create `./.env.local`.
-2. Add one `KEY=value` entry per line.
-3. Blank lines are allowed, and lines starting with `#` are treated as comments.
-4. Add only the keys you want to change; any key you omit will continue using its committed default.
+1. Code defaults in source. The table above documents the committed defaults defined in the codebase. This is
+   the only layer that `cabal run haskell-web-api` uses today.
+2. `./.env` in the repository root. This file is intended to be checked in and used for shared,
+   non-secret development overrides when a project wants defaults that differ from the code-level values.
+3. `./.env.local` in the repository root. This file is intended for machine-specific or deployed
+   configuration, may contain secrets, and is excluded from git.
 
-Today, `./.env.local` is a documented convention for the parser/test seam, not an auto-loaded runtime
-file. The current `cabal run haskell-web-api` path does not yet read `./.env.local` or process
-environment variables automatically; it still boots with the committed in-process defaults directly.
+Both `./.env` and `./.env.local` use simple `KEY=value` lines. Blank lines are allowed, and lines starting
+with `#` are treated as comments.
 
-In practice, that means:
+When startup wiring reads those files, the intended precedence is:
 
-1. To run the default localhost setup, just use `cabal run haskell-web-api` and do not create any
-   override file unless you want one for future wiring.
-2. To prepare overrides in the format already supported by the config parser, put them in
-   `./.env.local`.
-3. Once startup wiring loads overrides, the intended precedence is: committed defaults in source,
-   then `./.env.local`, then process environment variables.
+1. Code defaults in source.
+2. `./.env` for checked-in development defaults.
+3. `./.env.local` for local or deployed overrides.
 
-Example fully populated `./.env.local` body:
+At the moment, the file format and precedence are already supported by the parser seam, but the current
+`cabal run haskell-web-api` path still boots directly from the committed in-process defaults. That means
+`./.env` and `./.env.local` describe the intended file layout and layering model today rather than an
+already-wired startup behavior.
+
+Example checked-in `./.env` body for shared, non-secret development overrides:
+
+```dotenv
+# Shared development defaults for this repository
+APP_MODE=development
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=5432
+DATABASE_NAME=web_api_dev
+DATABASE_USER=web_api
+DATABASE_PASSWORD=web_api
+APP_TITLE_PREFIX=web-api-dev
+LISTENER_0_HOST=127.0.0.1
+LISTENER_0_PORT=5001
+LISTENER_0_SCHEME=http
+```
+
+Example fully populated `./.env.local` body for machine-specific or deployed overrides:
 
 ```dotenv
 # App environment values
