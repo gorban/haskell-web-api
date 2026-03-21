@@ -4,8 +4,10 @@ module WebApi.Page
     HomePageModel (..),
     NotFoundPageModel (..),
     SecondPageModel (..),
+    buildPageModelFromRouteData,
     buildPageModelWithDatabase,
     buildPageModel,
+    renderPageFromRouteData,
     renderPageWithDatabase,
     renderPage,
     renderPageBody,
@@ -19,14 +21,17 @@ import WebApi.Config (AppConfig (..))
 import WebApi.Database
   ( DatabaseEffect,
     defaultDatabaseEffect,
-    loadSecondPageData,
-    secondPageDataHighlights,
-    secondPageDataSummary,
   )
 import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
     renderRoutePath,
+  )
+import WebApi.RouteData
+  ( HomeRouteData (..),
+    RouteDataResult (..),
+    SecondRouteData (..),
+    selectRouteDataWithDatabase,
   )
 
 data CallToAction = CallToAction
@@ -71,7 +76,11 @@ renderPage config =
 
 renderPageWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
 renderPageWithDatabase config databaseEffect routeRequest =
-  let pageModel = buildPageModelWithDatabase databaseEffect routeRequest
+  renderPageFromRouteData config routeRequest (selectRouteDataWithDatabase databaseEffect routeRequest)
+
+renderPageFromRouteData :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> HarchWeb.Page AppRoute AppRequestContext
+renderPageFromRouteData config routeRequest routeData =
+  let pageModel = buildPageModelFromRouteData routeRequest routeData
    in HarchWeb.Page
         { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, Text.pack ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
           HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
@@ -91,16 +100,20 @@ buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect
 
 buildPageModelWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
 buildPageModelWithDatabase databaseEffect routeRequest =
-  case HarchWeb.requestRoute routeRequest of
-    HomeRoute ->
+  buildPageModelFromRouteData routeRequest (selectRouteDataWithDatabase databaseEffect routeRequest)
+
+buildPageModelFromRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> AppPageModel
+buildPageModelFromRouteData routeRequest routeData =
+  case routeData of
+    HomeRouteDataResult homeRouteData ->
       HomePage
         HomePageModel
           { homeHeading = Text.pack "Home",
-            homeSummary = Text.pack "Server-rendered home page with stubbed content.",
+            homeSummary = homeRouteSummary homeRouteData,
             homePrimaryAction = buildCallToAction routeRequest SecondRoute (Text.pack "Browse the second page")
           }
-    SecondRoute ->
-      buildSecondPageModel databaseEffect routeRequest
+    SecondRouteDataResult secondRouteDataResult ->
+      buildSecondPageModel routeRequest secondRouteDataResult
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -109,16 +122,16 @@ buildPageModelWithDatabase databaseEffect routeRequest =
             notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
           }
 
-buildSecondPageModel :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
-buildSecondPageModel databaseEffect routeRequest =
+buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
+buildSecondPageModel routeRequest secondRouteDataResult =
   let returnHome = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
-   in case loadSecondPageData databaseEffect (HarchWeb.requestContext routeRequest) of
-        Right secondPageData ->
+   in case secondRouteDataResult of
+        Right secondRouteData ->
           SecondPage
             SecondPageModel
               { secondHeading = Text.pack "Second",
-                secondSummary = secondPageDataSummary secondPageData,
-                secondHighlights = secondPageDataHighlights secondPageData,
+                secondSummary = secondRouteSummary secondRouteData,
+                secondHighlights = secondRouteHighlights secondRouteData,
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = returnHome
               }

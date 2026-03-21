@@ -16,10 +16,11 @@ import System.IO.Temp (withSystemTempFile)
 import WebApi (buildApp, run)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageWithDatabase)
-import WebApi.Response (selectResponse)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
+import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataWithDatabase)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -46,6 +47,13 @@ frenchApiStatusRequest =
       HarchWeb.requestContext = frenchRequestContext {requestSurface = ApiSurface}
     }
 
+frenchApiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+frenchApiSecondRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = SecondRoute,
+      HarchWeb.requestContext = frenchRequestContext {requestSurface = ApiSurface}
+    }
+
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 notFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = defaultRequestContext}
 
@@ -53,6 +61,13 @@ apiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
+      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+    }
+
+apiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+apiSecondRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = SecondRoute,
       HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
     }
 
@@ -733,6 +748,99 @@ spec = do
         `shouldBe` loadHomePageData defaultDatabaseEffect defaultRequestContext
       loadSecondPageData defaultDatabaseEffect frenchRequestContext
         `shouldBe` loadSecondPageData defaultDatabaseEffect frenchRequestContext
+
+  describe "selectRouteData" $ do
+    it "selects the same second-route domain data for page and API surfaces" $ do
+      let seededDatabaseEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  englishSecondPageData =
+                    Right
+                      SecondPageData
+                        { secondPageDataSummary = Text.pack "Shared domain summary.",
+                          secondPageDataHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                        },
+                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                }
+          selectedRouteData = selectRouteDataWithDatabase seededDatabaseEffect secondRequest
+      selectedRouteData
+        `shouldBe` SecondRouteDataResult
+          ( Right
+              SecondRouteData
+                { secondRouteSummary = Text.pack "Shared domain summary.",
+                  secondRouteHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                }
+          )
+      selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldBe` selectedRouteData
+
+    it "keeps route-data selectors and derived instances deterministic for tests" $ do
+      let homeRouteData =
+            HomeRouteData
+              { homeRouteSummary = Text.pack "Stubbed home summary"
+              }
+          otherHomeRouteData =
+            HomeRouteData
+              { homeRouteSummary = Text.pack "Different home summary"
+              }
+          secondRouteData =
+            SecondRouteData
+              { secondRouteSummary = Text.pack "Shared domain summary",
+                secondRouteHighlights = [Text.pack "Shared loader"]
+              }
+          statusApiData =
+            StatusApiData
+              { statusApiLocale = French
+              }
+          routeDataResult = HomeRouteDataResult homeRouteData
+      homeRouteSummary homeRouteData `shouldBe` Text.pack "Stubbed home summary"
+      secondRouteSummary secondRouteData `shouldBe` Text.pack "Shared domain summary"
+      secondRouteHighlights secondRouteData `shouldBe` [Text.pack "Shared loader"]
+      statusApiLocale statusApiData `shouldBe` French
+      homeRouteData `shouldBe` homeRouteData
+      homeRouteData `shouldNotBe` otherHomeRouteData
+      secondRouteData `shouldNotBe` secondRouteData {secondRouteHighlights = []}
+      statusApiData `shouldBe` statusApiData
+      statusApiData `shouldNotBe` StatusApiData {statusApiLocale = English}
+      routeDataResult `shouldBe` routeDataResult
+      routeDataResult `shouldNotBe` NotFoundRouteDataResult
+      show homeRouteData `shouldBe` "HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}"
+      show secondRouteData
+        `shouldBe` "SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}"
+      show statusApiData `shouldBe` "StatusApiData {statusApiLocale = French}"
+      show routeDataResult
+        `shouldBe` "HomeRouteDataResult (HomeRouteData {homeRouteSummary = \"Stubbed home summary\"})"
+      show (SecondRouteDataResult (Right secondRouteData))
+        `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
+      show (StatusApiDataResult statusApiData)
+        `shouldBe` "StatusApiDataResult (StatusApiData {statusApiLocale = French})"
+      show [homeRouteData] `shouldBe` "[HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}]"
+      show [secondRouteData]
+        `shouldBe` "[SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}]"
+      show [statusApiData] `shouldBe` "[StatusApiData {statusApiLocale = French}]"
+      show [NotFoundRouteDataResult] `shouldBe` "[NotFoundRouteDataResult]"
+
+    it "selects default stubbed and status route data without extra wiring" $ do
+      selectRouteData homeRequest
+        `shouldBe` HomeRouteDataResult
+          HomeRouteData
+            { homeRouteSummary = Text.pack "Server-rendered home page with stubbed content."
+            }
+      selectRouteData secondRequest
+        `shouldBe` SecondRouteDataResult
+          ( Right
+              SecondRouteData
+                { secondRouteSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                  secondRouteHighlights = []
+                }
+          )
+      selectRouteData frenchApiStatusRequest
+        `shouldBe` StatusApiDataResult
+          StatusApiData
+            { statusApiLocale = French
+            }
+      selectRouteData apiNotFoundRequest `shouldBe` NotFoundRouteDataResult
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
@@ -1527,6 +1635,7 @@ spec = do
 
     it "parses API routes with the API response surface" $ do
       parseRoute defaultRequestContext (Text.pack "/api/status") `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext (Text.pack "/api/second") `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext (Text.pack "/api") `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext (Text.pack "/api/404") `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext (Text.pack "/api/missing") `shouldBe` Just apiNotFoundRequest
@@ -1579,6 +1688,7 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath frenchSecondRequest) `shouldBe` Just frenchSecondRequest
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
     it "renders locale prefixes only for non-default locales" $ do
@@ -1588,6 +1698,7 @@ spec = do
       renderRoutePath frenchSecondRequest `shouldBe` Text.pack "/fr/second"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` Text.pack "/404"
       renderRoutePath apiStatusRequest `shouldBe` Text.pack "/api/status"
+      renderRoutePath apiSecondRequest `shouldBe` Text.pack "/api/second"
       renderRoutePath apiNotFoundRequest `shouldBe` Text.pack "/api/404"
       renderRoutePath notFoundRequest `shouldBe` Text.pack "/404"
 
@@ -1607,6 +1718,7 @@ spec = do
 
     it "matches API paths with the API response surface" $ do
       pureRouteMatcher (Text.pack "/api/status") `shouldBe` apiStatusRequest
+      pureRouteMatcher (Text.pack "/api/second") `shouldBe` apiSecondRequest
       pureRouteMatcher (Text.pack "/api/missing") `shouldBe` apiNotFoundRequest
 
     it "falls back to the stable not-found route for unknown paths" $
@@ -1638,6 +1750,25 @@ spec = do
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = Text.pack "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+          }
+
+    it "renders selected route data without reloading it" $
+      renderPageFromRouteData
+        defaultAppConfig
+        secondRequest
+        ( SecondRouteDataResult
+            ( Right
+                SecondRouteData
+                  { secondRouteSummary = Text.pack "Shared domain summary.",
+                    secondRouteHighlights = [Text.pack "Shared loader"]
+                  }
+            )
+        )
+        `shouldBe` HarchWeb.Page
+          { HarchWeb.pageTitle = Text.pack "web-api: Second",
+            HarchWeb.pageRoute = SecondRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
           }
 
     it "keeps shared layout data consistent across all routes" $ do
@@ -1674,7 +1805,7 @@ spec = do
     it "resolves page routes to page responses that still flow through the shared shell" $
       selectResponse defaultAppConfig secondRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig secondRequest)
 
-    it "resolves API-only routes to explicit status, content type, and body values" $
+    it "resolves API-only routes to explicit status, content type, and body values" $ do
       selectResponse defaultAppConfig apiStatusRequest
         `shouldBe` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
@@ -1682,14 +1813,28 @@ spec = do
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
             }
+      selectResponse defaultAppConfig apiSecondRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+            }
 
-    it "keeps API payload rendering locale-aware without touching page routing" $
+    it "keeps API payload rendering locale-aware without touching page routing" $ do
       selectResponse defaultAppConfig frenchApiStatusRequest
         `shouldBe` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"status\":\"ok\",\"locale\":\"fr\"}"
+            }
+      selectResponse defaultAppConfig frenchApiSecondRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
             }
 
     it "keeps not-found handling consistent across page and non-page responses" $ do
@@ -1700,6 +1845,25 @@ spec = do
             { HarchWeb.responseStatus = 404,
               HarchWeb.responseContentType = Text.pack "application/json",
               HarchWeb.responseBody = Text.pack "{\"error\":\"not-found\"}"
+            }
+
+    it "maps shared second-page load failures into explicit API error responses" $
+      selectResponseWithDatabase
+        defaultAppConfig
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        apiSecondRequest
+        `shouldBe` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 503,
+              HarchWeb.responseContentType = Text.pack "application/json",
+              HarchWeb.responseBody = Text.pack "{\"error\":\"second-page-unavailable\"}"
             }
 
     it "is deterministic for repeated requests" $
@@ -1733,6 +1897,36 @@ spec = do
                     callToActionHref = Text.pack "/fr/second"
                   }
             }
+
+    it "renders selected route data into both page models and API responses" $ do
+      let selectedRouteData =
+            SecondRouteDataResult
+              ( Right
+                  SecondRouteData
+                    { secondRouteSummary = Text.pack "Shared domain summary.",
+                      secondRouteHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"]
+                    }
+              )
+      buildPageModelFromRouteData secondRequest selectedRouteData
+        `shouldBe` SecondPage
+          SecondPageModel
+            { secondHeading = Text.pack "Second",
+              secondSummary = Text.pack "Shared domain summary.",
+              secondHighlights = [Text.pack "Shared loader", Text.pack "Shared renderer"],
+              secondErrorMessage = Nothing,
+              secondPrimaryAction =
+                CallToAction
+                  { callToActionLabel = Text.pack "Return home",
+                    callToActionRoute = HomeRoute,
+                    callToActionHref = Text.pack "/"
+                  }
+            }
+      renderApiResponseFromRouteData selectedRouteData
+        `shouldBe` HarchWeb.ResponseBody
+          { HarchWeb.responseStatus = 200,
+            HarchWeb.responseContentType = Text.pack "application/json",
+            HarchWeb.responseBody = Text.pack "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}"
+          }
 
     it "loads second-page content from the database effect when provided" $
       buildPageModelWithDatabase
@@ -1878,11 +2072,13 @@ spec = do
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/fr") `shouldBe` parseRoute defaultRequestContext (Text.pack "/fr")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/second")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/api/status") `shouldBe` parseRoute defaultRequestContext (Text.pack "/api/status")
+      HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/api/second") `shouldBe` parseRoute defaultRequestContext (Text.pack "/api/second")
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/missing") `shouldBe` Nothing
       HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
       HarchWeb.renderRoute codec frenchSecondRequest `shouldBe` renderRoutePath frenchSecondRequest
       HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
       HarchWeb.renderRoute codec apiStatusRequest `shouldBe` renderRoutePath apiStatusRequest
+      HarchWeb.renderRoute codec apiSecondRequest `shouldBe` renderRoutePath apiSecondRequest
       HarchWeb.renderRoute codec apiNotFoundRequest `shouldBe` renderRoutePath apiNotFoundRequest
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
@@ -1891,6 +2087,7 @@ spec = do
       HarchWeb.renderResponse pureApplication homeRequest `shouldBe` selectResponse defaultAppConfig homeRequest
       HarchWeb.renderResponse pureApplication secondRequest `shouldBe` selectResponse defaultAppConfig secondRequest
       HarchWeb.renderResponse pureApplication apiStatusRequest `shouldBe` selectResponse defaultAppConfig apiStatusRequest
+      HarchWeb.renderResponse pureApplication apiSecondRequest `shouldBe` selectResponse defaultAppConfig apiSecondRequest
       HarchWeb.renderResponse pureApplication notFoundRequest `shouldBe` selectResponse defaultAppConfig notFoundRequest
       HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldBe` selectResponse defaultAppConfig apiNotFoundRequest
 
@@ -1906,6 +2103,12 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders apiStatusResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
       readResponseBody apiStatusResponse
         `shouldReturn` Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+
+      apiSecondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "api", Text.pack "second"])
+      Wai.responseStatus apiSecondResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders apiSecondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      readResponseBody apiSecondResponse
+        `shouldReturn` Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
 
       missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "missing"])
       Wai.responseStatus missingResponse `shouldBe` Http.status404
@@ -1931,8 +2134,8 @@ spec = do
         `shouldBe` Text.pack "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
     it "can grow from page responses to API responses without changing route matching" $
-      case HarchWeb.renderResponse pureApplication apiStatusRequest of
-        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` Text.pack "{\"status\":\"ok\",\"locale\":\"en\"}"
+      case HarchWeb.renderResponse pureApplication apiSecondRequest of
+        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` Text.pack "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 
   describe "run" $

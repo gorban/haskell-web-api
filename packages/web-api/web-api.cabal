@@ -65,6 +65,7 @@ library
     WebApi.Page
     WebApi.Response
     WebApi.Route
+    WebApi.RouteData
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:

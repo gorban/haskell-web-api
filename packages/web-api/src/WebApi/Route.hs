@@ -143,6 +143,7 @@ parsePrefixedPath fullPath prefix segment =
 parseApiPath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
 parseApiPath segment
   | segment == Text.pack "status" = Right (Nothing, ApiSurface, StatusApiRoute)
+  | segment == Text.pack "second" = Right (Nothing, ApiSurface, SecondRoute)
   | segment == Text.pack "404" = Right (Nothing, ApiSurface, NotFoundRoute)
 parseApiPath _ = Right (Nothing, ApiSurface, NotFoundRoute)
 
@@ -180,4 +181,5 @@ renderApiRoutePath :: AppRoute -> Text
 renderApiRoutePath route =
   case route of
     StatusApiRoute -> Text.pack "/api/status"
+    SecondRoute -> Text.pack "/api/second"
     _ -> Text.pack "/api/404"
