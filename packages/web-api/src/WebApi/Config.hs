@@ -6,8 +6,10 @@ module WebApi.Config
     AcmeConfig (..),
     AppConfig (..),
     AppEnvironmentConfig (..),
+    AppEnvironmentConfigLoadError (..),
     AppMode (..),
     CertbotConfig (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     DatabaseConfig (..),
     ListenerConfig (..),
@@ -22,15 +24,19 @@ module WebApi.Config
     committedRuntimeDefaults,
     defaultAppConfig,
     defaultAppEnvironmentConfig,
+    loadAppEnvironmentConfig,
+    loadAppEnvironmentConfigWithFiles,
     parseAppEnvironmentConfig,
     parseRuntimeAppConfig,
   )
 where
 
 import Core.Config
-  ( ConfigParseError (..),
+  ( ConfigOverridesFileError (..),
+    ConfigParseError (..),
     declaredIndices,
     indexedConfigKey,
+    loadConfigOverridesFile,
     lookupConfigValue,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
@@ -75,6 +81,11 @@ data AppEnvironmentConfig = AppEnvironmentConfig
   { appMode :: AppMode,
     databaseConfig :: DatabaseConfig
   }
+  deriving (Eq, Show)
+
+data AppEnvironmentConfigLoadError
+  = AppEnvironmentOverridesFileError FilePath ConfigOverridesFileError
+  | AppEnvironmentConfigParseError ConfigParseError
   deriving (Eq, Show)
 
 data AppConfig = AppConfig
@@ -148,6 +159,29 @@ defaultAppConfig =
             metricsExporter = Nothing
           }
     }
+
+loadAppEnvironmentConfig :: IO (Either AppEnvironmentConfigLoadError AppEnvironmentConfig)
+loadAppEnvironmentConfig =
+  loadAppEnvironmentConfigWithFiles ".env" ".env.local"
+
+loadAppEnvironmentConfigWithFiles :: FilePath -> FilePath -> IO (Either AppEnvironmentConfigLoadError AppEnvironmentConfig)
+loadAppEnvironmentConfigWithFiles committedDefaultsPath localOverridesPath = do
+  committedDefaultsResult <- loadOverridesFile committedDefaultsPath
+  localOverridesResult <- loadOverridesFile localOverridesPath
+  pure $ do
+    committedDefaults <- committedDefaultsResult
+    localOverrides <- localOverridesResult
+    case parseAppEnvironmentConfig committedEnvDefaults committedDefaults localOverrides of
+      Left parseError -> Left (AppEnvironmentConfigParseError parseError)
+      Right environmentConfig -> Right environmentConfig
+  where
+    loadOverridesFile overridesPath =
+      fmap
+        ( either
+            (Left . AppEnvironmentOverridesFileError overridesPath)
+            Right
+        )
+        (loadConfigOverridesFile overridesPath)
 
 parseAppEnvironmentConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppEnvironmentConfig
 parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides = do

@@ -35,7 +35,7 @@ curl -s https://raw.githubusercontent.com/89luca89/distrobox/main/install | sudo
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -43,12 +43,24 @@ init_hooks="install -d /var/tmp/distrobox-git /var/tmp/distrobox-git/bin"
 init_hooks="if [ -f \$HOME/.gitconfig ]; then cp \$HOME/.gitconfig /var/tmp/distrobox-git/gitconfig; else : > /var/tmp/distrobox-git/gitconfig; fi"
 init_hooks="GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get diff.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global diff.tool vimdiff; GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get merge.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global merge.tool vimdiff"
 init_hooks="resolve_git_tool_bin() { case \$1 in bc|bc3|bc4) printf %s bcompare ;; gvimdiff|gvimdiff1|gvimdiff2|gvimdiff3) printf %s gvim ;; nvimdiff|nvimdiff1|nvimdiff2|nvimdiff3) printf %s nvimdiff ;; vimdiff|vimdiff1|vimdiff2|vimdiff3) printf %s vimdiff ;; vscode) printf %s code ;; *) printf %s \$1 ;; esac; }; if command -v distrobox-host-exec >/dev/null 2>&1; then for tool_key in diff.tool merge.tool; do tool_name=\$(GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get \$tool_key || true); test x\$tool_name = x && continue; tool_bin=\$(resolve_git_tool_bin \$tool_name); if ! command -v \$tool_bin >/dev/null 2>&1; then ln -sf /usr/bin/distrobox-host-exec /var/tmp/distrobox-git/bin/\$tool_bin; case \$tool_key in diff.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global difftool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; merge.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global mergetool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; esac; fi; done; fi"
+init_hooks="ln -sf /run/user/$(id -u)/podman/podman.sock /var/run/docker.sock"
+init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman"
 ```
 
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
   optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
   built-in `vimdiff` tool inside the container.
+- The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
+  `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
+  symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
+  if needed.
+  - **NOTE**: It is not required for the app to start up its own prerequisites if they are provided
+    separately connections are configured appropriately, but otherwise you must have the Podman socket
+    enabled on your host:
+    ```bash
+    systemctl --user enable --now podman.socket
+    ```
 - The `init_hooks` do git setup overrides inside the container. `additional_flags` sets `GIT_CONFIG_GLOBAL`
   on every container start, and the hooks copy the host `~/.gitconfig` into that container-local file if
   it exists. They then inspect the selected `diff.tool` and `merge.tool` values from that copied config.
@@ -268,75 +280,67 @@ If you want a local PostgreSQL instance that matches the current committed devel
 - Host: `127.0.0.1`
 - Port: `5432`
 - Database: `web_api_dev`
-- User: `web_api`
-- Password: `web_api`
+- Runtime app user: `web_api`
+- Runtime app password: `web_api`
 
-One straightforward option is a local container, using either Docker or Podman.
-
-### Docker
+Today, prerequisite autostart from `Setup.hs` is still planned work. For now, manually start a local
+PostgreSQL instance that matches your configured values. One straightforward option is a local container,
+using either Docker or Podman.
 
 ```bash
 docker run --name web-api-postgres \
-  -e POSTGRES_PASSWORD=postgres \
+  -e POSTGRES_USER=web_api_owner \
+  -e POSTGRES_PASSWORD=web_api_owner \
+  -e POSTGRES_DB=web_api_dev \
   -p 5432:5432 \
   -d postgres:17
 ```
+- **podman**: just replace `docker` with `podman` in the above command, but make sure you have the Podman
+  socket enabled on your host.
 
-### Podman
-
-```bash
-podman run --name web-api-postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -p 5432:5432 \
-  -d postgres:17
-```
-
-After the container is running, create the matching role and database:
+That container example creates a database owner up front, so you do not need separate `psql` owner calls
+just to bootstrap the database. Then export dedicated migration credentials before running the Haskell
+migration command:
 
 ```bash
-psql -h 127.0.0.1 -U postgres -d postgres -c "CREATE ROLE web_api LOGIN PASSWORD 'web_api';"
-psql -h 127.0.0.1 -U postgres -d postgres -c "CREATE DATABASE web_api_dev OWNER web_api;"
+export WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1
+export WEB_API_MIGRATION_DATABASE_PORT=5432
+export WEB_API_MIGRATION_DATABASE_NAME=web_api_dev
+export WEB_API_MIGRATION_DATABASE_USER=web_api_owner
+export WEB_API_MIGRATION_DATABASE_PASSWORD=web_api_owner
 ```
 
-Apply the current schema and seed statements expected by `WebApi.Postgres`:
+Then apply the Haskell-managed migrations and seed data from this repository:
 
 ```bash
-PGPASSWORD=web_api psql -h 127.0.0.1 -U web_api -d web_api_dev <<'SQL'
-CREATE TABLE IF NOT EXISTS page_content (
-  route_slug TEXT NOT NULL,
-  locale TEXT NOT NULL,
-  summary TEXT NOT NULL,
-  PRIMARY KEY (route_slug, locale)
-);
-
-CREATE TABLE IF NOT EXISTS page_highlights (
-  route_slug TEXT NOT NULL,
-  locale TEXT NOT NULL,
-  position INTEGER NOT NULL,
-  highlight TEXT NOT NULL,
-  PRIMARY KEY (route_slug, locale, position)
-);
-
-DELETE FROM page_highlights;
-DELETE FROM page_content;
-
-INSERT INTO page_content (route_slug, locale, summary) VALUES
-  ('home', 'en', 'Server-rendered home page with stubbed content.'),
-  ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'),
-  ('second', 'en', 'Second page content with stubbed data ready for future loaders.'),
-  ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');
-SQL
+cabal run haskell-web-api-db -- migrate-and-seed
 ```
 
-Those commands mirror the current defaults and SQL in `WebApi.Config` and `WebApi.Postgres`. If you change
-the database connection values in your local config layers, adjust the `psql` commands to match.
+That command intentionally does **not** read the runtime app config files. Instead, it requires separate
+owner-level credentials from the environment variables shown above so migrations do not depend on the
+runtime application's minimal-access user.
+
+Your runtime `./.env` / `./.env.local` values should keep describing the application's own connection user.
+The future database-backed runtime path should use a minimal-access account there, while migrations should
+continue to use separate owner credentials.
+
+No extra migration tool installation is required. If you only want the schema without the sample content,
+run:
+
+```bash
+cabal run haskell-web-api-db -- migrate
+```
+
+If you change the owner-level database connection values, update the exported
+`WEB_API_MIGRATION_DATABASE_*` environment variables to match. The later `Setup.hs` prerequisite-autostart
+work should reuse this same migration path with its own owner credentials instead of requiring manual SQL.
 
 When you are done with the container example, stop and remove it with either Docker or Podman:
 
 ```bash
 docker rm -f web-api-postgres
-podman rm -f web-api-postgres
 ```
+- **podman**: just replace `docker` with `podman` in the above comman.
 
 ## Local Jaeger All-in-One Startup Example
 
@@ -349,8 +353,6 @@ OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
 
 Then start Jaeger all-in-one with OTLP enabled.
 
-### Docker
-
 ```bash
 docker run --name web-api-jaeger \
   -e COLLECTOR_OTLP_ENABLED=true \
@@ -358,16 +360,8 @@ docker run --name web-api-jaeger \
   -p 4318:4318 \
   -d jaegertracing/all-in-one
 ```
-
-### Podman
-
-```bash
-podman run --name web-api-jaeger \
-  -e COLLECTOR_OTLP_ENABLED=true \
-  -p 16686:16686 \
-  -p 4318:4318 \
-  -d jaegertracing/all-in-one
-```
+- **podman**: just replace `docker` with `podman` in the above command, but make sure you have the Podman
+  socket enabled on your host.
 
 Useful endpoints after startup:
 
@@ -378,8 +372,8 @@ When you are done, stop and remove it with either Docker or Podman:
 
 ```bash
 docker rm -f web-api-jaeger
-podman rm -f web-api-jaeger
 ```
+- **podman**: just replace `docker` with `podman` in the above command.
 
 #### Additional Build Prerequisites for CI Builds
 

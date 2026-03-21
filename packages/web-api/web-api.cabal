@@ -62,6 +62,7 @@ library
     WebApi.App
     WebApi.Config
     WebApi.Database
+    WebApi.DatabaseSetup
     WebApi.Page
     WebApi.Postgres
     WebApi.Response
@@ -97,6 +98,15 @@ executable haskell-web-api
   -- Directories containing source files.
   hs-source-dirs: app
 
+executable haskell-web-api-db
+  import: common
+  main-is: DatabaseSetupMain.hs
+  build-depends:
+    base ^>=4.22.0.0,
+    haskell-web-api,
+
+  hs-source-dirs: app
+
 test-suite haskell-web-api-tests
   import: common
   -- Common test suite settings.
@@ -120,6 +130,7 @@ test-suite haskell-web-api-tests
     -- Discovers hspec *Spec.hs tests
     -- Our spec-preprocessor to fill in {-# SPEC #-} headers
     haskell-web-api:haskell-web-api,
+    haskell-web-api:haskell-web-api-db,
     hspec-discover:hspec-discover,
     test-core:spec-preprocessor,
 
@@ -134,6 +145,7 @@ test-suite haskell-web-api-tests
     base ^>=4.22.0.0,
     bytestring,
     core,
+    directory,
     harch-web,
     haskell-web-api,
     hspec,

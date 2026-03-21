@@ -2,7 +2,7 @@
 
 {-# SPEC #-}
 
-import Control.Exception (finally)
+import Control.Exception (IOException, displayException, finally, try)
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -14,6 +14,7 @@ import qualified HarchWeb
 import qualified Network.HTTP.Types as Http
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
+import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getEnv, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hClose)
@@ -21,8 +22,9 @@ import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
+import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatements, runPostgresMigrations, runPostgresMigrationsWithRunner, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
@@ -178,6 +180,12 @@ withTemporaryEnvironment key maybeValue action = do
           Just value -> setEnv key value
           Nothing -> unsetEnv key
   action `finally` restore
+
+withCurrentDirectory :: FilePath -> IO a -> IO a
+withCurrentDirectory directory action = do
+  previousDirectory <- getCurrentDirectory
+  setCurrentDirectory directory
+  action `finally` setCurrentDirectory previousDirectory
 
 withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a
 withFakePsqlScriptResults commandResults action =
@@ -1424,6 +1432,372 @@ spec = do
       parseAppEnvironmentConfig committedEnvDefaults [] [("DATABASE_PORT", "0")]
         `shouldBe` Left (InvalidConfigValue "DATABASE_PORT" "0")
 
+  describe "loadAppEnvironmentConfigWithFiles" $ do
+    it "loads the documented .env then .env.local layers" $
+      withSystemTempDirectory "app-environment-config" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+        writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
+        loadAppEnvironmentConfigWithFiles envPath envLocalPath
+          `shouldReturn` Right
+            AppEnvironmentConfig
+              { appMode = Test,
+                databaseConfig =
+                  DatabaseConfig
+                    { databaseHost = "db.shared",
+                      databasePort = 7432,
+                      databaseName = "shared_db",
+                      databaseUser = "shared_user",
+                      databasePassword = "local_password"
+                    }
+              }
+
+    it "reports invalid override files with the failing path" $
+      withSystemTempDirectory "app-environment-config-error" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "DATABASE_HOST\n"
+        loadAppEnvironmentConfigWithFiles envPath envLocalPath
+          `shouldReturn` Left
+            (AppEnvironmentOverridesFileError envPath (InvalidConfigOverridesLine 1 "DATABASE_HOST"))
+
+    it "reports parse errors after both files load successfully" $
+      withSystemTempDirectory "app-environment-config-parse-error" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "DATABASE_PORT=0\n"
+        loadAppEnvironmentConfigWithFiles envPath envLocalPath
+          `shouldReturn` Left
+            (AppEnvironmentConfigParseError (InvalidConfigValue "DATABASE_PORT" "0"))
+
+  describe "loadAppEnvironmentConfig" $
+    it "loads the default .env file names from the current directory" $
+      withSystemTempDirectory "app-environment-config-current-directory" $ \tempDirectory -> do
+        writeFile (tempDirectory <> "/.env") "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+        writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\n"
+        withCurrentDirectory tempDirectory $
+          loadAppEnvironmentConfig
+            `shouldReturn` Right
+              AppEnvironmentConfig
+                { appMode = Test,
+                  databaseConfig =
+                    DatabaseConfig
+                      { databaseHost = "db.shared",
+                        databasePort = 6432,
+                        databaseName = "shared_db",
+                        databaseUser = "shared_user",
+                        databasePassword = "local_password"
+                      }
+                }
+
+  describe "AppEnvironmentConfigLoadError" $
+    it "keeps load-error equality and rendering deterministic" $ do
+      let fileLoadError = AppEnvironmentOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
+          parseLoadError = AppEnvironmentConfigParseError (InvalidConfigValue "DATABASE_PORT" "0")
+      fileLoadError `shouldBe` fileLoadError
+      fileLoadError `shouldNotBe` parseLoadError
+      show fileLoadError
+        `shouldBe` "AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"
+      show parseLoadError
+        `shouldBe` "AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")"
+      show [fileLoadError, parseLoadError]
+        `shouldBe` "[AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")]"
+
+  describe "parseDatabaseSetupCommand" $ do
+    it "accepts migrate, seed, and migrate-and-seed" $ do
+      parseDatabaseSetupCommand ["migrate"] `shouldBe` Right MigrateDatabase
+      parseDatabaseSetupCommand ["seed"] `shouldBe` Right SeedDatabase
+      parseDatabaseSetupCommand ["migrate-and-seed"] `shouldBe` Right MigrateAndSeedDatabase
+
+    it "rejects unsupported command lines with explicit guidance" $ do
+      parseDatabaseSetupCommand ["deploy"]
+        `shouldBe` Left (InvalidDatabaseSetupCommand ["deploy"])
+      renderDatabaseSetupError (InvalidDatabaseSetupCommand ["deploy"])
+        `shouldBe` "Unsupported database setup command: deploy\nExpected one of: migrate, seed, migrate-and-seed"
+
+    it "keeps command and error values stable" $ do
+      let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+          configSetupError = DatabaseSetupConfigLoadError loadError
+          migrationSetupError = DatabaseSetupMigrationError (UnexpectedQueryRows "expected exactly one row" ["first", "second"])
+          seedSetupError = DatabaseSetupSeedError (UnexpectedQueryRows "expected exactly one row" ["seed"])
+      MigrateDatabase `shouldBe` MigrateDatabase
+      MigrateDatabase `shouldNotBe` SeedDatabase
+      show MigrateDatabase `shouldBe` "MigrateDatabase"
+      show SeedDatabase `shouldBe` "SeedDatabase"
+      show MigrateAndSeedDatabase `shouldBe` "MigrateAndSeedDatabase"
+      show [MigrateDatabase, SeedDatabase, MigrateAndSeedDatabase]
+        `shouldBe` "[MigrateDatabase,SeedDatabase,MigrateAndSeedDatabase]"
+      configSetupError `shouldBe` configSetupError
+      configSetupError `shouldNotBe` migrationSetupError
+      seedSetupError `shouldBe` seedSetupError
+      show configSetupError
+        `shouldBe` "DatabaseSetupConfigLoadError (InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\")"
+      show migrationSetupError
+        `shouldBe` "DatabaseSetupMigrationError (UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"])"
+      show seedSetupError
+        `shouldBe` "DatabaseSetupSeedError (UnexpectedQueryRows \"expected exactly one row\" [\"seed\"])"
+      show [configSetupError]
+        `shouldBe` "[DatabaseSetupConfigLoadError (InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\")]"
+
+    it "renders load, migration, and seed failures explicitly" $ do
+      let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+          migrationRunnerError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
+          seedRunnerError = UnexpectedQueryRows "expected exactly one row" ["seed"]
+      renderDatabaseSetupError (DatabaseSetupConfigLoadError loadError)
+        `shouldBe` "Failed to load database setup config: InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\""
+      renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
+        `shouldBe` "Failed to apply database migrations: UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
+      renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
+        `shouldBe` "Failed to apply database seed data: UnexpectedQueryRows \"expected exactly one row\" [\"seed\"]"
+
+  describe "parseDatabaseSetupConfig" $ do
+    it "reads owner-level migration credentials from dedicated environment variables" $
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")
+        ]
+        `shouldBe` Right
+          DatabaseConfig
+            { databaseHost = "127.0.0.1",
+              databasePort = 5432,
+              databaseName = "web_api_dev",
+              databaseUser = "web_api_owner",
+              databasePassword = "owner-secret"
+            }
+
+    it "fails missing or invalid migration environment values explicitly" $ do
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner")
+        ]
+        `shouldBe` Left (MissingConfigValue "WEB_API_MIGRATION_DATABASE_PASSWORD")
+      parseDatabaseSetupConfig
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "0"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")
+        ]
+        `shouldBe` Left (InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0")
+
+  describe "loadDatabaseSetupConfig" $
+    it "reads dedicated migration credentials from the process environment" $
+      withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1") $
+        withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432") $
+          withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev") $
+            withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner") $
+              withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret") $
+                loadDatabaseSetupConfig
+                  `shouldReturn` Right
+                    DatabaseConfig
+                      { databaseHost = "127.0.0.1",
+                        databasePort = 5432,
+                        databaseName = "web_api_dev",
+                        databaseUser = "web_api_owner",
+                        databasePassword = "owner-secret"
+                      }
+
+  describe "runDatabaseSetupCommand"
+    $ it "uses the default migration environment loader and postgres runners for single-command setup"
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
+    $ withFakePsqlScript
+      [ ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+        ("DELETE FROM page_highlights;", Text.empty),
+        ("DELETE FROM page_content;", Text.empty),
+        ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+      ]
+    $ \argsLogPath -> do
+      runDatabaseSetupCommand MigrateDatabase `shouldReturn` Right ()
+      runDatabaseSetupCommand SeedDatabase `shouldReturn` Right ()
+      readFile argsLogPath
+        `shouldReturn` unlines
+          [ "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_highlights;",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_content;",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+          ]
+
+  describe "runDatabaseSetupCommandWith" $ do
+    it "returns configuration load errors before running any commands" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+          unexpectedRunner _ =
+            modifyIORef' recordedStepsReference (<> ["runner"])
+              >> pure (Right ())
+      runDatabaseSetupCommandWith
+        (pure (Left loadError))
+        unexpectedRunner
+        unexpectedRunner
+        MigrateDatabase
+        `shouldReturn` Left (DatabaseSetupConfigLoadError loadError)
+      readIORef recordedStepsReference `shouldReturn` []
+
+    it "runs migrations and seed data in order with the loaded database config" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let environmentConfig =
+            postgresTestConfig
+          recordStep label databaseRuntimeConfig =
+            modifyIORef' recordedStepsReference (<> [label <> ":" <> databaseHost databaseRuntimeConfig <> ":" <> databaseName databaseRuntimeConfig])
+              >> pure (Right ())
+      runDatabaseSetupCommandWith
+        (pure (Right environmentConfig))
+        (recordStep "migrate")
+        (recordStep "seed")
+        MigrateAndSeedDatabase
+        `shouldReturn` Right ()
+      readIORef recordedStepsReference
+        `shouldReturn` ["migrate:db.internal:web_api_prod", "seed:db.internal:web_api_prod"]
+
+    it "maps single-command migration failures explicitly" $ do
+      let migrationError =
+            PostgresCommandFailed
+              (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken"], postgresEnvironment = []})
+              (failingPostgresResult "migration failed")
+          environmentConfig = postgresTestConfig
+      runDatabaseSetupCommandWith
+        (pure (Right environmentConfig))
+        (\_ -> pure (Left migrationError))
+        (\_ -> pure (Right ()))
+        MigrateDatabase
+        `shouldReturn` Left (DatabaseSetupMigrationError migrationError)
+
+    it "maps single-command seed failures explicitly" $ do
+      let seedError =
+            PostgresCommandFailed
+              (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken-seed"], postgresEnvironment = []})
+              (failingPostgresResult "seed failed")
+          environmentConfig = postgresTestConfig
+      runDatabaseSetupCommandWith
+        (pure (Right environmentConfig))
+        (\_ -> pure (Right ()))
+        (\_ -> pure (Left seedError))
+        SeedDatabase
+        `shouldReturn` Left (DatabaseSetupSeedError seedError)
+
+    it "stops after the first migration failure and preserves the runner error" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let migrationError =
+            PostgresCommandFailed
+              (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken"], postgresEnvironment = []})
+              (failingPostgresResult "migration failed")
+          environmentConfig = postgresTestConfig
+          failingMigrations _ =
+            modifyIORef' recordedStepsReference (<> ["migrate"])
+              >> pure (Left migrationError)
+          unexpectedSeed _ =
+            modifyIORef' recordedStepsReference (<> ["seed"])
+              >> pure (Right ())
+      runDatabaseSetupCommandWith
+        (pure (Right environmentConfig))
+        failingMigrations
+        unexpectedSeed
+        MigrateAndSeedDatabase
+        `shouldReturn` Left (DatabaseSetupMigrationError migrationError)
+      readIORef recordedStepsReference `shouldReturn` ["migrate"]
+
+    it "maps migrate-and-seed seed failures explicitly after successful migrations" $ do
+      let seedError =
+            PostgresCommandFailed
+              (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken-seed"], postgresEnvironment = []})
+              (failingPostgresResult "seed failed")
+          environmentConfig = postgresTestConfig
+      runDatabaseSetupCommandWith
+        (pure (Right environmentConfig))
+        (\_ -> pure (Right ()))
+        (\_ -> pure (Left seedError))
+        MigrateAndSeedDatabase
+        `shouldReturn` Left (DatabaseSetupSeedError seedError)
+
+  describe "runDatabaseSetupArgsWith" $ do
+    it "prints a success message for completed setup commands" $
+      withSystemTempFile "database-setup-stdout.txt" $ \outputPath outputHandle -> do
+        runDatabaseSetupArgsWith
+          (pure (Right postgresTestConfig))
+          (\_ -> pure (Right ()))
+          (\_ -> pure (Right ()))
+          outputHandle
+          ["seed"]
+        hClose outputHandle
+        readFile outputPath `shouldReturn` "Applied database seed data.\n"
+
+    it "throws an explicit user error for unsupported command lines" $
+      withSystemTempFile "database-setup-invalid-stdout.txt" $ \_ outputHandle -> do
+        result <-
+          try
+            ( runDatabaseSetupArgsWith
+                (pure (Right postgresTestConfig))
+                (\_ -> pure (Right ()))
+                (\_ -> pure (Right ()))
+                outputHandle
+                ["deploy"]
+            ) ::
+            IO (Either IOException ())
+        hClose outputHandle
+        case result of
+          Left exception ->
+            displayException exception
+              `shouldContain` "Unsupported database setup command: deploy"
+          Right () ->
+            expectationFailure "expected invalid database setup command to raise an exception"
+
+    it "throws an explicit user error when setup returns a failure" $
+      withSystemTempFile "database-setup-error-stdout.txt" $ \_ outputHandle -> do
+        let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+        result <-
+          try
+            ( runDatabaseSetupArgsWith
+                (pure (Left loadError))
+                (\_ -> pure (Right ()))
+                (\_ -> pure (Right ()))
+                outputHandle
+                ["migrate"]
+            ) ::
+            IO (Either IOException ())
+        hClose outputHandle
+        case result of
+          Left exception ->
+            displayException exception
+              `shouldContain` "Failed to load database setup config"
+          Right () ->
+            expectationFailure "expected database setup failure to raise an exception"
+
+  describe "runDatabaseSetupArgs"
+    $ it "uses the default migration environment loader and postgres runners for migrate and migrate-and-seed output"
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
+    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
+    $ withFakePsqlScript
+      [ ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+        ("DELETE FROM page_highlights;", Text.empty),
+        ("DELETE FROM page_content;", Text.empty),
+        ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+      ]
+    $ \_ ->
+      withSystemTempFile "database-setup-args-migrate.txt" $ \migrateOutputPath migrateOutputHandle -> do
+        runDatabaseSetupArgs migrateOutputHandle ["migrate"]
+        hClose migrateOutputHandle
+        readFile migrateOutputPath `shouldReturn` "Applied database migrations.\n"
+        withSystemTempFile "database-setup-args-migrate-and-seed.txt" $ \migrateAndSeedOutputPath migrateAndSeedOutputHandle -> do
+          runDatabaseSetupArgs migrateAndSeedOutputHandle ["migrate-and-seed"]
+          hClose migrateAndSeedOutputHandle
+          readFile migrateAndSeedOutputPath `shouldReturn` "Applied database migrations and seed data.\n"
+
+  describe "config model values" $ do
     it "can represent manual certificates, certbot-backed ACME, and exporter endpoints" $ do
       let certbotConfig =
             CertbotConfig
