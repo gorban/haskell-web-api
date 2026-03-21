@@ -80,8 +80,8 @@ understands the following values:
 
 | Config value | Description | Default |
 | --- | --- | --- |
-| `APP_MODE` | Application environment mode for app-level behavior. | (`development`) |
-| `DATABASE_HOST` | Database host for app environment config. | (`127.0.0.1`) |
+| `APP_MODE` | Application environment mode for app-level behavior. Supported values are `development`, `test`, and `production` (there is no `staging` mode by default). | (`development`) |
+| `DATABASE_HOST` | Database host for app environment config. Using loopback addresses such as `127.0.0.1` or `::1` keeps the database reachable only from the local machine, not from external clients. | (`127.0.0.1`) |
 | `DATABASE_PORT` | Database port for app environment config. | (`5432`) |
 | `DATABASE_NAME` | Database name for app environment config. | (`web_api_dev`) |
 | `DATABASE_USER` | Database username for app environment config. | (`web_api`) |
@@ -127,10 +127,10 @@ Windows containers).
 
 ## Local Development Runtime
 
-With the default configuration, `cabal run haskell-web-api` is enough to boot the example application locally.
-It uses the committed localhost listener defaults, the built-in page/API response stubs, and no external
-database, telemetry backend, TLS certificate, ACME service, or static-asset root is required unless you
-explicitly reconfigure one.
+With the default configuration, `cabal run haskell-web-api` is enough to boot the example application
+locally. It uses the committed localhost listener defaults, the built-in page/API response stubs, and no
+external database, telemetry backend, TLS certificate, ACME service, or static-asset root is required
+unless you explicitly reconfigure one.
 
 In practice that means a fresh clone can usually be started with:
 
@@ -139,4 +139,5 @@ cabal run haskell-web-api
 ```
 
 By default the app binds an HTTP listener on `127.0.0.1:5001` and serves the example SSR/API behavior in
-place, so external dependencies only become necessary when you override the defaults for your own environment.
+place, so external dependencies only become necessary when you override the defaults for your own
+environment.
