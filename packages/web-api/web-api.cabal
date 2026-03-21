@@ -121,11 +121,14 @@ test-suite haskell-web-api-tests
     -- For testing framework:
     -- For running the executable in tests:
     base ^>=4.22.0.0,
+    bytestring,
     core,
     harch-web,
     haskell-web-api,
     hspec,
+    http-types,
     process,
     temporary,
     test-core,
     text,
+    wai,

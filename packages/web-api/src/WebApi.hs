@@ -803,6 +803,7 @@ buildApp config =
     HarchWeb.application
       HarchWeb.Application
         { HarchWeb.appName = Text.pack "web-api",
+          HarchWeb.defaultRequestContext = defaultRequestContext,
           HarchWeb.routeCodec = routeCodec,
           HarchWeb.renderResponse = renderResponse config,
           HarchWeb.pageShell = appShell config

@@ -1,8 +1,16 @@
 {-# SPEC #-}
 
+import qualified Data.ByteString.Builder as Builder
+import qualified Data.ByteString.Lazy as LazyByteString
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as TextEncoding
 import qualified HarchWeb
+import qualified Network.HTTP.Types as Http
+import qualified Network.Wai as Wai
+import qualified Network.Wai.Internal as WaiInternal
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppLocale (..), AppMode (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), ConfigParseError (..), DatabaseConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultRequestContext, matchRoute, parseAppEnvironmentConfig, parseRoute, parseRuntimeAppConfig, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
@@ -36,6 +44,36 @@ renderedShell config route =
   let application = buildApp config
       page = renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
    in HarchWeb.pageShell application page
+
+performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest webApplication request = do
+  responseReference <- newIORef Nothing
+  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
+  maybeResponse <- readIORef responseReference
+  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
+
+readResponseBody :: Wai.Response -> IO Text
+readResponseBody response = do
+  let (_, _, withStreamingBody) = Wai.responseToStream response
+  chunksReference <- newIORef []
+  withStreamingBody $ \streamingBody ->
+    streamingBody
+      (\builder -> modifyIORef' chunksReference (<> [Builder.toLazyByteString builder]))
+      (pure ())
+  chunks <- readIORef chunksReference
+  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
+
+waiRequest :: [Text] -> Wai.Request
+waiRequest segments =
+  Wai.defaultRequest
+    { Wai.rawPathInfo = TextEncoding.encodeUtf8 renderedPath,
+      Wai.pathInfo = segments
+    }
+  where
+    renderedPath =
+      case segments of
+        [] -> Text.pack "/"
+        _ -> Text.pack "/" <> Text.intercalate (Text.pack "/") segments
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -1512,6 +1550,9 @@ spec = do
     it "constructs the application description against the HarchWeb facade" $
       HarchWeb.appName pureApplication `shouldBe` Text.pack "web-api"
 
+    it "stores the default request context used by the WAI adapter" $
+      HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
+
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
       HarchWeb.parseRoute codec defaultRequestContext (Text.pack "/") `shouldBe` parseRoute defaultRequestContext (Text.pack "/")
@@ -1528,6 +1569,19 @@ spec = do
       HarchWeb.renderResponse pureApplication homeRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig homeRequest)
       HarchWeb.renderResponse pureApplication secondRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig secondRequest)
       HarchWeb.renderResponse pureApplication notFoundRequest `shouldBe` HarchWeb.PageResponse (renderPage defaultAppConfig notFoundRequest)
+
+    it "adapts the pure application to WAI without changing rendered pages" $ do
+      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "fr", Text.pack "second"])
+      Wai.responseStatus secondResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      readResponseBody secondResponse
+        `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig frenchSecondRequest)
+
+      missingResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest [Text.pack "missing"])
+      Wai.responseStatus missingResponse `shouldBe` Http.status404
+      lookup Http.hContentType (Wai.responseHeaders missingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      readResponseBody missingResponse
+        `shouldReturn` HarchWeb.pageShell pureApplication (renderPage defaultAppConfig notFoundRequest)
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       let homePage = renderPage defaultAppConfig homeRequest

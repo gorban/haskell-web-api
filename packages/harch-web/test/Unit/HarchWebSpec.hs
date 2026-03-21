@@ -1,8 +1,16 @@
 {-# SPEC #-}
 
+import qualified Data.ByteString.Builder as Builder
+import qualified Data.ByteString.Lazy as LazyByteString
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import qualified Data.Text.Encoding as TextEncoding
 import HarchWeb
+import qualified Network.HTTP.Types as Http
+import qualified Network.Wai as Wai
+import qualified Network.Wai.Internal as WaiInternal
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
 
@@ -13,6 +21,7 @@ newtype TestContext = TestContext
 
 data TestRoute
   = KnownRoute
+  | DataRoute
   | MissingRoute
   deriving (Eq, Show)
 
@@ -27,7 +36,7 @@ sampleCodec =
   RouteCodec
     { parseRoute = parseSampleRoute,
       renderRoute = renderSampleRoute,
-      notFoundRequest = \routeContext -> RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
+      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
 
 parseSampleRoute :: TestContext -> Text -> Maybe (RouteRequest TestRoute TestContext)
@@ -36,6 +45,8 @@ parseSampleRoute routeContext path
       Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
   | path == Text.pack "/es/known" =
       Just RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
+  | path == Text.pack "/data" =
+      Just RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
   | otherwise = Nothing
 
 renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
@@ -44,6 +55,7 @@ renderSampleRoute request =
     (language, KnownRoute)
       | language == Text.pack "es" -> Text.pack "/es/known"
       | otherwise -> Text.pack "/known"
+    (_, DataRoute) -> Text.pack "/data"
     (_, MissingRoute) -> Text.pack "/404"
 
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
@@ -53,6 +65,15 @@ samplePage request =
       pageRoute = requestRoute request,
       pageContext = requestContext request,
       pageBody = Text.pack "<h1>Known</h1>"
+    }
+
+sampleMissingPage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
+sampleMissingPage request =
+  Page
+    { pageTitle = Text.pack "Missing",
+      pageRoute = requestRoute request,
+      pageContext = requestContext request,
+      pageBody = Text.pack "<h1>Missing</h1>"
     }
 
 sampleShell :: PageShell TestRoute TestContext
@@ -81,22 +102,79 @@ sampleApplication :: Application TestRoute TestContext
 sampleApplication =
   Application
     { appName = Text.pack "sample",
+      defaultRequestContext = defaultContext,
       routeCodec = sampleCodec,
       renderResponse = renderSampleResponse,
       pageShell = buildPageShell sampleCodec sampleShell
+    }
+
+rootPathApplication :: Application TestRoute TestContext
+rootPathApplication =
+  Application
+    { appName = Text.pack "root-path",
+      defaultRequestContext = defaultContext,
+      routeCodec = rootPathCodec,
+      renderResponse = PageResponse . samplePage,
+      pageShell = buildPageShell rootPathCodec sampleShell
+    }
+
+rootPathCodec :: RouteCodec TestRoute TestContext
+rootPathCodec =
+  RouteCodec
+    { parseRoute = \routeContext path ->
+        if path == Text.pack "/"
+          then Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
+          else Nothing,
+      renderRoute = \request ->
+        case requestRoute request of
+          KnownRoute -> Text.pack "/"
+          DataRoute -> Text.pack "/data"
+          MissingRoute -> Text.pack "/404",
+      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
 
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext
 renderSampleResponse request =
   case requestRoute request of
     KnownRoute -> PageResponse (samplePage request)
-    MissingRoute ->
+    DataRoute ->
       BodyResponse
         ResponseBody
-          { responseStatus = 404,
+          { responseStatus = 202,
             responseContentType = Text.pack "application/json",
-            responseBody = Text.pack "{\"error\":\"missing\"}"
+            responseBody = Text.pack "{\"route\":\"data\"}"
           }
+    MissingRoute -> PageResponse (sampleMissingPage request)
+
+performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest webApplication request = do
+  responseReference <- newIORef Nothing
+  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
+  maybeResponse <- readIORef responseReference
+  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
+
+readResponseBody :: Wai.Response -> IO Text
+readResponseBody response = do
+  let (_, _, withStreamingBody) = Wai.responseToStream response
+  chunksReference <- newIORef []
+  withStreamingBody $ \streamingBody ->
+    streamingBody
+      (\builder -> modifyIORef' chunksReference (<> [Builder.toLazyByteString builder]))
+      (pure ())
+  chunks <- readIORef chunksReference
+  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
+
+waiRequest :: [Text] -> Wai.Request
+waiRequest segments =
+  Wai.defaultRequest
+    { Wai.rawPathInfo = TextEncoding.encodeUtf8 renderedPath,
+      Wai.pathInfo = segments
+    }
+  where
+    renderedPath =
+      case segments of
+        [] -> Text.pack "/"
+        _ -> Text.pack "/" <> Text.intercalate (Text.pack "/") segments
 
 spec = do
   describe "public record coverage" $ do
@@ -108,7 +186,7 @@ spec = do
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = Text.pack "Known", navigationRoute = KnownRoute, navigationHref = Text.pack "/known", navigationIsActive = True}
           document = Document {documentTitle = Text.pack "Known", documentBodyAttributes = [attribute], documentNavigation = [resolvedNavigationItem], documentMainId = Text.pack "app-main", documentMainContent = Text.pack "<h1>Known</h1>"}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = Text.pack "app-main"}
-          responseBodyValue = ResponseBody {responseStatus = 404, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"error\":\"missing\"}"}
+          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -134,13 +212,14 @@ spec = do
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
       shellMainId shell `shouldBe` Text.pack "app-main"
-      responseStatus responseBodyValue `shouldBe` 404
+      defaultRequestContext sampleApplication `shouldBe` defaultContext
+      responseStatus responseBodyValue `shouldBe` 202
       responseContentType responseBodyValue `shouldBe` Text.pack "application/json"
-      responseBody responseBodyValue `shouldBe` Text.pack "{\"error\":\"missing\"}"
+      responseBody responseBodyValue `shouldBe` Text.pack "{\"route\":\"data\"}"
 
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
-          otherRequest = RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
+          otherRequest = RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
           page = Page {pageTitle = Text.pack "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = Text.pack "<h1>Known</h1>"}
           otherPage = Page {pageTitle = Text.pack "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = Text.pack "<h1>Missing</h1>"}
           attribute = HtmlAttribute {attributeName = Text.pack "data-app", attributeValue = Text.pack "sample"}
@@ -153,7 +232,7 @@ spec = do
           otherDocument = Document {documentTitle = Text.pack "Missing", documentBodyAttributes = [otherAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = Text.pack "other-main", documentMainContent = Text.pack "<h1>Missing</h1>"}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationItems = [navigationItem], shellMainId = Text.pack "app-main"}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = Text.pack "other-main"}
-          body = ResponseBody {responseStatus = 404, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"error\":\"missing\"}"}
+          body = ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
           otherBody = ResponseBody {responseStatus = 200, responseContentType = Text.pack "text/html", responseBody = Text.pack "<h1>OK</h1>"}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
@@ -191,22 +270,24 @@ spec = do
       show [shell] `shouldBe` "[PageShell {shellBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], shellNavigationItems = [NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}], shellMainId = \"app-main\"}]"
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
-      show body `shouldBe` "ResponseBody {responseStatus = 404, responseContentType = \"application/json\", responseBody = \"{\\\"error\\\":\\\"missing\\\"}\"}"
-      show [body] `shouldBe` "[ResponseBody {responseStatus = 404, responseContentType = \"application/json\", responseBody = \"{\\\"error\\\":\\\"missing\\\"}\"}]"
+      show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"}"
+      show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"}]"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
-      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 404, responseContentType = \"application/json\", responseBody = \"{\\\"error\\\":\\\"missing\\\"}\"})"
-      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"}),BodyResponse (ResponseBody {responseStatus = 404, responseContentType = \"application/json\", responseBody = \"{\\\"error\\\":\\\"missing\\\"}\"})]"
+      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})"
+      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})]"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
           codec = routeCodec sampleApplication
 
       appName sampleApplication `shouldBe` Text.pack "sample"
+      defaultRequestContext sampleApplication `shouldBe` defaultContext
       parseRoute codec defaultContext (Text.pack "/known") `shouldBe` Just request
+      parseRoute codec defaultContext (Text.pack "/data") `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       renderRoute codec request `shouldBe` Text.pack "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
       renderResponse sampleApplication request `shouldBe` PageResponse (samplePage request)
@@ -218,8 +299,8 @@ spec = do
       appName (application sampleApplication) `shouldBe` Text.pack "sample"
 
     it "can render non-page responses for future API routes" $
-      renderResponse sampleApplication (RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext})
-        `shouldBe` BodyResponse ResponseBody {responseStatus = 404, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"error\":\"missing\"}"}
+      renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
+        `shouldBe` BodyResponse ResponseBody {responseStatus = 202, responseContentType = Text.pack "application/json", responseBody = Text.pack "{\"route\":\"data\"}"}
 
   describe "matchRoute" $ do
     it "returns parsed routes for supported paths" $
@@ -296,6 +377,34 @@ spec = do
     it "renders the shared HTML document for the supplied page and shell options" $
       buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
         `shouldBe` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+
+  describe "toWaiApplication" $ do
+    it "selects request paths through the stored route parser and returns HTML pages" $ do
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "es", Text.pack "known"])
+      Wai.responseStatus response `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      readResponseBody response
+        `shouldReturn` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/es/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+
+    it "treats an empty raw path as the root path" $ do
+      response <- performWaiRequest (toWaiApplication rootPathApplication) Wai.defaultRequest
+      Wai.responseStatus response `shouldBe` Http.status200
+      readResponseBody response
+        `shouldReturn` Text.pack "<html><head><title>Known</title></head><body data-app=\"sample\"><nav><a href=\"/\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\"><h1>Known</h1></main></body></html>"
+
+    it "renders the not-found page through the shared shell with a 404 status" $ do
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "missing"])
+      Wai.responseStatus response `shouldBe` Http.status404
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "text/html; charset=utf-8"))
+      readResponseBody response
+        `shouldReturn` Text.pack "<html><head><title>Missing</title></head><body data-app=\"sample\"><nav><a href=\"/known\">Known</a><a href=\"/404\" aria-current=\"page\">Missing</a></nav><main id=\"app-main\"><h1>Missing</h1></main></body></html>"
+
+    it "preserves body-response status, content type, and body" $ do
+      response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest [Text.pack "data"])
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
+      readResponseBody response `shouldReturn` Text.pack "{\"route\":\"data\"}"
 
   describe "runServer" $
     it "writes the stub startup message to the supplied handle" $

@@ -61,7 +61,10 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
+    bytestring,
+    http-types,
     text,
+    wai,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -93,8 +96,11 @@ test-suite harch-web-tests
   build-depends:
     -- For testing framework:
     base ^>=4.22.0.0,
+    bytestring,
     harch-web,
     hspec,
+    http-types,
     temporary,
     test-core,
     text,
+    wai,

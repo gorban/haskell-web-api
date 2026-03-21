@@ -20,12 +20,18 @@ module HarchWeb
     routeHref,
     renderDocument,
     runServer,
+    toWaiApplication,
   )
 where
 
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
 import System.IO (Handle, hPutStrLn)
 
 data RouteRequest route context = RouteRequest
@@ -98,6 +104,7 @@ data RouteCodec route context = RouteCodec
 
 data Application route context = Application
   { appName :: Text,
+    defaultRequestContext :: context,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> Response route context,
     pageShell :: Page route context -> Text
@@ -154,9 +161,31 @@ buildPageShell codec shell = renderDocument . buildDocument codec shell
 matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route context
 matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
 
-runServer :: Handle -> config -> Application route context -> IO ()
+toWaiApplication :: (Eq route) => Application route context -> Wai.Application
+toWaiApplication webApplication request respond =
+  respond
+    ( toWaiResponse
+        webApplication
+        ( renderResponse webApplication $
+            matchRoute
+              (routeCodec webApplication)
+              (defaultRequestContext webApplication)
+              (waiRequestPath request)
+        )
+    )
+
+runServer :: (Eq route) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
-  config `seq` webApplication `seq` hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+  let startupResponse =
+        toWaiResponse
+          webApplication
+          ( renderResponse webApplication $
+              matchRoute
+                (routeCodec webApplication)
+                (defaultRequestContext webApplication)
+                (Text.pack "/")
+          )
+   in config `seq` Wai.responseStatus startupResponse `seq` hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute
@@ -182,3 +211,32 @@ renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, naviga
       itemLabel,
       Text.pack "</a>"
     ]
+
+toWaiResponse :: (Eq route) => Application route context -> Response route context -> Wai.Response
+toWaiResponse webApplication response =
+  case response of
+    PageResponse page ->
+      Wai.responseLBS
+        (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
+        [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
+        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
+    BodyResponse responseBodyValue ->
+      Wai.responseLBS
+        (Http.mkStatus (responseStatus responseBodyValue) mempty)
+        [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))]
+        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
+isNotFoundPage webApplication page =
+  let pageRequestContext = pageContext page
+   in pageRequestContext `seq`
+        pageRoute page == requestRoute (notFoundRequest (routeCodec webApplication) pageRequestContext)
+
+waiRequestPath :: Wai.Request -> Text
+waiRequestPath request =
+  if ByteString.null (Wai.rawPathInfo request)
+    then Text.pack "/"
+    else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+
+htmlContentType :: Text
+htmlContentType = Text.pack "text/html; charset=utf-8"
