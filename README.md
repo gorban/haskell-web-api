@@ -72,6 +72,40 @@ The following is a detailed guide to set up a Haskell development environment on
     Debugger
 - (optional) Stack (some third party projects might require it)
 
+### Configuration
+
+The example application ships with committed localhost-friendly defaults, so you can run it for local
+development without setting any configuration first. When you do need to reconfigure it, the current app
+understands the following values:
+
+| Config value | Description | Default |
+| --- | --- | --- |
+| `APP_MODE` | Application environment mode for app-level behavior. | (`development`) |
+| `DATABASE_HOST` | Database host for app environment config. | (`127.0.0.1`) |
+| `DATABASE_PORT` | Database port for app environment config. | (`5432`) |
+| `DATABASE_NAME` | Database name for app environment config. | (`web_api_dev`) |
+| `DATABASE_USER` | Database username for app environment config. | (`web_api`) |
+| `DATABASE_PASSWORD` | Database password for app environment config. | (`web_api`) |
+| `APP_TITLE_PREFIX` | Prefix used in rendered HTML page titles. | (`web-api`) |
+| `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
+| `LISTENER_<n>_PORT` | Port to bind for listener `n`. | (`LISTENER_0_PORT=5001`) |
+| `LISTENER_<n>_SCHEME` | Listener scheme, either `http` or `https`. | (`LISTENER_0_SCHEME=http`) |
+| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners, either `manual` or `acme`. | (`unset`) |
+| `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
+| `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
+| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
+| `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
+| `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Executable path for the `certbot-http01` backend. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. | (`unset`) |
+| `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
+| `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
+| `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
+| `OTLP_TRACING_ENDPOINT` | OTLP endpoint for tracing export. | (`unset`) |
+| `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
+| `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
+| `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
+
 ### MacOS / Linux
 
 See [Setup](SETUP.md) for detailed instructions on setting up the Haskell environment on MacOS and Linux.
@@ -90,3 +124,19 @@ Windows containers).
   containers from its System Tray icon menu, "Switch to Linux Containers", if you set up Docker Desktop
   correctly:\
   <https://docs.docker.com/desktop/windows/wsl/>
+
+## Local Development Runtime
+
+With the default configuration, `cabal run haskell-web-api` is enough to boot the example application locally.
+It uses the committed localhost listener defaults, the built-in page/API response stubs, and no external
+database, telemetry backend, TLS certificate, ACME service, or static-asset root is required unless you
+explicitly reconfigure one.
+
+In practice that means a fresh clone can usually be started with:
+
+```bash
+cabal run haskell-web-api
+```
+
+By default the app binds an HTTP listener on `127.0.0.1:5001` and serves the example SSR/API behavior in
+place, so external dependencies only become necessary when you override the defaults for your own environment.
