@@ -32,6 +32,12 @@ appShellConfig config =
               HarchWeb.attributeValue = appTitlePrefix config
             }
         ],
+      HarchWeb.shellNavigationAttributes =
+        [ HarchWeb.HtmlAttribute
+            { HarchWeb.attributeName = "data-navigation-region",
+              HarchWeb.attributeValue = "primary"
+            }
+        ],
       HarchWeb.shellNavigationItems =
         [ HarchWeb.NavigationItem
             { HarchWeb.navigationLabel = "Home",
@@ -42,8 +48,21 @@ appShellConfig config =
               HarchWeb.navigationRoute = SecondRoute
             }
         ],
-      HarchWeb.shellMainId = "app-main"
+      HarchWeb.shellMainId = "app-main",
+      HarchWeb.shellMainAttributes =
+        [ HarchWeb.HtmlAttribute
+            { HarchWeb.attributeName = "data-navigation-content",
+              HarchWeb.attributeValue = "true"
+            }
+        ],
+      HarchWeb.shellScriptSources = navigationScriptSources config
     }
+
+navigationScriptSources :: AppConfig -> [Text]
+navigationScriptSources config =
+  case HarchWeb.staticAssetRoots (staticAssets config) of
+    primaryRoot : _ -> [HarchWeb.staticAssetHref primaryRoot "navigation.js"]
+    [] -> []
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabase config databaseEffect =

@@ -213,16 +213,22 @@ data ResolvedNavigationItem route = ResolvedNavigationItem
 data Document route = Document
   { documentTitle :: Text,
     documentBodyAttributes :: [HtmlAttribute],
+    documentNavigationAttributes :: [HtmlAttribute],
     documentNavigation :: [ResolvedNavigationItem route],
     documentMainId :: Text,
-    documentMainContent :: Text
+    documentMainAttributes :: [HtmlAttribute],
+    documentMainContent :: Text,
+    documentScriptSources :: [Text]
   }
   deriving (Eq, Show)
 
 data PageShell route context = PageShell
   { shellBodyAttributes :: [HtmlAttribute],
+    shellNavigationAttributes :: [HtmlAttribute],
     shellNavigationItems :: [NavigationItem route],
-    shellMainId :: Text
+    shellMainId :: Text,
+    shellMainAttributes :: [HtmlAttribute],
+    shellScriptSources :: [Text]
   }
   deriving (Eq, Show)
 
@@ -290,9 +296,12 @@ buildDocument codec shell page =
   Document
     { documentTitle = pageTitle page,
       documentBodyAttributes = shellBodyAttributes shell,
+      documentNavigationAttributes = shellNavigationAttributes shell,
       documentNavigation = buildNavigation codec page (shellNavigationItems shell),
       documentMainId = shellMainId shell,
-      documentMainContent = pageBody page
+      documentMainAttributes = shellMainAttributes shell,
+      documentMainContent = pageBody page,
+      documentScriptSources = shellScriptSources shell
     }
 
 renderDocument :: Document route -> Text
@@ -300,13 +309,19 @@ renderDocument document =
   Text.concat
     [ "<html><head><title>",
       documentTitle document,
-      "</title></head><body",
+      "</title>",
+      renderScriptSources (documentScriptSources document),
+      "</head><body",
       renderAttributes (documentBodyAttributes document),
-      "><nav>",
+      "><nav",
+      renderAttributes (documentNavigationAttributes document),
+      ">",
       Text.concat (map renderNavigationItem (documentNavigation document)),
       "</nav><main id=\"",
       documentMainId document,
-      "\">",
+      "\"",
+      renderAttributes (documentMainAttributes document),
+      ">",
       documentMainContent document,
       "</main></body></html>"
     ]
@@ -376,6 +391,18 @@ renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, naviga
       ">",
       itemLabel,
       "</a>"
+    ]
+
+renderScriptSources :: [Text] -> Text
+renderScriptSources =
+  Text.concat . map renderScriptSource
+
+renderScriptSource :: Text -> Text
+renderScriptSource scriptSource =
+  Text.concat
+    [ "<script src=\"",
+      scriptSource,
+      "\" defer></script>"
     ]
 
 toWaiResponse :: (Eq route) => Application route context -> Response route context -> Wai.Response
