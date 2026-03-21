@@ -108,10 +108,10 @@ understands the following values:
 
 The intended configuration model has three layers:
 
-1. Code defaults in source. The table above documents the committed defaults defined in the codebase. This is
-   the only layer that `cabal run haskell-web-api` uses today.
-2. `./.env` in the repository root. This file is intended to be checked in and used for shared,
-   non-secret development overrides when a project wants defaults that differ from the code-level values.
+1. Code defaults in source. The table above documents the committed defaults defined in the codebase. This
+   is the only layer that `cabal run haskell-web-api` uses today.
+2. `./.env` in the repository root. This file is intended to be checked in and used for shared, non-secret
+   development overrides when a project wants defaults that differ from the code-level values.
 3. `./.env.local` in the repository root. This file is intended for machine-specific or deployed
    configuration, may contain secrets, and is excluded from git.
 
