@@ -758,6 +758,17 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
 
+    it "handles secure requests through the same response-selection path" $ do
+      let secureRequest =
+            (waiRequest ["data"])
+              { Wai.isSecure = True,
+                Wai.requestMethod = "POST"
+              }
+      response <- performWaiRequest (toWaiApplication sampleApplication) secureRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
+      readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
+
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
         let assetDirectory = tempDirectory <> "/public"

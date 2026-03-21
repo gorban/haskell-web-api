@@ -62,6 +62,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
@@ -382,15 +383,33 @@ toWaiApplication webApplication request respond =
     maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
     case maybeStaticResponse of
       Just staticResponse -> respond staticResponse
-      Nothing ->
-        renderResponse
-          webApplication
-          ( matchRoute
-              (routeCodec webApplication)
-              (defaultRequestContext webApplication)
-              (waiRequestPath request)
-          )
-          >>= respond . toWaiResponse webApplication
+      Nothing -> do
+        let routeRequest =
+              matchRoute
+                (routeCodec webApplication)
+                (defaultRequestContext webApplication)
+                (waiRequestPath request)
+        response <- renderResponse webApplication routeRequest
+        let requestObservability =
+              Observability.buildRequestObservability
+                (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                (if Wai.isSecure request then "https" else "http")
+                (waiRequestPath request)
+                (renderRoute (routeCodec webApplication) routeRequest)
+                ( case response of
+                    PageResponse page ->
+                      if isNotFoundPage webApplication page
+                        then 404
+                        else 200
+                    BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                )
+                ( case response of
+                    PageResponse _ -> Observability.PageResponseKind
+                    BodyResponse _ -> Observability.BodyResponseKind
+                )
+                []
+        Observability.forceRequestObservability requestObservability `seq`
+          respond (toWaiResponse webApplication response)
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =

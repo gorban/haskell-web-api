@@ -56,7 +56,10 @@ library
   -- Common library settings.
   exposed: True
   -- Modules included in this library.
-  exposed-modules: HarchWeb
+  exposed-modules:
+    HarchWeb
+    HarchWeb.Observability
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
