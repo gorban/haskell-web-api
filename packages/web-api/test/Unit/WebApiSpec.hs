@@ -16,7 +16,7 @@ import System.IO.Temp (withSystemTempFile)
 import WebApi (buildApp, run)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, renderPage, renderPageBody)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageWithDatabase)
 import WebApi.Response (selectResponse)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
@@ -601,7 +601,7 @@ spec = do
           { englishHomePageData =
               Right
                 HomePageData
-                  { homePageDataSummary = Text.pack "Server-rendered home page with seeded development data."
+                  { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
                   },
             frenchHomePageData =
               Right
@@ -611,13 +611,13 @@ spec = do
             englishSecondPageData =
               Right
                 SecondPageData
-                  { secondPageDataSummary = Text.pack "Second page content loaded from the seeded database effect.",
-                    secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"]
+                  { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+                    secondPageDataHighlights = []
                   },
             frenchSecondPageData =
               Right
                 SecondPageData
-                  { secondPageDataSummary = Text.pack "Contenu de la seconde page charge depuis l'effet de base de donnees seedee.",
+                  { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                     secondPageDataHighlights = []
                   }
           }
@@ -685,13 +685,13 @@ spec = do
       loadHomePageData englishEffect defaultRequestContext
         `shouldBe` Right
           HomePageData
-            { homePageDataSummary = Text.pack "Server-rendered home page with seeded development data."
+            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
             }
       loadSecondPageData englishEffect defaultRequestContext
         `shouldBe` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content loaded from the seeded database effect.",
-              secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"]
+            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+              secondPageDataHighlights = []
             }
       loadHomePageData englishEffect frenchRequestContext
         `shouldBe` Right
@@ -701,7 +701,7 @@ spec = do
       loadSecondPageData englishEffect frenchRequestContext
         `shouldBe` Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Contenu de la seconde page charge depuis l'effet de base de donnees seedee.",
+            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
 
@@ -914,6 +914,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
       case manualCertificateSource of
@@ -990,6 +991,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction =
                   CallToAction
                     { callToActionLabel = Text.pack "Return home",
@@ -1106,11 +1108,11 @@ spec = do
       show homePageModel
         `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}}"
       show secondPageModel
-        `shouldBe` "SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
+        `shouldBe` "SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
       show (HomePage homePageModel)
         `shouldBe` "HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}})"
       show (SecondPage secondPageModel)
-        `shouldBe` "SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
+        `shouldBe` "SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
       show notFoundPageModel
         `shouldBe` "NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
       show (NotFoundPage notFoundPageModel)
@@ -1219,6 +1221,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
@@ -1352,6 +1355,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
@@ -1465,6 +1469,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
           notFoundPageModel =
@@ -1505,11 +1510,11 @@ spec = do
       show [homePageModel]
         `shouldBe` "[HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [secondPageModel]
-        `shouldBe` "[SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
+        `shouldBe` "[SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [notFoundPageModel]
         `shouldBe` "[NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [HomePage homePageModel, SecondPage secondPageModel, NotFoundPage notFoundPageModel]
-        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
+        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix (Text.pack "de"), UnsupportedPath (Text.pack "/missing")]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
       show [HomeRoute, SecondRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,StatusApiRoute,NotFoundRoute]"
@@ -1729,6 +1734,61 @@ spec = do
                   }
             }
 
+    it "loads second-page content from the database effect when provided" $
+      buildPageModelWithDatabase
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData =
+                  Right
+                    SecondPageData
+                      { secondPageDataSummary = Text.pack "Loaded from the seeded database effect.",
+                        secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"]
+                      },
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        secondRequest
+        `shouldBe` SecondPage
+          SecondPageModel
+            { secondHeading = Text.pack "Second",
+              secondSummary = Text.pack "Loaded from the seeded database effect.",
+              secondHighlights = [Text.pack "Fast SSR", Text.pack "Progressive enhancement"],
+              secondErrorMessage = Nothing,
+              secondPrimaryAction =
+                CallToAction
+                  { callToActionLabel = Text.pack "Return home",
+                    callToActionRoute = HomeRoute,
+                    callToActionHref = Text.pack "/"
+                  }
+            }
+
+    it "builds an explicit error-state second page when the database effect fails" $
+      buildPageModelWithDatabase
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        secondRequest
+        `shouldBe` SecondPage
+          SecondPageModel
+            { secondHeading = Text.pack "Second",
+              secondSummary = Text.pack "Second page content is temporarily unavailable.",
+              secondHighlights = [],
+              secondErrorMessage = Just (Text.pack "Could not load second page data."),
+              secondPrimaryAction =
+                CallToAction
+                  { callToActionLabel = Text.pack "Return home",
+                    callToActionRoute = HomeRoute,
+                    callToActionHref = Text.pack "/"
+                  }
+            }
+
   describe "renderPageBody" $ do
     it "renders the home page heading and navigation affordance" $
       renderPageBody (buildPageModel homeRequest)
@@ -1760,6 +1820,7 @@ spec = do
               { secondHeading = Text.pack "Second",
                 secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
                 secondHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"],
+                secondErrorMessage = Nothing,
                 secondPrimaryAction =
                   CallToAction
                     { callToActionLabel = Text.pack "Return home",
@@ -1769,6 +1830,25 @@ spec = do
               }
         )
         `shouldBe` Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><ul><li>Fast SSR</li><li>Stable routes</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+
+    it "renders an explicit error state when the second-page load fails" $
+      renderPageWithDatabase
+        defaultAppConfig
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData = Left (SecondPageDataError (Text.pack "seed unavailable")),
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        secondRequest
+        `shouldBe` HarchWeb.Page
+          { HarchWeb.pageTitle = Text.pack "web-api: Second",
+            HarchWeb.pageRoute = SecondRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = Text.pack "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+          }
 
   describe "page shell integration" $ do
     it "marks the active navigation item for each routed page" $ do

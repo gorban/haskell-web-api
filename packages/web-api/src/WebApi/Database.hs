@@ -59,7 +59,7 @@ defaultDatabaseSeed =
     { englishHomePageData =
         Right
           HomePageData
-            { homePageDataSummary = Text.pack "Server-rendered home page with seeded development data."
+            { homePageDataSummary = Text.pack "Server-rendered home page with stubbed content."
             },
       frenchHomePageData =
         Right
@@ -69,13 +69,13 @@ defaultDatabaseSeed =
       englishSecondPageData =
         Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Second page content loaded from the seeded database effect.",
-              secondPageDataHighlights = [Text.pack "Fast SSR", Text.pack "Stable routes"]
+            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
+              secondPageDataHighlights = []
             },
       frenchSecondPageData =
         Right
           SecondPageData
-            { secondPageDataSummary = Text.pack "Contenu de la seconde page charge depuis l'effet de base de donnees seedee.",
+            { secondPageDataSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
     }

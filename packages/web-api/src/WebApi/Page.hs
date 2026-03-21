@@ -4,7 +4,9 @@ module WebApi.Page
     HomePageModel (..),
     NotFoundPageModel (..),
     SecondPageModel (..),
+    buildPageModelWithDatabase,
     buildPageModel,
+    renderPageWithDatabase,
     renderPage,
     renderPageBody,
   )
@@ -14,6 +16,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.Config (AppConfig (..))
+import WebApi.Database
+  ( DatabaseEffect,
+    defaultDatabaseEffect,
+    loadSecondPageData,
+    secondPageDataHighlights,
+    secondPageDataSummary,
+  )
 import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
@@ -38,6 +47,7 @@ data SecondPageModel = SecondPageModel
   { secondHeading :: Text,
     secondSummary :: Text,
     secondHighlights :: [Text],
+    secondErrorMessage :: Maybe Text,
     secondPrimaryAction :: CallToAction
   }
   deriving (Eq, Show)
@@ -56,8 +66,12 @@ data AppPageModel
   deriving (Eq, Show)
 
 renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
-renderPage config routeRequest =
-  let pageModel = buildPageModel routeRequest
+renderPage config =
+  renderPageWithDatabase config defaultDatabaseEffect
+
+renderPageWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
+renderPageWithDatabase config databaseEffect routeRequest =
+  let pageModel = buildPageModelWithDatabase databaseEffect routeRequest
    in HarchWeb.Page
         { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, Text.pack ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
           HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
@@ -73,7 +87,10 @@ routeTitle route =
     _ -> Text.pack "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
-buildPageModel routeRequest =
+buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect
+
+buildPageModelWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
+buildPageModelWithDatabase databaseEffect routeRequest =
   case HarchWeb.requestRoute routeRequest of
     HomeRoute ->
       HomePage
@@ -83,13 +100,7 @@ buildPageModel routeRequest =
             homePrimaryAction = buildCallToAction routeRequest SecondRoute (Text.pack "Browse the second page")
           }
     SecondRoute ->
-      SecondPage
-        SecondPageModel
-          { secondHeading = Text.pack "Second",
-            secondSummary = Text.pack "Second page content with stubbed data ready for future loaders.",
-            secondHighlights = [],
-            secondPrimaryAction = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
-          }
+      buildSecondPageModel databaseEffect routeRequest
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -97,6 +108,29 @@ buildPageModel routeRequest =
             notFoundSummary = Text.pack "The requested page could not be found.",
             notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
           }
+
+buildSecondPageModel :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
+buildSecondPageModel databaseEffect routeRequest =
+  let returnHome = buildCallToAction routeRequest HomeRoute (Text.pack "Return home")
+   in case loadSecondPageData databaseEffect (HarchWeb.requestContext routeRequest) of
+        Right secondPageData ->
+          SecondPage
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = secondPageDataSummary secondPageData,
+                secondHighlights = secondPageDataHighlights secondPageData,
+                secondErrorMessage = Nothing,
+                secondPrimaryAction = returnHome
+              }
+        Left _ ->
+          SecondPage
+            SecondPageModel
+              { secondHeading = Text.pack "Second",
+                secondSummary = Text.pack "Second page content is temporarily unavailable.",
+                secondHighlights = [],
+                secondErrorMessage = Just (Text.pack "Could not load second page data."),
+                secondPrimaryAction = returnHome
+              }
 
 buildCallToAction :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppRoute -> Text -> CallToAction
 buildCallToAction routeRequest route label =
@@ -132,10 +166,11 @@ renderPageBody pageModel =
           Text.pack "<h1 data-page-title=\"true\">",
           secondHeading secondPage,
           Text.pack "</h1>",
+          renderSecondPageError (secondErrorMessage secondPage),
           Text.pack "<p>",
           secondSummary secondPage,
           Text.pack "</p>",
-          renderHighlights (secondHighlights secondPage),
+          renderSecondPageHighlights secondPage,
           renderCallToAction (secondPrimaryAction secondPage),
           Text.pack "</section>"
         ]
@@ -162,6 +197,23 @@ renderHighlights highlights =
           Text.concat (map renderHighlight highlights),
           Text.pack "</ul>"
         ]
+
+renderSecondPageError :: Maybe Text -> Text
+renderSecondPageError maybeErrorMessage =
+  case maybeErrorMessage of
+    Nothing -> Text.empty
+    Just errorMessage ->
+      Text.concat
+        [ Text.pack "<p data-error-state=\"true\">",
+          errorMessage,
+          Text.pack "</p>"
+        ]
+
+renderSecondPageHighlights :: SecondPageModel -> Text
+renderSecondPageHighlights secondPage =
+  case secondErrorMessage secondPage of
+    Nothing -> renderHighlights (secondHighlights secondPage)
+    Just _ -> Text.empty
 
 renderHighlight :: Text -> Text
 renderHighlight highlight =
