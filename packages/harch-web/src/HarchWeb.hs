@@ -8,8 +8,12 @@ module HarchWeb
     CertbotConfig (..),
     Document (..),
     HtmlAttribute (..),
+    HttpBindPlan (..),
     ListenerConfig (..),
+    ListenerEndpoint (..),
     ListenerScheme (..),
+    ListenerStartupError (..),
+    ManualTlsBindPlan (..),
     NavigationItem (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
@@ -20,8 +24,10 @@ module HarchWeb
     ResolvedNavigationItem (..),
     RouteCodec (..),
     RouteRequest (..),
+    ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
+    AcmeBindPlan (..),
     TlsCertificateSource (..),
     TlsConfig (..),
     application,
@@ -29,6 +35,7 @@ module HarchWeb
     buildNavigation,
     buildPageShell,
     matchRoute,
+    planServerStartup,
     routeHref,
     renderDocument,
     runServer,
@@ -120,6 +127,42 @@ data AppConfig = AppConfig
     staticAssets :: StaticAssetsConfig,
     observability :: ObservabilityConfig
   }
+  deriving (Eq, Show)
+
+data ListenerEndpoint = ListenerEndpoint
+  { endpointHost :: Text,
+    endpointPort :: Int
+  }
+  deriving (Eq, Show)
+
+newtype HttpBindPlan = HttpBindPlan
+  { httpEndpoints :: [ListenerEndpoint]
+  }
+  deriving (Eq, Show)
+
+data ManualTlsBindPlan = ManualTlsBindPlan
+  { tlsEndpoint :: ListenerEndpoint,
+    tlsCertificateFile :: FilePath,
+    tlsPrivateKeyFile :: FilePath
+  }
+  deriving (Eq, Show)
+
+data AcmeBindPlan = AcmeBindPlan
+  { acmeEndpoint :: ListenerEndpoint,
+    acmeListenerConfig :: AcmeConfig
+  }
+  deriving (Eq, Show)
+
+data ServerStartupPlan = ServerStartupPlan
+  { httpBindPlan :: HttpBindPlan,
+    manualTlsBindPlans :: [ManualTlsBindPlan],
+    acmeBindPlans :: [AcmeBindPlan]
+  }
+  deriving (Eq, Show)
+
+data ListenerStartupError
+  = DuplicateListenerEndpoint ListenerEndpoint
+  | InvalidListenerTlsConfiguration ListenerConfig
   deriving (Eq, Show)
 
 data RouteRequest route context = RouteRequest
@@ -262,7 +305,7 @@ toWaiApplication webApplication request respond =
         )
     )
 
-runServer :: (Eq route) => Handle -> config -> Application route context -> IO ()
+runServer :: (Eq route) => Handle -> AppConfig -> Application route context -> IO ()
 runServer outputHandle config webApplication =
   let startupResponse =
         toWaiResponse
@@ -273,7 +316,12 @@ runServer outputHandle config webApplication =
                 (defaultRequestContext webApplication)
                 (Text.pack "/")
           )
-   in config `seq` Wai.responseStatus startupResponse `seq` hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+   in case planServerStartup config of
+        Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
+        Right startupPlan ->
+          startupPlan `seq`
+            Wai.responseStatus startupResponse `seq`
+              hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute
@@ -328,3 +376,82 @@ waiRequestPath request =
 
 htmlContentType :: Text
 htmlContentType = Text.pack "text/html; charset=utf-8"
+
+planServerStartup :: AppConfig -> Either ListenerStartupError ServerStartupPlan
+planServerStartup config = do
+  plannedListeners <- traverse classifyListener (listenerConfigs config)
+  case firstDuplicate (map plannedEndpoint plannedListeners) of
+    Just duplicateEndpoint -> Left (DuplicateListenerEndpoint duplicateEndpoint)
+    Nothing ->
+      Right
+        ServerStartupPlan
+          { httpBindPlan =
+              HttpBindPlan
+                { httpEndpoints =
+                    [ endpoint
+                    | PlannedHttp endpoint <- plannedListeners
+                    ]
+                },
+            manualTlsBindPlans =
+              [ manualTlsBindPlan
+              | PlannedManualTls manualTlsBindPlan <- plannedListeners
+              ],
+            acmeBindPlans =
+              [ acmeBindPlan
+              | PlannedAcme acmeBindPlan <- plannedListeners
+              ]
+          }
+  where
+    classifyListener listenerConfig =
+      case (listenerScheme listenerConfig, listenerTls listenerConfig) of
+        (Http, Nothing) ->
+          Right (PlannedHttp (listenerEndpoint listenerConfig))
+        (Http, Just _) ->
+          Left (InvalidListenerTlsConfiguration listenerConfig)
+        (Https, Nothing) ->
+          Left (InvalidListenerTlsConfiguration listenerConfig)
+        (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}) ->
+          Right
+            ( PlannedManualTls
+                ManualTlsBindPlan
+                  { tlsEndpoint = listenerEndpoint listenerConfig,
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath
+                  }
+            )
+        (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}) ->
+          Right
+            ( PlannedAcme
+                AcmeBindPlan
+                  { acmeEndpoint = listenerEndpoint listenerConfig,
+                    acmeListenerConfig = acmeConfig
+                  }
+            )
+
+data PlannedListener
+  = PlannedHttp ListenerEndpoint
+  | PlannedManualTls ManualTlsBindPlan
+  | PlannedAcme AcmeBindPlan
+
+plannedEndpoint :: PlannedListener -> ListenerEndpoint
+plannedEndpoint plannedListener =
+  case plannedListener of
+    PlannedHttp endpoint -> endpoint
+    PlannedManualTls manualTlsBindPlan -> tlsEndpoint manualTlsBindPlan
+    PlannedAcme acmeBindPlan -> acmeEndpoint acmeBindPlan
+
+listenerEndpoint :: ListenerConfig -> ListenerEndpoint
+listenerEndpoint listenerConfig =
+  ListenerEndpoint
+    { endpointHost = listenerHost listenerConfig,
+      endpointPort = listenerPort listenerConfig
+    }
+
+firstDuplicate :: (Eq value) => [value] -> Maybe value
+firstDuplicate values =
+  case values of
+    [] -> Nothing
+    value : remainingValues ->
+      if value `elem` remainingValues
+        then Just value
+        else firstDuplicate remainingValues

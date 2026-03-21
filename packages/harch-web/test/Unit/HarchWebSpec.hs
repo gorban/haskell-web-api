@@ -109,6 +109,36 @@ sampleApplication =
       pageShell = buildPageShell sampleCodec sampleShell
     }
 
+sampleAppConfig :: AppConfig
+sampleAppConfig =
+  AppConfig
+    { appTitlePrefix = Text.pack "sample-app",
+      listenerConfigs =
+        [ ListenerConfig
+            { listenerHost = Text.pack "127.0.0.1",
+              listenerPort = 5001,
+              listenerScheme = Http,
+              listenerTls = Nothing
+            }
+        ],
+      staticAssets =
+        StaticAssetsConfig
+          { staticAssetRoots = [],
+            staticCacheControlSeconds = Nothing
+          },
+      observability =
+        ObservabilityConfig
+          { tracingExporter = Nothing,
+            metricsExporter = Nothing
+          }
+    }
+
+appConfigWithListeners :: [ListenerConfig] -> AppConfig
+appConfigWithListeners listeners =
+  sampleAppConfig
+    { listenerConfigs = listeners
+    }
+
 rootPathApplication :: Application TestRoute TestContext
 rootPathApplication =
   Application
@@ -592,9 +622,177 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 (Text.pack "application/json"))
       readResponseBody response `shouldReturn` Text.pack "{\"route\":\"data\"}"
 
-  describe "runServer" $
+  describe "planServerStartup" $ do
+    it "groups HTTP listeners into the expected bind plan" $ do
+      let firstEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
+          secondEndpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5002}
+          firstListener = ListenerConfig {listenerHost = endpointHost firstEndpoint, listenerPort = endpointPort firstEndpoint, listenerScheme = Http, listenerTls = Nothing}
+          secondListener = ListenerConfig {listenerHost = endpointHost secondEndpoint, listenerPort = endpointPort secondEndpoint, listenerScheme = Http, listenerTls = Nothing}
+          httpBindPlan = HttpBindPlan {httpEndpoints = [firstEndpoint, secondEndpoint]}
+          startupPlan =
+            ServerStartupPlan
+              { httpBindPlan = httpBindPlan,
+                manualTlsBindPlans = [],
+                acmeBindPlans = []
+              }
+      planServerStartup (appConfigWithListeners [firstListener, secondListener]) `shouldBe` Right startupPlan
+      firstEndpoint `shouldBe` firstEndpoint
+      firstEndpoint `shouldNotBe` secondEndpoint
+      httpBindPlan `shouldBe` httpBindPlan
+      httpBindPlan `shouldNotBe` HttpBindPlan {httpEndpoints = [firstEndpoint]}
+      startupPlan `shouldBe` startupPlan
+      startupPlan `shouldNotBe` startupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [firstEndpoint]}}
+      show firstEndpoint `shouldBe` "ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001}"
+      show [firstEndpoint, secondEndpoint] `shouldBe` "[ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]"
+      show httpBindPlan `shouldBe` "HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}"
+      show [httpBindPlan] `shouldBe` "[HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}]"
+      show startupPlan `shouldBe` "ServerStartupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}, manualTlsBindPlans = [], acmeBindPlans = []}"
+      show [startupPlan] `shouldBe` "[ServerStartupPlan {httpBindPlan = HttpBindPlan {httpEndpoints = [ListenerEndpoint {endpointHost = \"127.0.0.1\", endpointPort = 5001},ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5002}]}, manualTlsBindPlans = [], acmeBindPlans = []}]"
+
+    it "translates manual certificate files into TLS startup parameters" $ do
+      let endpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5443}
+          certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+          listener =
+            ListenerConfig
+              { listenerHost = endpointHost endpoint,
+                listenerPort = endpointPort endpoint,
+                listenerScheme = Https,
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource})
+              }
+          manualPlan =
+            ManualTlsBindPlan
+              { tlsEndpoint = endpoint,
+                tlsCertificateFile = "cert.pem",
+                tlsPrivateKeyFile = "key.pem"
+              }
+      planServerStartup (appConfigWithListeners [listener])
+        `shouldBe` Right
+          ServerStartupPlan
+            { httpBindPlan = HttpBindPlan {httpEndpoints = []},
+              manualTlsBindPlans = [manualPlan],
+              acmeBindPlans = []
+            }
+      manualPlan `shouldBe` manualPlan
+      manualPlan `shouldNotBe` manualPlan {tlsCertificateFile = "other.pem"}
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\"}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\"}]"
+
+    it "translates ACME-backed HTTPS listeners into certificate-management plans" $ do
+      let httpEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
+          endpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5444}
+          httpListener =
+            ListenerConfig
+              { listenerHost = endpointHost httpEndpoint,
+                listenerPort = endpointPort httpEndpoint,
+                listenerScheme = Http,
+                listenerTls = Nothing
+              }
+          acmeConfig =
+            AcmeConfig
+              { acmeDirectoryUrl = Text.pack "https://acme-v02.api.letsencrypt.org/directory",
+                acmeContactEmails = [Text.pack "ops@example.com"],
+                acmeChallengeBackend =
+                  CertbotHttp01
+                    CertbotConfig
+                      { certbotExecutable = "certbot",
+                        certbotArguments = [Text.pack "certonly", Text.pack "--webroot"]
+                      }
+              }
+          listener =
+            ListenerConfig
+              { listenerHost = endpointHost endpoint,
+                listenerPort = endpointPort endpoint,
+                listenerScheme = Https,
+                listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource acmeConfig})
+              }
+          acmePlan =
+            AcmeBindPlan
+              { acmeEndpoint = endpoint,
+                acmeListenerConfig = acmeConfig
+              }
+      planServerStartup (appConfigWithListeners [httpListener, listener])
+        `shouldBe` Right
+          ServerStartupPlan
+            { httpBindPlan = HttpBindPlan {httpEndpoints = [httpEndpoint]},
+              manualTlsBindPlans = [],
+              acmeBindPlans = [acmePlan]
+            }
+      acmePlan `shouldBe` acmePlan
+      acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5444}}
+      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}"
+      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}]"
+
+    it "rejects listeners whose TLS mode does not match their scheme" $ do
+      let httpTlsListener =
+            ListenerConfig
+              { listenerHost = Text.pack "127.0.0.1",
+                listenerPort = 5001,
+                listenerScheme = Http,
+                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}})
+              }
+          httpsWithoutTls =
+            ListenerConfig
+              { listenerHost = Text.pack "127.0.0.1",
+                listenerPort = 5443,
+                listenerScheme = Https,
+                listenerTls = Nothing
+              }
+      planServerStartup (appConfigWithListeners [httpTlsListener])
+        `shouldBe` Left (InvalidListenerTlsConfiguration httpTlsListener)
+      planServerStartup (appConfigWithListeners [httpsWithoutTls])
+        `shouldBe` Left (InvalidListenerTlsConfiguration httpsWithoutTls)
+      InvalidListenerTlsConfiguration httpTlsListener `shouldNotBe` InvalidListenerTlsConfiguration httpsWithoutTls
+      show (InvalidListenerTlsConfiguration httpTlsListener)
+        `shouldBe` "InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}})})"
+      show [InvalidListenerTlsConfiguration httpsWithoutTls]
+        `shouldBe` "[InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5443, listenerScheme = Https, listenerTls = Nothing})]"
+
+    it "rejects invalid mixed listener configurations before startup" $ do
+      let httpListener =
+            ListenerConfig
+              { listenerHost = Text.pack "0.0.0.0",
+                listenerPort = 5001,
+                listenerScheme = Http,
+                listenerTls = Nothing
+              }
+          httpsListener =
+            ListenerConfig
+              { listenerHost = Text.pack "0.0.0.0",
+                listenerPort = 5001,
+                listenerScheme = Https,
+                listenerTls =
+                  Just
+                    TlsConfig
+                      { certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+                      }
+              }
+          duplicateEndpoint = ListenerEndpoint {endpointHost = Text.pack "0.0.0.0", endpointPort = 5001}
+      planServerStartup (appConfigWithListeners [httpListener, httpsListener])
+        `shouldBe` Left (DuplicateListenerEndpoint duplicateEndpoint)
+      DuplicateListenerEndpoint duplicateEndpoint `shouldBe` DuplicateListenerEndpoint duplicateEndpoint
+      DuplicateListenerEndpoint duplicateEndpoint `shouldNotBe` DuplicateListenerEndpoint ListenerEndpoint {endpointHost = Text.pack "127.0.0.1", endpointPort = 5001}
+      show (DuplicateListenerEndpoint duplicateEndpoint)
+        `shouldBe` "DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})"
+      show [DuplicateListenerEndpoint duplicateEndpoint]
+        `shouldBe` "[DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})]"
+
+  describe "runServer" $ do
     it "writes the stub startup message to the supplied handle" $
       withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
-        runServer outputHandle () sampleApplication
+        runServer outputHandle sampleAppConfig sampleApplication
         hClose outputHandle
         readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+
+    it "fails before startup when the listener plan is invalid" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let invalidConfig =
+              appConfigWithListeners
+                [ ListenerConfig
+                    { listenerHost = Text.pack "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Https,
+                      listenerTls = Nothing
+                    }
+                ]
+        runServer outputHandle invalidConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Invalid listener startup plan: InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Nothing}))")
