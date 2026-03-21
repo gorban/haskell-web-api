@@ -72,7 +72,8 @@ simply running the GHCup installer below should install some prerequisites, but 
 > On Darwin M1 you might also need a working llvm installed (e.g. via brew) and have the toolchain exposed
 > in PATH.
 
-But, we also have a custom pre-commit hook that uses `dos2unix` for formatting checks, so you may want to install that as well with Homebrew:
+But, we also have a custom pre-commit hook that uses `dos2unix` for formatting checks, so you may want to
+install that as well with Homebrew:
 
 ```bash
 brew install llvm dos2unix
@@ -198,8 +199,8 @@ cabal build all
 In addition to the Haskell toolchain, the current repository is easiest to work with when the following
 commands are also available on your `PATH`:
 
-- `node` for the current browser-harness-backed e2e spec. No Playwright install is required yet; the current
-  e2e path only needs a basic Node.js runtime.
+- `node` for the current browser-harness-backed e2e spec. No Playwright install is required yet; the
+  current e2e path only needs a basic Node.js runtime.
 - `psql` plus a local PostgreSQL server if you want to exercise the PostgreSQL adapter, migrations, or seed
   data locally.
 
@@ -223,9 +224,10 @@ sudo dnf install -y nodejs postgresql-server postgresql
 brew install node postgresql@17
 ```
 
-If you only want to boot the example app with its current committed stub data, PostgreSQL is optional today.
-`cabal run haskell-web-api` still starts from `defaultAppConfig` and the in-process default database effect,
-so the local database only becomes necessary when you are explicitly exercising the PostgreSQL path.
+If you only want to boot the example app with its current committed stub data, PostgreSQL is optional
+today. `cabal run haskell-web-api` still starts from `defaultAppConfig` and the in-process default
+database effect, so the local database only becomes necessary when you are explicitly exercising the
+PostgreSQL path.
 
 ## Repository Configuration Layers
 
@@ -269,7 +271,9 @@ If you want a local PostgreSQL instance that matches the current committed devel
 - User: `web_api`
 - Password: `web_api`
 
-One straightforward option is a local Docker container:
+One straightforward option is a local container, using either Docker or Podman.
+
+### Docker
 
 ```bash
 docker run --name web-api-postgres \
@@ -278,7 +282,16 @@ docker run --name web-api-postgres \
   -d postgres:17
 ```
 
-Create the matching role and database:
+### Podman
+
+```bash
+podman run --name web-api-postgres \
+  -e POSTGRES_PASSWORD=postgres \
+  -p 5432:5432 \
+  -d postgres:17
+```
+
+After the container is running, create the matching role and database:
 
 ```bash
 psql -h 127.0.0.1 -U postgres -d postgres -c "CREATE ROLE web_api LOGIN PASSWORD 'web_api';"
@@ -318,10 +331,54 @@ SQL
 Those commands mirror the current defaults and SQL in `WebApi.Config` and `WebApi.Postgres`. If you change
 the database connection values in your local config layers, adjust the `psql` commands to match.
 
-When you are done with the Docker example, you can stop and remove it with:
+When you are done with the container example, stop and remove it with either Docker or Podman:
 
 ```bash
 docker rm -f web-api-postgres
+podman rm -f web-api-postgres
+```
+
+## Local Jaeger All-in-One Startup Example
+
+If you want a local tracing backend that matches the current OTLP tracing configuration seam, point
+`OTLP_TRACING_ENDPOINT` at Jaeger's OTLP HTTP listener, for example:
+
+```dotenv
+OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+```
+
+Then start Jaeger all-in-one with OTLP enabled.
+
+### Docker
+
+```bash
+docker run --name web-api-jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  -d jaegertracing/all-in-one
+```
+
+### Podman
+
+```bash
+podman run --name web-api-jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  -p 16686:16686 \
+  -p 4318:4318 \
+  -d jaegertracing/all-in-one
+```
+
+Useful endpoints after startup:
+
+- Jaeger UI: `http://127.0.0.1:16686`
+- OTLP HTTP ingest: `http://127.0.0.1:4318/v1/traces`
+
+When you are done, stop and remove it with either Docker or Podman:
+
+```bash
+docker rm -f web-api-jaeger
+podman rm -f web-api-jaeger
 ```
 
 #### Additional Build Prerequisites for CI Builds
