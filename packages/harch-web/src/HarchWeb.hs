@@ -193,7 +193,8 @@ data Page route context = Page
   { pageTitle :: Text,
     pageRoute :: route,
     pageContext :: context,
-    pageBody :: Text
+    pageBody :: Text,
+    pageBootstrapHooks :: [Text]
   }
   deriving (Eq, Show)
 
@@ -225,6 +226,7 @@ data Document route = Document
     documentMainId :: Text,
     documentMainAttributes :: [HtmlAttribute],
     documentMainContent :: Text,
+    documentBootstrapHooks :: [Text],
     documentScriptSources :: [Text]
   }
   deriving (Eq, Show)
@@ -321,6 +323,7 @@ buildDocument codec shell page =
       documentMainId = shellMainId shell,
       documentMainAttributes = shellMainAttributes shell,
       documentMainContent = pageBody page,
+      documentBootstrapHooks = pageBootstrapHooks page,
       documentScriptSources = shellScriptSources shell
     }
 
@@ -340,7 +343,7 @@ renderDocument document =
       "</nav><main id=\"",
       documentMainId document,
       "\"",
-      renderAttributes (documentMainAttributes document),
+      renderAttributes (documentMainAttributes document <> renderBootstrapHookAttributes (documentBootstrapHooks document)),
       ">",
       documentMainContent document,
       "</main></body></html>"
@@ -465,6 +468,17 @@ renderAttribute attribute =
       attributeValue attribute,
       "\""
     ]
+
+renderBootstrapHookAttributes :: [Text] -> [HtmlAttribute]
+renderBootstrapHookAttributes bootstrapHooks =
+  case bootstrapHooks of
+    [] -> []
+    _ ->
+      [ HtmlAttribute
+          { attributeName = "data-bootstrap-hooks",
+            attributeValue = Text.intercalate "," bootstrapHooks
+          }
+      ]
 
 renderNavigationItem :: ResolvedNavigationItem route -> Text
 renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, navigationHref = itemHref, navigationIsActive = itemIsActive} =

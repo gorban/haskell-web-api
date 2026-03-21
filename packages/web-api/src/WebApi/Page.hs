@@ -89,7 +89,8 @@ renderPageFromRouteData config routeRequest routeData =
         { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
           HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
           HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
-          HarchWeb.pageBody = renderPageBody pageModel
+          HarchWeb.pageBody = renderPageBody pageModel,
+          HarchWeb.pageBootstrapHooks = bootstrapHooks pageModel
         }
 
 routeTitle :: AppRoute -> Text
@@ -247,3 +248,10 @@ renderCallToAction callToAction =
       callToActionLabel callToAction,
       "</a></p>"
     ]
+
+bootstrapHooks :: AppPageModel -> [Text]
+bootstrapHooks pageModel =
+  case pageModel of
+    HomePage _ -> []
+    SecondPage _ -> ["second-page"]
+    NotFoundPage _ -> []

@@ -1319,7 +1319,8 @@ spec = do
                 { HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
                   HarchWeb.pageContext = defaultRequestContext,
-                  HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+                  HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+                  HarchWeb.pageBootstrapHooks = ["second-page"]
                 }
             )
         runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
@@ -2238,7 +2239,8 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>",
+            HarchWeb.pageBootstrapHooks = []
           }
 
     it "selects a distinct second page model" $
@@ -2247,7 +2249,8 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
     it "selects a stable not-found page model" $
@@ -2256,7 +2259,8 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBootstrapHooks = []
           }
 
     it "renders selected route data without reloading it" $
@@ -2275,7 +2279,8 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
     it "keeps shared layout data consistent across all routes" $ do
@@ -2289,7 +2294,7 @@ spec = do
       renderedShell config HomeRoute
         `shouldReturn` "<html><head><title>test-app: Home</title></head><body data-app=\"test-app\"><nav data-navigation-region=\"primary\"><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       renderedShell config SecondRoute
-        `shouldReturn` "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldReturn` "<html><head><title>test-app: Second</title></head><body data-app=\"test-app\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       renderedShell config NotFoundRoute
         `shouldReturn` "<html><head><title>test-app: Not Found</title></head><body data-app=\"test-app\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 
@@ -2305,7 +2310,7 @@ spec = do
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\"}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
@@ -2507,7 +2512,7 @@ spec = do
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
       Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" secondShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       homePageModel <- buildPageModel homeRequest
@@ -2557,7 +2562,8 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
+            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
   describe "page shell integration" $ do
@@ -2580,12 +2586,15 @@ spec = do
               }
       homeShellWithoutAssets <- renderedShell defaultAppConfig HomeRoute
       homeShell <- renderedShell navigationAppConfig HomeRoute
+      secondShell <- renderedShell navigationAppConfig SecondRoute
       rootMountedShell <- renderedShell rootMountedConfig HomeRoute
       Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` False
       Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
       Text.isInfixOf "<script src=\"/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
       Text.isInfixOf "<nav data-navigation-region=\"primary\">" homeShell `shouldBe` True
       Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "data-bootstrap-hooks" homeShell `shouldBe` False
+      Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "serves the bundled navigation asset through configured static roots" $ do
       response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])
@@ -2685,7 +2694,7 @@ spec = do
       HarchWeb.pageShell pureApplication homePage
         `shouldBe` "<html><head><title>web-api: Home</title></head><body data-app=\"web-api\"><nav data-navigation-region=\"primary\"><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication secondPage
-        `shouldBe` "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+        `shouldBe` "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
       HarchWeb.pageShell pureApplication notFoundPage
         `shouldBe` "<html><head><title>web-api: Not Found</title></head><body data-app=\"web-api\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
 

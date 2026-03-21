@@ -73,7 +73,8 @@ samplePage request =
     { pageTitle = "Known",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = "<h1>Known</h1>"
+      pageBody = "<h1>Known</h1>",
+      pageBootstrapHooks = []
     }
 
 sampleMissingPage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
@@ -82,7 +83,8 @@ sampleMissingPage request =
     { pageTitle = "Missing",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = "<h1>Missing</h1>"
+      pageBody = "<h1>Missing</h1>",
+      pageBootstrapHooks = []
     }
 
 sampleShell :: PageShell TestRoute TestContext
@@ -431,10 +433,10 @@ spec = do
           navigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "primary"}
           mainAttribute = HtmlAttribute {attributeName = "data-navigation-content", attributeValue = "true"}
           localTestServer = LocalTestServer {localServerHost = "127.0.0.1", localServerPort = 5001, localServerBaseUrl = "http://127.0.0.1:5001"}
-          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>"}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentScriptSources = ["/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentScriptSources = ["/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
@@ -448,6 +450,7 @@ spec = do
       pageRoute page `shouldBe` KnownRoute
       pageContext page `shouldBe` defaultContext
       pageBody page `shouldBe` "<h1>Known</h1>"
+      pageBootstrapHooks page `shouldBe` ["known-page"]
       navigationItemLabel `shouldBe` "Known"
       navigationItemRoute `shouldBe` KnownRoute
       resolvedNavigationItemLabel `shouldBe` "Known"
@@ -461,6 +464,7 @@ spec = do
       documentMainId document `shouldBe` "app-main"
       documentMainAttributes document `shouldBe` [mainAttribute]
       documentMainContent document `shouldBe` "<h1>Known</h1>"
+      documentBootstrapHooks document `shouldBe` ["known-page"]
       documentScriptSources document `shouldBe` ["/assets/navigation.js"]
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationAttributes shell `shouldBe` [navigationAttribute]
@@ -479,8 +483,8 @@ spec = do
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
           otherRequest = RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
-          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>"}
-          otherPage = Page {pageTitle = "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = "<h1>Missing</h1>"}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
+          otherPage = Page {pageTitle = "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = "<h1>Missing</h1>", pageBootstrapHooks = []}
           attribute = HtmlAttribute {attributeName = "data-app", attributeValue = "sample"}
           otherAttribute = HtmlAttribute {attributeName = "lang", attributeValue = "en"}
           navigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "primary"}
@@ -493,8 +497,8 @@ spec = do
           otherNavigationItem = NavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentScriptSources = ["/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentScriptSources = []}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentScriptSources = ["/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentScriptSources = []}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellScriptSources = []}
           body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
@@ -514,8 +518,8 @@ spec = do
       show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\"}}]"
       (page == page) `shouldBe` True
       (page /= otherPage) `shouldBe` True
-      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"}"
-      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"}]"
+      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
+      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
       (attribute == attribute) `shouldBe` True
       (attribute /= otherAttribute) `shouldBe` True
       show attribute `shouldBe` "HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}"
@@ -527,8 +531,8 @@ spec = do
       show resolvedNavigationItem `shouldBe` "ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}"
       (document == document) `shouldBe` True
       (document /= otherDocument) `shouldBe` True
-      show document `shouldBe` "Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentScriptSources = [\"/assets/navigation.js\"]}"
-      show [document] `shouldBe` "[Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentScriptSources = [\"/assets/navigation.js\"]}]"
+      show document `shouldBe` "Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentBootstrapHooks = [\"known-page\"], documentScriptSources = [\"/assets/navigation.js\"]}"
+      show [document] `shouldBe` "[Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentBootstrapHooks = [\"known-page\"], documentScriptSources = [\"/assets/navigation.js\"]}]"
       (localTestServer == localTestServer) `shouldBe` True
       (localTestServer /= otherLocalTestServer) `shouldBe` True
       show localTestServer `shouldBe` "LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}"
@@ -543,11 +547,11 @@ spec = do
       show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"}]"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
-      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"})"
+      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})"
-      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\"}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})]"
+      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})]"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -662,13 +666,28 @@ spec = do
                   }
               ],
             documentMainContent = "<h1>Known</h1>",
+            documentBootstrapHooks = [],
             documentScriptSources = ["/assets/navigation.js"]
           }
 
-  describe "buildPageShell" $
+  describe "buildPageShell" $ do
     it "renders the shared HTML document for the supplied page and shell options" $
       buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
         `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+
+    it "renders bootstrap hook metadata only for pages that opt in" $
+      buildPageShell
+        sampleCodec
+        sampleShell
+        ( Page
+            { pageTitle = "Known",
+              pageRoute = KnownRoute,
+              pageContext = defaultContext,
+              pageBody = "<h1>Known</h1>",
+              pageBootstrapHooks = ["known-page", "hydrate-known"]
+            }
+        )
+        `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
 
   describe "toWaiApplication" $ do
     it "selects request paths through the stored route parser and returns HTML pages" $ do
