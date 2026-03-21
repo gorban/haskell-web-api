@@ -2570,10 +2570,30 @@ spec = do
       Text.isInfixOf "aria-current=\"page\"" notFoundShell `shouldBe` False
 
     it "emits deterministic navigation hooks and script references when assets are configured" $ do
+      let rootMountedConfig =
+            navigationAppConfig
+              { staticAssets =
+                  StaticAssetsConfig
+                    { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}],
+                      staticCacheControlSeconds = Nothing
+                    }
+              }
+      homeShellWithoutAssets <- renderedShell defaultAppConfig HomeRoute
       homeShell <- renderedShell navigationAppConfig HomeRoute
+      rootMountedShell <- renderedShell rootMountedConfig HomeRoute
+      Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" homeShellWithoutAssets `shouldBe` False
       Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
+      Text.isInfixOf "<script src=\"/navigation.js\" defer></script>" rootMountedShell `shouldBe` True
       Text.isInfixOf "<nav data-navigation-region=\"primary\">" homeShell `shouldBe` True
       Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+
+    it "serves the bundled navigation asset through configured static roots" $ do
+      response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])
+      Wai.responseStatus response `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "data-page-link" responseBody `shouldBe` True
+      Text.isInfixOf "popstate" responseBody `shouldBe` True
 
     it "keeps shell output identical for repeated renders of the same page input" $ do
       let application = buildApp defaultAppConfig

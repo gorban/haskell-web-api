@@ -6,6 +6,7 @@
 * App-facing seams are being kept pure where possible so route matching, page rendering, layout decisions, and future config parsing can be Unit-tested before IO adapters are added.
 * The intended PR-ready scope for `web-api` is to remain responsible for app routes, pages, config, and startup while delegating shared SSR/server/runtime concerns to `HarchWeb`.
 * The executable and tests now target the new facade startup path rather than the previous direct banner-writing stub.
+* `web-api` now includes a tiny bundled `navigation.js` asset, and the shared shell can emit and serve that asset through configured static roots.
 
 ## 0.1.0.1
 
