@@ -13,7 +13,11 @@ import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
-import WebApi (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppLocale (..), AppMode (..), AppPageModel (..), AppRequestContext (..), AppRoute (..), CallToAction (..), CertbotConfig (..), ConfigParseError (..), DatabaseConfig (..), HomePageModel (..), ListenerConfig (..), ListenerScheme (..), NotFoundPageModel (..), ObservabilityConfig (..), OtlpExporter (..), RouteSelectionError (..), SecondPageModel (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), buildApp, buildPageModel, committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultRequestContext, matchRoute, parseAppEnvironmentConfig, parseRoute, parseRuntimeAppConfig, renderPage, renderPageBody, renderRoutePath, run, selectRoute)
+import WebApi (buildApp, run)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, parseAppEnvironmentConfig, parseRuntimeAppConfig)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, renderPage, renderPageBody)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
+import qualified WebApi.Route
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -37,7 +41,7 @@ notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 notFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = defaultRequestContext}
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
-pureRouteMatcher = matchRoute defaultRequestContext
+pureRouteMatcher = WebApi.Route.matchRoute WebApi.Route.defaultRequestContext
 
 renderedShell :: AppConfig -> AppRoute -> Text
 renderedShell config route =
@@ -1395,6 +1399,10 @@ spec = do
       renderRoutePath notFoundRequest `shouldBe` Text.pack "/404"
 
   describe "matchRoute" $ do
+    it "remains available separately from HarchWeb.matchRoute" $
+      WebApi.Route.matchRoute WebApi.Route.defaultRequestContext (Text.pack "/second")
+        `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext (Text.pack "/second")
+
     it "matches the home path" $
       pureRouteMatcher (Text.pack "/") `shouldBe` homeRequest
 
