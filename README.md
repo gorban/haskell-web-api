@@ -108,13 +108,14 @@ understands the following values:
 | `SETUP_AUTOSTART_DATABASE` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local PostgreSQL startup when the configured database is unavailable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`true`) |
 | `SETUP_AUTOSTART_JAEGER` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local Jaeger startup when OTLP tracing is configured but unreachable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
 
-The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the runtime
-application config consumed by `cabal run haskell-web-api`. They are intended for build and verification paths
-that need real prerequisite services, such as `cabal build haskell-web-api`, `cabal build all`, or targeted
-Unit tests for the concrete PostgreSQL adapter and similar components that must verify a real connection
-instead of a mock. Today they are parsed from the same layered `./.env` and `./.env.local` files and feed
-prerequisite planning helpers in `WebApi.SetupConfig` / `WebApi.SetupPlan`; the remaining `Setup.hs`
-prerequisite detection and autostart execution work is still tracked in `TASKS.md`.
+The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the
+runtime application config consumed by `cabal run haskell-web-api`. They are intended for build and
+verification paths that need real prerequisite services, such as `cabal build haskell-web-api`,
+`cabal build all`, or targeted Unit tests for the concrete PostgreSQL adapter and similar components that
+must verify a real connection instead of a mock. Today they are parsed from the same layered `./.env` and
+`./.env.local` files and feed prerequisite planning helpers in `WebApi.SetupConfig` / `WebApi.SetupPlan`;
+the remaining `Setup.hs` prerequisite detection and autostart execution work is still tracked in
+`TASKS.md`.
 
 The intended configuration model has three layers:
 
