@@ -64,6 +64,7 @@ library
     WebApi.Database
     WebApi.DatabaseSetup
     WebApi.Page
+    WebApi.PageShell
     WebApi.Postgres
     WebApi.Response
     WebApi.Route

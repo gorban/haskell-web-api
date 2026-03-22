@@ -13,6 +13,7 @@ import HarchWeb qualified
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
 import WebApi.Page (renderPageFromRouteData)
+import WebApi.PageShell (buildAppPageShell)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -38,9 +39,27 @@ selectResponseWithDatabase config databaseEffect routeRequest =
           ApiSurface ->
             HarchWeb.BodyResponse (renderApiResponseFromRouteData routeData)
           PageSurface ->
-            HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
+            renderPageResponseFromRouteData config routeRequest routeData
     )
     (selectRouteDataWithDatabase databaseEffect routeRequest)
+
+renderPageResponseFromRouteData ::
+  AppConfig ->
+  HarchWeb.RouteRequest AppRoute AppRequestContext ->
+  RouteDataResult ->
+  HarchWeb.Response AppRoute AppRequestContext
+renderPageResponseFromRouteData config routeRequest routeData =
+  case routeData of
+    SecondRouteDataResult (Left _) ->
+      let renderedPage = renderPageFromRouteData config routeRequest routeData
+       in HarchWeb.BodyResponse
+            HarchWeb.ResponseBody
+              { HarchWeb.responseStatus = 500,
+                HarchWeb.responseContentType = "text/html; charset=utf-8",
+                HarchWeb.responseBody = buildAppPageShell config renderedPage
+              }
+    _ ->
+      HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
 
 renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
 renderApiResponseFromRouteData routeData =

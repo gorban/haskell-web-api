@@ -26,6 +26,7 @@ import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.PageShell (buildAppPageShell)
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatements, runPostgresMigrations, runPostgresMigrationsWithRunner, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
@@ -2763,6 +2764,48 @@ spec = do
               HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}"
             }
 
+    it "maps required second-page failures into explicit HTML 500 responses" $ do
+      let failingDatabaseEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                }
+          renderedPage =
+            renderPageFromRouteData
+              defaultAppConfig
+              secondRequest
+              (SecondRouteDataResult (Left (SecondPageDataError "seed unavailable")))
+      selectResponseWithDatabase defaultAppConfig failingDatabaseEffect secondRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 500,
+              HarchWeb.responseContentType = "text/html; charset=utf-8",
+              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage
+            }
+
+    it "keeps routes without required database data on their existing responses" $ do
+      let failingDatabaseEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                  frenchSecondPageData = Left (SecondPageDataError "seed unavailable")
+                }
+      renderedHomePage <- renderPage defaultAppConfig homeRequest
+      selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
+        `shouldReturn` HarchWeb.PageResponse renderedHomePage
+      selectResponseWithDatabase defaultAppConfig failingDatabaseEffect apiStatusRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}"
+            }
+
     it "is deterministic for repeated requests" $ do
       firstResponse <- selectResponse defaultAppConfig apiStatusRequest
       secondResponse <- selectResponse defaultAppConfig apiStatusRequest
@@ -3069,6 +3112,28 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders apiMissingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody apiMissingResponse
         `shouldReturn` "{\"error\":\"not-found\"}"
+
+    it "returns HTTP 500 for required page failures while keeping unaffected routes unchanged" $ do
+      let failingApplication =
+            buildAppWithDatabase
+              defaultAppConfig
+              ( buildSeededDatabaseEffect
+                  DatabaseSeed
+                    { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                      frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                      englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                      frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                    }
+              )
+      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication failingApplication) (waiRequest ["second"])
+      Wai.responseStatus secondResponse `shouldBe` Http.internalServerError500
+      lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
+      secondResponseBody <- readResponseBody secondResponse
+      secondResponseBody `shouldSatisfy` Text.isInfixOf "Second page content is temporarily unavailable."
+
+      homeResponse <- performWaiRequest (HarchWeb.toWaiApplication failingApplication) (waiRequest [])
+      Wai.responseStatus homeResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders homeResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       homePage <- renderPage defaultAppConfig homeRequest
