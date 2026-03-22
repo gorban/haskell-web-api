@@ -10,8 +10,12 @@ module WebApi.App
   )
 where
 
+import Control.Exception (evaluate)
+import Data.Text qualified as Text
+import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
-import System.IO (Handle)
+import HarchWeb.Observability qualified as Observability
+import System.IO (Handle, stderr)
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
@@ -32,6 +36,15 @@ import WebApi.Route
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabase config databaseEffect =
+  buildAppWithDatabaseAndReporters config databaseEffect ignoreRequestObservability ignoreApplicationLog
+
+buildAppWithDatabaseAndReporters ::
+  AppConfig ->
+  DatabaseEffect ->
+  (Observability.RequestObservability -> IO ()) ->
+  (Text.Text -> IO ()) ->
+  HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityReporter applicationLogReporter =
   config `seq`
     HarchWeb.application
       HarchWeb.Application
@@ -40,7 +53,9 @@ buildAppWithDatabase config databaseEffect =
           HarchWeb.applicationStaticAssets = staticAssets config,
           HarchWeb.routeCodec = routeCodec,
           HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
-          HarchWeb.pageShell = buildAppPageShell config
+          HarchWeb.pageShell = buildAppPageShell config,
+          HarchWeb.reportRequestObservability = requestObservabilityReporter,
+          HarchWeb.reportApplicationLog = applicationLogReporter
         }
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
@@ -58,7 +73,12 @@ buildRuntimeAppWithDatabaseBuilder ::
   HarchWeb.Application AppRoute AppRequestContext
 buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig =
   let databaseEffect = buildDatabaseEffect (databaseConfig environmentConfig)
-   in databaseEffect `seq` buildAppWithDatabase config databaseEffect
+   in databaseEffect `seq`
+        buildAppWithDatabaseAndReporters
+          config
+          databaseEffect
+          runtimeRequestObservabilityReporter
+          runtimeApplicationLogReporter
 
 runWithEnvironmentConfig :: Handle -> AppEnvironmentConfig -> IO ()
 runWithEnvironmentConfig outputHandle =
@@ -71,3 +91,21 @@ run outputHandle = do
     (\loadError -> ioError (userError ("Failed to load app environment config: " <> show loadError)))
     (runWithEnvironmentConfig outputHandle)
     environmentConfigResult
+
+runtimeRequestObservabilityReporter :: Observability.RequestObservability -> IO ()
+runtimeRequestObservabilityReporter =
+  TextIO.hPutStrLn stderr . ("TRACE " <>) . Text.pack . show
+
+runtimeApplicationLogReporter :: Text.Text -> IO ()
+runtimeApplicationLogReporter =
+  TextIO.hPutStrLn stderr . ("ERROR " <>)
+
+ignoreRequestObservability :: Observability.RequestObservability -> IO ()
+ignoreRequestObservability requestObservability =
+  let ignored = mempty :: ()
+   in Observability.forceRequestObservability requestObservability `seq` ignored `seq` evaluate ignored
+
+ignoreApplicationLog :: Text.Text -> IO ()
+ignoreApplicationLog logEntry =
+  let ignored = mempty :: ()
+   in Text.length logEntry `seq` ignored `seq` evaluate ignored

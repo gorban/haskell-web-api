@@ -11,6 +11,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import qualified HarchWeb
+import qualified HarchWeb.Observability as Observability
 import qualified Network.HTTP.Types as Http
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
@@ -2708,14 +2709,18 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}"
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
       selectResponse defaultAppConfig apiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
 
     it "keeps API payload rendering locale-aware without touching page routing" $ do
@@ -2724,14 +2729,18 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"fr\"}"
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"fr\"}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
       selectResponse defaultAppConfig frenchApiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+              HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
 
     it "keeps not-found handling consistent across page and non-page responses" $ do
@@ -2742,7 +2751,9 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 404,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"error\":\"not-found\"}"
+              HarchWeb.responseBody = "{\"error\":\"not-found\"}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
 
     it "maps shared second-page load failures into explicit API error responses" $
@@ -2761,8 +2772,56 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 503,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}"
+              HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.message",
+                      Observability.attributeValue = Observability.TextAttribute "seed unavailable"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.route",
+                      Observability.attributeValue = Observability.TextAttribute "/second"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.surface",
+                      Observability.attributeValue = Observability.TextAttribute "api"
+                    }
+                ],
+              HarchWeb.responseLogEntries =
+                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
             }
+
+    it "preserves unexpected database error constructors in API diagnostics" $
+      renderApiResponseFromRouteData (SecondRouteDataResult (Left (HomePageDataError "wrong loader")))
+        `shouldBe` HarchWeb.ResponseBody
+          { HarchWeb.responseStatus = 503,
+            HarchWeb.responseContentType = "application/json",
+            HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
+            HarchWeb.responseObservabilityAttributes =
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.type",
+                    Observability.attributeValue = Observability.TextAttribute "HomePageDataError"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.message",
+                    Observability.attributeValue = Observability.TextAttribute "wrong loader"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "app.route",
+                    Observability.attributeValue = Observability.TextAttribute "/second"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "app.surface",
+                    Observability.attributeValue = Observability.TextAttribute "api"
+                  }
+              ],
+            HarchWeb.responseLogEntries =
+              ["Database failure while rendering required second-page api response: HomePageDataError \"wrong loader\""]
+          }
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
@@ -2783,7 +2842,27 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 500,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
-              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage
+              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage,
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.message",
+                      Observability.attributeValue = Observability.TextAttribute "seed unavailable"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.route",
+                      Observability.attributeValue = Observability.TextAttribute "/second"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.surface",
+                      Observability.attributeValue = Observability.TextAttribute "page"
+                    }
+                ],
+              HarchWeb.responseLogEntries =
+                ["Database failure while rendering required second-page page response: SecondPageDataError \"seed unavailable\""]
             }
 
     it "keeps routes without required database data on their existing responses" $ do
@@ -2803,7 +2882,9 @@ spec = do
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}"
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = []
             }
 
     it "is deterministic for repeated requests" $ do
@@ -2867,7 +2948,9 @@ spec = do
         `shouldBe` HarchWeb.ResponseBody
           { HarchWeb.responseStatus = 200,
             HarchWeb.responseContentType = "application/json",
-            HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}"
+            HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}",
+            HarchWeb.responseObservabilityAttributes = [],
+            HarchWeb.responseLogEntries = []
           }
 
     it "loads second-page content from the database effect when provided" $
@@ -3049,6 +3132,20 @@ spec = do
     it "stores the configured static assets used by the WAI adapter" $
       HarchWeb.applicationStaticAssets pureApplication `shouldBe` staticAssets defaultAppConfig
 
+    it "keeps pure-app observability and log reporters as no-ops" $ do
+      HarchWeb.reportRequestObservability
+        pureApplication
+        ( Observability.buildRequestObservability
+            "GET"
+            "http"
+            "/"
+            "/"
+            200
+            Observability.PageResponseKind
+            []
+        )
+      HarchWeb.reportApplicationLog pureApplication "ignored"
+
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
       HarchWeb.parseRoute codec defaultRequestContext "/" `shouldBe` parseRoute defaultRequestContext "/"
@@ -3184,6 +3281,22 @@ spec = do
           HarchWeb.responseBody body
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
+      HarchWeb.reportRequestObservability
+        runtimeApplication
+        ( Observability.buildRequestObservability
+            "GET"
+            "http"
+            "/second"
+            "/second"
+            500
+            Observability.BodyResponseKind
+            [ Observability.ObservabilityAttribute
+                { Observability.attributeName = "exception.type",
+                  Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
+                }
+            ]
+        )
+      HarchWeb.reportApplicationLog runtimeApplication "runtime failure detail"
 
   describe "run" $ do
     it "starts the runtime server from an explicit environment config" $

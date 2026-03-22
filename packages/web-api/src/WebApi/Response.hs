@@ -10,8 +10,9 @@ where
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
+import HarchWeb.Observability qualified as Observability
 import WebApi.Config (AppConfig)
-import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
+import WebApi.Database (DatabaseEffect, DatabaseError (..), defaultDatabaseEffect)
 import WebApi.Page (renderPageFromRouteData)
 import WebApi.PageShell (buildAppPageShell)
 import WebApi.Route
@@ -50,14 +51,10 @@ renderPageResponseFromRouteData ::
   HarchWeb.Response AppRoute AppRequestContext
 renderPageResponseFromRouteData config routeRequest routeData =
   case routeData of
-    SecondRouteDataResult (Left _) ->
+    SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.BodyResponse
-            HarchWeb.ResponseBody
-              { HarchWeb.responseStatus = 500,
-                HarchWeb.responseContentType = "text/html; charset=utf-8",
-                HarchWeb.responseBody = buildAppPageShell config renderedPage
-              }
+            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (secondPageFailureDiagnostics PageSurface databaseError))
     _ ->
       HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
 
@@ -65,29 +62,13 @@ renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
 renderApiResponseFromRouteData routeData =
   case routeData of
     StatusApiDataResult statusApiData ->
-      HarchWeb.ResponseBody
-        { HarchWeb.responseStatus = 200,
-          HarchWeb.responseContentType = "application/json",
-          HarchWeb.responseBody = statusApiBody statusApiData
-        }
+      jsonResponseBody 200 (statusApiBody statusApiData)
     SecondRouteDataResult (Right secondRouteData) ->
-      HarchWeb.ResponseBody
-        { HarchWeb.responseStatus = 200,
-          HarchWeb.responseContentType = "application/json",
-          HarchWeb.responseBody = secondRouteApiBody secondRouteData
-        }
-    SecondRouteDataResult (Left _) ->
-      HarchWeb.ResponseBody
-        { HarchWeb.responseStatus = 503,
-          HarchWeb.responseContentType = "application/json",
-          HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}"
-        }
+      jsonResponseBody 200 (secondRouteApiBody secondRouteData)
+    SecondRouteDataResult (Left databaseError) ->
+      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (secondPageFailureDiagnostics ApiSurface databaseError)
     _ ->
-      HarchWeb.ResponseBody
-        { HarchWeb.responseStatus = 404,
-          HarchWeb.responseContentType = "application/json",
-          HarchWeb.responseBody = "{\"error\":\"not-found\"}"
-        }
+      jsonResponseBody 404 "{\"error\":\"not-found\"}"
 
 statusApiBody :: StatusApiData -> Text
 statusApiBody statusApiData =
@@ -124,3 +105,84 @@ renderLocale locale =
   case locale of
     English -> "en"
     French -> "fr"
+
+jsonResponseBody :: Int -> Text -> HarchWeb.ResponseBody
+jsonResponseBody statusCode bodyText =
+  HarchWeb.ResponseBody
+    { HarchWeb.responseStatus = statusCode,
+      HarchWeb.responseContentType = "application/json",
+      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseLogEntries = []
+    }
+
+jsonErrorResponseBody :: Int -> Text -> FailureDiagnostics -> HarchWeb.ResponseBody
+jsonErrorResponseBody statusCode bodyText diagnostics =
+  (jsonResponseBody statusCode bodyText)
+    { HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
+      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+    }
+
+htmlErrorResponseBody :: Text -> FailureDiagnostics -> HarchWeb.ResponseBody
+htmlErrorResponseBody bodyText diagnostics =
+  HarchWeb.ResponseBody
+    { HarchWeb.responseStatus = 500,
+      HarchWeb.responseContentType = "text/html; charset=utf-8",
+      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
+      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+    }
+
+data FailureDiagnostics = FailureDiagnostics
+  { diagnosticsObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    diagnosticsLogEntries :: [Text]
+  }
+
+secondPageFailureDiagnostics :: RequestSurface -> DatabaseError -> FailureDiagnostics
+secondPageFailureDiagnostics requestSurfaceValue databaseError =
+  FailureDiagnostics
+    { diagnosticsObservabilityAttributes =
+        [ Observability.ObservabilityAttribute
+            { Observability.attributeName = "exception.type",
+              Observability.attributeValue = Observability.TextAttribute (databaseErrorType databaseError)
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "exception.message",
+              Observability.attributeValue = Observability.TextAttribute (databaseErrorMessage databaseError)
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.route",
+              Observability.attributeValue = Observability.TextAttribute "/second"
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.surface",
+              Observability.attributeValue = Observability.TextAttribute (renderRequestSurface requestSurfaceValue)
+            }
+        ],
+      diagnosticsLogEntries =
+        [ Text.concat
+            [ "Database failure while rendering required second-page ",
+              renderRequestSurface requestSurfaceValue,
+              " response: ",
+              Text.pack (show databaseError)
+            ]
+        ]
+    }
+
+databaseErrorType :: DatabaseError -> Text
+databaseErrorType databaseError =
+  case databaseError of
+    HomePageDataError _ -> "HomePageDataError"
+    SecondPageDataError _ -> "SecondPageDataError"
+
+databaseErrorMessage :: DatabaseError -> Text
+databaseErrorMessage databaseError =
+  case databaseError of
+    HomePageDataError message -> message
+    SecondPageDataError message -> message
+
+renderRequestSurface :: RequestSurface -> Text
+renderRequestSurface requestSurfaceValue =
+  case requestSurfaceValue of
+    PageSurface -> "page"
+    ApiSurface -> "api"

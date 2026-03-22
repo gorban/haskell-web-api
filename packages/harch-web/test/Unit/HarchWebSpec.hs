@@ -12,6 +12,7 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import HarchWeb
+import qualified HarchWeb.Observability as Observability
 import qualified Network.HTTP.Types as Http
 import qualified Network.Socket as Socket
 import qualified Network.Socket.ByteString as SocketByteString
@@ -137,7 +138,9 @@ sampleApplicationWithStaticAssets staticAssetsConfig =
       applicationStaticAssets = staticAssetsConfig,
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
-      pageShell = buildPageShell sampleCodec sampleShell
+      pageShell = buildPageShell sampleCodec sampleShell,
+      reportRequestObservability = const (pure ()),
+      reportApplicationLog = const (pure ())
     }
 
 sampleApplication :: Application TestRoute TestContext
@@ -181,7 +184,9 @@ rootPathApplication =
       applicationStaticAssets = emptyStaticAssets,
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
-      pageShell = buildPageShell rootPathCodec sampleShell
+      pageShell = buildPageShell rootPathCodec sampleShell,
+      reportRequestObservability = const (pure ()),
+      reportApplicationLog = const (pure ())
     }
 
 rootPathCodec :: RouteCodec TestRoute TestContext
@@ -208,7 +213,9 @@ renderSampleResponse request =
         ResponseBody
           { responseStatus = 202,
             responseContentType = "application/json",
-            responseBody = "{\"route\":\"data\"}"
+            responseBody = "{\"route\":\"data\"}",
+            responseObservabilityAttributes = [],
+            responseLogEntries = []
           }
     MissingRoute -> PageResponse (sampleMissingPage request)
 
@@ -479,7 +486,7 @@ spec = do
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentScriptSources = ["/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
-          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
+          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -520,6 +527,8 @@ spec = do
       responseStatus responseBodyValue `shouldBe` 202
       responseContentType responseBodyValue `shouldBe` "application/json"
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
+      responseObservabilityAttributes responseBodyValue `shouldBe` []
+      responseLogEntries responseBodyValue `shouldBe` []
 
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -542,8 +551,8 @@ spec = do
           otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentScriptSources = []}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellScriptSources = []}
-          body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
-          otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>"}
+          body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+          otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
           otherPageResponse :: Response TestRoute TestContext
@@ -584,15 +593,15 @@ spec = do
       show [shell] `shouldBe` "[PageShell {shellBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], shellNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], shellNavigationItems = [NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}], shellMainId = \"app-main\", shellMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], shellScriptSources = [\"/assets/navigation.js\"]}]"
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
-      show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"}"
-      show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"}]"
+      show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
+      show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
-      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})"
-      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\"})]"
+      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -608,6 +617,18 @@ spec = do
       renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
       pageShell sampleApplication (samplePage request)
         `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      reportRequestObservability
+        sampleApplication
+        ( Observability.buildRequestObservability
+            "GET"
+            "http"
+            "/known"
+            "/known"
+            200
+            Observability.PageResponseKind
+            []
+        )
+      reportApplicationLog sampleApplication "ignored log entry"
 
   describe "application" $ do
     it "preserves the supplied application description" $
@@ -615,7 +636,7 @@ spec = do
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}"}
+        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
 
   describe "matchRoute" $ do
     it "returns parsed routes for supported paths" $
@@ -768,6 +789,47 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
+
+    it "reports body-response observability attributes and logs through the application hooks" $ do
+      requestObservabilityReference <- newIORef []
+      logEntriesReference <- newIORef []
+      let failureAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "exception.type",
+                Observability.attributeValue = Observability.TextAttribute "SampleError"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { renderResponse =
+                  \_ ->
+                    pure $
+                      BodyResponse
+                        ResponseBody
+                          { responseStatus = 503,
+                            responseContentType = "application/json",
+                            responseBody = "{\"error\":\"data-unavailable\"}",
+                            responseObservabilityAttributes = [failureAttribute],
+                            responseLogEntries = ["Sample failure log"]
+                          },
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                reportApplicationLog = \logEntry ->
+                  modifyIORef' logEntriesReference (<> [logEntry])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) (waiRequest ["data"])
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 503
+      readResponseBody response `shouldReturn` "{\"error\":\"data-unavailable\"}"
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           503
+                           Observability.BodyResponseKind
+                           [failureAttribute]
+                       ]
+      readIORef logEntriesReference `shouldReturn` ["Sample failure log"]
 
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do

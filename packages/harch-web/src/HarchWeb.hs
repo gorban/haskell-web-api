@@ -266,7 +266,9 @@ data PageShell route context = PageShell
 data ResponseBody = ResponseBody
   { responseStatus :: Int,
     responseContentType :: Text,
-    responseBody :: Text
+    responseBody :: Text,
+    responseObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    responseLogEntries :: [Text]
   }
   deriving (Eq, Show)
 
@@ -287,7 +289,9 @@ data Application route context = Application
     applicationStaticAssets :: StaticAssetsConfig,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
-    pageShell :: Page route context -> Text
+    pageShell :: Page route context -> Text,
+    reportRequestObservability :: Observability.RequestObservability -> IO (),
+    reportApplicationLog :: Text -> IO ()
   }
 
 data LocalTestServer = LocalTestServer
@@ -390,7 +394,15 @@ toWaiApplication webApplication request respond =
                 (defaultRequestContext webApplication)
                 (waiRequestPath request)
         response <- renderResponse webApplication routeRequest
-        let requestObservability =
+        let extraObservabilityAttributes =
+              case response of
+                PageResponse _ -> []
+                BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+            responseLogEntriesValue =
+              case response of
+                PageResponse _ -> []
+                BodyResponse responseBodyValue -> responseLogEntries responseBodyValue
+            requestObservability =
               Observability.buildRequestObservability
                 (TextEncoding.decodeUtf8 (Wai.requestMethod request))
                 (if Wai.isSecure request then "https" else "http")
@@ -407,9 +419,11 @@ toWaiApplication webApplication request respond =
                     PageResponse _ -> Observability.PageResponseKind
                     BodyResponse _ -> Observability.BodyResponseKind
                 )
-                []
+                extraObservabilityAttributes
         Observability.forceRequestObservability requestObservability `seq`
-          respond (toWaiResponse webApplication response)
+          reportRequestObservability webApplication requestObservability
+            >> mapM_ (reportApplicationLog webApplication) responseLogEntriesValue
+            >> respond (toWaiResponse webApplication response)
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
