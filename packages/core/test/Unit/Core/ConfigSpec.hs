@@ -93,6 +93,23 @@ spec = do
       CoreConfig.parseNonNegativeInt "CACHE" "nope"
         `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "nope")
 
+  describe "parseBoolean" $ do
+    it "accepts common truthy and falsey values" $ do
+      CoreConfig.parseBoolean "FLAG" "true" `shouldBe` Right True
+      CoreConfig.parseBoolean "FLAG" "TRUE" `shouldBe` Right True
+      CoreConfig.parseBoolean "FLAG" "1" `shouldBe` Right True
+      CoreConfig.parseBoolean "FLAG" "yes" `shouldBe` Right True
+      CoreConfig.parseBoolean "FLAG" "false" `shouldBe` Right False
+      CoreConfig.parseBoolean "FLAG" "FALSE" `shouldBe` Right False
+      CoreConfig.parseBoolean "FLAG" "0" `shouldBe` Right False
+      CoreConfig.parseBoolean "FLAG" "no" `shouldBe` Right False
+
+    it "rejects invalid boolean values explicitly" $ do
+      CoreConfig.parseBoolean "FLAG" "sometimes"
+        `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "sometimes")
+      CoreConfig.parseBoolean "FLAG" ""
+        `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "")
+
   describe "parseDelimitedTexts" $ do
     it "parses comma-delimited values" $
       CoreConfig.parseDelimitedTexts "EMAILS" "ops@example.com, alerts@example.com"

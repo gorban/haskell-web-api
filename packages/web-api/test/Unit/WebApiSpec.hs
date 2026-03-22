@@ -33,6 +33,7 @@ import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectRe
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataWithDatabase)
+import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -1514,6 +1515,171 @@ spec = do
         `shouldBe` "AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")"
       show [fileLoadError, parseLoadError]
         `shouldBe` "[AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")]"
+
+  describe "parseAppSetupConfig" $ do
+    it "parses committed runtime and setup defaults into the expected setup config" $ do
+      committedSetupDefaults
+        `shouldBe` [ ("SETUP_AUTOSTART_DATABASE", "false"),
+                     ("SETUP_AUTOSTART_JAEGER", "false")
+                   ]
+      defaultSetupAutostartConfig
+        `shouldBe` SetupAutostartConfig
+          { setupAutostartDatabase = False,
+            setupAutostartJaeger = False
+          }
+      defaultAppSetupConfig
+        `shouldBe` AppSetupConfig
+          { setupAppConfig = defaultAppConfig,
+            setupAutostartConfig = defaultSetupAutostartConfig
+          }
+      parseAppSetupConfig committedRuntimeDefaults [] []
+        `shouldBe` Right defaultAppSetupConfig
+      parseAppSetupConfig (committedRuntimeDefaults <> committedSetupDefaults) [] []
+        `shouldBe` Right defaultAppSetupConfig
+
+    it "lets setup booleans follow the same layered precedence as runtime config" $
+      parseAppSetupConfig
+        (committedRuntimeDefaults <> committedSetupDefaults)
+        [ ("APP_TITLE_PREFIX", "setup-local"),
+          ("SETUP_AUTOSTART_DATABASE", "yes")
+        ]
+        [("SETUP_AUTOSTART_JAEGER", "1")]
+        `shouldBe` Right
+          AppSetupConfig
+            { setupAppConfig =
+                defaultAppConfig
+                  { appTitlePrefix = "setup-local"
+                  },
+              setupAutostartConfig =
+                SetupAutostartConfig
+                  { setupAutostartDatabase = True,
+                    setupAutostartJaeger = True
+                  }
+            }
+
+    it "fails invalid runtime or setup values explicitly" $ do
+      parseAppSetupConfig
+        (committedRuntimeDefaults <> committedSetupDefaults)
+        []
+        [("LISTENER_0_PORT", "0")]
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_PORT" "0")
+      parseAppSetupConfig
+        (committedRuntimeDefaults <> committedSetupDefaults)
+        []
+        [("SETUP_AUTOSTART_DATABASE", "sometimes")]
+        `shouldBe` Left (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "sometimes")
+
+  describe "loadAppSetupConfigWithFiles" $ do
+    it "loads the documented .env then .env.local layers for setup config" $
+      withSystemTempDirectory "app-setup-config" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
+        writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
+        loadAppSetupConfigWithFiles envPath envLocalPath
+          `shouldReturn` Right
+            AppSetupConfig
+              { setupAppConfig =
+                  defaultAppConfig
+                    { appTitlePrefix = "web-api-local"
+                    },
+                setupAutostartConfig =
+                  SetupAutostartConfig
+                    { setupAutostartDatabase = True,
+                      setupAutostartJaeger = True
+                    }
+              }
+
+    it "reports invalid override files or parse failures with explicit errors" $
+      withSystemTempDirectory "app-setup-config-errors" $ \tempDirectory -> do
+        let brokenEnvPath = tempDirectory <> "/broken.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+            invalidEnvPath = tempDirectory <> "/invalid.env"
+        writeFile brokenEnvPath "SETUP_AUTOSTART_DATABASE\n"
+        loadAppSetupConfigWithFiles brokenEnvPath envLocalPath
+          `shouldReturn` Left
+            (AppSetupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "SETUP_AUTOSTART_DATABASE"))
+        writeFile invalidEnvPath "SETUP_AUTOSTART_JAEGER=maybe\n"
+        loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
+          `shouldReturn` Left
+            (AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_JAEGER" "maybe"))
+
+  describe "loadAppSetupConfig" $
+    it "loads the default .env file names for setup config from the current directory" $
+      withSystemTempDirectory "app-setup-config-current-directory" $ \tempDirectory -> do
+        writeFile (tempDirectory <> "/.env") "SETUP_AUTOSTART_DATABASE=true\n"
+        writeFile (tempDirectory <> "/.env.local") "APP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
+        withCurrentDirectory tempDirectory $
+          loadAppSetupConfig
+            `shouldReturn` Right
+              AppSetupConfig
+                { setupAppConfig =
+                    defaultAppConfig
+                      { appTitlePrefix = "web-api-dev"
+                      },
+                  setupAutostartConfig =
+                    SetupAutostartConfig
+                      { setupAutostartDatabase = True,
+                        setupAutostartJaeger = True
+                      }
+                }
+
+  describe "AppSetupConfig and AppSetupConfigLoadError" $
+    it "keep selectors, equality, and rendering deterministic" $ do
+      let setupConfig =
+            AppSetupConfig
+              { setupAppConfig = defaultAppConfig {appTitlePrefix = "setup-app"},
+                setupAutostartConfig =
+                  SetupAutostartConfig
+                    { setupAutostartDatabase = True,
+                      setupAutostartJaeger = False
+                    }
+              }
+          fileLoadError = AppSetupOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
+          parseLoadError = AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "maybe")
+      setupAppConfig setupConfig `shouldBe` defaultAppConfig {appTitlePrefix = "setup-app"}
+      setupAutostartConfig setupConfig
+        `shouldBe` SetupAutostartConfig
+          { setupAutostartDatabase = True,
+            setupAutostartJaeger = False
+          }
+      setupAutostartDatabase (setupAutostartConfig setupConfig) `shouldBe` True
+      setupAutostartJaeger (setupAutostartConfig setupConfig) `shouldBe` False
+      defaultSetupAutostartConfig `shouldBe` defaultSetupAutostartConfig
+      defaultSetupAutostartConfig
+        `shouldNotBe` SetupAutostartConfig
+          { setupAutostartDatabase = True,
+            setupAutostartJaeger = False
+          }
+      show defaultSetupAutostartConfig
+        `shouldBe` "SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False}"
+      showsPrec 11 defaultSetupAutostartConfig ""
+        `shouldBe` "(SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False})"
+      show [defaultSetupAutostartConfig]
+        `shouldBe` "[SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False}]"
+      setupConfig `shouldBe` setupConfig
+      setupConfig
+        `shouldNotBe` setupConfig
+          { setupAutostartConfig =
+              SetupAutostartConfig
+                { setupAutostartDatabase = False,
+                  setupAutostartJaeger = False
+                }
+          }
+      show setupConfig
+        `shouldBe` "AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+      showsPrec 11 setupConfig ""
+        `shouldBe` "(AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+      show [setupConfig]
+        `shouldBe` "[AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+      fileLoadError `shouldBe` fileLoadError
+      fileLoadError `shouldNotBe` parseLoadError
+      show fileLoadError
+        `shouldBe` "AppSetupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"
+      show parseLoadError
+        `shouldBe` "AppSetupConfigParseError (InvalidConfigValue \"SETUP_AUTOSTART_DATABASE\" \"maybe\")"
+      show [fileLoadError, parseLoadError]
+        `shouldBe` "[AppSetupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppSetupConfigParseError (InvalidConfigValue \"SETUP_AUTOSTART_DATABASE\" \"maybe\")]"
 
   describe "parseDatabaseSetupCommand" $ do
     it "accepts migrate, seed, and migrate-and-seed" $ do

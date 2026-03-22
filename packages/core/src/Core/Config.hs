@@ -8,6 +8,7 @@ module Core.Config
     loadConfigOverridesFile,
     lookupConfigValue,
     parseConfigOverridesFile,
+    parseBoolean,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
     parseHeadersUnsafe,
@@ -84,6 +85,17 @@ parseNonNegativeInt key value =
   case readMaybe (Text.unpack value) of
     Just parsedInt
       | parsedInt >= 0 -> Right parsedInt
+    _ -> Left (InvalidConfigValue key value)
+
+parseBoolean :: Text -> Text -> Either ConfigParseError Bool
+parseBoolean key value =
+  case Text.toLower value of
+    "true" -> Right True
+    "false" -> Right False
+    "1" -> Right True
+    "0" -> Right False
+    "yes" -> Right True
+    "no" -> Right False
     _ -> Left (InvalidConfigValue key value)
 
 parseDelimitedTexts :: Text -> Text -> Either ConfigParseError [Text]
