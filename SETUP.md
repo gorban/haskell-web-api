@@ -43,9 +43,9 @@ init_hooks="install -d /var/tmp/distrobox-git /var/tmp/distrobox-git/bin"
 init_hooks="if [ -f \$HOME/.gitconfig ]; then cp \$HOME/.gitconfig /var/tmp/distrobox-git/gitconfig; else : > /var/tmp/distrobox-git/gitconfig; fi"
 init_hooks="GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get diff.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global diff.tool vimdiff; GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get merge.tool >/dev/null 2>&1 || GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global merge.tool vimdiff"
 init_hooks="resolve_git_tool_bin() { case \$1 in bc|bc3|bc4) printf %s bcompare ;; gvimdiff|gvimdiff1|gvimdiff2|gvimdiff3) printf %s gvim ;; nvimdiff|nvimdiff1|nvimdiff2|nvimdiff3) printf %s nvimdiff ;; vimdiff|vimdiff1|vimdiff2|vimdiff3) printf %s vimdiff ;; vscode) printf %s code ;; *) printf %s \$1 ;; esac; }; if command -v distrobox-host-exec >/dev/null 2>&1; then for tool_key in diff.tool merge.tool; do tool_name=\$(GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get \$tool_key || true); test x\$tool_name = x && continue; tool_bin=\$(resolve_git_tool_bin \$tool_name); if ! command -v \$tool_bin >/dev/null 2>&1; then ln -sf /usr/bin/distrobox-host-exec /var/tmp/distrobox-git/bin/\$tool_bin; case \$tool_key in diff.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global difftool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; merge.tool) GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global mergetool.\$tool_name.path /var/tmp/distrobox-git/bin/\$tool_bin ;; esac; fi; done; fi"
-init_hooks="editor_cmd=\$(GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get core.editor || true); case \$editor_cmd in code|code\ --wait|code\ -w|vscode|vscode\ --wait|vscode\ -w|'') if command -v distrobox-host-exec >/dev/null 2>&1 && ! command -v code >/dev/null 2>&1; then ln -sf /usr/bin/distrobox-host-exec /var/tmp/distrobox-git/bin/code; GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global core.editor '/var/tmp/distrobox-git/bin/code --wait'; fi ;; esac"
-init_hooks="ln -sf /run/user/$(id -u)/podman/podman.sock /var/run/docker.sock"
-init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman"
+init_hooks="if command -v distrobox-host-exec >/dev/null 2>&1 && ! command -v code >/dev/null 2>&1; then set -- \$(GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get core.editor || true); if ! GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global --get core.editor >/dev/null 2>&1 || test x\$1 = xcode || test x\$1 = xvscode; then printf %b \\\\043\\\\041/bin/sh\\\\012exec\\\\040/usr/bin/distrobox-host-exec\\\\040code\\\\040\\\\055w\\\\040\\\\042\\\\044\\\\100\\\\042\\\\012 > /var/tmp/distrobox-git/bin/git-editor && chmod +x /var/tmp/distrobox-git/bin/git-editor && GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig git config --global core.editor /var/tmp/distrobox-git/bin/git-editor; fi; fi"
+init_hooks="ln -sf /run/user/$(id -u)/podman/podman.sock /var/run/docker.sock 2>/dev/null || true"
+init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || true"
 ```
 
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
@@ -68,14 +68,22 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman"
   If a selected tool is not installed locally, the example creates a symlink under
   `/var/tmp/distrobox-git/bin` that reroutes that executable via `distrobox-host-exec`, and points git at
   that symlink with `difftool.<tool>.path` or `mergetool.<tool>.path`. They do not override any existing
-  `diff.tool` or `merge.tool` setting copied from the host; they only default missing tool entries to
-  `vimdiff`.
+  `diff.tool` or `merge.tool` selection copied from the host; they only default missing tool entries to
+  `vimdiff`. That works well for executable-based tools such as `vimdiff`, `nvimdiff`, `gvimdiff`,
+  `bc3`/`bc4`, and `vscode` (mapped to the host `code` binary). If you use a fully custom
+  `difftool.<tool>.cmd` or `mergetool.<tool>.cmd`, keep that custom command available inside the container
+  or add a dedicated wrapper instead of relying on this generic executable bridge.
 - The same example also handles the common VS Code editor case for `git commit`. If `core.editor` is unset,
-  or already set to `code` / `code --wait` / `code -w` (or the equivalent `vscode` spellings), and the
-  container does not have a local `code` binary, the hook creates `/var/tmp/distrobox-git/bin/code` as a
-  `distrobox-host-exec` shim and rewrites `core.editor` inside the container-local git config to
-  `/var/tmp/distrobox-git/bin/code --wait`. That makes `git commit`, `git commit --amend`, and similar
-  commands open the host VS Code and wait for it to close before git continues.
+  or already starts with `code` / `vscode`, and the container does not have a local `code` binary, the
+  hook generates `/var/tmp/distrobox-git/bin/git-editor` as a small wrapper that runs host
+  `code -w "$@"`, then rewrites `core.editor` inside the container-local git config to that wrapper. That
+  makes `git commit`, `git config --edit`, and similar commands open the host VS Code and wait for it to
+  close before git continues. If your copied host config already uses a different editor such as `vim`,
+  `nvim`, `nano`, or another executable available inside the container, the hook leaves that editor alone.
+- The Podman convenience symlinks are intentionally best-effort here. Some Distrobox setups run
+  `init_hooks` without permission to write `/var/run` or `/usr/local/bin`; in that case those lines now
+  quietly skip instead of aborting `distrobox enter`. If they are skipped, host-container control from
+  inside the box may still need separate manual setup.
 
 Then to assemble and run the container:
 ```bash
