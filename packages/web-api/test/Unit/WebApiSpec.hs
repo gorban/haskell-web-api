@@ -1520,12 +1520,12 @@ spec = do
   describe "parseAppSetupConfig" $ do
     it "parses committed runtime and setup defaults into the expected setup config" $ do
       committedSetupDefaults
-        `shouldBe` [ ("SETUP_AUTOSTART_DATABASE", "false"),
+        `shouldBe` [ ("SETUP_AUTOSTART_DATABASE", "true"),
                      ("SETUP_AUTOSTART_JAEGER", "false")
                    ]
       defaultSetupAutostartConfig
         `shouldBe` SetupAutostartConfig
-          { setupAutostartDatabase = False,
+          { setupAutostartDatabase = True,
             setupAutostartJaeger = False
           }
       defaultAppSetupConfig
@@ -1657,15 +1657,15 @@ spec = do
       defaultSetupAutostartConfig `shouldBe` defaultSetupAutostartConfig
       defaultSetupAutostartConfig
         `shouldNotBe` SetupAutostartConfig
-          { setupAutostartDatabase = True,
+          { setupAutostartDatabase = False,
             setupAutostartJaeger = False
           }
       show defaultSetupAutostartConfig
-        `shouldBe` "SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False}"
+        `shouldBe` "SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}"
       showsPrec 11 defaultSetupAutostartConfig ""
-        `shouldBe` "(SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False})"
+        `shouldBe` "(SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False})"
       show [defaultSetupAutostartConfig]
-        `shouldBe` "[SetupAutostartConfig {setupAutostartDatabase = False, setupAutostartJaeger = False}]"
+        `shouldBe` "[SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}]"
       setupConfig `shouldBe` setupConfig
       setupConfig
         `shouldNotBe` setupConfig
@@ -1704,6 +1704,10 @@ spec = do
                             databaseUser = "web_api_runtime",
                             databasePassword = "secret"
                           }
+                    },
+                setupAutostartConfig =
+                  defaultSetupAutostartConfig
+                    { setupAutostartDatabase = False
                     }
               }
       planAppPrerequisites setupConfig

@@ -52,14 +52,14 @@ data AppSetupConfigLoadError
 
 committedSetupDefaults :: [(Text, Text)]
 committedSetupDefaults =
-  [ ("SETUP_AUTOSTART_DATABASE", "false"),
+  [ ("SETUP_AUTOSTART_DATABASE", "true"),
     ("SETUP_AUTOSTART_JAEGER", "false")
   ]
 
 defaultSetupAutostartConfig :: SetupAutostartConfig
 defaultSetupAutostartConfig =
   SetupAutostartConfig
-    { setupAutostartDatabase = False,
+    { setupAutostartDatabase = True,
       setupAutostartJaeger = False
     }
 
@@ -112,7 +112,7 @@ parseAppSetupConfig committedDefaults localOverrides environmentOverrides = do
 parseSetupAutostartConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupAutostartConfig
 parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides =
   SetupAutostartConfig
-    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" False
+    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" True
     <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" False
   where
     optionalBoolean key fallback =
