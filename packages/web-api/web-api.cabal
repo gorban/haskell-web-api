@@ -79,6 +79,7 @@ library
     base ^>=4.22.0.0,
     core,
     harch-web,
+    network,
     process,
     text,
 
@@ -154,6 +155,7 @@ test-suite haskell-web-api-tests
     haskell-web-api,
     hspec,
     http-types,
+    network,
     process,
     template-haskell,
     temporary,

@@ -13,6 +13,7 @@ import qualified Data.Text.Encoding as TextEncoding
 import qualified HarchWeb
 import qualified HarchWeb.Observability as Observability
 import qualified Network.HTTP.Types as Http
+import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
@@ -34,7 +35,7 @@ import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), Requ
 import qualified WebApi.Route
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataWithDatabase)
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
-import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingPrerequisitePlan (..), defaultContainerAutostartPlan, planAppPrerequisites)
+import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -269,6 +270,24 @@ withFakePsqlScript commandOutputs =
   where
     toSuccessfulCommandResult (sqlText, stdoutText) =
       (sqlText, successfulPostgresResult stdoutText)
+
+withListeningTcpEndpoint :: (TcpEndpoint -> IO a) -> IO a
+withListeningTcpEndpoint action = do
+  listenerSocket <- socket AF_INET Stream defaultProtocol
+  bind listenerSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  listen listenerSocket 1
+  socketAddress <- getSocketName listenerSocket
+  case socketAddress of
+    SockAddrInet port _ ->
+      action
+        TcpEndpoint
+          { tcpEndpointHost = "127.0.0.1",
+            tcpEndpointPort = fromIntegral port
+          }
+        `finally` close listenerSocket
+    _ ->
+      close listenerSocket
+        >> error "expected IPv4 loopback test socket"
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -1894,6 +1913,107 @@ spec = do
         `shouldBe` "[TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing}]"
       show [appPlan]
         `shouldBe` "[AppPrerequisitePlan {databasePrerequisitePlan = DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}, tracingPrerequisitePlan = Just (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})}]"
+
+  describe "parseTracingEndpoint" $ do
+    it "parses supported tracing URLs into TCP endpoints" $ do
+      parseTracingEndpoint "http://collector:4318/v1/traces"
+        `shouldBe` Right
+          TcpEndpoint
+            { tcpEndpointHost = "collector",
+              tcpEndpointPort = 4318
+            }
+      parseTracingEndpoint "https://collector.example/v1/traces"
+        `shouldBe` Right
+          TcpEndpoint
+            { tcpEndpointHost = "collector.example",
+              tcpEndpointPort = 443
+            }
+      parseTracingEndpoint "http://[::1]:4318/v1/traces"
+        `shouldBe` Right
+          TcpEndpoint
+            { tcpEndpointHost = "::1",
+              tcpEndpointPort = 4318
+            }
+      parseTracingEndpoint "https://[::1]/v1/traces"
+        `shouldBe` Right
+          TcpEndpoint
+            { tcpEndpointHost = "::1",
+              tcpEndpointPort = 443
+            }
+      parseTracingEndpoint "https://collector/v1/traces"
+        `shouldBe` Right
+          TcpEndpoint
+            { tcpEndpointHost = "collector",
+              tcpEndpointPort = 443
+            }
+
+    it "rejects malformed or unsupported tracing endpoints explicitly" $ do
+      parseTracingEndpoint "://collector:4318/v1/traces"
+        `shouldBe` Left (InvalidTracingEndpointFormat "://collector:4318/v1/traces")
+      parseTracingEndpoint "collector:4318/v1/traces"
+        `shouldBe` Left (InvalidTracingEndpointFormat "collector:4318/v1/traces")
+      parseTracingEndpoint "grpc://collector:4317"
+        `shouldBe` Left (UnsupportedTracingEndpointScheme "grpc")
+      parseTracingEndpoint "http:///v1/traces"
+        `shouldBe` Left MissingTracingEndpointHost
+      parseTracingEndpoint "http://:4318/v1/traces"
+        `shouldBe` Left MissingTracingEndpointHost
+      parseTracingEndpoint "http://collector:not-a-port/v1/traces"
+        `shouldBe` Left (InvalidTracingEndpointPort "not-a-port")
+      parseTracingEndpoint "http://collector:0/v1/traces"
+        `shouldBe` Left (InvalidTracingEndpointPort "0")
+      parseTracingEndpoint "http://[::1/v1/traces"
+        `shouldBe` Left MissingTracingEndpointHost
+      parseTracingEndpoint "http://[]:4318/v1/traces"
+        `shouldBe` Left MissingTracingEndpointHost
+      parseTracingEndpoint "http://[::1]suffix/v1/traces"
+        `shouldBe` Left (InvalidTracingEndpointFormat "suffix")
+
+    it "keeps parse error equality and rendering deterministic" $ do
+      let parseError = InvalidTracingEndpointPort "not-a-port"
+      parseError `shouldBe` InvalidTracingEndpointPort "not-a-port"
+      parseError `shouldNotBe` MissingTracingEndpointHost
+      show parseError `shouldBe` "InvalidTracingEndpointPort \"not-a-port\""
+      show [parseError] `shouldBe` "[InvalidTracingEndpointPort \"not-a-port\"]"
+
+  describe "checkTcpEndpointReachable" $ do
+    it "reports True for a reachable local TCP listener" $
+      withListeningTcpEndpoint $ \tcpEndpoint ->
+        checkTcpEndpointReachable tcpEndpoint
+          `shouldReturn` True
+
+    it "reports False once the TCP listener is gone" $ do
+      closedEndpoint <- withListeningTcpEndpoint pure
+      checkTcpEndpointReachable closedEndpoint
+        `shouldReturn` False
+
+    it "reports False for invalid resolver inputs or immediate timeout cutoffs" $
+      withListeningTcpEndpoint $ \tcpEndpoint -> do
+        checkTcpEndpointReachableWithTimeout
+          1000000
+          TcpEndpoint
+            { tcpEndpointHost = tcpEndpointHost tcpEndpoint,
+              tcpEndpointPort = -1
+            }
+          `shouldReturn` False
+        checkTcpEndpointReachableWithTimeout 0 tcpEndpoint
+          `shouldReturn` False
+
+  describe "checkTracingEndpointReachable" $ do
+    it "checks supported tracing endpoints by their parsed TCP host and port" $
+      withListeningTcpEndpoint $ \tcpEndpoint -> do
+        let endpoint =
+              "http://"
+                <> tcpEndpointHost tcpEndpoint
+                <> ":"
+                <> Text.pack (show (tcpEndpointPort tcpEndpoint))
+                <> "/v1/traces"
+        checkTracingEndpointReachable endpoint
+          `shouldReturn` Right True
+
+    it "returns parse errors instead of silently treating malformed tracing endpoints as unreachable" $
+      checkTracingEndpointReachable "collector:4318/v1/traces"
+        `shouldReturn` Left (InvalidTracingEndpointFormat "collector:4318/v1/traces")
 
   describe "parseDatabaseSetupCommand" $ do
     it "accepts migrate, seed, and migrate-and-seed" $ do
