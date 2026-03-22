@@ -23,8 +23,12 @@ import Core.Config
 import Data.Text (Text)
 import WebApi.Config
   ( AppConfig,
+    AppEnvironmentConfig,
+    committedEnvDefaults,
     committedRuntimeDefaults,
     defaultAppConfig,
+    defaultAppEnvironmentConfig,
+    parseAppEnvironmentConfig,
     parseRuntimeAppConfig,
   )
 
@@ -35,7 +39,8 @@ data SetupAutostartConfig = SetupAutostartConfig
   deriving (Eq, Show)
 
 data AppSetupConfig = AppSetupConfig
-  { setupAppConfig :: AppConfig,
+  { setupEnvironmentConfig :: AppEnvironmentConfig,
+    setupAppConfig :: AppConfig,
     setupAutostartConfig :: SetupAutostartConfig
   }
   deriving (Eq, Show)
@@ -61,7 +66,8 @@ defaultSetupAutostartConfig =
 defaultAppSetupConfig :: AppSetupConfig
 defaultAppSetupConfig =
   AppSetupConfig
-    { setupAppConfig = defaultAppConfig,
+    { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+      setupAppConfig = defaultAppConfig,
       setupAutostartConfig = defaultSetupAutostartConfig
     }
 
@@ -77,7 +83,7 @@ loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
     case parseAppSetupConfig
-      (committedRuntimeDefaults <> committedSetupDefaults)
+      (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
       committedDefaults
       localOverrides of
       Left parseError -> Left (AppSetupConfigParseError parseError)
@@ -93,11 +99,13 @@ loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
 
 parseAppSetupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppSetupConfig
 parseAppSetupConfig committedDefaults localOverrides environmentOverrides = do
+  parsedEnvironmentConfig <- parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides
   parsedRuntimeConfig <- parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides
   parsedAutostartConfig <- parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides
   pure
     AppSetupConfig
-      { setupAppConfig = parsedRuntimeConfig,
+      { setupEnvironmentConfig = parsedEnvironmentConfig,
+        setupAppConfig = parsedRuntimeConfig,
         setupAutostartConfig = parsedAutostartConfig
       }
 

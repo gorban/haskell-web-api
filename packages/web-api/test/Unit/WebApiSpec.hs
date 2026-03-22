@@ -1529,24 +1529,28 @@ spec = do
           }
       defaultAppSetupConfig
         `shouldBe` AppSetupConfig
-          { setupAppConfig = defaultAppConfig,
+          { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+            setupAppConfig = defaultAppConfig,
             setupAutostartConfig = defaultSetupAutostartConfig
           }
-      parseAppSetupConfig committedRuntimeDefaults [] []
+      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults) [] []
         `shouldBe` Right defaultAppSetupConfig
-      parseAppSetupConfig (committedRuntimeDefaults <> committedSetupDefaults) [] []
+      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults) [] []
+        `shouldBe` Right defaultAppSetupConfig
+      parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults) [] []
         `shouldBe` Right defaultAppSetupConfig
 
     it "lets setup booleans follow the same layered precedence as runtime config" $
       parseAppSetupConfig
-        (committedRuntimeDefaults <> committedSetupDefaults)
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
         [ ("APP_TITLE_PREFIX", "setup-local"),
           ("SETUP_AUTOSTART_DATABASE", "yes")
         ]
         [("SETUP_AUTOSTART_JAEGER", "1")]
         `shouldBe` Right
           AppSetupConfig
-            { setupAppConfig =
+            { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+              setupAppConfig =
                 defaultAppConfig
                   { appTitlePrefix = "setup-local"
                   },
@@ -1559,12 +1563,12 @@ spec = do
 
     it "fails invalid runtime or setup values explicitly" $ do
       parseAppSetupConfig
-        (committedRuntimeDefaults <> committedSetupDefaults)
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
         []
         [("LISTENER_0_PORT", "0")]
         `shouldBe` Left (InvalidConfigValue "LISTENER_0_PORT" "0")
       parseAppSetupConfig
-        (committedRuntimeDefaults <> committedSetupDefaults)
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
         []
         [("SETUP_AUTOSTART_DATABASE", "sometimes")]
         `shouldBe` Left (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "sometimes")
@@ -1579,7 +1583,8 @@ spec = do
         loadAppSetupConfigWithFiles envPath envLocalPath
           `shouldReturn` Right
             AppSetupConfig
-              { setupAppConfig =
+              { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+                setupAppConfig =
                   defaultAppConfig
                     { appTitlePrefix = "web-api-local"
                     },
@@ -1613,7 +1618,8 @@ spec = do
           loadAppSetupConfig
             `shouldReturn` Right
               AppSetupConfig
-                { setupAppConfig =
+                { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+                  setupAppConfig =
                     defaultAppConfig
                       { appTitlePrefix = "web-api-dev"
                       },
@@ -1628,7 +1634,8 @@ spec = do
     it "keep selectors, equality, and rendering deterministic" $ do
       let setupConfig =
             AppSetupConfig
-              { setupAppConfig = defaultAppConfig {appTitlePrefix = "setup-app"},
+              { setupEnvironmentConfig = defaultAppEnvironmentConfig {appMode = Test},
+                setupAppConfig = defaultAppConfig {appTitlePrefix = "setup-app"},
                 setupAutostartConfig =
                   SetupAutostartConfig
                     { setupAutostartDatabase = True,
@@ -1637,6 +1644,7 @@ spec = do
               }
           fileLoadError = AppSetupOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
           parseLoadError = AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "maybe")
+      setupEnvironmentConfig setupConfig `shouldBe` defaultAppEnvironmentConfig {appMode = Test}
       setupAppConfig setupConfig `shouldBe` defaultAppConfig {appTitlePrefix = "setup-app"}
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig
@@ -1667,11 +1675,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
