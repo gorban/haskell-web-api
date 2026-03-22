@@ -105,6 +105,14 @@ understands the following values:
 | `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
 | `OTLP_METRICS_HEADERS` | Comma-delimited OTLP metrics headers in `name=value` form. | (`unset`) |
+| `SETUP_AUTOSTART_DATABASE` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local PostgreSQL startup when the configured database is unavailable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
+| `SETUP_AUTOSTART_JAEGER` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local Jaeger startup when OTLP tracing is configured but unreachable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
+
+The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam, not the runtime
+application config consumed by `cabal run haskell-web-api`. Today they are parsed from the same layered
+`./.env` and `./.env.local` files and feed prerequisite planning helpers in `WebApi.SetupConfig` /
+`WebApi.SetupPlan`, but the actual `Setup.hs` prerequisite detection and autostart execution is still planned
+work.
 
 The intended configuration model has three layers:
 
@@ -195,6 +203,10 @@ OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
 OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
 OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
 OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
+
+# Setup/prerequisite planning
+SETUP_AUTOSTART_DATABASE=false
+SETUP_AUTOSTART_JAEGER=false
 ```
 
 ### MacOS / Linux
