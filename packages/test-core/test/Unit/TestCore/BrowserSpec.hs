@@ -80,6 +80,8 @@ spec = do
           }
         [ VisitUrl "http://localhost:8080/",
           ClickLinkWithText "Browse the second page",
+          NavigateHistoryBack,
+          NavigateHistoryForward,
           AssertTextEquals "[data-page-title=\"true\"]" "Second"
         ]
         `shouldBe` unlines
@@ -87,6 +89,8 @@ spec = do
             "keep-open-on-failure\ttrue",
             "action\tvisit-url\thttp://localhost:8080/",
             "action\tclick-link-with-text\tBrowse the second page",
+            "action\thistory-back",
+            "action\thistory-forward",
             "action\tassert-text-equals\t[data-page-title=\"true\"]\tSecond"
           ]
 
@@ -98,30 +102,36 @@ spec = do
                 browserHeadless = False,
                 browserKeepOpenOnFailure = True
               }
-          browserAction = ClickLinkWithText "Browse the second page"
+          browserAction = NavigateHistoryBack
           browserError = BrowserRunnerProcessError (ExitFailure 3) "stdout" "stderr"
       browserRunnerCommand browserConfig `shouldBe` "node"
       browserRunnerArguments browserConfig `shouldBe` ["runner.js"]
       browserHeadless browserConfig `shouldBe` False
       browserKeepOpenOnFailure browserConfig `shouldBe` True
-      browserAction `shouldBe` ClickLinkWithText "Browse the second page"
-      show browserAction `shouldBe` "ClickLinkWithText \"Browse the second page\""
+      browserAction `shouldBe` NavigateHistoryBack
+      show browserAction `shouldBe` "NavigateHistoryBack"
       show browserConfig `shouldBe` "BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [\"runner.js\"], browserHeadless = False, browserKeepOpenOnFailure = True}"
       show browserError `shouldBe` "BrowserRunnerProcessError (ExitFailure 3) \"stdout\" \"stderr\""
 
     it "covers the remaining equality and show branches for browser actions and errors" $ do
       let visitAction = VisitUrl "http://localhost:8080/"
+          backAction = NavigateHistoryBack
+          forwardAction = NavigateHistoryForward
           assertAction = AssertTextEquals "[data-page-title=\"true\"]" "Second"
           launchError = BrowserRunnerLaunchError "missing-browser-runner"
           protocolError = BrowserRunnerProtocolError "unexpected response"
           assertionError = BrowserAssertionFailed "Expected the second page to load"
       defaultBrowserConfig `shouldBe` defaultBrowserConfig
       visitAction `shouldBe` VisitUrl "http://localhost:8080/"
+      backAction `shouldBe` NavigateHistoryBack
+      forwardAction `shouldBe` NavigateHistoryForward
       assertAction `shouldBe` AssertTextEquals "[data-page-title=\"true\"]" "Second"
       launchError `shouldBe` BrowserRunnerLaunchError "missing-browser-runner"
       protocolError `shouldBe` BrowserRunnerProtocolError "unexpected response"
       assertionError `shouldBe` BrowserAssertionFailed "Expected the second page to load"
       show visitAction `shouldBe` "VisitUrl \"http://localhost:8080/\""
+      show backAction `shouldBe` "NavigateHistoryBack"
+      show forwardAction `shouldBe` "NavigateHistoryForward"
       show assertAction `shouldBe` "AssertTextEquals \"[data-page-title=\\\"true\\\"]\" \"Second\""
       show launchError `shouldBe` "BrowserRunnerLaunchError \"missing-browser-runner\""
       show protocolError `shouldBe` "BrowserRunnerProtocolError \"unexpected response\""
@@ -134,15 +144,18 @@ spec = do
               }
           visitAction = VisitUrl "http://localhost:8080/"
           clickAction = ClickLinkWithText "Browse the second page"
+          backAction = NavigateHistoryBack
+          forwardAction = NavigateHistoryForward
           launchError = BrowserRunnerLaunchError "missing-browser-runner"
           protocolError = BrowserRunnerProtocolError "unexpected response"
       defaultBrowserConfig /= otherBrowserConfig `shouldBe` True
       visitAction /= clickAction `shouldBe` True
+      backAction /= forwardAction `shouldBe` True
       launchError /= protocolError `shouldBe` True
       show [defaultBrowserConfig, otherBrowserConfig]
         `shouldBe` "[BrowserConfig {browserRunnerCommand = \"playwright-e2e-runner\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False},BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False}]"
-      show [visitAction, clickAction]
-        `shouldBe` "[VisitUrl \"http://localhost:8080/\",ClickLinkWithText \"Browse the second page\"]"
+      show [visitAction, clickAction, backAction, forwardAction]
+        `shouldBe` "[VisitUrl \"http://localhost:8080/\",ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward]"
       show [launchError, protocolError]
         `shouldBe` "[BrowserRunnerLaunchError \"missing-browser-runner\",BrowserRunnerProtocolError \"unexpected response\"]"
 

@@ -32,6 +32,8 @@ data BrowserConfig = BrowserConfig
 data BrowserAction
   = VisitUrl String
   | ClickLinkWithText String
+  | NavigateHistoryBack
+  | NavigateHistoryForward
   | AssertTextEquals String String
   deriving (Eq, Show)
 
@@ -133,6 +135,8 @@ renderBrowserAction browserAction =
   case browserAction of
     VisitUrl url -> "action\tvisit-url\t" ++ url
     ClickLinkWithText linkText -> "action\tclick-link-with-text\t" ++ linkText
+    NavigateHistoryBack -> "action\thistory-back"
+    NavigateHistoryForward -> "action\thistory-forward"
     AssertTextEquals selector expectedText -> "action\tassert-text-equals\t" ++ selector ++ "\t" ++ expectedText
 
 parseBrowserResponse :: String -> Either BrowserRunnerError ()

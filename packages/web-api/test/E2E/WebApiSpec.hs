@@ -31,6 +31,25 @@ spec =
             runBrowserScript browserConfig (sameOriginNavigationActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
               `shouldReturn` Right ()
 
+    it "uses the enhanced navigation path for browser Back and Forward" $
+      withNodeBrowserRunner $ \browserConfig ->
+        withE2EAppConfig $ \appConfig ->
+          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
+            runBrowserScript browserConfig (sameOriginBackForwardActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
+              `shouldReturn` Right ()
+
+    it "loads the second page directly through a real local HTTP listener and asserts SSR content" $
+      withNodeBrowserRunner $ \browserConfig ->
+        withE2EAppConfig $ \appConfig ->
+          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
+            runBrowserScript
+              browserConfig
+              [ VisitUrl (Text.unpack (HarchWeb.localServerBaseUrl localTestServer) <> "/second"),
+                AssertTextEquals "title" "web-api: Second",
+                AssertTextEquals "[data-page-title=\"true\"]" "Second"
+              ]
+              `shouldReturn` Right ()
+
 withE2EAppConfig :: (AppConfig -> IO a) -> IO a
 withE2EAppConfig action =
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory -> do
@@ -79,6 +98,18 @@ sameOriginNavigationActions baseUrl =
     AssertTextEquals "[data-page-title=\"true\"]" "Second"
   ]
 
+sameOriginBackForwardActions :: String -> [BrowserAction]
+sameOriginBackForwardActions baseUrl =
+  [ VisitUrl (baseUrl <> "/"),
+    ClickLinkWithText "Browse the second page",
+    NavigateHistoryBack,
+    AssertTextEquals "title" "web-api: Home",
+    AssertTextEquals "[data-page-title=\"true\"]" "Home",
+    NavigateHistoryForward,
+    AssertTextEquals "title" "web-api: Second",
+    AssertTextEquals "[data-page-title=\"true\"]" "Second"
+  ]
+
 nodeBrowserRunnerSource :: String
 nodeBrowserRunnerSource =
   unlines
@@ -112,6 +143,18 @@ nodeBrowserRunnerSource =
       "          return writeError(responsePath, 'No page has been loaded yet.');",
       "        }",
       "        await currentSession.clickLinkWithText(parts.slice(2).join('\\t'));",
+      "        break;",
+      "      case 'history-back':",
+      "        if (currentSession === null) {",
+      "          return writeError(responsePath, 'No page has been loaded yet.');",
+      "        }",
+      "        await currentSession.window.history.back();",
+      "        break;",
+      "      case 'history-forward':",
+      "        if (currentSession === null) {",
+      "          return writeError(responsePath, 'No page has been loaded yet.');",
+      "        }",
+      "        await currentSession.window.history.forward();",
       "        break;",
       "      case 'assert-text-equals': {",
       "        if (currentSession === null) {",
@@ -147,6 +190,8 @@ nodeBrowserRunnerSource =
       "    this.documentListeners = { click: [] };",
       "    this.windowListeners = { popstate: [] };",
       "    this.pendingPromises = new Set();",
+      "    this.historyEntries = [targetUrl];",
+      "    this.historyIndex = 0;",
       "    this.assignedUrl = null;",
       "    this.document = this.buildDocument();",
       "    this.window = this.buildWindow();",
@@ -219,7 +264,13 @@ nodeBrowserRunnerSource =
       "      },",
       "      history: {",
       "        pushState(_state, _title, targetUrl) {",
-      "          session.currentUrl = resolveUrl(targetUrl, session.currentUrl);",
+      "          session.pushHistory(resolveUrl(targetUrl, session.currentUrl));",
+      "        },",
+      "        back() {",
+      "          return session.navigateHistoryDelta(-1);",
+      "        },",
+      "        forward() {",
+      "          return session.navigateHistoryDelta(1);",
       "        },",
       "      },",
       "      addEventListener(eventName, listener) {",
@@ -329,11 +380,34 @@ nodeBrowserRunnerSource =
       "  }",
       "",
       "  async hardNavigate(targetUrl) {",
-      "    const response = await fetchResponse(resolveUrl(targetUrl, this.currentUrl));",
-      "    this.currentUrl = resolveUrl(targetUrl, this.currentUrl);",
+      "    const resolvedTargetUrl = resolveUrl(targetUrl, this.currentUrl);",
+      "    const response = await fetchResponse(resolvedTargetUrl);",
+      "    this.pushHistory(resolvedTargetUrl);",
       "    this.page = parseHtml(response.body, `hard-navigate ${targetUrl}`);",
       "    this.assignedUrl = null;",
       "    await this.loadExternalScripts();",
+      "  }",
+      "",
+      "  pushHistory(targetUrl) {",
+      "    if (this.historyIndex < this.historyEntries.length - 1) {",
+      "      this.historyEntries = this.historyEntries.slice(0, this.historyIndex + 1);",
+      "    }",
+      "    this.historyEntries.push(targetUrl);",
+      "    this.historyIndex = this.historyEntries.length - 1;",
+      "    this.currentUrl = targetUrl;",
+      "  }",
+      "",
+      "  async navigateHistoryDelta(delta) {",
+      "    const nextIndex = this.historyIndex + delta;",
+      "    if (nextIndex < 0 || nextIndex >= this.historyEntries.length) {",
+      "      return;",
+      "    }",
+      "    this.historyIndex = nextIndex;",
+      "    this.currentUrl = this.historyEntries[this.historyIndex];",
+      "    for (const listener of this.windowListeners.popstate || []) {",
+      "      listener({});",
+      "    }",
+      "    await this.waitForSettled();",
       "  }",
       "",
       "  trackPromise(promise) {",
