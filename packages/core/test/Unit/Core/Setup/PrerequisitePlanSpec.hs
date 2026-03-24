@@ -85,13 +85,14 @@ spec = do
 
   describe "defaultContainerAutostartPlan and prerequisite plan rendering" $
     it "keep selectors, equality, and rendering deterministic" $ do
-      let databasePlan =
+      let databaseEndpoint =
+            Prerequisite.TcpEndpoint
+              { Prerequisite.tcpEndpointHost = "db.internal",
+                Prerequisite.tcpEndpointPort = 6543
+              }
+          databasePlan =
             PrerequisitePlan.DatabasePrerequisitePlan
-              { PrerequisitePlan.databaseCheckEndpoint =
-                  Prerequisite.TcpEndpoint
-                    { Prerequisite.tcpEndpointHost = "db.internal",
-                      Prerequisite.tcpEndpointPort = 6543
-                    },
+              { PrerequisitePlan.databaseCheckEndpoint = databaseEndpoint,
                 PrerequisitePlan.databaseAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
               }
           tracingPlan =
@@ -104,13 +105,37 @@ spec = do
               { PrerequisitePlan.databasePrerequisitePlan = databasePlan,
                 PrerequisitePlan.tracingPrerequisitePlan = Just tracingPlan
               }
+          otherDatabasePlan =
+            databasePlan
+              { PrerequisitePlan.databaseAutostartPlan = Nothing
+              }
+          otherTracingPlan =
+            tracingPlan
+              { PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+              }
       PrerequisitePlan.autostartRuntimes PrerequisitePlan.defaultContainerAutostartPlan
         `shouldBe` [PrerequisitePlan.PodmanRuntime, PrerequisitePlan.DockerRuntime]
+      PrerequisitePlan.PodmanRuntime `shouldBe` PrerequisitePlan.PodmanRuntime
+      PrerequisitePlan.PodmanRuntime `shouldNotBe` PrerequisitePlan.DockerRuntime
       PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` PrerequisitePlan.defaultContainerAutostartPlan
       PrerequisitePlan.defaultContainerAutostartPlan
         `shouldNotBe` PrerequisitePlan.ContainerAutostartPlan
           { PrerequisitePlan.autostartRuntimes = [PrerequisitePlan.DockerRuntime]
           }
+      databasePlan `shouldBe` databasePlan
+      databasePlan `shouldNotBe` otherDatabasePlan
+      tracingPlan `shouldBe` tracingPlan
+      tracingPlan `shouldNotBe` otherTracingPlan
+      appPlan `shouldBe` appPlan
+      appPlan
+        `shouldNotBe` PrerequisitePlan.AppPrerequisitePlan
+          { PrerequisitePlan.databasePrerequisitePlan = databasePlan,
+            PrerequisitePlan.tracingPrerequisitePlan = Nothing
+          }
+      show PrerequisitePlan.PodmanRuntime `shouldBe` "PodmanRuntime"
+      showsPrec 11 PrerequisitePlan.PodmanRuntime ""
+        `shouldBe` "PodmanRuntime"
+      show [PrerequisitePlan.PodmanRuntime] `shouldBe` "[PodmanRuntime]"
       show PrerequisitePlan.defaultContainerAutostartPlan
         `shouldBe` "ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}"
       show databasePlan

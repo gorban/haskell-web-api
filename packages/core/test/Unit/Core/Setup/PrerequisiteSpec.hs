@@ -80,11 +80,34 @@ spec = do
         `shouldBe` Left (Prerequisite.InvalidTracingEndpointFormat "suffix")
 
     it "keeps parse error equality and rendering deterministic" $ do
-      let parseError = Prerequisite.InvalidTracingEndpointPort "not-a-port"
+      let tcpEndpoint =
+            Prerequisite.TcpEndpoint
+              { Prerequisite.tcpEndpointHost = "collector",
+                Prerequisite.tcpEndpointPort = 4318
+              }
+          parseError = Prerequisite.InvalidTracingEndpointPort "not-a-port"
       parseError `shouldBe` Prerequisite.InvalidTracingEndpointPort "not-a-port"
       parseError `shouldNotBe` Prerequisite.InvalidTracingEndpointPort "other-port"
+      tcpEndpoint `shouldBe` tcpEndpoint
+      tcpEndpoint
+        `shouldNotBe` Prerequisite.TcpEndpoint
+          { Prerequisite.tcpEndpointHost = "other",
+            Prerequisite.tcpEndpointPort = 4318
+          }
+      show tcpEndpoint
+        `shouldBe` "TcpEndpoint {tcpEndpointHost = \"collector\", tcpEndpointPort = 4318}"
+      showsPrec 11 tcpEndpoint ""
+        `shouldBe` "(TcpEndpoint {tcpEndpointHost = \"collector\", tcpEndpointPort = 4318})"
+      show [tcpEndpoint]
+        `shouldBe` "[TcpEndpoint {tcpEndpointHost = \"collector\", tcpEndpointPort = 4318}]"
       show parseError `shouldBe` "InvalidTracingEndpointPort \"not-a-port\""
       show [parseError] `shouldBe` "[InvalidTracingEndpointPort \"not-a-port\"]"
+      show (Prerequisite.InvalidTracingEndpointFormat "bad-endpoint")
+        `shouldBe` "InvalidTracingEndpointFormat \"bad-endpoint\""
+      show (Prerequisite.UnsupportedTracingEndpointScheme "grpc")
+        `shouldBe` "UnsupportedTracingEndpointScheme \"grpc\""
+      show Prerequisite.MissingTracingEndpointHost
+        `shouldBe` "MissingTracingEndpointHost"
 
   describe "checkTcpEndpointReachable" $ do
     it "reports True for a reachable local TCP listener" $

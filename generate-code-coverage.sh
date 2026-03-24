@@ -291,8 +291,15 @@ SCRIPT
     fractions+=("$fraction_line")
   done < <(
     awk 'BEGIN{IGNORECASE=1}
-      /Program Coverage Total/ { capture=1; next }
-      capture {
+      {
+        if (!capture) {
+          if (match($0, /Program Coverage Total/)) {
+            $0 = substr($0, RSTART + RLENGTH)
+            capture = 1
+          } else {
+            next
+          }
+        }
         while (match($0, /[0-9]+[[:space:]]*\/[[:space:]]*[0-9]+/)) {
           s = substr($0, RSTART, RLENGTH)
           gsub(/[[:space:]]/, "", s)
