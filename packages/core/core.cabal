@@ -62,6 +62,7 @@ library
     Core.Prelude
     Core.Setup
     Core.Setup.Prerequisite
+    Core.Setup.PrerequisiteConfig
     Core.System.Path
     Core.System.Temp
 
