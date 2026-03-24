@@ -63,6 +63,7 @@ library
     Core.Setup
     Core.Setup.Prerequisite
     Core.Setup.PrerequisiteConfig
+    Core.Setup.PrerequisitePlan
     Core.System.Path
     Core.System.Temp
 
