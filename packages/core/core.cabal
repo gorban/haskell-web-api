@@ -61,6 +61,7 @@ library
     Core.Control.Error
     Core.Prelude
     Core.Setup
+    Core.Setup.DatabaseAutostart
     Core.Setup.Prerequisite
     Core.Setup.PrerequisiteConfig
     Core.Setup.PrerequisitePlan
@@ -78,6 +79,7 @@ library
     filepath,
     mtl,
     network,
+    process,
     temporary,
     text,
 
@@ -144,5 +146,6 @@ test-suite core-tests
     hspec-expectations-match,
     mtl,
     network,
+    process,
     temporary,
     text,

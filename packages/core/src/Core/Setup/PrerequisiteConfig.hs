@@ -24,6 +24,9 @@ import Data.Text (Text)
 
 data SetupPrerequisiteConfig = SetupPrerequisiteConfig
   { setupDatabaseEndpoint :: TcpEndpoint,
+    setupDatabaseName :: Text,
+    setupDatabaseUser :: Text,
+    setupDatabasePassword :: Text,
     setupTracingEndpoint :: Maybe Text,
     setupAutostartDatabase :: Bool,
     setupAutostartJaeger :: Bool
@@ -39,6 +42,9 @@ committedPrerequisiteDefaults :: [(Text, Text)]
 committedPrerequisiteDefaults =
   [ ("DATABASE_HOST", "127.0.0.1"),
     ("DATABASE_PORT", "5432"),
+    ("DATABASE_NAME", "web_api_dev"),
+    ("DATABASE_USER", "web_api"),
+    ("DATABASE_PASSWORD", "web_api"),
     ("SETUP_AUTOSTART_DATABASE", "true"),
     ("SETUP_AUTOSTART_JAEGER", "false")
   ]
@@ -51,6 +57,9 @@ defaultSetupPrerequisiteConfig =
           { tcpEndpointHost = "127.0.0.1",
             tcpEndpointPort = 5432
           },
+      setupDatabaseName = "web_api_dev",
+      setupDatabaseUser = "web_api",
+      setupDatabasePassword = "web_api",
       setupTracingEndpoint = Nothing,
       setupAutostartDatabase = True,
       setupAutostartJaeger = False
@@ -83,6 +92,9 @@ parseSetupPrerequisiteConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text
 parseSetupPrerequisiteConfig committedDefaults localOverrides environmentOverrides =
   SetupPrerequisiteConfig
     <$> parseDatabaseEndpoint
+    <*> requiredConfigValue "DATABASE_NAME"
+    <*> requiredConfigValue "DATABASE_USER"
+    <*> requiredConfigValue "DATABASE_PASSWORD"
     <*> pure (lookupOptionalValue "OTLP_TRACING_ENDPOINT")
     <*> optionalBoolean "SETUP_AUTOSTART_DATABASE" True
     <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" False

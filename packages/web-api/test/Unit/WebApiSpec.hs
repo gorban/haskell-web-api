@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Control.Exception (IOException, displayException, finally, try)
+import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -35,7 +36,7 @@ import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), Requ
 import qualified WebApi.Route
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataWithDatabase)
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
-import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites)
+import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites, toSetupPrerequisiteConfig)
 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
@@ -1710,6 +1711,31 @@ spec = do
         `shouldBe` "[AppSetupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppSetupConfigParseError (InvalidConfigValue \"SETUP_AUTOSTART_DATABASE\" \"maybe\")]"
 
   describe "planAppPrerequisites" $ do
+    it "preserves runtime database identity fields in the shared setup prerequisite config" $ do
+      let setupConfig =
+            defaultAppSetupConfig
+              { setupEnvironmentConfig =
+                  defaultAppEnvironmentConfig
+                    { databaseConfig =
+                        DatabaseConfig
+                          { databaseHost = "db.internal",
+                            databasePort = 6543,
+                            databaseName = "web_api_build",
+                            databaseUser = "web_api_runtime",
+                            databasePassword = "secret"
+                          }
+                    }
+              }
+          prerequisiteConfig = toSetupPrerequisiteConfig setupConfig
+      PrerequisiteConfig.setupDatabaseEndpoint prerequisiteConfig
+        `shouldBe` TcpEndpoint
+          { tcpEndpointHost = "db.internal",
+            tcpEndpointPort = 6543
+          }
+      PrerequisiteConfig.setupDatabaseName prerequisiteConfig `shouldBe` "web_api_build"
+      PrerequisiteConfig.setupDatabaseUser prerequisiteConfig `shouldBe` "web_api_runtime"
+      PrerequisiteConfig.setupDatabasePassword prerequisiteConfig `shouldBe` "secret"
+
     it "always plans the configured database reachability check and skips disabled autostarts" $ do
       let setupConfig =
             defaultAppSetupConfig

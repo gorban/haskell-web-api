@@ -16,6 +16,9 @@ spec = do
                 { Prerequisite.tcpEndpointHost = "db.internal",
                   Prerequisite.tcpEndpointPort = 6543
                 },
+            PrerequisiteConfig.setupDatabaseName = "web_api_build",
+            PrerequisiteConfig.setupDatabaseUser = "web_api_runtime",
+            PrerequisiteConfig.setupDatabasePassword = "secret",
             PrerequisiteConfig.setupTracingEndpoint = Nothing,
             PrerequisiteConfig.setupAutostartDatabase = False,
             PrerequisiteConfig.setupAutostartJaeger = False

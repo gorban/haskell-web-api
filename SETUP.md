@@ -298,24 +298,31 @@ If you want a local PostgreSQL instance that matches the current committed devel
 - Runtime app user: `web_api`
 - Runtime app password: `web_api`
 
-Today, prerequisite autostart from `Setup.hs` is still planned work. For now, manually start a local
-PostgreSQL instance that matches your configured values. One straightforward option is a local container,
-using either Docker or Podman.
+`Setup.hs` now tries to start a missing local PostgreSQL instance during `cabal build` / `cabal test`
+when `SETUP_AUTOSTART_DATABASE=true`, `DATABASE_HOST` is `127.0.0.1` or `0.0.0.0`, and the configured
+database is unreachable. It tries Podman first, then Docker, and uses the same `DATABASE_HOST`,
+`DATABASE_PORT`, `DATABASE_NAME`, `DATABASE_USER`, and `DATABASE_PASSWORD` values from your layered
+`./.env` / `./.env.local` setup config.
+
+If you prefer to start PostgreSQL yourself, want to use a remote/shared database, or need a different
+bootstrap shape, disable that behavior with `SETUP_AUTOSTART_DATABASE=false` and start a matching local
+container manually instead. One straightforward option is:
 
 ```bash
 docker run --name web-api-postgres \
-  -e POSTGRES_USER=web_api_owner \
-  -e POSTGRES_PASSWORD=web_api_owner \
+  -e POSTGRES_USER=web_api \
+  -e POSTGRES_PASSWORD=web_api \
   -e POSTGRES_DB=web_api_dev \
-  -p 5432:5432 \
-  -d postgres:17
+  -p 127.0.0.1:5432:5432 \
+  -d docker.io/library/postgres:17
 ```
 - **podman**: just replace `docker` with `podman` in the above command, but make sure you have the Podman
   socket enabled on your host.
 
-That container example creates a database owner up front, so you do not need separate `psql` owner calls
-just to bootstrap the database. Then export dedicated migration credentials before running the Haskell
-migration command:
+Automatic migrate-and-seed after `Setup.hs` creates a database is still pending work. For now, after a
+fresh container comes up, export the owner-level migration credentials you want `haskell-web-api-db` to
+use before running the Haskell migration command. If you used the default setup-time container behavior
+above, the simplest option is to point those migration variables at the same credentials:
 
 ```bash
 export WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1
@@ -347,7 +354,7 @@ cabal run haskell-web-api-db -- migrate
 ```
 
 If you change the owner-level database connection values, update the exported
-`WEB_API_MIGRATION_DATABASE_*` environment variables to match. The later `Setup.hs` prerequisite-autostart
+`WEB_API_MIGRATION_DATABASE_*` environment variables to match. The remaining `Setup.hs` database bootstrap
 work should reuse this same migration path with its own owner credentials instead of requiring manual SQL.
 
 When you are done with the container example, stop and remove it with either Docker or Podman:

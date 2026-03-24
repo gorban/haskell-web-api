@@ -12,6 +12,11 @@ module Core.Setup.PrerequisiteReport
   )
 where
 
+import Core.Setup.DatabaseAutostart
+  ( ContainerRuntimeFailure (..),
+    DatabaseAutostartResult (..),
+    attemptDatabaseAutostart,
+  )
 import Core.Setup.Prerequisite
   ( TcpEndpoint (..),
     TracingEndpointParseError,
@@ -40,6 +45,9 @@ import Text.Show (showListWith)
 data DatabasePrerequisiteStatus
   = DatabasePrerequisiteReachable TcpEndpoint
   | DatabasePrerequisiteUnreachable DatabasePrerequisitePlan
+  | DatabasePrerequisiteAutostarted DatabasePrerequisitePlan ContainerRuntime
+  | DatabasePrerequisiteAutostartSkipped DatabasePrerequisitePlan Text
+  | DatabasePrerequisiteAutostartFailed DatabasePrerequisitePlan [ContainerRuntimeFailure]
   deriving (Eq)
 
 data TracingPrerequisiteStatus
@@ -58,6 +66,21 @@ instance Show DatabasePrerequisiteStatus where
         DatabasePrerequisiteUnreachable databasePlan ->
           showString "DatabasePrerequisiteUnreachable "
             . showsPrec 11 databasePlan
+        DatabasePrerequisiteAutostarted databasePlan containerRuntime ->
+          showString "DatabasePrerequisiteAutostarted "
+            . showsPrec 11 databasePlan
+            . showChar ' '
+            . shows containerRuntime
+        DatabasePrerequisiteAutostartSkipped databasePlan reason ->
+          showString "DatabasePrerequisiteAutostartSkipped "
+            . showsPrec 11 databasePlan
+            . showChar ' '
+            . shows reason
+        DatabasePrerequisiteAutostartFailed databasePlan runtimeFailures ->
+          showString "DatabasePrerequisiteAutostartFailed "
+            . showsPrec 11 databasePlan
+            . showChar ' '
+            . shows runtimeFailures
 
   showList = showListWith shows
 
@@ -151,6 +174,27 @@ renderDatabaseStatus databaseStatus =
           <> renderTcpEndpoint (databaseCheckEndpoint databasePlan)
           <> renderAutostartSuffix (databaseAutostartPlan databasePlan)
       ]
+    DatabasePrerequisiteAutostarted databasePlan containerRuntime ->
+      [ "Setup: Database prerequisite unreachable at "
+          <> renderTcpEndpoint (databaseCheckEndpoint databasePlan)
+          <> renderAutostartSuffix (databaseAutostartPlan databasePlan),
+        "Setup: Started local PostgreSQL container via "
+          <> renderContainerRuntime containerRuntime
+          <> "."
+      ]
+    DatabasePrerequisiteAutostartSkipped databasePlan reason ->
+      [ "Setup: Database prerequisite unreachable at "
+          <> renderTcpEndpoint (databaseCheckEndpoint databasePlan)
+          <> renderAutostartSuffix (databaseAutostartPlan databasePlan),
+        "Setup: Skipping database autostart: " <> reason <> "."
+      ]
+    DatabasePrerequisiteAutostartFailed databasePlan runtimeFailures ->
+      [ "Setup: Database prerequisite unreachable at "
+          <> renderTcpEndpoint (databaseCheckEndpoint databasePlan)
+          <> renderAutostartSuffix (databaseAutostartPlan databasePlan)
+      ]
+        <> map renderContainerRuntimeFailure runtimeFailures
+        <> ["Setup: Continuing without database autostart."]
 
 renderTracingStatus :: TracingPrerequisiteStatus -> [Text]
 renderTracingStatus tracingStatus =
@@ -189,20 +233,64 @@ renderContainerRuntime containerRuntime =
     PodmanRuntime -> "podman"
     DockerRuntime -> "docker"
 
+renderContainerRuntimeFailure :: ContainerRuntimeFailure -> Text
+renderContainerRuntimeFailure runtimeFailure =
+  "Setup: Database autostart via "
+    <> renderContainerRuntime (failedContainerRuntime runtimeFailure)
+    <> " failed: "
+    <> containerRuntimeFailureMessage runtimeFailure
+    <> "."
+
 reportSetupPrerequisites :: IO ()
 reportSetupPrerequisites =
   reportSetupPrerequisitesWith
     loadSetupPrerequisiteConfig
     checkTcpEndpointReachable
     checkTracingEndpointReachable
+    attemptDatabaseAutostart
     stdout
 
 reportSetupPrerequisitesWith ::
   IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
   (TcpEndpoint -> IO Bool) ->
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
+  (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
   Handle ->
   IO ()
-reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing outputHandle = do
-  prerequisiteReport <- checkSetupPrerequisitesWith loadConfig checkDatabase checkTracing
+reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase outputHandle = do
+  loadedConfig <- loadConfig
+  prerequisiteReport <-
+    case loadedConfig of
+      Left loadError ->
+        pure (Left loadError)
+      Right setupConfig -> do
+        Right report <- checkSetupPrerequisitesWith (pure (Right setupConfig)) checkDatabase checkTracing
+        Right <$> applyDatabaseAutostart attemptDatabase setupConfig report
   mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
+
+applyDatabaseAutostart ::
+  (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
+  PrerequisiteConfig.SetupPrerequisiteConfig ->
+  SetupPrerequisiteReport ->
+  IO SetupPrerequisiteReport
+applyDatabaseAutostart attemptDatabase setupConfig prerequisiteReport =
+  case databasePrerequisiteStatus prerequisiteReport of
+    DatabasePrerequisiteUnreachable databasePlan ->
+      case databaseAutostartPlan databasePlan of
+        Nothing ->
+          pure prerequisiteReport
+        Just _ -> do
+          autostartResult <- attemptDatabase setupConfig databasePlan
+          pure
+            prerequisiteReport
+              { databasePrerequisiteStatus =
+                  case autostartResult of
+                    DatabaseAutostartSkipped reason ->
+                      DatabasePrerequisiteAutostartSkipped databasePlan reason
+                    DatabaseAutostartSucceeded containerRuntime ->
+                      DatabasePrerequisiteAutostarted databasePlan containerRuntime
+                    DatabaseAutostartFailed runtimeFailures ->
+                      DatabasePrerequisiteAutostartFailed databasePlan runtimeFailures
+              }
+    _ ->
+      pure prerequisiteReport

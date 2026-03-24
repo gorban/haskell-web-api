@@ -11,6 +11,7 @@ module WebApi.SetupPlan
     checkTracingEndpointReachable,
     defaultContainerAutostartPlan,
     parseTracingEndpoint,
+    toSetupPrerequisiteConfig,
     planAppPrerequisites,
   )
 where
@@ -36,20 +37,26 @@ import Core.Setup.PrerequisitePlan
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), DatabaseConfig (..), ObservabilityConfig (..), OtlpExporter (..))
 import WebApi.SetupConfig (AppSetupConfig (..), SetupAutostartConfig (..))
 
-planAppPrerequisites :: AppSetupConfig -> AppPrerequisitePlan
-planAppPrerequisites setupConfig =
-  planSetupPrerequisites $
-    PrerequisiteConfig.SetupPrerequisiteConfig
-      { PrerequisiteConfig.setupDatabaseEndpoint =
-          TcpEndpoint
-            { tcpEndpointHost = databaseHost runtimeDatabaseConfig,
-              tcpEndpointPort = databasePort runtimeDatabaseConfig
-            },
-        PrerequisiteConfig.setupTracingEndpoint =
-          otlpEndpoint <$> tracingExporter (observability (setupAppConfig setupConfig)),
-        PrerequisiteConfig.setupAutostartDatabase = setupAutostartDatabase autostartConfig,
-        PrerequisiteConfig.setupAutostartJaeger = setupAutostartJaeger autostartConfig
-      }
+toSetupPrerequisiteConfig :: AppSetupConfig -> PrerequisiteConfig.SetupPrerequisiteConfig
+toSetupPrerequisiteConfig setupConfig =
+  PrerequisiteConfig.SetupPrerequisiteConfig
+    { PrerequisiteConfig.setupDatabaseEndpoint =
+        TcpEndpoint
+          { tcpEndpointHost = databaseHost runtimeDatabaseConfig,
+            tcpEndpointPort = databasePort runtimeDatabaseConfig
+          },
+      PrerequisiteConfig.setupDatabaseName = databaseName runtimeDatabaseConfig,
+      PrerequisiteConfig.setupDatabaseUser = databaseUser runtimeDatabaseConfig,
+      PrerequisiteConfig.setupDatabasePassword = databasePassword runtimeDatabaseConfig,
+      PrerequisiteConfig.setupTracingEndpoint =
+        otlpEndpoint <$> tracingExporter (observability (setupAppConfig setupConfig)),
+      PrerequisiteConfig.setupAutostartDatabase = setupAutostartDatabase autostartConfig,
+      PrerequisiteConfig.setupAutostartJaeger = setupAutostartJaeger autostartConfig
+    }
   where
     runtimeDatabaseConfig = databaseConfig (setupEnvironmentConfig setupConfig)
     autostartConfig = setupAutostartConfig setupConfig
+
+planAppPrerequisites :: AppSetupConfig -> AppPrerequisitePlan
+planAppPrerequisites setupConfig =
+  planSetupPrerequisites (toSetupPrerequisiteConfig setupConfig)

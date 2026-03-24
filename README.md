@@ -112,10 +112,11 @@ The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration 
 runtime application config consumed by `cabal run haskell-web-api`. They are intended for build and
 verification paths that need real prerequisite services, such as `cabal build haskell-web-api`,
 `cabal build all`, or targeted Unit tests for the concrete PostgreSQL adapter and similar components that
-must verify a real connection instead of a mock. Today they are parsed from the same layered `./.env` and
-`./.env.local` files and feed prerequisite planning helpers in `WebApi.SetupConfig` / `WebApi.SetupPlan`;
-the remaining `Setup.hs` prerequisite detection and autostart execution work is still tracked in
-`TASKS.md`.
+must verify a real connection instead of a mock. They are parsed from the same layered `./.env` and
+`./.env.local` files, feed the shared setup config/planning helpers in `WebApi.SetupConfig` /
+`WebApi.SetupPlan`, and now drive `Setup.hs` database prerequisite detection plus local PostgreSQL
+autostart attempts. Tracing autostart and automatic migrate-and-seed after setup-created databases are
+still tracked in `TASKS.md`.
 
 The intended configuration model has three layers:
 

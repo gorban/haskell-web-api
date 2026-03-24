@@ -24,6 +24,9 @@ spec = do
           { Prerequisite.tcpEndpointHost = "127.0.0.1",
             Prerequisite.tcpEndpointPort = 5432
           }
+      PrerequisiteConfig.setupDatabaseName setupConfig `shouldBe` "web_api_dev"
+      PrerequisiteConfig.setupDatabaseUser setupConfig `shouldBe` "web_api"
+      PrerequisiteConfig.setupDatabasePassword setupConfig `shouldBe` "web_api"
       PrerequisiteConfig.setupTracingEndpoint setupConfig `shouldBe` Nothing
       PrerequisiteConfig.setupAutostartDatabase setupConfig `shouldBe` True
       PrerequisiteConfig.setupAutostartJaeger setupConfig `shouldBe` False
@@ -34,6 +37,9 @@ spec = do
                 { Prerequisite.tcpEndpointHost = "127.0.0.1",
                   Prerequisite.tcpEndpointPort = 5432
                 },
+            PrerequisiteConfig.setupDatabaseName = "web_api_dev",
+            PrerequisiteConfig.setupDatabaseUser = "web_api",
+            PrerequisiteConfig.setupDatabasePassword = "web_api",
             PrerequisiteConfig.setupTracingEndpoint = Nothing,
             PrerequisiteConfig.setupAutostartDatabase = True,
             PrerequisiteConfig.setupAutostartJaeger = False
@@ -41,9 +47,9 @@ spec = do
       setupConfig
         `shouldNotBe` setupConfig {PrerequisiteConfig.setupAutostartJaeger = True}
       show setupConfig
-        `shouldBe` "SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}"
+        `shouldBe` "SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}"
       show [setupConfig]
-        `shouldBe` "[SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}]"
+        `shouldBe` "[SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}]"
 
   describe "parseSetupPrerequisiteConfig" $ do
     it "parses the built-in defaults when file layers are empty" $
@@ -56,7 +62,10 @@ spec = do
     it "falls back to the default autostart values when setup flags are absent in every layer" $
       PrerequisiteConfig.parseSetupPrerequisiteConfig
         [ ("DATABASE_HOST", "db.internal"),
-          ("DATABASE_PORT", "6543")
+          ("DATABASE_PORT", "6543"),
+          ("DATABASE_NAME", "web_api_build"),
+          ("DATABASE_USER", "web_api_runtime"),
+          ("DATABASE_PASSWORD", "secret")
         ]
         []
         []
@@ -67,6 +76,9 @@ spec = do
                   { Prerequisite.tcpEndpointHost = "db.internal",
                     Prerequisite.tcpEndpointPort = 6543
                   },
+              PrerequisiteConfig.setupDatabaseName = "web_api_build",
+              PrerequisiteConfig.setupDatabaseUser = "web_api_runtime",
+              PrerequisiteConfig.setupDatabasePassword = "secret",
               PrerequisiteConfig.setupTracingEndpoint = Nothing,
               PrerequisiteConfig.setupAutostartDatabase = True,
               PrerequisiteConfig.setupAutostartJaeger = False
@@ -77,11 +89,17 @@ spec = do
         PrerequisiteConfig.committedPrerequisiteDefaults
         [ ("DATABASE_HOST", "db.internal"),
           ("DATABASE_PORT", "6543"),
+          ("DATABASE_NAME", "web_api_build"),
+          ("DATABASE_USER", "web_api_runtime"),
+          ("DATABASE_PASSWORD", "secret"),
           ("OTLP_TRACING_ENDPOINT", "http://collector:4318/v1/traces"),
           ("SETUP_AUTOSTART_DATABASE", "false")
         ]
         [ ("DATABASE_HOST", "db.local"),
           ("DATABASE_PORT", "7654"),
+          ("DATABASE_NAME", "web_api_local"),
+          ("DATABASE_USER", "web_api_local"),
+          ("DATABASE_PASSWORD", "topsecret"),
           ("OTLP_TRACING_ENDPOINT", "https://collector.example/v1/traces"),
           ("SETUP_AUTOSTART_DATABASE", "true"),
           ("SETUP_AUTOSTART_JAEGER", "true")
@@ -93,6 +111,9 @@ spec = do
                   { Prerequisite.tcpEndpointHost = "db.local",
                     Prerequisite.tcpEndpointPort = 7654
                   },
+              PrerequisiteConfig.setupDatabaseName = "web_api_local",
+              PrerequisiteConfig.setupDatabaseUser = "web_api_local",
+              PrerequisiteConfig.setupDatabasePassword = "topsecret",
               PrerequisiteConfig.setupTracingEndpoint = Just "https://collector.example/v1/traces",
               PrerequisiteConfig.setupAutostartDatabase = True,
               PrerequisiteConfig.setupAutostartJaeger = True
@@ -125,6 +146,9 @@ spec = do
           ( unlines
               [ "DATABASE_HOST=db.internal",
                 "DATABASE_PORT=6543",
+                "DATABASE_NAME=web_api_build",
+                "DATABASE_USER=web_api_runtime",
+                "DATABASE_PASSWORD=secret",
                 "OTLP_TRACING_ENDPOINT=http://collector:4318/v1/traces",
                 "SETUP_AUTOSTART_DATABASE=false"
               ]
@@ -133,6 +157,7 @@ spec = do
           (tempDirectory <> "/.env.local")
           ( unlines
               [ "DATABASE_PORT=7654",
+                "DATABASE_NAME=web_api_local",
                 "SETUP_AUTOSTART_JAEGER=true"
               ]
           )
@@ -146,6 +171,9 @@ spec = do
                     { Prerequisite.tcpEndpointHost = "db.internal",
                       Prerequisite.tcpEndpointPort = 7654
                     },
+                PrerequisiteConfig.setupDatabaseName = "web_api_local",
+                PrerequisiteConfig.setupDatabaseUser = "web_api_runtime",
+                PrerequisiteConfig.setupDatabasePassword = "secret",
                 PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
                 PrerequisiteConfig.setupAutostartDatabase = False,
                 PrerequisiteConfig.setupAutostartJaeger = True
@@ -162,7 +190,16 @@ spec = do
                 (tempDirectory <> "/broken.env")
                 (CoreConfig.InvalidConfigOverridesLine 1 "BROKEN")
             )
-        writeFile (tempDirectory <> "/valid.env") "DATABASE_HOST=db.internal\nDATABASE_PORT=6543\n"
+        writeFile
+          (tempDirectory <> "/valid.env")
+          ( unlines
+              [ "DATABASE_HOST=db.internal",
+                "DATABASE_PORT=6543",
+                "DATABASE_NAME=web_api_build",
+                "DATABASE_USER=web_api_runtime",
+                "DATABASE_PASSWORD=secret"
+              ]
+          )
         writeFile (tempDirectory <> "/invalid.env.local") "SETUP_AUTOSTART_JAEGER=later\n"
         PrerequisiteConfig.loadSetupPrerequisiteConfigWithFiles
           (tempDirectory <> "/valid.env")
@@ -179,7 +216,10 @@ spec = do
           (tempDirectory <> "/.env")
           ( unlines
               [ "DATABASE_HOST=db.internal",
-                "DATABASE_PORT=6543"
+                "DATABASE_PORT=6543",
+                "DATABASE_NAME=web_api_build",
+                "DATABASE_USER=web_api_runtime",
+                "DATABASE_PASSWORD=secret"
               ]
           )
         withCurrentDirectory tempDirectory $
@@ -191,6 +231,9 @@ spec = do
                       { Prerequisite.tcpEndpointHost = "db.internal",
                         Prerequisite.tcpEndpointPort = 6543
                       },
+                  PrerequisiteConfig.setupDatabaseName = "web_api_build",
+                  PrerequisiteConfig.setupDatabaseUser = "web_api_runtime",
+                  PrerequisiteConfig.setupDatabasePassword = "secret",
                   PrerequisiteConfig.setupTracingEndpoint = Nothing,
                   PrerequisiteConfig.setupAutostartDatabase = True,
                   PrerequisiteConfig.setupAutostartJaeger = False
