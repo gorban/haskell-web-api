@@ -79,7 +79,6 @@ library
     base ^>=4.22.0.0,
     core,
     harch-web,
-    network,
     process,
     text,
 

@@ -61,6 +61,7 @@ library
     Core.Control.Error
     Core.Prelude
     Core.Setup
+    Core.Setup.Prerequisite
     Core.System.Path
     Core.System.Temp
 
@@ -73,6 +74,7 @@ library
     directory,
     filepath,
     mtl,
+    network,
     temporary,
     text,
 
@@ -138,5 +140,6 @@ test-suite core-tests
     hspec,
     hspec-expectations-match,
     mtl,
+    network,
     temporary,
     text,
