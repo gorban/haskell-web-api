@@ -110,7 +110,7 @@ committedEnvDefaults =
     ("DATABASE_HOST", "127.0.0.1"),
     ("DATABASE_PORT", "5432"),
     ("DATABASE_NAME", "web_api_dev"),
-    ("DATABASE_USER", "web_api"),
+    ("DATABASE_USER", "web_api_runtime"),
     ("DATABASE_PASSWORD", "web_api")
   ]
 
@@ -131,7 +131,7 @@ defaultAppEnvironmentConfig =
           { databaseHost = "127.0.0.1",
             databasePort = 5432,
             databaseName = "web_api_dev",
-            databaseUser = "web_api",
+            databaseUser = "web_api_runtime",
             databasePassword = "web_api"
           }
     }

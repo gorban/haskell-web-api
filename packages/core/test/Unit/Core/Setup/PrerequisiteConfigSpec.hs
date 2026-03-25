@@ -25,7 +25,7 @@ spec = do
             Prerequisite.tcpEndpointPort = 5432
           }
       PrerequisiteConfig.setupDatabaseName setupConfig `shouldBe` "web_api_dev"
-      PrerequisiteConfig.setupDatabaseUser setupConfig `shouldBe` "web_api"
+      PrerequisiteConfig.setupDatabaseUser setupConfig `shouldBe` "web_api_runtime"
       PrerequisiteConfig.setupDatabasePassword setupConfig `shouldBe` "web_api"
       PrerequisiteConfig.setupTracingEndpoint setupConfig `shouldBe` Nothing
       PrerequisiteConfig.setupAutostartDatabase setupConfig `shouldBe` True
@@ -38,7 +38,7 @@ spec = do
                   Prerequisite.tcpEndpointPort = 5432
                 },
             PrerequisiteConfig.setupDatabaseName = "web_api_dev",
-            PrerequisiteConfig.setupDatabaseUser = "web_api",
+            PrerequisiteConfig.setupDatabaseUser = "web_api_runtime",
             PrerequisiteConfig.setupDatabasePassword = "web_api",
             PrerequisiteConfig.setupTracingEndpoint = Nothing,
             PrerequisiteConfig.setupAutostartDatabase = True,
@@ -47,9 +47,9 @@ spec = do
       setupConfig
         `shouldNotBe` setupConfig {PrerequisiteConfig.setupAutostartJaeger = True}
       show setupConfig
-        `shouldBe` "SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}"
+        `shouldBe` "SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api_runtime\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}"
       show [setupConfig]
-        `shouldBe` "[SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}]"
+        `shouldBe` "[SetupPrerequisiteConfig {setupDatabaseEndpoint = TcpEndpoint {tcpEndpointHost = \"127.0.0.1\", tcpEndpointPort = 5432}, setupDatabaseName = \"web_api_dev\", setupDatabaseUser = \"web_api_runtime\", setupDatabasePassword = \"web_api\", setupTracingEndpoint = Nothing, setupAutostartDatabase = True, setupAutostartJaeger = False}]"
 
   describe "parseSetupPrerequisiteConfig" $ do
     it "parses the built-in defaults when file layers are empty" $

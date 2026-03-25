@@ -6,7 +6,7 @@ import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Process (StdStream (UseHandle), callProcess, createProcess, cwd, env, proc, std_out, waitForProcess)
+import System.Process (StdStream (UseHandle), createProcess, cwd, env, proc, readCreateProcessWithExitCode, std_out, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import WebApi.Database (DatabaseEffect (..), HomePageData (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresDatabaseEffect)
@@ -24,7 +24,7 @@ spec = do
       exitCode `shouldBe` ExitSuccess
 
   describe "database integration" $
-    it "runs migrate-and-seed and loads seeded page data against real PostgreSQL" $
+    it "runs migrate-and-seed, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL" $
       withContainerizedPsqlOnPath $ do
         ensureDefaultPostgresAvailable
         inheritedEnvironment <- getEnvironment
@@ -69,3 +69,45 @@ spec = do
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                 secondPageDataHighlights = []
               }
+
+        allowedSelect <-
+          readCreateProcessWithExitCode
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
+                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                }
+            )
+            ""
+        allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
+
+        forbiddenInsert <-
+          readCreateProcessWithExitCode
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('forbidden', 'en', 'nope');"])
+                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                }
+            )
+            ""
+        fst3 forbiddenInsert `shouldNotBe` ExitSuccess
+        thd3 forbiddenInsert `shouldContain` "permission denied"
+
+        forbiddenSchemaChange <-
+          readCreateProcessWithExitCode
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "DO $$ BEGIN EXECUTE format('CREATE TABLE web_api.forbidden_runtime_table_%s (id INTEGER);', pg_backend_pid()); END $$;"])
+                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                }
+            )
+            ""
+        fst3 forbiddenSchemaChange `shouldNotBe` ExitSuccess
+        thd3 forbiddenSchemaChange `shouldContain` "permission denied"
+
+        forbiddenRoleCreate <-
+          readCreateProcessWithExitCode
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "CREATE ROLE forbidden_runtime_role LOGIN PASSWORD 'forbidden_runtime_role';"])
+                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                }
+            )
+            ""
+        fst3 forbiddenRoleCreate `shouldNotBe` ExitSuccess
+        thd3 forbiddenRoleCreate `shouldContain` "permission denied"
+  where
+    fst3 (firstValue, _, _) = firstValue
+    thd3 (_, _, thirdValue) = thirdValue

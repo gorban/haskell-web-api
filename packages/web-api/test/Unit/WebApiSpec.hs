@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 {-# SPEC #-}
 
@@ -23,7 +24,7 @@ import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
-import TestSupport.RealPostgres (defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
+import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
@@ -31,7 +32,7 @@ import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (.
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell (buildAppPageShell)
-import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatements, runPostgresMigrations, runPostgresMigrationsWithRunner, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatementsFor, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
@@ -152,6 +153,33 @@ postgresTestConfig =
       databaseName = "web_api_prod",
       databaseUser = "web_api_app",
       databasePassword = "super-secret"
+    }
+
+migrationPostgresTestConfig :: DatabaseConfig
+migrationPostgresTestConfig =
+  postgresTestConfig
+    { databaseUser = "web_api_owner",
+      databasePassword = "owner-secret"
+    }
+
+setupMigrationPostgresTestConfig :: DatabaseConfig
+setupMigrationPostgresTestConfig =
+  DatabaseConfig
+    { databaseHost = "127.0.0.1",
+      databasePort = 5432,
+      databaseName = "web_api_dev",
+      databaseUser = "web_api_owner",
+      databasePassword = "owner-secret"
+    }
+
+runtimeSetupPostgresTestConfig :: DatabaseConfig
+runtimeSetupPostgresTestConfig =
+  DatabaseConfig
+    { databaseHost = "127.0.0.1",
+      databasePort = 5432,
+      databaseName = "web_api_dev",
+      databaseUser = "web_api_runtime",
+      databasePassword = "runtime-secret"
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult
@@ -715,7 +743,7 @@ spec = do
                      ("DATABASE_HOST", "127.0.0.1"),
                      ("DATABASE_PORT", "5432"),
                      ("DATABASE_NAME", "web_api_dev"),
-                     ("DATABASE_USER", "web_api"),
+                     ("DATABASE_USER", "web_api_runtime"),
                      ("DATABASE_PASSWORD", "web_api")
                    ]
       defaultAppEnvironmentConfig
@@ -726,7 +754,7 @@ spec = do
                 { databaseHost = "127.0.0.1",
                   databasePort = 5432,
                   databaseName = "web_api_dev",
-                  databaseUser = "web_api",
+                  databaseUser = "web_api_runtime",
                   databasePassword = "web_api"
                 }
           }
@@ -1253,10 +1281,36 @@ spec = do
     it "runs migrations and seed statements in order through the provided runner" $ do
       recordedCommandsReference <- newIORef []
       let runner command = modifyIORef' recordedCommandsReference (<> [command]) >> pure (successfulPostgresResult Text.empty)
-      runPostgresMigrationsWithRunner runner postgresTestConfig `shouldReturn` Right ()
+      runPostgresMigrationsWithRunnerForRuntime runner migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
       runPostgresSeedWithRunner runner postgresTestConfig `shouldReturn` Right ()
       recordedCommands <- readIORef recordedCommandsReference
-      map commandSql recordedCommands `shouldBe` migrationStatements <> seedStatements
+      map commandSql recordedCommands `shouldBe` migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements
+
+    it "keeps the legacy same-config migration wrappers on the runtime-config path"
+      $ withFakePsqlScript
+        (fmap (,Text.empty) (migrationStatementsFor postgresTestConfig postgresTestConfig))
+      $ \argsLogPath -> do
+        recordedCommandsReference <- newIORef []
+        let runner command = modifyIORef' recordedCommandsReference (<> [command]) >> pure (successfulPostgresResult Text.empty)
+        runPostgresMigrationsWithRunner runner postgresTestConfig `shouldReturn` Right ()
+        map commandSql
+          <$> readIORef recordedCommandsReference
+            `shouldReturn` migrationStatementsFor postgresTestConfig postgresTestConfig
+        runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
+        let renderMutationLogEntry databaseConfig sql =
+              "--host "
+                <> Text.unpack (databaseHost databaseConfig)
+                <> " --port "
+                <> show (databasePort databaseConfig)
+                <> " --dbname "
+                <> Text.unpack (databaseName databaseConfig)
+                <> " --username "
+                <> Text.unpack (databaseUser databaseConfig)
+                <> " --no-password --set ON_ERROR_STOP=1 --command "
+                <> Text.unpack sql
+        readFile argsLogPath
+          `shouldReturn` unlines
+            (fmap (renderMutationLogEntry postgresTestConfig) (migrationStatementsFor postgresTestConfig postgresTestConfig))
 
     it "stops database setup when a migration or seed command fails" $ do
       case seedStatements of
@@ -1344,16 +1398,12 @@ spec = do
 
     it "uses the default psql runner for effect loading and database setup when psql is on PATH"
       $ withFakePsqlScript
-        [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
-          ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
-          ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
-          ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
-          ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-          ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-          ("DELETE FROM web_api.page_highlights;", Text.empty),
-          ("DELETE FROM web_api.page_content;", Text.empty),
-          ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
-        ]
+        ( [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
+            ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
+            ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty)
+          ]
+            <> fmap (,Text.empty) (migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements)
+        )
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
         HarchWeb.renderResponse application secondRequest
@@ -1366,19 +1416,30 @@ spec = do
                   HarchWeb.pageBootstrapHooks = ["second-page"]
                 }
             )
-        runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
+        runPostgresMigrationsForRuntime migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
         runPostgresSeed postgresTestConfig `shouldReturn` Right ()
+        let renderQueryLogEntry sql =
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command "
+                <> Text.unpack sql
+            renderMutationLogEntry databaseConfig sql =
+              "--host "
+                <> Text.unpack (databaseHost databaseConfig)
+                <> " --port "
+                <> show (databasePort databaseConfig)
+                <> " --dbname "
+                <> Text.unpack (databaseName databaseConfig)
+                <> " --username "
+                <> Text.unpack (databaseUser databaseConfig)
+                <> " --no-password --set ON_ERROR_STOP=1 --command "
+                <> Text.unpack sql
         readFile argsLogPath
           `shouldReturn` unlines
-            [ "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE SCHEMA IF NOT EXISTS web_api;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_highlights;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_content;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
-            ]
+            ( [ renderQueryLogEntry "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+                renderQueryLogEntry "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
+              ]
+                <> fmap (renderMutationLogEntry migrationPostgresTestConfig) (migrationStatementsFor migrationPostgresTestConfig postgresTestConfig)
+                <> fmap (renderMutationLogEntry postgresTestConfig) seedStatements
+            )
 
     it "uses stderr from the default psql runner when a command fails"
       $ withFakePsqlScriptResults
@@ -1397,8 +1458,8 @@ spec = do
     it "loads seeded page data through the concrete postgres adapter against real PostgreSQL" $
       withContainerizedPsqlOnPath $ do
         ensureDefaultPostgresAvailable
-        runPostgresMigrations defaultRealPostgresConfig `shouldReturn` Right ()
-        runPostgresSeed defaultRealPostgresConfig `shouldReturn` Right ()
+        runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+        runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
         let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
         loadHomePageData postgresEffect defaultRequestContext
           `shouldReturn` Right
@@ -1485,7 +1546,7 @@ spec = do
           ("DATABASE_HOST", "127.0.0.1"),
           ("DATABASE_PORT", "5432"),
           ("DATABASE_NAME", "web_api_dev"),
-          ("DATABASE_USER", "web_api")
+          ("DATABASE_USER", "web_api_runtime")
         ]
         []
         []
@@ -1843,11 +1904,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -2202,7 +2263,9 @@ spec = do
 
     it "keeps command and error values stable" $ do
       let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+          runtimeLoadError = MissingConfigValue "DATABASE_PASSWORD"
           configSetupError = DatabaseSetupConfigLoadError loadError
+          runtimeConfigSetupError = DatabaseSetupRuntimeConfigLoadError runtimeLoadError
           migrationSetupError = DatabaseSetupMigrationError (UnexpectedQueryRows "expected exactly one row" ["first", "second"])
           seedSetupError = DatabaseSetupSeedError (UnexpectedQueryRows "expected exactly one row" ["seed"])
       MigrateDatabase `shouldBe` MigrateDatabase
@@ -2214,9 +2277,13 @@ spec = do
         `shouldBe` "[MigrateDatabase,SeedDatabase,MigrateAndSeedDatabase]"
       configSetupError `shouldBe` configSetupError
       configSetupError `shouldNotBe` migrationSetupError
+      runtimeConfigSetupError `shouldBe` runtimeConfigSetupError
+      runtimeConfigSetupError `shouldNotBe` configSetupError
       seedSetupError `shouldBe` seedSetupError
       show configSetupError
         `shouldBe` "DatabaseSetupConfigLoadError (InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\")"
+      show runtimeConfigSetupError
+        `shouldBe` "DatabaseSetupRuntimeConfigLoadError (MissingConfigValue \"DATABASE_PASSWORD\")"
       show migrationSetupError
         `shouldBe` "DatabaseSetupMigrationError (UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"])"
       show seedSetupError
@@ -2226,10 +2293,13 @@ spec = do
 
     it "renders load, migration, and seed failures explicitly" $ do
       let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
+          runtimeLoadError = MissingConfigValue "DATABASE_PASSWORD"
           migrationRunnerError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
           seedRunnerError = UnexpectedQueryRows "expected exactly one row" ["seed"]
       renderDatabaseSetupError (DatabaseSetupConfigLoadError loadError)
         `shouldBe` "Failed to load database setup config: InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\""
+      renderDatabaseSetupError (DatabaseSetupRuntimeConfigLoadError runtimeLoadError)
+        `shouldBe` "Failed to load runtime database config: MissingConfigValue \"DATABASE_PASSWORD\""
       renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
         `shouldBe` "Failed to apply database migrations: UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
       renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
@@ -2294,67 +2364,99 @@ spec = do
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
+    $ withTemporaryEnvironment "DATABASE_HOST" (Just "127.0.0.1")
+    $ withTemporaryEnvironment "DATABASE_PORT" (Just "5432")
+    $ withTemporaryEnvironment "DATABASE_NAME" (Just "web_api_dev")
+    $ withTemporaryEnvironment "DATABASE_USER" (Just "web_api_runtime")
+    $ withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime-secret")
     $ withFakePsqlScript
-      [ ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-        ("DELETE FROM web_api.page_highlights;", Text.empty),
-        ("DELETE FROM web_api.page_content;", Text.empty),
-        ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
-      ]
+      (fmap (,Text.empty) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig <> seedStatements))
     $ \argsLogPath -> do
       runDatabaseSetupCommand MigrateDatabase `shouldReturn` Right ()
       runDatabaseSetupCommand SeedDatabase `shouldReturn` Right ()
+      let renderMutationLogEntry databaseConfig sql =
+            "--host "
+              <> Text.unpack (databaseHost databaseConfig)
+              <> " --port "
+              <> show (databasePort databaseConfig)
+              <> " --dbname "
+              <> Text.unpack (databaseName databaseConfig)
+              <> " --username "
+              <> Text.unpack (databaseUser databaseConfig)
+              <> " --no-password --set ON_ERROR_STOP=1 --command "
+              <> Text.unpack sql
       readFile argsLogPath
         `shouldReturn` unlines
-          [ "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE SCHEMA IF NOT EXISTS web_api;",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_highlights;",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_content;",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
-          ]
+          ( fmap (renderMutationLogEntry setupMigrationPostgresTestConfig) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig)
+              <> fmap (renderMutationLogEntry setupMigrationPostgresTestConfig) seedStatements
+          )
 
   describe "runDatabaseSetupCommandWith" $ do
     it "returns configuration load errors before running any commands" $ do
       recordedStepsReference <- newIORef ([] :: [Text])
       let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
-          unexpectedRunner _ =
+          unexpectedRuntimeLoader =
+            modifyIORef' recordedStepsReference (<> ["runtime-loader"])
+              >> pure (Right postgresTestConfig)
+          unexpectedMigrationRunner _ _ =
             modifyIORef' recordedStepsReference (<> ["runner"])
               >> pure (Right ())
       runDatabaseSetupCommandWith
         (pure (Left loadError))
-        unexpectedRunner
-        unexpectedRunner
+        unexpectedRuntimeLoader
+        unexpectedMigrationRunner
+        (\_ -> pure (Right ()))
         MigrateDatabase
         `shouldReturn` Left (DatabaseSetupConfigLoadError loadError)
       readIORef recordedStepsReference `shouldReturn` []
 
-    it "runs migrations and seed data in order with the loaded database config" $ do
+    it "returns runtime configuration load errors before running database commands" $ do
       recordedStepsReference <- newIORef ([] :: [Text])
-      let environmentConfig =
-            postgresTestConfig
-          recordStep label databaseRuntimeConfig =
-            modifyIORef' recordedStepsReference (<> [label <> ":" <> databaseHost databaseRuntimeConfig <> ":" <> databaseName databaseRuntimeConfig])
+      let loadError = MissingConfigValue "DATABASE_PASSWORD"
+          unexpectedMigrationRunner _ _ =
+            modifyIORef' recordedStepsReference (<> ["migrate"])
+              >> pure (Right ())
+          unexpectedSeedRunner _ =
+            modifyIORef' recordedStepsReference (<> ["seed"])
               >> pure (Right ())
       runDatabaseSetupCommandWith
-        (pure (Right environmentConfig))
-        (recordStep "migrate")
-        (recordStep "seed")
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Left loadError))
+        unexpectedMigrationRunner
+        unexpectedSeedRunner
+        MigrateDatabase
+        `shouldReturn` Left (DatabaseSetupRuntimeConfigLoadError loadError)
+      readIORef recordedStepsReference `shouldReturn` []
+
+    it "runs migrations and seed data in order with the loaded database config" $ do
+      recordedStepsReference <- newIORef ([] :: [Text])
+      let recordMigrationStep migrationDatabaseConfig runtimeDatabaseConfig =
+            modifyIORef'
+              recordedStepsReference
+              (<> ["migrate:" <> databaseUser migrationDatabaseConfig <> "->" <> databaseUser runtimeDatabaseConfig <> ":" <> databaseName runtimeDatabaseConfig])
+              >> pure (Right ())
+          recordSeedStep databaseRuntimeConfig =
+            modifyIORef' recordedStepsReference (<> ["seed:" <> databaseUser databaseRuntimeConfig <> ":" <> databaseName databaseRuntimeConfig])
+              >> pure (Right ())
+      runDatabaseSetupCommandWith
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        recordMigrationStep
+        recordSeedStep
         MigrateAndSeedDatabase
         `shouldReturn` Right ()
       readIORef recordedStepsReference
-        `shouldReturn` ["migrate:db.internal:web_api_prod", "seed:db.internal:web_api_prod"]
+        `shouldReturn` ["migrate:web_api_owner->web_api_app:web_api_prod", "seed:web_api_owner:web_api_prod"]
 
     it "maps single-command migration failures explicitly" $ do
       let migrationError =
             PostgresCommandFailed
               (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken"], postgresEnvironment = []})
               (failingPostgresResult "migration failed")
-          environmentConfig = postgresTestConfig
       runDatabaseSetupCommandWith
-        (pure (Right environmentConfig))
-        (\_ -> pure (Left migrationError))
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        (\_ _ -> pure (Left migrationError))
         (\_ -> pure (Right ()))
         MigrateDatabase
         `shouldReturn` Left (DatabaseSetupMigrationError migrationError)
@@ -2364,10 +2466,10 @@ spec = do
             PostgresCommandFailed
               (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken-seed"], postgresEnvironment = []})
               (failingPostgresResult "seed failed")
-          environmentConfig = postgresTestConfig
       runDatabaseSetupCommandWith
-        (pure (Right environmentConfig))
-        (\_ -> pure (Right ()))
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        (\_ _ -> pure (Right ()))
         (\_ -> pure (Left seedError))
         SeedDatabase
         `shouldReturn` Left (DatabaseSetupSeedError seedError)
@@ -2378,15 +2480,15 @@ spec = do
             PostgresCommandFailed
               (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken"], postgresEnvironment = []})
               (failingPostgresResult "migration failed")
-          environmentConfig = postgresTestConfig
-          failingMigrations _ =
+          failingMigrations _ _ =
             modifyIORef' recordedStepsReference (<> ["migrate"])
               >> pure (Left migrationError)
           unexpectedSeed _ =
             modifyIORef' recordedStepsReference (<> ["seed"])
               >> pure (Right ())
       runDatabaseSetupCommandWith
-        (pure (Right environmentConfig))
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
         failingMigrations
         unexpectedSeed
         MigrateAndSeedDatabase
@@ -2398,10 +2500,10 @@ spec = do
             PostgresCommandFailed
               (PostgresCommand {postgresExecutable = "psql", postgresArguments = ["--command", "broken-seed"], postgresEnvironment = []})
               (failingPostgresResult "seed failed")
-          environmentConfig = postgresTestConfig
       runDatabaseSetupCommandWith
-        (pure (Right environmentConfig))
-        (\_ -> pure (Right ()))
+        (pure (Right migrationPostgresTestConfig))
+        (pure (Right postgresTestConfig))
+        (\_ _ -> pure (Right ()))
         (\_ -> pure (Left seedError))
         MigrateAndSeedDatabase
         `shouldReturn` Left (DatabaseSetupSeedError seedError)
@@ -2410,8 +2512,9 @@ spec = do
     it "prints a success message for completed setup commands" $
       withSystemTempFile "database-setup-stdout.txt" $ \outputPath outputHandle -> do
         runDatabaseSetupArgsWith
+          (pure (Right migrationPostgresTestConfig))
           (pure (Right postgresTestConfig))
-          (\_ -> pure (Right ()))
+          (\_ _ -> pure (Right ()))
           (\_ -> pure (Right ()))
           outputHandle
           ["seed"]
@@ -2423,8 +2526,9 @@ spec = do
         result <-
           try
             ( runDatabaseSetupArgsWith
+                (pure (Right migrationPostgresTestConfig))
                 (pure (Right postgresTestConfig))
-                (\_ -> pure (Right ()))
+                (\_ _ -> pure (Right ()))
                 (\_ -> pure (Right ()))
                 outputHandle
                 ["deploy"]
@@ -2445,7 +2549,8 @@ spec = do
           try
             ( runDatabaseSetupArgsWith
                 (pure (Left loadError))
-                (\_ -> pure (Right ()))
+                (pure (Right postgresTestConfig))
+                (\_ _ -> pure (Right ()))
                 (\_ -> pure (Right ()))
                 outputHandle
                 ["migrate"]
@@ -2466,14 +2571,13 @@ spec = do
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
+    $ withTemporaryEnvironment "DATABASE_HOST" (Just "127.0.0.1")
+    $ withTemporaryEnvironment "DATABASE_PORT" (Just "5432")
+    $ withTemporaryEnvironment "DATABASE_NAME" (Just "web_api_dev")
+    $ withTemporaryEnvironment "DATABASE_USER" (Just "web_api_runtime")
+    $ withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime-secret")
     $ withFakePsqlScript
-      [ ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-        ("DELETE FROM web_api.page_highlights;", Text.empty),
-        ("DELETE FROM web_api.page_content;", Text.empty),
-        ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
-      ]
+      (fmap (,Text.empty) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig <> seedStatements))
     $ \_ ->
       withSystemTempFile "database-setup-args-migrate.txt" $ \migrateOutputPath migrateOutputHandle -> do
         runDatabaseSetupArgs migrateOutputHandle ["migrate"]

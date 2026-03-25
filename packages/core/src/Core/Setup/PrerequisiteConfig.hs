@@ -43,7 +43,7 @@ committedPrerequisiteDefaults =
   [ ("DATABASE_HOST", "127.0.0.1"),
     ("DATABASE_PORT", "5432"),
     ("DATABASE_NAME", "web_api_dev"),
-    ("DATABASE_USER", "web_api"),
+    ("DATABASE_USER", "web_api_runtime"),
     ("DATABASE_PASSWORD", "web_api"),
     ("SETUP_AUTOSTART_DATABASE", "true"),
     ("SETUP_AUTOSTART_JAEGER", "false")
@@ -58,7 +58,7 @@ defaultSetupPrerequisiteConfig =
             tcpEndpointPort = 5432
           },
       setupDatabaseName = "web_api_dev",
-      setupDatabaseUser = "web_api",
+      setupDatabaseUser = "web_api_runtime",
       setupDatabasePassword = "web_api",
       setupTracingEndpoint = Nothing,
       setupAutostartDatabase = True,

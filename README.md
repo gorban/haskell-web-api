@@ -84,7 +84,7 @@ understands the following values:
 | `DATABASE_HOST` | Database host for app environment config. Using loopback addresses such as `127.0.0.1` or `::1` keeps the database reachable only from the local machine, not from external clients. | (`127.0.0.1`) |
 | `DATABASE_PORT` | Database port for app environment config. | (`5432`) |
 | `DATABASE_NAME` | Database name for app environment config. | (`web_api_dev`) |
-| `DATABASE_USER` | Database username for app environment config. | (`web_api`) |
+| `DATABASE_USER` | Database username for app environment config. | (`web_api_runtime`) |
 | `DATABASE_PASSWORD` | Database password for app environment config. | (`web_api`) |
 | `APP_TITLE_PREFIX` | Prefix used in rendered HTML page titles. | (`web-api`) |
 | `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
@@ -149,7 +149,7 @@ APP_MODE=development
 DATABASE_HOST=127.0.0.1
 DATABASE_PORT=5432
 DATABASE_NAME=web_api_dev
-DATABASE_USER=web_api
+DATABASE_USER=web_api_runtime
 DATABASE_PASSWORD=web_api
 APP_TITLE_PREFIX=web-api-dev
 LISTENER_0_HOST=127.0.0.1

@@ -20,10 +20,10 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
-import WebApi.Config (DatabaseConfig (..))
+import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig)
 import WebApi.Postgres
   ( PostgresRunnerError,
-    runPostgresMigrations,
+    runPostgresMigrationsForRuntime,
     runPostgresSeed,
   )
 
@@ -36,6 +36,7 @@ data DatabaseSetupCommand
 data DatabaseSetupError
   = InvalidDatabaseSetupCommand [String]
   | DatabaseSetupConfigLoadError ConfigParseError
+  | DatabaseSetupRuntimeConfigLoadError ConfigParseError
   | DatabaseSetupMigrationError PostgresRunnerError
   | DatabaseSetupSeedError PostgresRunnerError
   deriving (Eq, Show)
@@ -44,6 +45,15 @@ loadDatabaseSetupConfig :: IO (Either ConfigParseError DatabaseConfig)
 loadDatabaseSetupConfig =
   fmap
     ( parseDatabaseSetupConfig
+        . map (bimap Text.pack Text.pack)
+    )
+    getEnvironment
+
+loadRuntimeDatabaseConfig :: IO (Either ConfigParseError DatabaseConfig)
+loadRuntimeDatabaseConfig =
+  fmap
+    ( fmap databaseConfig
+        . parseAppEnvironmentConfig committedEnvDefaults []
         . map (bimap Text.pack Text.pack)
     )
     getEnvironment
@@ -79,6 +89,8 @@ renderDatabaseSetupError setupError =
         <> "\nExpected one of: migrate, seed, migrate-and-seed"
     DatabaseSetupConfigLoadError loadError ->
       "Failed to load database setup config: " <> show loadError
+    DatabaseSetupRuntimeConfigLoadError loadError ->
+      "Failed to load runtime database config: " <> show loadError
     DatabaseSetupMigrationError runnerError ->
       "Failed to apply database migrations: " <> show runnerError
     DatabaseSetupSeedError runnerError ->
@@ -86,53 +98,59 @@ renderDatabaseSetupError setupError =
 
 runDatabaseSetupArgs :: Handle -> [String] -> IO ()
 runDatabaseSetupArgs =
-  runDatabaseSetupArgsWith loadDatabaseSetupConfig runPostgresMigrations runPostgresSeed
+  runDatabaseSetupArgsWith loadDatabaseSetupConfig loadRuntimeDatabaseConfig runPostgresMigrationsForRuntime runPostgresSeed
 
 runDatabaseSetupArgsWith ::
   IO (Either ConfigParseError DatabaseConfig) ->
-  (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
+  IO (Either ConfigParseError DatabaseConfig) ->
+  (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
   (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
   Handle ->
   [String] ->
   IO ()
-runDatabaseSetupArgsWith loadEnvironmentConfig runMigrations runSeed outputHandle arguments =
+runDatabaseSetupArgsWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed outputHandle arguments =
   case parseDatabaseSetupCommand arguments of
     Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
     Right setupCommand -> do
-      setupResult <- runDatabaseSetupCommandWith loadEnvironmentConfig runMigrations runSeed setupCommand
+      setupResult <- runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand
       case setupResult of
         Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
         Right () -> hPutStrLn outputHandle (successMessage setupCommand)
 
 runDatabaseSetupCommand :: DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
 runDatabaseSetupCommand =
-  runDatabaseSetupCommandWith loadDatabaseSetupConfig runPostgresMigrations runPostgresSeed
+  runDatabaseSetupCommandWith loadDatabaseSetupConfig loadRuntimeDatabaseConfig runPostgresMigrationsForRuntime runPostgresSeed
 
 runDatabaseSetupCommandWith ::
   IO (Either ConfigParseError DatabaseConfig) ->
-  (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
+  IO (Either ConfigParseError DatabaseConfig) ->
+  (DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
   (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
   DatabaseSetupCommand ->
   IO (Either DatabaseSetupError ())
-runDatabaseSetupCommandWith loadEnvironmentConfig runMigrations runSeed setupCommand = do
-  databaseConfigResult <- loadEnvironmentConfig
-  case databaseConfigResult of
+runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand = do
+  migrationConfigResult <- loadMigrationConfig
+  case migrationConfigResult of
     Left loadError -> pure (Left (DatabaseSetupConfigLoadError loadError))
-    Right databaseRuntimeConfig ->
-      runCommandWithConfig databaseRuntimeConfig
+    Right migrationDatabaseConfig -> do
+      runtimeConfigResult <- loadRuntimeConfig
+      case runtimeConfigResult of
+        Left loadError -> pure (Left (DatabaseSetupRuntimeConfigLoadError loadError))
+        Right runtimeDatabaseConfig ->
+          runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
   where
-    runCommandWithConfig databaseRuntimeConfig =
+    runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig =
       case setupCommand of
         MigrateDatabase ->
-          fmap (either (Left . DatabaseSetupMigrationError) Right) (runMigrations databaseRuntimeConfig)
+          fmap (either (Left . DatabaseSetupMigrationError) Right) (runMigrations migrationDatabaseConfig runtimeDatabaseConfig)
         SeedDatabase ->
-          fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed databaseRuntimeConfig)
+          fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
         MigrateAndSeedDatabase -> do
-          migrationsResult <- runMigrations databaseRuntimeConfig
+          migrationsResult <- runMigrations migrationDatabaseConfig runtimeDatabaseConfig
           case migrationsResult of
             Left migrationError -> pure (Left (DatabaseSetupMigrationError migrationError))
             Right () ->
-              fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed databaseRuntimeConfig)
+              fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
 
 successMessage :: DatabaseSetupCommand -> String
 successMessage setupCommand =

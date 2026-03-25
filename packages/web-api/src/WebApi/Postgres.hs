@@ -6,9 +6,11 @@ module WebApi.Postgres
     PostgresRunnerError (..),
     buildPostgresDatabaseEffect,
     buildPostgresDatabaseEffectWithRunner,
-    migrationStatements,
+    migrationStatementsFor,
     runPostgresMigrations,
+    runPostgresMigrationsForRuntime,
     runPostgresMigrationsWithRunner,
+    runPostgresMigrationsWithRunnerForRuntime,
     runPostgresSeed,
     runPostgresSeedWithRunner,
     seedStatements,
@@ -79,7 +81,15 @@ runPostgresMigrations =
 
 runPostgresMigrationsWithRunner :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrationsWithRunner runCommand databaseConfig =
-  runStatements runCommand databaseConfig migrationStatements
+  runPostgresMigrationsWithRunnerForRuntime runCommand databaseConfig databaseConfig
+
+runPostgresMigrationsForRuntime :: DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
+runPostgresMigrationsForRuntime =
+  runPostgresMigrationsWithRunnerForRuntime runPostgresCommand
+
+runPostgresMigrationsWithRunnerForRuntime :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> DatabaseConfig -> IO (Either PostgresRunnerError ())
+runPostgresMigrationsWithRunnerForRuntime runCommand migrationDatabaseConfig runtimeDatabaseConfig =
+  runStatements runCommand migrationDatabaseConfig (migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig)
 
 runPostgresSeed :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresSeed =
@@ -92,12 +102,38 @@ runPostgresSeedWithRunner runCommand databaseConfig =
 appSchemaName :: Text
 appSchemaName = "web_api"
 
-migrationStatements :: [Text]
-migrationStatements =
-  [ "CREATE SCHEMA IF NOT EXISTS " <> appSchemaName <> ";",
-    "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_content" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-    "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_highlights" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));"
-  ]
+migrationStatementsFor :: DatabaseConfig -> DatabaseConfig -> [Text]
+migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
+  baseSchemaStatements
+    <> privilegeStatements
+  where
+    baseSchemaStatements =
+      [ "CREATE SCHEMA IF NOT EXISTS " <> appSchemaName <> ";",
+        "ALTER SCHEMA " <> appSchemaName <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER DATABASE " <> sqlIdentifier (databaseName migrationDatabaseConfig) <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_content" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_highlights" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+        "ALTER TABLE " <> qualifiedTableName "page_content" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "page_highlights" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";"
+      ]
+
+    privilegeStatements =
+      if databaseUser migrationDatabaseConfig == databaseUser runtimeDatabaseConfig
+        then []
+        else
+          [ ensureRuntimeRoleStatement runtimeDatabaseConfig,
+            "REVOKE ALL ON DATABASE " <> sqlIdentifier (databaseName runtimeDatabaseConfig) <> " FROM PUBLIC;",
+            "REVOKE ALL ON DATABASE " <> sqlIdentifier (databaseName runtimeDatabaseConfig) <> " FROM " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT CONNECT ON DATABASE " <> sqlIdentifier (databaseName runtimeDatabaseConfig) <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "REVOKE ALL ON SCHEMA public FROM PUBLIC;",
+            "REVOKE ALL ON SCHEMA public FROM " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "REVOKE ALL ON SCHEMA " <> appSchemaName <> " FROM PUBLIC;",
+            "GRANT USAGE ON SCHEMA " <> appSchemaName <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "page_content" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "page_highlights" <> " FROM PUBLIC;",
+            "GRANT SELECT ON TABLE " <> qualifiedTableName "page_content" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT ON TABLE " <> qualifiedTableName "page_highlights" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";"
+          ]
 
 seedStatements :: [Text]
 seedStatements =
@@ -235,6 +271,38 @@ secondHighlightsQuery locale =
 qualifiedTableName :: Text -> Text
 qualifiedTableName tableName =
   appSchemaName <> "." <> tableName
+
+ensureRuntimeRoleStatement :: DatabaseConfig -> Text
+ensureRuntimeRoleStatement runtimeDatabaseConfig =
+  "DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = "
+    <> sqlLiteral (databaseUser runtimeDatabaseConfig)
+    <> ") THEN EXECUTE "
+    <> sqlLiteral alterRoleCommand
+    <> "; ELSE EXECUTE "
+    <> sqlLiteral createRoleCommand
+    <> "; END IF; END $$;"
+  where
+    createRoleCommand =
+      "CREATE ROLE "
+        <> sqlIdentifier (databaseUser runtimeDatabaseConfig)
+        <> " WITH LOGIN PASSWORD "
+        <> sqlLiteral (databasePassword runtimeDatabaseConfig)
+        <> " NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT"
+
+    alterRoleCommand =
+      "ALTER ROLE "
+        <> sqlIdentifier (databaseUser runtimeDatabaseConfig)
+        <> " WITH LOGIN PASSWORD "
+        <> sqlLiteral (databasePassword runtimeDatabaseConfig)
+        <> " NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT"
+
+sqlIdentifier :: Text -> Text
+sqlIdentifier value =
+  "\"" <> Text.replace "\"" "\"\"" value <> "\""
+
+sqlLiteral :: Text -> Text
+sqlLiteral value =
+  "'" <> Text.replace "'" "''" value <> "'"
 
 normalizeQueryResult :: Text -> PostgresCommandResult -> Either PostgresRunnerError [Text]
 normalizeQueryResult sql commandResult =
