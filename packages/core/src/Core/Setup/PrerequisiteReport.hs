@@ -7,11 +7,14 @@ module Core.Setup.PrerequisiteReport
     checkSetupPrerequisites,
     checkSetupPrerequisitesWith,
     renderSetupPrerequisiteReport,
+    reportSetupPrerequisitesAndReturn,
     reportSetupPrerequisites,
+    reportSetupPrerequisitesWithResult,
     reportSetupPrerequisitesWith,
   )
 where
 
+import Control.Monad (void)
 import Core.Setup.DatabaseAutostart
   ( ContainerRuntimeFailure (..),
     DatabaseAutostartResult (..),
@@ -286,9 +289,9 @@ renderContainerRuntimeFailure subject runtimeFailure =
     <> containerRuntimeFailureMessage runtimeFailure
     <> "."
 
-reportSetupPrerequisites :: IO ()
-reportSetupPrerequisites =
-  reportSetupPrerequisitesWith
+reportSetupPrerequisitesAndReturn :: IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
+reportSetupPrerequisitesAndReturn =
+  reportSetupPrerequisitesWithResult
     loadSetupPrerequisiteConfig
     checkTcpEndpointReachable
     checkTracingEndpointReachable
@@ -296,15 +299,19 @@ reportSetupPrerequisites =
     attemptTracingAutostart
     stdout
 
-reportSetupPrerequisitesWith ::
+reportSetupPrerequisites :: IO ()
+reportSetupPrerequisites =
+  void reportSetupPrerequisitesAndReturn
+
+reportSetupPrerequisitesWithResult ::
   IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
   (TcpEndpoint -> IO Bool) ->
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
   (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
   (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
   Handle ->
-  IO ()
-reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
+  IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
+reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
   loadedConfig <- loadConfig
   prerequisiteReport <-
     case loadedConfig of
@@ -315,6 +322,18 @@ reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDataba
         reportWithDatabase <- applyDatabaseAutostart attemptDatabase setupConfig report
         Right <$> applyTracingAutostart attemptTracing reportWithDatabase
   mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
+  pure prerequisiteReport
+
+reportSetupPrerequisitesWith ::
+  IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
+  (TcpEndpoint -> IO Bool) ->
+  (Text -> IO (Either TracingEndpointParseError Bool)) ->
+  (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
+  (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
+  Handle ->
+  IO ()
+reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle =
+  void (reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle)
 
 applyDatabaseAutostart ::
   (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->

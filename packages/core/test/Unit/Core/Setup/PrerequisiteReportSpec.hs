@@ -633,7 +633,40 @@ spec = do
               "Setup: Tracing prerequisite endpoint collector:4318/v1/traces is invalid: InvalidTracingEndpointFormat \"collector:4318/v1/traces\"."
             ]
 
-  describe "checkSetupPrerequisites and reportSetupPrerequisites" $ do
+    it "returns the rendered report after writing it to the supplied handle" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        reportedPrerequisites <-
+          PrerequisiteReport.reportSetupPrerequisitesWithResult
+            (pure (Right PrerequisiteConfig.defaultSetupPrerequisiteConfig))
+            (\_ -> pure False)
+            (\_ -> pure (Right False))
+            (\_ _ -> pure (DatabaseAutostart.DatabaseAutostartSucceeded PrerequisitePlan.PodmanRuntime))
+            unusedTracingAutostart
+            outputHandle
+        hClose outputHandle
+        reportedPrerequisites
+          `shouldBe` Right
+            PrerequisiteReport.SetupPrerequisiteReport
+              { PrerequisiteReport.databasePrerequisiteStatus =
+                  PrerequisiteReport.DatabasePrerequisiteAutostarted
+                    PrerequisitePlan.DatabasePrerequisitePlan
+                      { PrerequisitePlan.databaseCheckEndpoint =
+                          Prerequisite.TcpEndpoint
+                            { Prerequisite.tcpEndpointHost = "127.0.0.1",
+                              Prerequisite.tcpEndpointPort = 5432
+                            },
+                        PrerequisitePlan.databaseAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+                      }
+                    PrerequisitePlan.PodmanRuntime,
+                PrerequisiteReport.tracingPrerequisiteStatus = Nothing
+              }
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite unreachable at 127.0.0.1:5432. Configured autostart runtimes: podman, docker.",
+              "Setup: Started local PostgreSQL container via podman."
+            ]
+
+  describe "checkSetupPrerequisites, reportSetupPrerequisitesAndReturn, and reportSetupPrerequisites" $ do
     it "uses the default loader and real reachability checks from the current directory" $
       withSystemTempDirectory "setup-prerequisite-real-check" $ \tempDirectory ->
         withListeningTcpEndpoint $ \tcpEndpoint -> do
@@ -698,6 +731,25 @@ spec = do
                   <> show (Prerequisite.tcpEndpointPort tcpEndpoint)
                   <> "/v1/traces."
               ]
+
+    it "returns the default reported prerequisites after writing them to stdout" $
+      withSystemTempDirectory "setup-prerequisite-stdout-return" $ \tempDirectory ->
+        withListeningTcpEndpoint $ \tcpEndpoint -> do
+          writeFile
+            (tempDirectory <> "/.env")
+            ( unlines
+                [ "DATABASE_HOST=" <> Text.unpack (Prerequisite.tcpEndpointHost tcpEndpoint),
+                  "DATABASE_PORT=" <> show (Prerequisite.tcpEndpointPort tcpEndpoint)
+                ]
+            )
+          withCurrentDirectory tempDirectory $
+            PrerequisiteReport.reportSetupPrerequisitesAndReturn
+              `shouldReturn` Right
+                PrerequisiteReport.SetupPrerequisiteReport
+                  { PrerequisiteReport.databasePrerequisiteStatus =
+                      PrerequisiteReport.DatabasePrerequisiteReachable tcpEndpoint,
+                    PrerequisiteReport.tracingPrerequisiteStatus = Nothing
+                  }
 
     it "uses the real database autostart runner when the default report finds an unreachable local database" $
       withSystemTempDirectory "setup-prerequisite-autostart" $ \tempDirectory ->

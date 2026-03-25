@@ -41,8 +41,13 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
+    Cabal,
+    Cabal-syntax,
     base ^>=4.22.0.0,
     core,
+    directory,
+    filepath,
+    process,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
