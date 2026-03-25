@@ -66,6 +66,7 @@ library
     Core.Setup.PrerequisiteConfig
     Core.Setup.PrerequisitePlan
     Core.Setup.PrerequisiteReport
+    Core.Setup.TracingAutostart
     Core.System.Path
     Core.System.Temp
 
