@@ -1,11 +1,19 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 {-# SPEC #-}
 
+import Control.Exception (finally)
 import Data.Maybe (fromMaybe)
-import System.Environment (getEnvironment)
+import qualified Data.Text as Text
+import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (StdStream (UseHandle), callProcess, createProcess, cwd, env, proc, std_out, waitForProcess)
+import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), defaultAppEnvironmentConfig)
+import WebApi.Database (DatabaseEffect (..), HomePageData (..), SecondPageData (..))
+import WebApi.Postgres (buildPostgresDatabaseEffect)
+import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
 
 spec = do
   describe "main" $
@@ -18,49 +26,134 @@ spec = do
         pure result
       exitCode `shouldBe` ExitSuccess
 
-  describe "database setup executable" $
-    it "runs migrations and seed data with dedicated migration credentials" $ do
-      inheritedEnvironment <- getEnvironment
-      exitCode <-
-        withSystemTempDirectory "fake-psql" $ \binDirectory -> do
-          let scriptPath = binDirectory <> "/psql"
-              argsLogPath = binDirectory <> "/psql-args.log"
-              processEnvironment =
-                ("PATH", binDirectory <> ":" <> lookupValue "PATH" inheritedEnvironment)
-                  : ("PSQL_ARGS_LOG", argsLogPath)
-                  : ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1")
-                  : ("WEB_API_MIGRATION_DATABASE_PORT", "5432")
-                  : ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev")
-                  : ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner")
-                  : ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")
-                  : filter (\(key, _) -> key /= "PATH" && key /= "PSQL_ARGS_LOG") inheritedEnvironment
-          writeFile
-            scriptPath
-            ( unlines
-                [ "#!/usr/bin/env bash",
-                  "set -euo pipefail",
-                  "printf '%s\\n' \"$*\" >> \"$PSQL_ARGS_LOG\""
-                ]
-            )
-          callProcess "chmod" ["+x", scriptPath]
+  describe "database integration" $
+    it "runs migrate-and-seed and loads seeded page data against real PostgreSQL" $
+      withContainerizedPsqlOnPath $ do
+        ensureDefaultPostgresAvailable
+        inheritedEnvironment <- getEnvironment
+        exitCode <-
           withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
             withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
               (_, _, _, processHandle) <-
                 createProcess
                   ( (proc "haskell-web-api-db" ["migrate-and-seed"])
                       { cwd = Just workingDirectory,
-                        env = Just processEnvironment,
+                        env = Just (databaseSetupEnvironment inheritedEnvironment),
                         std_out = UseHandle outputHandle
                       }
                   )
               result <- waitForProcess processHandle
               hClose outputHandle
               readFile outputPath `shouldReturn` "Applied database migrations and seed data.\n"
-              argsLog <- readFile argsLogPath
-              argsLog `shouldContain` "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_content"
-              argsLog `shouldContain` "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command INSERT INTO page_content"
               pure result
-      exitCode `shouldBe` ExitSuccess
+        exitCode `shouldBe` ExitSuccess
+
+        let postgresEffect = buildPostgresDatabaseEffect defaultDatabaseConfig
+            frenchRequestContext = defaultRequestContext {requestLocale = French}
+        loadHomePageData postgresEffect defaultRequestContext
+          `shouldReturn` Right
+            HomePageData
+              { homePageDataSummary = "Server-rendered home page with stubbed content."
+              }
+        loadSecondPageData postgresEffect defaultRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                secondPageDataHighlights = []
+              }
+        loadHomePageData postgresEffect frenchRequestContext
+          `shouldReturn` Right
+            HomePageData
+              { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+              }
+        loadSecondPageData postgresEffect frenchRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                secondPageDataHighlights = []
+              }
   where
+    defaultDatabaseConfig = databaseConfig defaultAppEnvironmentConfig
+
     lookupValue key entries =
       fromMaybe "" (lookup key entries)
+
+    databaseSetupEnvironment inheritedEnvironment =
+      [ ("WEB_API_MIGRATION_DATABASE_HOST", Text.unpack (databaseHost defaultDatabaseConfig)),
+        ("WEB_API_MIGRATION_DATABASE_PORT", show (databasePort defaultDatabaseConfig)),
+        ("WEB_API_MIGRATION_DATABASE_NAME", Text.unpack (databaseName defaultDatabaseConfig)),
+        ("WEB_API_MIGRATION_DATABASE_USER", Text.unpack (databaseUser defaultDatabaseConfig)),
+        ("WEB_API_MIGRATION_DATABASE_PASSWORD", Text.unpack (databasePassword defaultDatabaseConfig)),
+        ("PATH", lookupValue "PATH" inheritedEnvironment)
+      ]
+        <> filter
+          ( \(key, _) ->
+              key
+                `notElem` [ "PATH",
+                            "WEB_API_MIGRATION_DATABASE_HOST",
+                            "WEB_API_MIGRATION_DATABASE_PORT",
+                            "WEB_API_MIGRATION_DATABASE_NAME",
+                            "WEB_API_MIGRATION_DATABASE_USER",
+                            "WEB_API_MIGRATION_DATABASE_PASSWORD"
+                          ]
+          )
+          inheritedEnvironment
+
+withTemporaryEnvironment :: String -> Maybe String -> IO a -> IO a
+withTemporaryEnvironment key maybeValue action = do
+  previousValue <- lookupEnv key
+  case maybeValue of
+    Just value -> setEnv key value
+    Nothing -> unsetEnv key
+  let restore =
+        case previousValue of
+          Just value -> setEnv key value
+          Nothing -> unsetEnv key
+  action `finally` restore
+
+withContainerizedPsqlOnPath :: IO a -> IO a
+withContainerizedPsqlOnPath action =
+  withSystemTempDirectory "containerized-psql" $ \binDirectory -> do
+    originalPath <- fromMaybe "" <$> lookupEnv "PATH"
+    let scriptPath = binDirectory <> "/psql"
+    writeFile
+      scriptPath
+      ( unlines
+          [ "#!/usr/bin/env bash",
+            "set -euo pipefail",
+            "if command -v podman >/dev/null 2>&1; then",
+            "  exec podman exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\"",
+            "fi",
+            "exec docker exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""
+          ]
+      )
+    callProcess "chmod" ["+x", scriptPath]
+    withTemporaryEnvironment "PATH" (Just (binDirectory <> ":" <> originalPath)) action
+
+ensureDefaultPostgresAvailable :: IO ()
+ensureDefaultPostgresAvailable =
+  callProcess
+    "bash"
+    [ "-eu",
+      "-c",
+      unlines
+        [ "if command -v podman >/dev/null 2>&1; then",
+          "  runtime=podman",
+          "elif command -v docker >/dev/null 2>&1; then",
+          "  runtime=docker",
+          "else",
+          "  echo 'No supported container runtime found' >&2",
+          "  exit 1",
+          "fi",
+          "\"$runtime\" start web-api-postgres >/dev/null 2>&1 || \\",
+          "  \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api -e POSTGRES_PASSWORD=web_api -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d docker.io/library/postgres:17 >/dev/null",
+          "for _ in $(seq 1 30); do",
+          "  if \"$runtime\" exec web-api-postgres pg_isready --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api >/dev/null 2>&1; then",
+          "    exit 0",
+          "  fi",
+          "  sleep 1",
+          "done",
+          "echo 'PostgreSQL did not become ready in time' >&2",
+          "exit 1"
+        ]
+    ]
