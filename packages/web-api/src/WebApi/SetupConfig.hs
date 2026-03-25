@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module WebApi.SetupConfig
   ( AppSetupConfig (..),
@@ -20,10 +21,12 @@ import Core.Config
     lookupConfigValue,
     parseBoolean,
   )
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import WebApi.Config
   ( AppConfig,
     AppEnvironmentConfig,
+    DatabaseConfig,
     committedEnvDefaults,
     committedRuntimeDefaults,
     defaultAppConfig,
@@ -31,6 +34,7 @@ import WebApi.Config
     parseAppEnvironmentConfig,
     parseRuntimeAppConfig,
   )
+import WebApi.DatabaseSetup (parseDatabaseSetupConfig)
 
 data SetupAutostartConfig = SetupAutostartConfig
   { setupAutostartDatabase :: Bool,
@@ -41,6 +45,7 @@ data SetupAutostartConfig = SetupAutostartConfig
 data AppSetupConfig = AppSetupConfig
   { setupEnvironmentConfig :: AppEnvironmentConfig,
     setupAppConfig :: AppConfig,
+    setupMigrationDatabaseConfig :: Maybe DatabaseConfig,
     setupAutostartConfig :: SetupAutostartConfig
   }
   deriving (Eq, Show)
@@ -68,6 +73,7 @@ defaultAppSetupConfig =
   AppSetupConfig
     { setupEnvironmentConfig = defaultAppEnvironmentConfig,
       setupAppConfig = defaultAppConfig,
+      setupMigrationDatabaseConfig = Nothing,
       setupAutostartConfig = defaultSetupAutostartConfig
     }
 
@@ -101,13 +107,37 @@ parseAppSetupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Eit
 parseAppSetupConfig committedDefaults localOverrides environmentOverrides = do
   parsedEnvironmentConfig <- parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides
   parsedRuntimeConfig <- parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides
+  parsedMigrationDatabaseConfig <- parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmentOverrides
   parsedAutostartConfig <- parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides
   pure
     AppSetupConfig
       { setupEnvironmentConfig = parsedEnvironmentConfig,
         setupAppConfig = parsedRuntimeConfig,
+        setupMigrationDatabaseConfig = parsedMigrationDatabaseConfig,
         setupAutostartConfig = parsedAutostartConfig
       }
+
+parseOptionalMigrationDatabaseConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError (Maybe DatabaseConfig)
+parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmentOverrides =
+  case migrationEntries of
+    [] -> Right Nothing
+    _ -> Just <$> parseDatabaseSetupConfig migrationEntries
+  where
+    migrationEntries =
+      mapMaybe lookupMigrationValue migrationConfigKeys
+
+    lookupMigrationValue key =
+      fmap
+        (key,)
+        (lookupConfigValue key committedDefaults localOverrides environmentOverrides)
+
+    migrationConfigKeys =
+      [ "WEB_API_MIGRATION_DATABASE_HOST",
+        "WEB_API_MIGRATION_DATABASE_PORT",
+        "WEB_API_MIGRATION_DATABASE_NAME",
+        "WEB_API_MIGRATION_DATABASE_USER",
+        "WEB_API_MIGRATION_DATABASE_PASSWORD"
+      ]
 
 parseSetupAutostartConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupAutostartConfig
 parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides =

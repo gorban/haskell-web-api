@@ -1552,6 +1552,7 @@ spec = do
         `shouldBe` AppSetupConfig
           { setupEnvironmentConfig = defaultAppEnvironmentConfig,
             setupAppConfig = defaultAppConfig,
+            setupMigrationDatabaseConfig = Nothing,
             setupAutostartConfig = defaultSetupAutostartConfig
           }
       parseAppSetupConfig (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults) [] []
@@ -1575,6 +1576,7 @@ spec = do
                 defaultAppConfig
                   { appTitlePrefix = "setup-local"
                   },
+              setupMigrationDatabaseConfig = Nothing,
               setupAutostartConfig =
                 SetupAutostartConfig
                   { setupAutostartDatabase = True,
@@ -1582,7 +1584,43 @@ spec = do
                   }
             }
 
-    it "fails invalid runtime or setup values explicitly" $ do
+    it "parses optional migration-owner credentials separately from the runtime database config" $
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        [ ("DATABASE_USER", "web_api_runtime"),
+          ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "5432"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner")
+        ]
+        [("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")]
+        `shouldBe` Right
+          AppSetupConfig
+            { setupEnvironmentConfig =
+                defaultAppEnvironmentConfig
+                  { databaseConfig =
+                      DatabaseConfig
+                        { databaseHost = "127.0.0.1",
+                          databasePort = 5432,
+                          databaseName = "web_api_dev",
+                          databaseUser = "web_api_runtime",
+                          databasePassword = "web_api"
+                        }
+                  },
+              setupAppConfig = defaultAppConfig,
+              setupMigrationDatabaseConfig =
+                Just
+                  DatabaseConfig
+                    { databaseHost = "127.0.0.1",
+                      databasePort = 5432,
+                      databaseName = "web_api_dev",
+                      databaseUser = "web_api_owner",
+                      databasePassword = "owner-secret"
+                    },
+              setupAutostartConfig = defaultSetupAutostartConfig
+            }
+
+    it "fails invalid runtime, setup, or partial migration config values explicitly" $ do
       parseAppSetupConfig
         (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
         []
@@ -1593,6 +1631,21 @@ spec = do
         []
         [("SETUP_AUTOSTART_DATABASE", "sometimes")]
         `shouldBe` Left (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "sometimes")
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        []
+        [("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1")]
+        `shouldBe` Left (MissingConfigValue "WEB_API_MIGRATION_DATABASE_PORT")
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        []
+        [ ("WEB_API_MIGRATION_DATABASE_HOST", "127.0.0.1"),
+          ("WEB_API_MIGRATION_DATABASE_PORT", "0"),
+          ("WEB_API_MIGRATION_DATABASE_NAME", "web_api_dev"),
+          ("WEB_API_MIGRATION_DATABASE_USER", "web_api_owner"),
+          ("WEB_API_MIGRATION_DATABASE_PASSWORD", "owner-secret")
+        ]
+        `shouldBe` Left (InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0")
 
   describe "loadAppSetupConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers for setup config" $
@@ -1609,11 +1662,54 @@ spec = do
                   defaultAppConfig
                     { appTitlePrefix = "web-api-local"
                     },
+                setupMigrationDatabaseConfig = Nothing,
                 setupAutostartConfig =
                   SetupAutostartConfig
                     { setupAutostartDatabase = True,
                       setupAutostartJaeger = True
                     }
+              }
+
+    it "loads optional migration-owner credentials from the same file layers without replacing runtime credentials" $
+      withSystemTempDirectory "app-setup-config-migration" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile
+          envPath
+          ( unlines
+              [ "DATABASE_USER=web_api_runtime",
+                "WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1",
+                "WEB_API_MIGRATION_DATABASE_PORT=5432",
+                "WEB_API_MIGRATION_DATABASE_NAME=web_api_dev",
+                "WEB_API_MIGRATION_DATABASE_USER=web_api_owner"
+              ]
+          )
+        writeFile envLocalPath "WEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
+        loadAppSetupConfigWithFiles envPath envLocalPath
+          `shouldReturn` Right
+            AppSetupConfig
+              { setupEnvironmentConfig =
+                  defaultAppEnvironmentConfig
+                    { databaseConfig =
+                        DatabaseConfig
+                          { databaseHost = "127.0.0.1",
+                            databasePort = 5432,
+                            databaseName = "web_api_dev",
+                            databaseUser = "web_api_runtime",
+                            databasePassword = "web_api"
+                          }
+                    },
+                setupAppConfig = defaultAppConfig,
+                setupMigrationDatabaseConfig =
+                  Just
+                    DatabaseConfig
+                      { databaseHost = "127.0.0.1",
+                        databasePort = 5432,
+                        databaseName = "web_api_dev",
+                        databaseUser = "web_api_owner",
+                        databasePassword = "owner-secret"
+                      },
+                setupAutostartConfig = defaultSetupAutostartConfig
               }
 
     it "reports invalid override files or parse failures with explicit errors" $
@@ -1644,6 +1740,7 @@ spec = do
                     defaultAppConfig
                       { appTitlePrefix = "web-api-dev"
                       },
+                  setupMigrationDatabaseConfig = Nothing,
                   setupAutostartConfig =
                     SetupAutostartConfig
                       { setupAutostartDatabase = True,
@@ -1657,6 +1754,15 @@ spec = do
             AppSetupConfig
               { setupEnvironmentConfig = defaultAppEnvironmentConfig {appMode = Test},
                 setupAppConfig = defaultAppConfig {appTitlePrefix = "setup-app"},
+                setupMigrationDatabaseConfig =
+                  Just
+                    DatabaseConfig
+                      { databaseHost = "127.0.0.1",
+                        databasePort = 5432,
+                        databaseName = "web_api_dev",
+                        databaseUser = "web_api_owner",
+                        databasePassword = "owner-secret"
+                      },
                 setupAutostartConfig =
                   SetupAutostartConfig
                     { setupAutostartDatabase = True,
@@ -1667,6 +1773,15 @@ spec = do
           parseLoadError = AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_DATABASE" "maybe")
       setupEnvironmentConfig setupConfig `shouldBe` defaultAppEnvironmentConfig {appMode = Test}
       setupAppConfig setupConfig `shouldBe` defaultAppConfig {appTitlePrefix = "setup-app"}
+      setupMigrationDatabaseConfig setupConfig
+        `shouldBe` Just
+          DatabaseConfig
+            { databaseHost = "127.0.0.1",
+              databasePort = 5432,
+              databaseName = "web_api_dev",
+              databaseUser = "web_api_owner",
+              databasePassword = "owner-secret"
+            }
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig
           { setupAutostartDatabase = True,
@@ -1696,11 +1811,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
