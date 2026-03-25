@@ -1031,12 +1031,12 @@ spec = do
                         if Text.isInfixOf "locale = 'fr'" sql
                           then "Accueil cote serveur avec des donnees de developpement preconfigurees."
                           else "Server-rendered home page with stubbed content."
-                  | Text.isInfixOf "SELECT summary FROM page_content WHERE route_slug = 'second'" sql ->
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
                       successfulPostgresResult $
                         if Text.isInfixOf "locale = 'fr'" sql
                           then "Charge depuis PostgreSQL."
                           else "Loaded from PostgreSQL."
-                  | Text.isInfixOf "SELECT highlight FROM page_highlights" sql ->
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
                       successfulPostgresResult $
                         if Text.isInfixOf "locale = 'fr'" sql
                           then "SSR rapide\nDonnees partagees"
@@ -1086,7 +1086,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';"
+                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        },
@@ -1108,7 +1108,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';"
+                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        },
@@ -1130,7 +1130,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
+                             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        },
@@ -1152,7 +1152,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'fr';"
+                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        },
@@ -1174,7 +1174,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'fr';"
+                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        },
@@ -1196,7 +1196,7 @@ spec = do
                              "--no-align",
                              "--quiet",
                              "--command",
-                             "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+                             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
                            ],
                          postgresEnvironment = [("PGPASSWORD", "super-secret")]
                        }
@@ -1237,9 +1237,9 @@ spec = do
             pure $
               case commandSql command of
                 sql
-                  | Text.isInfixOf "SELECT summary FROM page_content WHERE route_slug = 'second'" sql ->
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
                       successfulPostgresResult "Loaded from PostgreSQL."
-                  | Text.isInfixOf "SELECT highlight FROM page_highlights" sql ->
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
                       failingPostgresResult "highlights unavailable"
                   | otherwise ->
                       successfulPostgresResult Text.empty
@@ -1284,7 +1284,7 @@ spec = do
                           "--set",
                           "ON_ERROR_STOP=1",
                           "--command",
-                          "DELETE FROM page_highlights;"
+                          "DELETE FROM web_api.page_highlights;"
                         ],
                       postgresEnvironment = [("PGPASSWORD", "super-secret")]
                     }
@@ -1344,14 +1344,15 @@ spec = do
 
     it "uses the default psql runner for effect loading and database setup when psql is on PATH"
       $ withFakePsqlScript
-        [ ("SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
-          ("SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
-          ("SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
-          ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-          ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-          ("DELETE FROM page_highlights;", Text.empty),
-          ("DELETE FROM page_content;", Text.empty),
-          ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+        [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
+          ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
+          ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty),
+          ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
+          ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+          ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+          ("DELETE FROM web_api.page_highlights;", Text.empty),
+          ("DELETE FROM web_api.page_content;", Text.empty),
+          ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
         ]
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
@@ -1369,18 +1370,19 @@ spec = do
         runPostgresSeed postgresTestConfig `shouldReturn` Right ()
         readFile argsLogPath
           `shouldReturn` unlines
-            [ "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = 'en';",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_highlights;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_content;",
-              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+            [ "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE SCHEMA IF NOT EXISTS web_api;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_highlights;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_content;",
+              "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --command INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
             ]
 
     it "uses stderr from the default psql runner when a command fails"
       $ withFakePsqlScriptResults
-        [ ( "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = 'en';",
+        [ ( "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
             PostgresCommandResult
               { postgresExitCode = ExitFailure 4,
                 postgresStdout = Text.empty,
@@ -2293,22 +2295,24 @@ spec = do
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
     $ withFakePsqlScript
-      [ ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-        ("DELETE FROM page_highlights;", Text.empty),
-        ("DELETE FROM page_content;", Text.empty),
-        ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+      [ ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+        ("DELETE FROM web_api.page_highlights;", Text.empty),
+        ("DELETE FROM web_api.page_content;", Text.empty),
+        ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
       ]
     $ \argsLogPath -> do
       runDatabaseSetupCommand MigrateDatabase `shouldReturn` Right ()
       runDatabaseSetupCommand SeedDatabase `shouldReturn` Right ()
       readFile argsLogPath
         `shouldReturn` unlines
-          [ "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_highlights;",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM page_content;",
-            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+          [ "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE SCHEMA IF NOT EXISTS web_api;",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_highlights;",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command DELETE FROM web_api.page_content;",
+            "--host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --set ON_ERROR_STOP=1 --command INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
           ]
 
   describe "runDatabaseSetupCommandWith" $ do
@@ -2463,11 +2467,12 @@ spec = do
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
     $ withFakePsqlScript
-      [ ("CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
-        ("CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
-        ("DELETE FROM page_highlights;", Text.empty),
-        ("DELETE FROM page_content;", Text.empty),
-        ("INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
+      [ ("CREATE SCHEMA IF NOT EXISTS web_api;", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS web_api.page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));", Text.empty),
+        ("CREATE TABLE IF NOT EXISTS web_api.page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));", Text.empty),
+        ("DELETE FROM web_api.page_highlights;", Text.empty),
+        ("DELETE FROM web_api.page_content;", Text.empty),
+        ("INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');", Text.empty)
       ]
     $ \_ ->
       withSystemTempFile "database-setup-args-migrate.txt" $ \migrateOutputPath migrateOutputHandle -> do

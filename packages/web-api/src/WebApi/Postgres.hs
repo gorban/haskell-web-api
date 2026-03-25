@@ -89,17 +89,21 @@ runPostgresSeedWithRunner :: (PostgresCommand -> IO PostgresCommandResult) -> Da
 runPostgresSeedWithRunner runCommand databaseConfig =
   runStatements runCommand databaseConfig seedStatements
 
+appSchemaName :: Text
+appSchemaName = "web_api"
+
 migrationStatements :: [Text]
 migrationStatements =
-  [ "CREATE TABLE IF NOT EXISTS page_content (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
-    "CREATE TABLE IF NOT EXISTS page_highlights (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));"
+  [ "CREATE SCHEMA IF NOT EXISTS " <> appSchemaName <> ";",
+    "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_content" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
+    "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_highlights" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));"
   ]
 
 seedStatements :: [Text]
 seedStatements =
-  [ "DELETE FROM page_highlights;",
-    "DELETE FROM page_content;",
-    "INSERT INTO page_content (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
+  [ "DELETE FROM " <> qualifiedTableName "page_highlights" <> ";",
+    "DELETE FROM " <> qualifiedTableName "page_content" <> ";",
+    "INSERT INTO " <> qualifiedTableName "page_content" <> " (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'fr', 'Accueil cote serveur avec des donnees de developpement preconfigurees.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'fr', 'Second page content with stubbed data ready for future loaders.');"
   ]
 
 runRequiredScalarQuery :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> (Text -> DatabaseError) -> IO (Either DatabaseError Text)
@@ -201,7 +205,9 @@ passwordEnvironment databaseConfig =
 homeSummaryQuery :: AppLocale -> Text
 homeSummaryQuery locale =
   Text.concat
-    [ "SELECT summary FROM page_content WHERE route_slug = 'home' AND locale = '",
+    [ "SELECT summary FROM ",
+      qualifiedTableName "page_content",
+      " WHERE route_slug = 'home' AND locale = '",
       renderLocaleCode locale,
       "';"
     ]
@@ -209,7 +215,9 @@ homeSummaryQuery locale =
 secondSummaryQuery :: AppLocale -> Text
 secondSummaryQuery locale =
   Text.concat
-    [ "SELECT summary FROM page_content WHERE route_slug = 'second' AND locale = '",
+    [ "SELECT summary FROM ",
+      qualifiedTableName "page_content",
+      " WHERE route_slug = 'second' AND locale = '",
       renderLocaleCode locale,
       "';"
     ]
@@ -217,10 +225,16 @@ secondSummaryQuery locale =
 secondHighlightsQuery :: AppLocale -> Text
 secondHighlightsQuery locale =
   Text.concat
-    [ "SELECT highlight FROM page_highlights WHERE route_slug = 'second' AND locale = '",
+    [ "SELECT highlight FROM ",
+      qualifiedTableName "page_highlights",
+      " WHERE route_slug = 'second' AND locale = '",
       renderLocaleCode locale,
       "' ORDER BY position ASC;"
     ]
+
+qualifiedTableName :: Text -> Text
+qualifiedTableName tableName =
+  appSchemaName <> "." <> tableName
 
 normalizeQueryResult :: Text -> PostgresCommandResult -> Either PostgresRunnerError [Text]
 normalizeQueryResult sql commandResult =
