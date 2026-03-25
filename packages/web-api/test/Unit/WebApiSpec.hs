@@ -23,6 +23,7 @@ import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
+import TestSupport.RealPostgres (defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
@@ -1390,6 +1391,35 @@ spec = do
       $ \_ ->
         loadHomePageData (buildPostgresDatabaseEffect postgresTestConfig) defaultRequestContext
           `shouldReturn` Left (HomePageDataError "default runner failed")
+
+    it "loads seeded page data through the concrete postgres adapter against real PostgreSQL" $
+      withContainerizedPsqlOnPath $ do
+        ensureDefaultPostgresAvailable
+        runPostgresMigrations defaultRealPostgresConfig `shouldReturn` Right ()
+        runPostgresSeed defaultRealPostgresConfig `shouldReturn` Right ()
+        let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
+        loadHomePageData postgresEffect defaultRequestContext
+          `shouldReturn` Right
+            HomePageData
+              { homePageDataSummary = "Server-rendered home page with stubbed content."
+              }
+        loadSecondPageData postgresEffect defaultRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                secondPageDataHighlights = []
+              }
+        loadHomePageData postgresEffect frenchRequestContext
+          `shouldReturn` Right
+            HomePageData
+              { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+              }
+        loadSecondPageData postgresEffect frenchRequestContext
+          `shouldReturn` Right
+            SecondPageData
+              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                secondPageDataHighlights = []
+              }
 
   describe "parseAppEnvironmentConfig" $ do
     it "parses committed development defaults into the expected config" $
