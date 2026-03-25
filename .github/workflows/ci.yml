@@ -21,6 +21,32 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: 5432
+      DATABASE_NAME: web_api_dev
+      DATABASE_USER: web_api_runtime
+      DATABASE_PASSWORD: web_api
+      WEB_API_MIGRATION_DATABASE_HOST: 127.0.0.1
+      WEB_API_MIGRATION_DATABASE_PORT: 5432
+      WEB_API_MIGRATION_DATABASE_NAME: web_api_dev
+      WEB_API_MIGRATION_DATABASE_USER: web_api
+      WEB_API_MIGRATION_DATABASE_PASSWORD: web_api
+      SETUP_AUTOSTART_DATABASE: false
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: web_api
+          POSTGRES_PASSWORD: web_api
+          POSTGRES_DB: web_api_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=web_api --dbname=web_api_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
 
     steps:
       - name: Checkout
@@ -35,12 +61,12 @@ jobs:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
-      - name: Install dos2unix
+      - name: Install system tools
         if: steps.setup_haskell.outcome == 'success'
         id: dos2unix
         run: |
           sudo apt-get update
-          sudo apt-get install -y dos2unix
+          sudo apt-get install -y dos2unix postgresql-client
 
       - name: Restore Cabal cache
         if: steps.dos2unix.outcome == 'success'
@@ -59,8 +85,14 @@ jobs:
           cabal update
           cabal install --ignore-project hspec-discover
 
-      - name: Run tests with coverage
+      - name: Seed PostgreSQL test database
         if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
+        id: seed_postgres
+        run: |
+          cabal run haskell-web-api-db -- migrate-and-seed
+
+      - name: Run tests with coverage
+        if: steps.seed_postgres.outcome == 'success'
         id: coverage
         shell: bash
         run: |
