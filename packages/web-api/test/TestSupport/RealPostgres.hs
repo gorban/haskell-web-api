@@ -3,8 +3,10 @@
 module TestSupport.RealPostgres
   ( databaseSetupEnvironment,
     defaultMigrationPostgresConfig,
+    defaultPostgresContainerImage,
     defaultRealPostgresConfig,
     ensureDefaultPostgresAvailable,
+    supportedPostgresMajorVersions,
     withContainerizedPsqlOnPath,
   )
 where
@@ -16,6 +18,12 @@ import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
 import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), defaultAppEnvironmentConfig)
+
+defaultPostgresContainerImage :: String
+defaultPostgresContainerImage = "docker.io/library/postgres:17"
+
+supportedPostgresMajorVersions :: [Int]
+supportedPostgresMajorVersions = [17]
 
 defaultRealPostgresConfig :: DatabaseConfig
 defaultRealPostgresConfig =
@@ -99,7 +107,7 @@ ensureDefaultPostgresAvailable =
           "fi",
           "start_container() {",
           "  \"$runtime\" start web-api-postgres >/dev/null 2>&1 || \\",
-          "    \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api -e POSTGRES_PASSWORD=web_api -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d docker.io/library/postgres:17 >/dev/null",
+          "    \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api -e POSTGRES_PASSWORD=web_api -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d " <> defaultPostgresContainerImage <> " >/dev/null",
           "}",
           "wait_until_ready() {",
           "  local ready=false",

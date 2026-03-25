@@ -7,7 +7,7 @@ import System.Exit (ExitCode (ExitSuccess))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (StdStream (UseHandle), createProcess, cwd, env, proc, readCreateProcessWithExitCode, std_out, waitForProcess)
-import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
+import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Database (DatabaseEffect (..), HomePageData (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresDatabaseEffect)
 import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
@@ -24,7 +24,7 @@ spec = do
       exitCode `shouldBe` ExitSuccess
 
   describe "database integration" $
-    it "runs migrate-and-seed, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL" $
+    it "runs migrate-and-seed, verifies the supported PostgreSQL major version, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL" $
       withContainerizedPsqlOnPath $ do
         ensureDefaultPostgresAvailable
         inheritedEnvironment <- getEnvironment
@@ -44,6 +44,16 @@ spec = do
               readFile outputPath `shouldReturn` "Applied database migrations and seed data.\n"
               pure result
         exitCode `shouldBe` ExitSuccess
+
+        supportedVersionResult <-
+          readCreateProcessWithExitCode
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT current_setting('server_version_num')::integer / 10000;"])
+                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                }
+            )
+            ""
+        supportedVersionResult
+          `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
 
         let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
             frenchRequestContext = defaultRequestContext {requestLocale = French}

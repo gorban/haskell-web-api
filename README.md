@@ -118,6 +118,10 @@ must verify a real connection instead of a mock. They are parsed from the same l
 autostart attempts. Tracing autostart and automatic migrate-and-seed after setup-created databases are
 still tracked in `TASKS.md`.
 
+For real database paths, the repository currently targets PostgreSQL `17.x`. The committed local autostart
+flow, the documented container examples, and the live PostgreSQL integration coverage all use and verify
+that major version today.
+
 The intended configuration model has three layers:
 
 1. Code defaults in source. The table above documents the committed defaults defined in the codebase. This

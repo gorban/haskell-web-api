@@ -231,6 +231,9 @@ commands are also available on your `PATH`:
 - `psql` plus a local PostgreSQL server if you want to exercise the PostgreSQL adapter, migrations, or seed
   data locally.
 
+For real PostgreSQL coverage, the repository currently claims support for PostgreSQL `17.x`. The local
+autostart path, documented container examples, and live integration tests all target that major version.
+
 Example package-manager installs:
 
 ### Ubuntu
@@ -297,6 +300,8 @@ If you want a local PostgreSQL instance that matches the current committed devel
 - Database: `web_api_dev`
 - Runtime app user: `web_api_runtime`
 - Runtime app password: `web_api`
+
+The current committed support target for those real-database flows is PostgreSQL `17.x`.
 
 `Setup.hs` now tries to start a missing local PostgreSQL instance during `cabal build` / `cabal test`
 when `SETUP_AUTOSTART_DATABASE=true`, `DATABASE_HOST` is `127.0.0.1` or `0.0.0.0`, and the configured
