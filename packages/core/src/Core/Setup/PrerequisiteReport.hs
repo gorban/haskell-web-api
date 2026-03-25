@@ -36,6 +36,10 @@ import Core.Setup.PrerequisitePlan
     TracingPrerequisitePlan (..),
     planSetupPrerequisites,
   )
+import Core.Setup.TracingAutostart
+  ( TracingAutostartResult (..),
+    attemptTracingAutostart,
+  )
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
@@ -53,6 +57,9 @@ data DatabasePrerequisiteStatus
 data TracingPrerequisiteStatus
   = TracingPrerequisiteReachable Text
   | TracingPrerequisiteUnreachable TracingPrerequisitePlan
+  | TracingPrerequisiteAutostarted TracingPrerequisitePlan ContainerRuntime
+  | TracingPrerequisiteAutostartSkipped TracingPrerequisitePlan Text
+  | TracingPrerequisiteAutostartFailed TracingPrerequisitePlan [ContainerRuntimeFailure]
   | TracingPrerequisiteInvalidEndpoint Text TracingEndpointParseError
   deriving (Eq)
 
@@ -94,6 +101,21 @@ instance Show TracingPrerequisiteStatus where
         TracingPrerequisiteUnreachable tracingPlan ->
           showString "TracingPrerequisiteUnreachable "
             . showsPrec 11 tracingPlan
+        TracingPrerequisiteAutostarted tracingPlan containerRuntime ->
+          showString "TracingPrerequisiteAutostarted "
+            . showsPrec 11 tracingPlan
+            . showChar ' '
+            . shows containerRuntime
+        TracingPrerequisiteAutostartSkipped tracingPlan reason ->
+          showString "TracingPrerequisiteAutostartSkipped "
+            . showsPrec 11 tracingPlan
+            . showChar ' '
+            . shows reason
+        TracingPrerequisiteAutostartFailed tracingPlan runtimeFailures ->
+          showString "TracingPrerequisiteAutostartFailed "
+            . showsPrec 11 tracingPlan
+            . showChar ' '
+            . shows runtimeFailures
         TracingPrerequisiteInvalidEndpoint endpoint parseError ->
           showString "TracingPrerequisiteInvalidEndpoint "
             . shows endpoint
@@ -193,7 +215,7 @@ renderDatabaseStatus databaseStatus =
           <> renderTcpEndpoint (databaseCheckEndpoint databasePlan)
           <> renderAutostartSuffix (databaseAutostartPlan databasePlan)
       ]
-        <> map renderContainerRuntimeFailure runtimeFailures
+        <> map (renderContainerRuntimeFailure "Database") runtimeFailures
         <> ["Setup: Continuing without database autostart."]
 
 renderTracingStatus :: TracingPrerequisiteStatus -> [Text]
@@ -206,6 +228,27 @@ renderTracingStatus tracingStatus =
           <> tracingCheckEndpoint tracingPlan
           <> renderAutostartSuffix (tracingAutostartPlan tracingPlan)
       ]
+    TracingPrerequisiteAutostarted tracingPlan containerRuntime ->
+      [ "Setup: Tracing prerequisite unreachable at "
+          <> tracingCheckEndpoint tracingPlan
+          <> renderAutostartSuffix (tracingAutostartPlan tracingPlan),
+        "Setup: Started Jaeger container via "
+          <> renderContainerRuntime containerRuntime
+          <> "."
+      ]
+    TracingPrerequisiteAutostartSkipped tracingPlan reason ->
+      [ "Setup: Tracing prerequisite unreachable at "
+          <> tracingCheckEndpoint tracingPlan
+          <> renderAutostartSuffix (tracingAutostartPlan tracingPlan),
+        "Setup: Skipping tracing autostart: " <> reason <> "."
+      ]
+    TracingPrerequisiteAutostartFailed tracingPlan runtimeFailures ->
+      [ "Setup: Tracing prerequisite unreachable at "
+          <> tracingCheckEndpoint tracingPlan
+          <> renderAutostartSuffix (tracingAutostartPlan tracingPlan)
+      ]
+        <> map (renderContainerRuntimeFailure "Tracing") runtimeFailures
+        <> ["Setup: Continuing without tracing autostart."]
     TracingPrerequisiteInvalidEndpoint endpoint parseError ->
       [ "Setup: Tracing prerequisite endpoint "
           <> endpoint
@@ -233,9 +276,11 @@ renderContainerRuntime containerRuntime =
     PodmanRuntime -> "podman"
     DockerRuntime -> "docker"
 
-renderContainerRuntimeFailure :: ContainerRuntimeFailure -> Text
-renderContainerRuntimeFailure runtimeFailure =
-  "Setup: Database autostart via "
+renderContainerRuntimeFailure :: Text -> ContainerRuntimeFailure -> Text
+renderContainerRuntimeFailure subject runtimeFailure =
+  "Setup: "
+    <> subject
+    <> " autostart via "
     <> renderContainerRuntime (failedContainerRuntime runtimeFailure)
     <> " failed: "
     <> containerRuntimeFailureMessage runtimeFailure
@@ -248,6 +293,7 @@ reportSetupPrerequisites =
     checkTcpEndpointReachable
     checkTracingEndpointReachable
     attemptDatabaseAutostart
+    attemptTracingAutostart
     stdout
 
 reportSetupPrerequisitesWith ::
@@ -255,9 +301,10 @@ reportSetupPrerequisitesWith ::
   (TcpEndpoint -> IO Bool) ->
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
   (PrerequisiteConfig.SetupPrerequisiteConfig -> DatabasePrerequisitePlan -> IO DatabaseAutostartResult) ->
+  (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
   Handle ->
   IO ()
-reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase outputHandle = do
+reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
   loadedConfig <- loadConfig
   prerequisiteReport <-
     case loadedConfig of
@@ -265,7 +312,8 @@ reportSetupPrerequisitesWith loadConfig checkDatabase checkTracing attemptDataba
         pure (Left loadError)
       Right setupConfig -> do
         Right report <- checkSetupPrerequisitesWith (pure (Right setupConfig)) checkDatabase checkTracing
-        Right <$> applyDatabaseAutostart attemptDatabase setupConfig report
+        reportWithDatabase <- applyDatabaseAutostart attemptDatabase setupConfig report
+        Right <$> applyTracingAutostart attemptTracing reportWithDatabase
   mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
 
 applyDatabaseAutostart ::
@@ -291,6 +339,33 @@ applyDatabaseAutostart attemptDatabase setupConfig prerequisiteReport =
                       DatabasePrerequisiteAutostarted databasePlan containerRuntime
                     DatabaseAutostartFailed runtimeFailures ->
                       DatabasePrerequisiteAutostartFailed databasePlan runtimeFailures
+              }
+    _ ->
+      pure prerequisiteReport
+
+applyTracingAutostart ::
+  (TracingPrerequisitePlan -> IO TracingAutostartResult) ->
+  SetupPrerequisiteReport ->
+  IO SetupPrerequisiteReport
+applyTracingAutostart attemptTracing prerequisiteReport =
+  case tracingPrerequisiteStatus prerequisiteReport of
+    Just (TracingPrerequisiteUnreachable tracingPlan) ->
+      case tracingAutostartPlan tracingPlan of
+        Nothing ->
+          pure prerequisiteReport
+        Just _ -> do
+          autostartResult <- attemptTracing tracingPlan
+          pure
+            prerequisiteReport
+              { tracingPrerequisiteStatus =
+                  Just $
+                    case autostartResult of
+                      TracingAutostartSkipped reason ->
+                        TracingPrerequisiteAutostartSkipped tracingPlan reason
+                      TracingAutostartSucceeded containerRuntime ->
+                        TracingPrerequisiteAutostarted tracingPlan containerRuntime
+                      TracingAutostartFailed runtimeFailures ->
+                        TracingPrerequisiteAutostartFailed tracingPlan runtimeFailures
               }
     _ ->
       pure prerequisiteReport

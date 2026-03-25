@@ -10,6 +10,7 @@ import qualified Core.Setup.Prerequisite as Prerequisite
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
 import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
 import qualified Core.Setup.PrerequisiteReport as PrerequisiteReport
+import qualified Core.Setup.TracingAutostart as TracingAutostart
 import qualified Data.Text as Text
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
@@ -88,6 +89,11 @@ withPathScripts scripts action =
         (unsetEnv "PATH")
         (setEnv "PATH")
         originalPath
+
+unusedTracingAutostart :: PrerequisitePlan.TracingPrerequisitePlan -> IO TracingAutostart.TracingAutostartResult
+unusedTracingAutostart _ =
+  expectationFailure "tracing autostart should not run"
+    >> pure (TracingAutostart.TracingAutostartSkipped "tracing autostart should not run")
 
 spec = do
   describe "checkSetupPrerequisitesWith" $ do
@@ -202,6 +208,11 @@ spec = do
                     },
                 PrerequisitePlan.databaseAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
               }
+          tracingPlan =
+            PrerequisitePlan.TracingPrerequisitePlan
+              { PrerequisitePlan.tracingCheckEndpoint = "http://collector:4318/v1/traces",
+                PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+              }
       PrerequisiteReport.renderSetupPrerequisiteReport
         (Left loadError)
         `shouldBe` ["Setup: Failed to load prerequisite config: SetupPrerequisiteConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"nope\")"]
@@ -229,10 +240,7 @@ spec = do
                 PrerequisiteReport.tracingPrerequisiteStatus =
                   Just
                     ( PrerequisiteReport.TracingPrerequisiteUnreachable
-                        PrerequisitePlan.TracingPrerequisitePlan
-                          { PrerequisitePlan.tracingCheckEndpoint = "http://collector:4318/v1/traces",
-                            PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
-                          }
+                        tracingPlan
                     )
               }
         )
@@ -299,6 +307,79 @@ spec = do
                       },
                 PrerequisiteReport.tracingPrerequisiteStatus =
                   Just
+                    ( PrerequisiteReport.TracingPrerequisiteAutostarted
+                        tracingPlan
+                        PrerequisitePlan.PodmanRuntime
+                    )
+              }
+        )
+        `shouldBe` [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+                     "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+                     "Setup: Started Jaeger container via podman."
+                   ]
+      PrerequisiteReport.renderSetupPrerequisiteReport
+        ( Right
+            PrerequisiteReport.SetupPrerequisiteReport
+              { PrerequisiteReport.databasePrerequisiteStatus =
+                  PrerequisiteReport.DatabasePrerequisiteReachable
+                    Prerequisite.TcpEndpoint
+                      { Prerequisite.tcpEndpointHost = "127.0.0.1",
+                        Prerequisite.tcpEndpointPort = 5432
+                      },
+                PrerequisiteReport.tracingPrerequisiteStatus =
+                  Just
+                    ( PrerequisiteReport.TracingPrerequisiteAutostartSkipped
+                        tracingPlan
+                        "unsupported host"
+                    )
+              }
+        )
+        `shouldBe` [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+                     "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+                     "Setup: Skipping tracing autostart: unsupported host."
+                   ]
+      PrerequisiteReport.renderSetupPrerequisiteReport
+        ( Right
+            PrerequisiteReport.SetupPrerequisiteReport
+              { PrerequisiteReport.databasePrerequisiteStatus =
+                  PrerequisiteReport.DatabasePrerequisiteReachable
+                    Prerequisite.TcpEndpoint
+                      { Prerequisite.tcpEndpointHost = "127.0.0.1",
+                        Prerequisite.tcpEndpointPort = 5432
+                      },
+                PrerequisiteReport.tracingPrerequisiteStatus =
+                  Just
+                    ( PrerequisiteReport.TracingPrerequisiteAutostartFailed
+                        tracingPlan
+                        [ DatabaseAutostart.ContainerRuntimeFailure
+                            { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.PodmanRuntime,
+                              DatabaseAutostart.containerRuntimeFailureMessage = "podman missing"
+                            },
+                          DatabaseAutostart.ContainerRuntimeFailure
+                            { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.DockerRuntime,
+                              DatabaseAutostart.containerRuntimeFailureMessage = "docker missing"
+                            }
+                        ]
+                    )
+              }
+        )
+        `shouldBe` [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+                     "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+                     "Setup: Tracing autostart via podman failed: podman missing.",
+                     "Setup: Tracing autostart via docker failed: docker missing.",
+                     "Setup: Continuing without tracing autostart."
+                   ]
+      PrerequisiteReport.renderSetupPrerequisiteReport
+        ( Right
+            PrerequisiteReport.SetupPrerequisiteReport
+              { PrerequisiteReport.databasePrerequisiteStatus =
+                  PrerequisiteReport.DatabasePrerequisiteReachable
+                    Prerequisite.TcpEndpoint
+                      { Prerequisite.tcpEndpointHost = "127.0.0.1",
+                        Prerequisite.tcpEndpointPort = 5432
+                      },
+                PrerequisiteReport.tracingPrerequisiteStatus =
+                  Just
                     ( PrerequisiteReport.TracingPrerequisiteInvalidEndpoint
                         "collector:4318/v1/traces"
                         (Prerequisite.InvalidTracingEndpointFormat "collector:4318/v1/traces")
@@ -320,6 +401,7 @@ spec = do
           (\_ -> expectationFailure "database check should not run" >> pure False)
           (\_ -> expectationFailure "tracing check should not run" >> pure (Right False))
           (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          unusedTracingAutostart
           outputHandle
         hClose outputHandle
         readFile outputPath
@@ -348,6 +430,7 @@ spec = do
                   }
               pure (DatabaseAutostart.DatabaseAutostartSucceeded PrerequisitePlan.PodmanRuntime)
           )
+          unusedTracingAutostart
           outputHandle
         hClose outputHandle
         readFile outputPath
@@ -370,6 +453,7 @@ spec = do
           (\_ -> pure False)
           (\_ -> pure (Right False))
           (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          unusedTracingAutostart
           outputHandle
         hClose outputHandle
         readFile outputPath
@@ -384,6 +468,7 @@ spec = do
           (\_ -> pure False)
           (\_ -> pure (Right False))
           (\_ _ -> pure (DatabaseAutostart.DatabaseAutostartSkipped "unsupported host"))
+          unusedTracingAutostart
           outputHandle
         hClose outputHandle
         readFile outputPath
@@ -407,6 +492,7 @@ spec = do
                       }
                   ]
           )
+          unusedTracingAutostart
           outputHandle
         hClose outputHandle
         readFile outputPath
@@ -414,6 +500,137 @@ spec = do
             [ "Setup: Database prerequisite unreachable at 127.0.0.1:5432. Configured autostart runtimes: podman, docker.",
               "Setup: Database autostart via podman failed: podman missing.",
               "Setup: Continuing without database autostart."
+            ]
+
+    it "writes successful tracing autostart outcomes to the supplied handle" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        PrerequisiteReport.reportSetupPrerequisitesWith
+          ( pure
+              ( Right
+                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
+                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
+                      PrerequisiteConfig.setupAutostartJaeger = True
+                    }
+              )
+          )
+          (\_ -> pure True)
+          (\_ -> pure (Right False))
+          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          ( \tracingPlan -> do
+              PrerequisitePlan.tracingCheckEndpoint tracingPlan
+                `shouldBe` "http://collector:4318/v1/traces"
+              pure (TracingAutostart.TracingAutostartSucceeded PrerequisitePlan.PodmanRuntime)
+          )
+          outputHandle
+        hClose outputHandle
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+              "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+              "Setup: Started Jaeger container via podman."
+            ]
+
+    it "writes failed tracing autostart outcomes to the supplied handle" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        PrerequisiteReport.reportSetupPrerequisitesWith
+          ( pure
+              ( Right
+                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
+                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
+                      PrerequisiteConfig.setupAutostartJaeger = True
+                    }
+              )
+          )
+          (\_ -> pure True)
+          (\_ -> pure (Right False))
+          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          ( \_ ->
+              pure $
+                TracingAutostart.TracingAutostartFailed
+                  [ DatabaseAutostart.ContainerRuntimeFailure
+                      { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.PodmanRuntime,
+                        DatabaseAutostart.containerRuntimeFailureMessage = "podman missing"
+                      }
+                  ]
+          )
+          outputHandle
+        hClose outputHandle
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+              "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+              "Setup: Tracing autostart via podman failed: podman missing.",
+              "Setup: Continuing without tracing autostart."
+            ]
+
+    it "writes skipped tracing autostart outcomes to the supplied handle" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        PrerequisiteReport.reportSetupPrerequisitesWith
+          ( pure
+              ( Right
+                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
+                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
+                      PrerequisiteConfig.setupAutostartJaeger = True
+                    }
+              )
+          )
+          (\_ -> pure True)
+          (\_ -> pure (Right False))
+          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          (\_ -> pure (TracingAutostart.TracingAutostartSkipped "unsupported host"))
+          outputHandle
+        hClose outputHandle
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+              "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces. Configured autostart runtimes: podman, docker.",
+              "Setup: Skipping tracing autostart: unsupported host."
+            ]
+
+    it "leaves unreachable tracing reports unchanged when tracing autostart is disabled in setup config" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        PrerequisiteReport.reportSetupPrerequisitesWith
+          ( pure
+              ( Right
+                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
+                    { PrerequisiteConfig.setupTracingEndpoint = Just "http://collector:4318/v1/traces",
+                      PrerequisiteConfig.setupAutostartJaeger = False
+                    }
+              )
+          )
+          (\_ -> pure True)
+          (\_ -> pure (Right False))
+          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          unusedTracingAutostart
+          outputHandle
+        hClose outputHandle
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+              "Setup: Tracing prerequisite unreachable at http://collector:4318/v1/traces."
+            ]
+
+    it "leaves tracing reports unchanged when tracing is reachable or invalid" $
+      withSystemTempFile "setup-prerequisite-report.txt" $ \outputPath outputHandle -> do
+        PrerequisiteReport.reportSetupPrerequisitesWith
+          ( pure
+              ( Right
+                  PrerequisiteConfig.defaultSetupPrerequisiteConfig
+                    { PrerequisiteConfig.setupTracingEndpoint = Just "collector:4318/v1/traces",
+                      PrerequisiteConfig.setupAutostartJaeger = True
+                    }
+              )
+          )
+          (\_ -> pure True)
+          (\_ -> pure (Left (Prerequisite.InvalidTracingEndpointFormat "collector:4318/v1/traces")))
+          (\_ _ -> expectationFailure "database autostart should not run" >> pure (DatabaseAutostart.DatabaseAutostartSkipped "database autostart should not run"))
+          unusedTracingAutostart
+          outputHandle
+        hClose outputHandle
+        readFile outputPath
+          `shouldReturn` unlines
+            [ "Setup: Database prerequisite reachable at 127.0.0.1:5432.",
+              "Setup: Tracing prerequisite endpoint collector:4318/v1/traces is invalid: InvalidTracingEndpointFormat \"collector:4318/v1/traces\"."
             ]
 
   describe "checkSetupPrerequisites and reportSetupPrerequisites" $ do
@@ -508,6 +725,44 @@ spec = do
                     "Setup: Started local PostgreSQL container via podman."
                   ]
 
+    it "uses the real tracing autostart runner when the default report finds an unreachable local tracing endpoint" $
+      withSystemTempDirectory "setup-prerequisite-tracing-autostart" $ \tempDirectory ->
+        withListeningTcpEndpoint $ \databaseEndpoint ->
+          withUnusedTcpEndpoint $ \tracingEndpoint ->
+            withPathScripts
+              [("podman", "#!/bin/sh\nexit 0\n")]
+              $ do
+                writeFile
+                  (tempDirectory <> "/.env")
+                  ( unlines
+                      [ "DATABASE_HOST=" <> Text.unpack (Prerequisite.tcpEndpointHost databaseEndpoint),
+                        "DATABASE_PORT=" <> show (Prerequisite.tcpEndpointPort databaseEndpoint),
+                        "OTLP_TRACING_ENDPOINT=http://"
+                          <> Text.unpack (Prerequisite.tcpEndpointHost tracingEndpoint)
+                          <> ":"
+                          <> show (Prerequisite.tcpEndpointPort tracingEndpoint)
+                          <> "/v1/traces",
+                        "SETUP_AUTOSTART_JAEGER=true"
+                      ]
+                  )
+                output <-
+                  withCurrentDirectory tempDirectory $
+                    captureStdout PrerequisiteReport.reportSetupPrerequisites
+                output
+                  `shouldBe` unlines
+                    [ "Setup: Database prerequisite reachable at "
+                        <> Text.unpack (Prerequisite.tcpEndpointHost databaseEndpoint)
+                        <> ":"
+                        <> show (Prerequisite.tcpEndpointPort databaseEndpoint)
+                        <> ".",
+                      "Setup: Tracing prerequisite unreachable at http://"
+                        <> Text.unpack (Prerequisite.tcpEndpointHost tracingEndpoint)
+                        <> ":"
+                        <> show (Prerequisite.tcpEndpointPort tracingEndpoint)
+                        <> "/v1/traces. Configured autostart runtimes: podman, docker.",
+                      "Setup: Started Jaeger container via podman."
+                    ]
+
   describe "prerequisite report records" $
     it "keep selectors, equality, and rendering deterministic" $ do
       let databaseReachableStatus =
@@ -575,6 +830,34 @@ spec = do
                 { PrerequisitePlan.tracingCheckEndpoint = "http://127.0.0.1:4318/v1/traces",
                   PrerequisitePlan.tracingAutostartPlan = Nothing
                 }
+          tracingAutostartedStatus =
+            PrerequisiteReport.TracingPrerequisiteAutostarted
+              ( PrerequisitePlan.TracingPrerequisitePlan
+                  { PrerequisitePlan.tracingCheckEndpoint = "http://127.0.0.1:4318/v1/traces",
+                    PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+                  }
+              )
+              PrerequisitePlan.PodmanRuntime
+          tracingAutostartSkippedStatus =
+            PrerequisiteReport.TracingPrerequisiteAutostartSkipped
+              ( PrerequisitePlan.TracingPrerequisitePlan
+                  { PrerequisitePlan.tracingCheckEndpoint = "http://127.0.0.1:4318/v1/traces",
+                    PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+                  }
+              )
+              "unsupported host"
+          tracingAutostartFailedStatus =
+            PrerequisiteReport.TracingPrerequisiteAutostartFailed
+              ( PrerequisitePlan.TracingPrerequisitePlan
+                  { PrerequisitePlan.tracingCheckEndpoint = "http://127.0.0.1:4318/v1/traces",
+                    PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
+                  }
+              )
+              [ DatabaseAutostart.ContainerRuntimeFailure
+                  { DatabaseAutostart.failedContainerRuntime = PrerequisitePlan.PodmanRuntime,
+                    DatabaseAutostart.containerRuntimeFailureMessage = "podman missing"
+                  }
+              ]
           tracingStatus =
             PrerequisiteReport.TracingPrerequisiteInvalidEndpoint
               "collector:4318/v1/traces"
@@ -639,6 +922,12 @@ spec = do
         `shouldBe` "TracingPrerequisiteUnreachable (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Nothing})"
       showsPrec 11 tracingUnreachableStatus ""
         `shouldBe` "(TracingPrerequisiteUnreachable (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Nothing}))"
+      show tracingAutostartedStatus
+        `shouldBe` "TracingPrerequisiteAutostarted (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}) PodmanRuntime"
+      show tracingAutostartSkippedStatus
+        `shouldBe` "TracingPrerequisiteAutostartSkipped (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}) \"unsupported host\""
+      show tracingAutostartFailedStatus
+        `shouldBe` "TracingPrerequisiteAutostartFailed (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}) [ContainerRuntimeFailure {failedContainerRuntime = PodmanRuntime, containerRuntimeFailureMessage = \"podman missing\"}]"
       show [tracingUnreachableStatus]
         `shouldBe` "[TracingPrerequisiteUnreachable (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318/v1/traces\", tracingAutostartPlan = Nothing})]"
       showList [tracingUnreachableStatus] ""
