@@ -24,7 +24,7 @@ spec =
               ]
               `shouldReturn` Right ()
 
-    it "navigates the same-origin link through the tiny runtime" $
+    it "fetches same-origin HTML through the tiny runtime without a hard document navigation" $
       withNodeBrowserRunner $ \browserConfig ->
         withE2EAppConfig $ \appConfig ->
           HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
