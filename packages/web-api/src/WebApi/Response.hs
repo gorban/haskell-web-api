@@ -11,10 +11,10 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
+import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseEffect, DatabaseError (..), defaultDatabaseEffect)
 import WebApi.Page (renderPageFromRouteData)
-import WebApi.PageShell (buildAppPageShell)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),

@@ -16,6 +16,7 @@ import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import System.IO (Handle, stderr)
+import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
@@ -24,7 +25,6 @@ import WebApi.Config
     loadAppEnvironmentConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
-import WebApi.PageShell (buildAppPageShell)
 import WebApi.Postgres (buildPostgresDatabaseEffect)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route

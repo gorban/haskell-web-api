@@ -65,6 +65,8 @@ library
   exposed-modules:
     WebApi
     WebApi.App
+    WebApi.App.Assets
+    WebApi.App.Shell
     WebApi.Config
     WebApi.Database
     WebApi.DatabaseSetup
