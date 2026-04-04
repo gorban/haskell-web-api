@@ -1456,12 +1456,17 @@ spec = do
           `shouldReturn` Left (HomePageDataError "default runner failed")
 
     it "prefers a runtime that is already running the named postgres container in the containerized psql wrapper" $ do
+      containerizedPsqlScriptContents `shouldContain'` "database_endpoint_is_reachable()"
+      containerizedPsqlScriptContents `shouldContain'` "host_psql_path=\"${WEB_API_REAL_PSQL_PATH:-}\""
+      containerizedPsqlScriptContents `shouldContain'` "if [ -n \"$host_psql_path\" ] && [ -x \"$host_psql_path\" ] && database_endpoint_is_reachable; then"
       containerizedPsqlScriptContents `shouldContain'` "runtime_with_running_container()"
       containerizedPsqlScriptContents `shouldContain'` "for candidate in docker podman; do"
       containerizedPsqlScriptContents `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
       containerizedPsqlScriptContents `shouldContain'` "exec \"$runtime\" exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""
 
     it "prefers a runtime that is already running the named postgres container before trying to start or create one" $ do
+      ensureDefaultPostgresAvailableScript `shouldContain'` "database_endpoint_is_reachable()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "if database_endpoint_is_reachable; then"
       ensureDefaultPostgresAvailableScript `shouldContain'` "runtime_with_running_container()"
       ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
       ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"

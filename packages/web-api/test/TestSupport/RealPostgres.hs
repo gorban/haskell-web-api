@@ -16,6 +16,7 @@ where
 import Control.Exception (finally)
 import Data.Maybe (fromMaybe)
 import qualified Data.Text as Text
+import System.Directory (findExecutable)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
@@ -26,6 +27,16 @@ defaultPostgresContainerImage = "docker.io/library/postgres:17"
 
 supportedPostgresMajorVersions :: [Int]
 supportedPostgresMajorVersions = [17]
+
+realHostPsqlPathVariable :: String
+realHostPsqlPathVariable = "WEB_API_REAL_PSQL_PATH"
+
+databaseEndpointReachabilityScriptLines :: [String]
+databaseEndpointReachabilityScriptLines =
+  [ "database_endpoint_is_reachable() {",
+    "  bash -c '</dev/tcp/127.0.0.1/5432' >/dev/null 2>&1",
+    "}"
+  ]
 
 containerRuntimeSelectionScriptLines :: [String]
 containerRuntimeSelectionScriptLines =
@@ -113,6 +124,12 @@ containerizedPsqlScriptContents =
     [ "#!/usr/bin/env bash",
       "set -euo pipefail"
     ]
+      <> databaseEndpointReachabilityScriptLines
+      <> [ "host_psql_path=\"${" <> realHostPsqlPathVariable <> ":-}\"",
+           "if [ -n \"$host_psql_path\" ] && [ -x \"$host_psql_path\" ] && database_endpoint_is_reachable; then",
+           "  exec \"$host_psql_path\" \"$@\"",
+           "fi"
+         ]
       <> containerRuntimeSelectionScriptLines
       <> ["exec \"$runtime\" exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""]
 
@@ -120,15 +137,22 @@ withContainerizedPsqlOnPath :: IO a -> IO a
 withContainerizedPsqlOnPath action =
   withSystemTempDirectory "containerized-psql" $ \binDirectory -> do
     originalPath <- fromMaybe "" <$> lookupEnv "PATH"
+    realHostPsqlPath <- findExecutable "psql"
     let scriptPath = binDirectory <> "/psql"
     writeFile scriptPath containerizedPsqlScriptContents
     callProcess "chmod" ["+x", scriptPath]
-    withTemporaryEnvironment "PATH" (Just (binDirectory <> ":" <> originalPath)) action
+    withTemporaryEnvironment realHostPsqlPathVariable realHostPsqlPath $
+      withTemporaryEnvironment "PATH" (Just (binDirectory <> ":" <> originalPath)) action
 
 ensureDefaultPostgresAvailableScript :: String
 ensureDefaultPostgresAvailableScript =
   unlines $
-    containerRuntimeSelectionScriptLines
+    databaseEndpointReachabilityScriptLines
+      <> [ "if database_endpoint_is_reachable; then",
+           "  exit 0",
+           "fi"
+         ]
+      <> containerRuntimeSelectionScriptLines
       <> [ "container_is_running() {",
            "  [ \"$($runtime inspect --format '{{.State.Running}}' web-api-postgres 2>/dev/null || true)\" = \"true\" ]",
            "}",
