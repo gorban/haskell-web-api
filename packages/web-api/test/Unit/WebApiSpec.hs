@@ -24,7 +24,7 @@ import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
-import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
+import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
@@ -1454,6 +1454,18 @@ spec = do
       $ \_ ->
         loadHomePageData (buildPostgresDatabaseEffect postgresTestConfig) defaultRequestContext
           `shouldReturn` Left (HomePageDataError "default runner failed")
+
+    it "prefers a runtime that is already running the named postgres container in the containerized psql wrapper" $ do
+      containerizedPsqlScriptContents `shouldContain'` "runtime_with_running_container()"
+      containerizedPsqlScriptContents `shouldContain'` "for candidate in docker podman; do"
+      containerizedPsqlScriptContents `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
+      containerizedPsqlScriptContents `shouldContain'` "exec \"$runtime\" exec -e PGPASSWORD=\"${PGPASSWORD:-}\" web-api-postgres psql \"$@\""
+
+    it "prefers a runtime that is already running the named postgres container before trying to start or create one" $ do
+      ensureDefaultPostgresAvailableScript `shouldContain'` "runtime_with_running_container()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "\"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0"
 
     it "loads seeded page data through the concrete postgres adapter against real PostgreSQL" $
       withContainerizedPsqlOnPath $ do
