@@ -1,3 +1,9 @@
+-- |
+-- Module: TestCore.Browser
+--
+-- Haskell owns the browser-spec DSL and request/response protocol; browser automation itself lives behind an
+-- external runner process. The intended long-term Playwright integration point is that runner boundary, using
+-- the official Node client behind it rather than reimplementing Playwright's remote protocol in Haskell.
 module TestCore.Browser
   ( BrowserAction (..),
     BrowserConfig (..),
@@ -11,10 +17,12 @@ module TestCore.Browser
 where
 
 import Control.Exception (IOException, displayException, try)
+import Core.Config qualified as CoreConfig
 import Core.System.Temp (withTempFile)
 import Data.Char (toLower)
 import Data.List (stripPrefix)
 import Data.Maybe (fromMaybe)
+import Data.Text qualified as Text
 import System.Directory (doesFileExist)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
@@ -72,6 +80,11 @@ parseBrowserConfig environment = do
   pure
     defaultBrowserConfig
       { browserRunnerCommand = fromMaybe (browserRunnerCommand defaultBrowserConfig) (lookup "TEST_CORE_BROWSER_RUNNER" environment),
+        browserRunnerArguments =
+          maybe
+            (browserRunnerArguments defaultBrowserConfig)
+            parseRunnerArguments
+            (lookup "TEST_CORE_BROWSER_RUNNER_ARGUMENTS" environment),
         browserHeadless = browserHeadless',
         browserKeepOpenOnFailure = browserKeepOpenOnFailure'
       }
@@ -138,6 +151,12 @@ renderBrowserAction browserAction =
     NavigateHistoryBack -> "action\thistory-back"
     NavigateHistoryForward -> "action\thistory-forward"
     AssertTextEquals selector expectedText -> "action\tassert-text-equals\t" ++ selector ++ "\t" ++ expectedText
+
+parseRunnerArguments :: String -> [String]
+parseRunnerArguments =
+  map Text.unpack
+    . CoreConfig.parseDelimitedTextsUnsafe (Text.pack ",")
+    . Text.pack
 
 parseBrowserResponse :: String -> Either BrowserRunnerError ()
 parseBrowserResponse responseBody =

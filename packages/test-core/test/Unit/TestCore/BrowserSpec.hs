@@ -19,12 +19,14 @@ spec = do
     it "applies environment overrides for runner and browser behavior" $
       parseBrowserConfig
         [ ("TEST_CORE_BROWSER_RUNNER", "node"),
+          ("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", "playwright-runner.js, --browser, chromium"),
           ("TEST_CORE_BROWSER_HEADLESS", "false"),
           ("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", "yes")
         ]
         `shouldBe` Right
           defaultBrowserConfig
             { browserRunnerCommand = "node",
+              browserRunnerArguments = ["playwright-runner.js", "--browser", "chromium"],
               browserHeadless = False,
               browserKeepOpenOnFailure = True
             }
@@ -47,6 +49,13 @@ spec = do
             { browserKeepOpenOnFailure = False
             }
 
+    it "treats blank runner arguments as an empty list" $
+      parseBrowserConfig [("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", " , ")]
+        `shouldBe` Right
+          defaultBrowserConfig
+            { browserRunnerArguments = []
+            }
+
     it "rejects invalid headless values explicitly" $
       parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "maybe")]
         `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_HEADLESS: maybe"
@@ -59,6 +68,7 @@ spec = do
     $ it "reads the same environment overrides through IO"
     $ withEnvironment
       [ ("TEST_CORE_BROWSER_RUNNER", Just "node"),
+        ("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", Just "playwright-runner.js, --headed"),
         ("TEST_CORE_BROWSER_HEADLESS", Just "false"),
         ("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", Just "true")
       ]
@@ -67,6 +77,7 @@ spec = do
         `shouldReturn` Right
           defaultBrowserConfig
             { browserRunnerCommand = "node",
+              browserRunnerArguments = ["playwright-runner.js", "--headed"],
               browserHeadless = False,
               browserKeepOpenOnFailure = True
             }

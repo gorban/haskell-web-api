@@ -4,7 +4,7 @@
 
 * Aligned changelog headings with the repository-wide version-first format used for the upcoming `0.1.1.0` work.
 * Added `{-# E2E_SPEC #-}` preprocessing and `TestCore.E2EPrelude` so browser-facing specs can grow from the same Haskell test flow.
-* Added a first browser-runner boundary in `TestCore.Browser`, with environment-driven headless/keep-open options and a script protocol that can be faked in tests now and backed by Playwright later.
+* Added a first browser-runner boundary in `TestCore.Browser`, with environment-driven runner/headless/keep-open options and a script protocol that keeps Haskell-authored specs on one side and a future official Node/Playwright runner on the other.
 
 ## 0.1.0.1
 
