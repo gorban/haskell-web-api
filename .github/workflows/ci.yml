@@ -32,7 +32,9 @@ jobs:
       WEB_API_MIGRATION_DATABASE_NAME: web_api_dev
       WEB_API_MIGRATION_DATABASE_USER: web_api
       WEB_API_MIGRATION_DATABASE_PASSWORD: web_api
+      OTLP_TRACING_ENDPOINT: http://127.0.0.1:4318/v1/traces
       SETUP_AUTOSTART_DATABASE: false
+      SETUP_AUTOSTART_JAEGER: false
     services:
       postgres:
         image: postgres:17
@@ -47,6 +49,11 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
+      jaeger:
+        image: jaegertracing/all-in-one
+        ports:
+          - 4318:4318
+          - 16686:16686
 
     steps:
       - name: Checkout
@@ -61,12 +68,36 @@ jobs:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
-      - name: Install system tools
+      - name: Setup Node
         if: steps.setup_haskell.outcome == 'success'
+        id: setup_node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install system tools
+        if: steps.setup_node.outcome == 'success'
         id: dos2unix
         run: |
           sudo apt-get update
           sudo apt-get install -y dos2unix postgresql-client
+
+      - name: Wait for prerequisite services
+        if: steps.dos2unix.outcome == 'success'
+        id: prerequisite_services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          until pg_isready --host="$DATABASE_HOST" --port="$DATABASE_PORT" --username="$WEB_API_MIGRATION_DATABASE_USER" --dbname="$WEB_API_MIGRATION_DATABASE_NAME"; do
+            sleep 1
+          done
+
+          until curl --fail --silent --show-error http://127.0.0.1:16686/ >/dev/null; do
+            sleep 1
+          done
+
+          node --version
 
       - name: Restore Cabal cache
         if: steps.dos2unix.outcome == 'success'
@@ -172,7 +203,7 @@ jobs:
         run: |
           .github/scripts/formatting-checks.sh
 
-      - name: Run tests (skip Unit)
+      - name: Run integration and E2E tests
         if: steps.coverage.outcome == 'success'
         id: run_tests_skip_unit
         run: |
