@@ -48,8 +48,28 @@ packages/
   - test-core: A library with shared test utilities and custom preprocessors.
   - hspec-expectations-match: A fork of the third-party package `hspec-expectations-match` with local
     changes to get it to work with current versions of Template Haskell.
-    - No public GitHub repo, so not sure if we can get these changes upstreamed to Hackage:\
-      <https://hackage.haskell.org/package/hspec-expectations-match>
+     - No public GitHub repo, so not sure if we can get these changes upstreamed to Hackage:\
+       <https://hackage.haskell.org/package/hspec-expectations-match>
+
+## Template Customization Map
+
+If you copy `packages/web-api` as the starting point for a new app, these are the main app-owned seams to
+edit first:
+
+| What you want to change | Edit here |
+| --- | --- |
+| Route parsing and route path rendering | `packages/web-api/src/WebApi/Route.hs` |
+| Page models and rendered page body HTML | `packages/web-api/src/WebApi/Page.hs` |
+| Shared layout, branding, and primary navigation shell | `packages/web-api/src/WebApi/App/Shell.hs` |
+| Client-only enhancement hook selection | `packages/web-api/src/WebApi/App/Enhancements.hs` |
+| Asset helper wiring for bundled app assets | `packages/web-api/src/WebApi/App/Assets.hs` |
+| Tiny navigation runtime | `packages/web-api/public/navigation.js` |
+| App stylesheet | `packages/web-api/public/styles/app.css` |
+| Font-face declarations and app-owned fonts | `packages/web-api/public/fonts/font-faces.css` and sibling files in `packages/web-api/public/fonts/` |
+| Other shipped browser resources such as icons | `packages/web-api/public/resources/` |
+
+To serve those bundled browser assets, point a static asset root at `packages/web-api/public` (or `public`
+when running from the package directory) and mount it at the URL prefix you want, such as `/assets`.
 
 ### Build Status
 
@@ -201,7 +221,7 @@ LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email
 
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
-STATIC_ASSET_ROOT_0_DIRECTORY=public/assets
+STATIC_ASSET_ROOT_0_DIRECTORY=public
 STATIC_ASSET_ROOT_1_URL_PREFIX=/uploads
 STATIC_ASSET_ROOT_1_DIRECTORY=/var/lib/web-api/uploads
 STATIC_CACHE_CONTROL_SECONDS=3600

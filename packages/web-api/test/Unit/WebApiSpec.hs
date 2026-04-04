@@ -27,6 +27,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
+import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
@@ -3877,6 +3878,12 @@ spec = do
           }
 
   describe "page shell integration" $ do
+    it "keeps client-only enhancement hooks in the app seam instead of page rendering" $ do
+      pageEnhancementHooks HomeRoute `shouldBe` []
+      pageEnhancementHooks SecondRoute `shouldBe` ["second-page"]
+      pageEnhancementHooks StatusApiRoute `shouldBe` []
+      pageEnhancementHooks NotFoundRoute `shouldBe` []
+
     it "marks the active navigation item for each routed page" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute
       secondShell <- renderedShell defaultAppConfig SecondRoute

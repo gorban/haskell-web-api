@@ -19,6 +19,7 @@ where
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
+import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.Config (AppConfig (..))
 import WebApi.Database
   ( DatabaseEffect,
@@ -90,7 +91,7 @@ renderPageFromRouteData config routeRequest routeData =
           HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
           HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
           HarchWeb.pageBody = renderPageBody pageModel,
-          HarchWeb.pageBootstrapHooks = bootstrapHooks pageModel
+          HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
         }
 
 routeTitle :: AppRoute -> Text
@@ -248,10 +249,3 @@ renderCallToAction callToAction =
       callToActionLabel callToAction,
       "</a></p>"
     ]
-
-bootstrapHooks :: AppPageModel -> [Text]
-bootstrapHooks pageModel =
-  case pageModel of
-    HomePage _ -> []
-    SecondPage _ -> ["second-page"]
-    NotFoundPage _ -> []
