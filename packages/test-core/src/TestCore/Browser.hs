@@ -7,6 +7,7 @@
 module TestCore.Browser
   ( BrowserAction (..),
     BrowserConfig (..),
+    NavigationMetric (..),
     BrowserRunnerError (..),
     defaultBrowserConfig,
     loadBrowserConfig,
@@ -37,12 +38,18 @@ data BrowserConfig = BrowserConfig
   }
   deriving (Eq, Show)
 
+data NavigationMetric
+  = EnhancedFetchCount
+  | HardNavigationCount
+  deriving (Eq, Show)
+
 data BrowserAction
   = VisitUrl String
   | ClickLinkWithText String
   | NavigateHistoryBack
   | NavigateHistoryForward
   | AssertTextEquals String String
+  | AssertNavigationMetricEquals NavigationMetric Int
   deriving (Eq, Show)
 
 data BrowserRunnerError
@@ -151,6 +158,17 @@ renderBrowserAction browserAction =
     NavigateHistoryBack -> "action\thistory-back"
     NavigateHistoryForward -> "action\thistory-forward"
     AssertTextEquals selector expectedText -> "action\tassert-text-equals\t" ++ selector ++ "\t" ++ expectedText
+    AssertNavigationMetricEquals navigationMetric expectedCount ->
+      "action\tassert-navigation-metric-equals\t"
+        ++ renderNavigationMetric navigationMetric
+        ++ "\t"
+        ++ show expectedCount
+
+renderNavigationMetric :: NavigationMetric -> String
+renderNavigationMetric navigationMetric =
+  case navigationMetric of
+    EnhancedFetchCount -> "enhanced-fetch-count"
+    HardNavigationCount -> "hard-navigation-count"
 
 parseRunnerArguments :: String -> [String]
 parseRunnerArguments =

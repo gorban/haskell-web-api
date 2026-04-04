@@ -93,7 +93,9 @@ spec = do
           ClickLinkWithText "Browse the second page",
           NavigateHistoryBack,
           NavigateHistoryForward,
-          AssertTextEquals "[data-page-title=\"true\"]" "Second"
+          AssertTextEquals "[data-page-title=\"true\"]" "Second",
+          AssertNavigationMetricEquals EnhancedFetchCount 1,
+          AssertNavigationMetricEquals HardNavigationCount 0
         ]
         `shouldBe` unlines
           [ "headless\tfalse",
@@ -102,7 +104,9 @@ spec = do
             "action\tclick-link-with-text\tBrowse the second page",
             "action\thistory-back",
             "action\thistory-forward",
-            "action\tassert-text-equals\t[data-page-title=\"true\"]\tSecond"
+            "action\tassert-text-equals\t[data-page-title=\"true\"]\tSecond",
+            "action\tassert-navigation-metric-equals\tenhanced-fetch-count\t1",
+            "action\tassert-navigation-metric-equals\thard-navigation-count\t0"
           ]
 
     it "covers selectors and derived instances for the public browser types" $ do
@@ -113,14 +117,17 @@ spec = do
                 browserHeadless = False,
                 browserKeepOpenOnFailure = True
               }
-          browserAction = NavigateHistoryBack
+          navigationMetric = HardNavigationCount
+          browserAction = AssertNavigationMetricEquals navigationMetric 0
           browserError = BrowserRunnerProcessError (ExitFailure 3) "stdout" "stderr"
       browserRunnerCommand browserConfig `shouldBe` "node"
       browserRunnerArguments browserConfig `shouldBe` ["runner.js"]
       browserHeadless browserConfig `shouldBe` False
       browserKeepOpenOnFailure browserConfig `shouldBe` True
-      browserAction `shouldBe` NavigateHistoryBack
-      show browserAction `shouldBe` "NavigateHistoryBack"
+      navigationMetric `shouldBe` HardNavigationCount
+      show navigationMetric `shouldBe` "HardNavigationCount"
+      browserAction `shouldBe` AssertNavigationMetricEquals HardNavigationCount 0
+      show browserAction `shouldBe` "AssertNavigationMetricEquals HardNavigationCount 0"
       show browserConfig `shouldBe` "BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [\"runner.js\"], browserHeadless = False, browserKeepOpenOnFailure = True}"
       show browserError `shouldBe` "BrowserRunnerProcessError (ExitFailure 3) \"stdout\" \"stderr\""
 
@@ -129,6 +136,7 @@ spec = do
           backAction = NavigateHistoryBack
           forwardAction = NavigateHistoryForward
           assertAction = AssertTextEquals "[data-page-title=\"true\"]" "Second"
+          metricAction = AssertNavigationMetricEquals EnhancedFetchCount 1
           launchError = BrowserRunnerLaunchError "missing-browser-runner"
           protocolError = BrowserRunnerProtocolError "unexpected response"
           assertionError = BrowserAssertionFailed "Expected the second page to load"
@@ -137,6 +145,7 @@ spec = do
       backAction `shouldBe` NavigateHistoryBack
       forwardAction `shouldBe` NavigateHistoryForward
       assertAction `shouldBe` AssertTextEquals "[data-page-title=\"true\"]" "Second"
+      metricAction `shouldBe` AssertNavigationMetricEquals EnhancedFetchCount 1
       launchError `shouldBe` BrowserRunnerLaunchError "missing-browser-runner"
       protocolError `shouldBe` BrowserRunnerProtocolError "unexpected response"
       assertionError `shouldBe` BrowserAssertionFailed "Expected the second page to load"
@@ -144,6 +153,7 @@ spec = do
       show backAction `shouldBe` "NavigateHistoryBack"
       show forwardAction `shouldBe` "NavigateHistoryForward"
       show assertAction `shouldBe` "AssertTextEquals \"[data-page-title=\\\"true\\\"]\" \"Second\""
+      show metricAction `shouldBe` "AssertNavigationMetricEquals EnhancedFetchCount 1"
       show launchError `shouldBe` "BrowserRunnerLaunchError \"missing-browser-runner\""
       show protocolError `shouldBe` "BrowserRunnerProtocolError \"unexpected response\""
       show assertionError `shouldBe` "BrowserAssertionFailed \"Expected the second page to load\""
@@ -157,16 +167,21 @@ spec = do
           clickAction = ClickLinkWithText "Browse the second page"
           backAction = NavigateHistoryBack
           forwardAction = NavigateHistoryForward
+          metricAction = AssertNavigationMetricEquals EnhancedFetchCount 1
           launchError = BrowserRunnerLaunchError "missing-browser-runner"
           protocolError = BrowserRunnerProtocolError "unexpected response"
       defaultBrowserConfig /= otherBrowserConfig `shouldBe` True
+      EnhancedFetchCount /= HardNavigationCount `shouldBe` True
       visitAction /= clickAction `shouldBe` True
       backAction /= forwardAction `shouldBe` True
+      metricAction /= backAction `shouldBe` True
       launchError /= protocolError `shouldBe` True
       show [defaultBrowserConfig, otherBrowserConfig]
         `shouldBe` "[BrowserConfig {browserRunnerCommand = \"playwright-e2e-runner\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False},BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False}]"
-      show [visitAction, clickAction, backAction, forwardAction]
-        `shouldBe` "[VisitUrl \"http://localhost:8080/\",ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward]"
+      show [EnhancedFetchCount, HardNavigationCount]
+        `shouldBe` "[EnhancedFetchCount,HardNavigationCount]"
+      show [visitAction, clickAction, backAction, forwardAction, metricAction]
+        `shouldBe` "[VisitUrl \"http://localhost:8080/\",ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward,AssertNavigationMetricEquals EnhancedFetchCount 1]"
       show [launchError, protocolError]
         `shouldBe` "[BrowserRunnerLaunchError \"missing-browser-runner\",BrowserRunnerProtocolError \"unexpected response\"]"
 
