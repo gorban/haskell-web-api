@@ -307,7 +307,7 @@ The current committed support target for those real-database flows is PostgreSQL
 when `SETUP_AUTOSTART_DATABASE=true`, `DATABASE_HOST` is `127.0.0.1` or `0.0.0.0`, and the configured
 database is unreachable. It tries Podman first, then Docker, uses the configured `DATABASE_HOST`,
 `DATABASE_PORT`, and `DATABASE_NAME` values for reachability/binding, and bootstraps the local container
-with the fixed PostgreSQL superuser `web_api` / `web_api`.
+with the fixed PostgreSQL migration superuser `web_api_owner` / `web_api_owner`.
 
 If you prefer to start PostgreSQL yourself, want to use a remote/shared database, or need a different
 bootstrap shape, disable that behavior with `SETUP_AUTOSTART_DATABASE=false` and start a matching local
@@ -315,8 +315,8 @@ container manually instead. One straightforward option is:
 
 ```bash
 docker run --name web-api-postgres \
-  -e POSTGRES_USER=web_api \
-  -e POSTGRES_PASSWORD=web_api \
+  -e POSTGRES_USER=web_api_owner \
+  -e POSTGRES_PASSWORD=web_api_owner \
   -e POSTGRES_DB=web_api_dev \
   -p 127.0.0.1:5432:5432 \
   -d docker.io/library/postgres:17

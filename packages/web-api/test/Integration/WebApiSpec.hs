@@ -47,8 +47,8 @@ spec = do
 
         supportedVersionResult <-
           readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT current_setting('server_version_num')::integer / 10000;"])
-                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_owner", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT current_setting('server_version_num')::integer / 10000;"])
+                { env = Just (("PGPASSWORD", "web_api_owner") : inheritedEnvironment)
                 }
             )
             ""

@@ -1466,7 +1466,10 @@ spec = do
 
     it "prefers a runtime that is already running the named postgres container before trying to start or create one" $ do
       ensureDefaultPostgresAvailableScript `shouldContain'` "database_endpoint_is_reachable()"
-      ensureDefaultPostgresAvailableScript `shouldContain'` "if database_endpoint_is_reachable; then"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "host_psql_is_available()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "owner_is_superuser_via_host_psql()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "ensure_owner_superuser_via_host_psql()"
+      ensureDefaultPostgresAvailableScript `shouldContain'` "if database_endpoint_is_reachable && host_psql_is_available; then"
       ensureDefaultPostgresAvailableScript `shouldContain'` "runtime_with_running_container()"
       ensureDefaultPostgresAvailableScript `shouldContain'` "for candidate in docker podman; do"
       ensureDefaultPostgresAvailableScript `shouldContain'` "elif runtime=$(runtime_with_existing_container); then"

@@ -38,6 +38,21 @@ databaseEndpointReachabilityScriptLines =
     "}"
   ]
 
+hostPsqlSelectionScriptLines :: [String]
+hostPsqlSelectionScriptLines =
+  [ "host_psql_path=\"${" <> realHostPsqlPathVariable <> ":-}\"",
+    "host_psql_is_available() {",
+    "  [ -n \"$host_psql_path\" ] && [ -x \"$host_psql_path\" ]",
+    "}",
+    "owner_is_superuser_via_host_psql() {",
+    "  [ \"$(PGPASSWORD=web_api_owner \"$host_psql_path\" --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner --no-password --tuples-only --no-align --quiet --set ON_ERROR_STOP=1 --command 'SELECT CASE WHEN rolsuper THEN $$t$$ ELSE $$f$$ END FROM pg_catalog.pg_roles WHERE rolname = current_user;' 2>/dev/null || true)\" = \"t\" ]",
+    "}",
+    "ensure_owner_superuser_via_host_psql() {",
+    "  PGPASSWORD=web_api \"$host_psql_path\" --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api --no-password --set ON_ERROR_STOP=1 --command \"ALTER ROLE web_api_owner WITH LOGIN SUPERUSER PASSWORD 'web_api_owner';\" >/dev/null 2>&1 || \\",
+    "    PGPASSWORD=web_api \"$host_psql_path\" --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api --no-password --set ON_ERROR_STOP=1 --command \"CREATE ROLE web_api_owner WITH LOGIN SUPERUSER PASSWORD 'web_api_owner';\" >/dev/null 2>&1",
+    "}"
+  ]
+
 containerRuntimeSelectionScriptLines :: [String]
 containerRuntimeSelectionScriptLines =
   [ "runtime_with_running_container() {",
@@ -148,7 +163,16 @@ ensureDefaultPostgresAvailableScript :: String
 ensureDefaultPostgresAvailableScript =
   unlines $
     databaseEndpointReachabilityScriptLines
-      <> [ "if database_endpoint_is_reachable; then",
+      <> hostPsqlSelectionScriptLines
+      <> [ "if database_endpoint_is_reachable && host_psql_is_available; then",
+           "  if owner_is_superuser_via_host_psql; then",
+           "    exit 0",
+           "  fi",
+           "  if ensure_owner_superuser_via_host_psql; then",
+           "    exit 0",
+           "  fi",
+           "fi",
+           "if database_endpoint_is_reachable && ! host_psql_is_available; then",
            "  exit 0",
            "fi"
          ]
@@ -161,12 +185,12 @@ ensureDefaultPostgresAvailableScript =
            "    return 0",
            "  fi",
            "  \"$runtime\" start web-api-postgres >/dev/null 2>&1 && return 0",
-           "  \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api -e POSTGRES_PASSWORD=web_api -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d " <> defaultPostgresContainerImage <> " >/dev/null",
+           "  \"$runtime\" run --name web-api-postgres -e POSTGRES_USER=web_api_owner -e POSTGRES_PASSWORD=web_api_owner -e POSTGRES_DB=web_api_dev -p 127.0.0.1:5432:5432 -d " <> defaultPostgresContainerImage <> " >/dev/null",
            "}",
            "wait_until_ready() {",
            "  local ready=false",
            "  for _ in $(seq 1 30); do",
-           "    if \"$runtime\" exec web-api-postgres pg_isready --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api >/dev/null 2>&1; then",
+           "    if \"$runtime\" exec web-api-postgres pg_isready --host 127.0.0.1 --port 5432 --dbname web_api_dev --username web_api_owner >/dev/null 2>&1; then",
            "      ready=true",
            "      break",
            "    fi",
