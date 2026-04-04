@@ -3914,6 +3914,25 @@ spec = do
       Text.isInfixOf "data-page-link" responseBody `shouldBe` True
       Text.isInfixOf "popstate" responseBody `shouldBe` True
 
+    it "serves bundled style, font, and resource assets through configured static roots" $ do
+      stylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "styles", "app.css"])
+      Wai.responseStatus stylesheetResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders stylesheetResponse) `shouldBe` Just "text/css; charset=utf-8"
+      stylesheetBody <- readResponseBody stylesheetResponse
+      Text.isInfixOf "font-family: system-ui, sans-serif;" stylesheetBody `shouldBe` True
+
+      fontStylesheetResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "fonts", "font-faces.css"])
+      Wai.responseStatus fontStylesheetResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders fontStylesheetResponse) `shouldBe` Just "text/css; charset=utf-8"
+      fontStylesheetBody <- readResponseBody fontStylesheetResponse
+      Text.isInfixOf "@font-face" fontStylesheetBody `shouldBe` True
+
+      faviconResponse <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "resources", "favicon.svg"])
+      Wai.responseStatus faviconResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders faviconResponse) `shouldBe` Just "image/svg+xml"
+      faviconBody <- readResponseBody faviconResponse
+      Text.isInfixOf "<svg" faviconBody `shouldBe` True
+
     it "keeps shell output identical for repeated renders of the same page input" $ do
       let application = buildApp defaultAppConfig
       page <- renderPage defaultAppConfig frenchSecondRequest

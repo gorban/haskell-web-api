@@ -1,0 +1,8 @@
+body {
+  font-family: system-ui, sans-serif;
+}
+
+nav[data-navigation-region="primary"] {
+  display: flex;
+  gap: 1rem;
+}
