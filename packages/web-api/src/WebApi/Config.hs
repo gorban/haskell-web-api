@@ -7,6 +7,8 @@ module WebApi.Config
     AppConfig (..),
     AppEnvironmentConfig (..),
     AppEnvironmentConfigLoadError (..),
+    AppStartupConfig (..),
+    AppStartupConfigLoadError (..),
     AppMode (..),
     CertbotConfig (..),
     ConfigOverridesFileError (..),
@@ -24,9 +26,13 @@ module WebApi.Config
     committedRuntimeDefaults,
     defaultAppConfig,
     defaultAppEnvironmentConfig,
+    defaultAppStartupConfig,
     loadAppEnvironmentConfig,
     loadAppEnvironmentConfigWithFiles,
+    loadAppStartupConfig,
+    loadAppStartupConfigWithFiles,
     parseAppEnvironmentConfig,
+    parseAppStartupConfig,
     parseRuntimeAppConfig,
   )
 where
@@ -96,6 +102,17 @@ data AppConfig = AppConfig
   }
   deriving (Eq, Show)
 
+data AppStartupConfig = AppStartupConfig
+  { startupEnvironmentConfig :: AppEnvironmentConfig,
+    startupAppConfig :: AppConfig
+  }
+  deriving (Eq, Show)
+
+data AppStartupConfigLoadError
+  = AppStartupOverridesFileError FilePath ConfigOverridesFileError
+  | AppStartupConfigParseError ConfigParseError
+  deriving (Eq, Show)
+
 instance HasServerConfig AppConfig where
   toServerConfig AppConfig {listenerConfigs = appListeners, staticAssets = appStaticAssets, observability = appObservability} =
     ServerConfig
@@ -160,6 +177,13 @@ defaultAppConfig =
           }
     }
 
+defaultAppStartupConfig :: AppStartupConfig
+defaultAppStartupConfig =
+  AppStartupConfig
+    { startupEnvironmentConfig = defaultAppEnvironmentConfig,
+      startupAppConfig = defaultAppConfig
+    }
+
 loadAppEnvironmentConfig :: IO (Either AppEnvironmentConfigLoadError AppEnvironmentConfig)
 loadAppEnvironmentConfig =
   loadAppEnvironmentConfigWithFiles ".env" ".env.local"
@@ -179,6 +203,29 @@ loadAppEnvironmentConfigWithFiles committedDefaultsPath localOverridesPath = do
       fmap
         ( either
             (Left . AppEnvironmentOverridesFileError overridesPath)
+            Right
+        )
+        (loadConfigOverridesFile overridesPath)
+
+loadAppStartupConfig :: IO (Either AppStartupConfigLoadError AppStartupConfig)
+loadAppStartupConfig =
+  loadAppStartupConfigWithFiles ".env" ".env.local"
+
+loadAppStartupConfigWithFiles :: FilePath -> FilePath -> IO (Either AppStartupConfigLoadError AppStartupConfig)
+loadAppStartupConfigWithFiles committedDefaultsPath localOverridesPath = do
+  committedDefaultsResult <- loadOverridesFile committedDefaultsPath
+  localOverridesResult <- loadOverridesFile localOverridesPath
+  pure $ do
+    committedDefaults <- committedDefaultsResult
+    localOverrides <- localOverridesResult
+    case parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) committedDefaults localOverrides of
+      Left parseError -> Left (AppStartupConfigParseError parseError)
+      Right startupConfig -> Right startupConfig
+  where
+    loadOverridesFile overridesPath =
+      fmap
+        ( either
+            (Left . AppStartupOverridesFileError overridesPath)
             Right
         )
         (loadConfigOverridesFile overridesPath)
@@ -224,6 +271,12 @@ parseMode value =
 
 parsePort :: Text -> Either ConfigParseError Int
 parsePort = parsePositiveInt "DATABASE_PORT"
+
+parseAppStartupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppStartupConfig
+parseAppStartupConfig committedDefaults localOverrides environmentOverrides =
+  AppStartupConfig
+    <$> parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides
+    <*> parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides
 
 parseRuntimeAppConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppConfig
 parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do

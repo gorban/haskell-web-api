@@ -29,7 +29,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, parseAppEnvironmentConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -1651,6 +1651,122 @@ spec = do
         `shouldBe` "AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")"
       show [fileLoadError, parseLoadError]
         `shouldBe` "[AppEnvironmentOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppEnvironmentConfigParseError (InvalidConfigValue \"DATABASE_PORT\" \"0\")]"
+
+  describe "parseAppStartupConfig" $
+    it "parses committed environment and runtime defaults into the expected startup config" $ do
+      defaultAppStartupConfig
+        `shouldBe` AppStartupConfig
+          { startupEnvironmentConfig = defaultAppEnvironmentConfig,
+            startupAppConfig = defaultAppConfig
+          }
+      parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) [] []
+        `shouldBe` Right defaultAppStartupConfig
+
+  describe "loadAppStartupConfigWithFiles" $ do
+    it "loads the documented .env then .env.local layers for runtime startup" $
+      withSystemTempDirectory "app-startup-config" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
+        writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
+        loadAppStartupConfigWithFiles envPath envLocalPath
+          `shouldReturn` Right
+            AppStartupConfig
+              { startupEnvironmentConfig =
+                  AppEnvironmentConfig
+                    { appMode = Production,
+                      databaseConfig =
+                        DatabaseConfig
+                          { databaseHost = "db.shared",
+                            databasePort = 6432,
+                            databaseName = "web_api_dev",
+                            databaseUser = "web_api_runtime",
+                            databasePassword = "local_password"
+                          }
+                    },
+                startupAppConfig =
+                  defaultAppConfig
+                    { appTitlePrefix = "web-api-local",
+                      listenerConfigs =
+                        [ ListenerConfig
+                            { listenerHost = "127.0.0.1",
+                              listenerPort = 7443,
+                              listenerScheme = Http,
+                              listenerTls = Nothing
+                            }
+                        ]
+                    }
+              }
+
+    it "reports invalid override files or parse failures with explicit errors" $
+      withSystemTempDirectory "app-startup-config-errors" $ \tempDirectory -> do
+        let brokenEnvPath = tempDirectory <> "/broken.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+            invalidEnvPath = tempDirectory <> "/invalid.env"
+        writeFile brokenEnvPath "APP_TITLE_PREFIX\n"
+        loadAppStartupConfigWithFiles brokenEnvPath envLocalPath
+          `shouldReturn` Left
+            (AppStartupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "APP_TITLE_PREFIX"))
+        writeFile invalidEnvPath "LISTENER_0_PORT=0\n"
+        loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
+          `shouldReturn` Left
+            (AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0"))
+
+  describe "loadAppStartupConfig" $
+    it "loads the default .env file names for runtime startup from the current directory" $
+      withSystemTempDirectory "app-startup-config-current-directory" $ \tempDirectory -> do
+        writeFile (tempDirectory <> "/.env") "APP_MODE=production\nAPP_TITLE_PREFIX=web-api-shared\n"
+        writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nLISTENER_0_PORT=6001\n"
+        withCurrentDirectory tempDirectory $
+          loadAppStartupConfig
+            `shouldReturn` Right
+              defaultAppStartupConfig
+                { startupEnvironmentConfig =
+                    defaultAppEnvironmentConfig
+                      { appMode = Test
+                      },
+                  startupAppConfig =
+                    defaultAppConfig
+                      { appTitlePrefix = "web-api-shared",
+                        listenerConfigs =
+                          [ ListenerConfig
+                              { listenerHost = "127.0.0.1",
+                                listenerPort = 6001,
+                                listenerScheme = Http,
+                                listenerTls = Nothing
+                              }
+                          ]
+                      }
+                }
+
+  describe "AppStartupConfig and AppStartupConfigLoadError" $
+    it "keep equality and rendering deterministic" $ do
+      let startupConfig =
+            AppStartupConfig
+              { startupEnvironmentConfig = defaultAppEnvironmentConfig {appMode = Test},
+                startupAppConfig = defaultAppConfig {appTitlePrefix = "web-api-test"}
+              }
+          differentStartupConfig =
+            AppStartupConfig
+              { startupEnvironmentConfig = defaultAppEnvironmentConfig,
+                startupAppConfig = defaultAppConfig
+              }
+          fileLoadError = AppStartupOverridesFileError ".env" (InvalidConfigOverridesLine 1 "BROKEN")
+          parseLoadError = AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0")
+      startupConfig `shouldBe` startupConfig
+      startupConfig `shouldNotBe` differentStartupConfig
+      show startupConfig
+        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
+      show [startupConfig]
+        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
+      fileLoadError `shouldBe` fileLoadError
+      fileLoadError `shouldNotBe` parseLoadError
+      show fileLoadError
+        `shouldBe` "AppStartupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\")"
+      show parseLoadError
+        `shouldBe` "AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")"
+      show [fileLoadError, parseLoadError]
+        `shouldBe` "[AppStartupOverridesFileError \".env\" (InvalidConfigOverridesLine 1 \"BROKEN\"),AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")]"
 
   describe "parseAppSetupConfig" $ do
     it "parses committed runtime and setup defaults into the expected setup config" $ do
@@ -4146,11 +4262,11 @@ spec = do
               hClose outputHandle
               readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
 
-    it "fails explicitly when the runtime environment config is invalid" $
+    it "fails explicitly when the layered runtime startup config is invalid" $
       withClearedAppEnvironment $
         withSystemTempDirectory "web-api-run-invalid" $ \tempDirectory ->
           withCurrentDirectory tempDirectory $ do
-            writeFile ".env" "APP_MODE=staging\n"
+            writeFile ".env" "LISTENER_0_PORT=0\n"
             result <-
               ( try $
                   withSystemTempFile "web-api-output.txt" $ \_ outputHandle -> do
@@ -4161,6 +4277,6 @@ spec = do
             case result of
               Left exception ->
                 displayException exception
-                  `shouldContain` "Failed to load app environment config: AppEnvironmentConfigParseError (InvalidConfigValue \"APP_MODE\" \"staging\")"
+                  `shouldContain` "Failed to load app startup config: AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")"
               Right () ->
-                expectationFailure "expected run to fail on invalid runtime environment config"
+                expectationFailure "expected run to fail on invalid runtime startup config"

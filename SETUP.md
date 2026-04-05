@@ -259,9 +259,8 @@ brew install node postgresql@17
 ```
 
 If you only want to boot the example app with its current committed stub data, PostgreSQL is optional
-today. `cabal run haskell-web-api` still starts from `defaultAppConfig` and the in-process default
-database effect, so the local database only becomes necessary when you are explicitly exercising the
-PostgreSQL path.
+today. `cabal run exe:haskell-web-api` loads code defaults, then `./.env`, then `./.env.local`, and uses
+the in-process default database effect unless you explicitly point it at PostgreSQL.
 
 ## Repository Configuration Layers
 
@@ -281,9 +280,8 @@ When the file-based startup path is wired in, the intended precedence is:
 2. `./.env`
 3. `./.env.local`
 
-Today, the parser seam and precedence rules already exist, but the default `cabal run haskell-web-api` path
-still starts directly from committed defaults. In other words, these two files describe the intended local
-layout now, even though the default executable path does not yet read them automatically.
+`cabal run exe:haskell-web-api` now reads those files on startup with exactly that precedence, so these two
+files are the active local override path rather than just a documented future layout.
 
 Practical steps:
 
@@ -344,7 +342,7 @@ export WEB_API_MIGRATION_DATABASE_PASSWORD=web_api_owner
 Then apply the Haskell-managed migrations and seed data from this repository:
 
 ```bash
-cabal run haskell-web-api-db -- migrate-and-seed
+cabal run exe:haskell-web-api-db -- migrate-and-seed
 ```
 
 That command intentionally does **not** read the runtime app config files. Instead, it requires separate
@@ -359,7 +357,7 @@ No extra migration tool installation is required. If you only want the schema wi
 run:
 
 ```bash
-cabal run haskell-web-api-db -- migrate
+cabal run exe:haskell-web-api-db -- migrate
 ```
 
 If you change the owner-level database connection values, update the exported

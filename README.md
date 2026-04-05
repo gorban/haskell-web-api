@@ -129,7 +129,7 @@ understands the following values:
 | `SETUP_AUTOSTART_JAEGER` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local Jaeger startup when OTLP tracing is configured but unreachable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
 
 The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the
-runtime application config consumed by `cabal run haskell-web-api`. They are intended for build and
+runtime application config consumed by `cabal run exe:haskell-web-api`. They are intended for build and
 verification paths that need real prerequisite services, such as `cabal build haskell-web-api`,
 `cabal build all`, or targeted Unit tests for the concrete PostgreSQL adapter and similar components that
 must verify a real connection instead of a mock. They are parsed from the same layered `./.env` and
@@ -142,10 +142,10 @@ For real database paths, the repository currently targets PostgreSQL `17.x`. The
 flow, the documented container examples, and the live PostgreSQL integration coverage all use and verify
 that major version today.
 
-The intended configuration model has three layers:
+The runtime configuration model has three layers:
 
-1. Code defaults in source. The table above documents the committed defaults defined in the codebase. This
-   is the only layer that `cabal run haskell-web-api` uses today.
+1. Code defaults in source. The table above documents the committed defaults defined in the codebase. These
+   are the fallback values below the file-based overrides used by `cabal run exe:haskell-web-api`.
 2. `./.env` in the repository root. This file is intended to be checked in and used for shared, non-secret
    development overrides when a project wants defaults that differ from the code-level values.
 3. `./.env.local` in the repository root. This file is intended for machine-specific or deployed
@@ -160,10 +160,8 @@ When startup wiring reads those files, the intended precedence is:
 2. `./.env` for checked-in development defaults.
 3. `./.env.local` for local or deployed overrides.
 
-At the moment, the file format and precedence are already supported by the parser seam, but the current
-`cabal run haskell-web-api` path still boots directly from the committed in-process defaults. That means
-`./.env` and `./.env.local` describe the intended file layout and layering model today rather than an
-already-wired startup behavior.
+`cabal run exe:haskell-web-api` now loads those files at startup with exactly that precedence, so local
+runtime overrides apply without rebuilding or editing the committed source defaults.
 
 Example checked-in `./.env` body for shared, non-secret development overrides:
 
@@ -258,15 +256,15 @@ Windows containers).
 
 ## Local Development Runtime
 
-With the default configuration, `cabal run haskell-web-api` is enough to boot the example application
-locally. It uses the committed localhost listener defaults, the built-in page/API response stubs, and no
-external database, telemetry backend, TLS certificate, ACME service, or static-asset root is required
-unless you explicitly reconfigure one.
+With the default configuration, `cabal run exe:haskell-web-api` is enough to boot the example application
+locally. Startup loads code defaults first, then `./.env`, then `./.env.local` if those files exist. It
+uses the built-in page/API response stubs, and no external database, telemetry backend, TLS certificate,
+ACME service, or static-asset root is required unless you explicitly reconfigure one.
 
 In practice that means a fresh clone can usually be started with:
 
 ```bash
-cabal run haskell-web-api
+cabal run exe:haskell-web-api
 ```
 
 By default the app binds an HTTP listener on `127.0.0.1:5001` and serves the example SSR/API behavior in

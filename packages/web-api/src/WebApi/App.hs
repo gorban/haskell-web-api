@@ -20,9 +20,10 @@ import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
+    AppStartupConfig (..),
     DatabaseConfig,
     defaultAppConfig,
-    loadAppEnvironmentConfig,
+    loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
 import WebApi.Postgres (buildPostgresDatabaseEffect)
@@ -82,15 +83,21 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
 
 runWithEnvironmentConfig :: Handle -> AppEnvironmentConfig -> IO ()
 runWithEnvironmentConfig outputHandle =
-  HarchWeb.runServer outputHandle defaultAppConfig . buildRuntimeApp defaultAppConfig
+  runWithConfig outputHandle defaultAppConfig
+
+runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
+runWithConfig outputHandle appConfig =
+  HarchWeb.runServer outputHandle appConfig . buildRuntimeApp appConfig
 
 run :: Handle -> IO ()
 run outputHandle = do
-  environmentConfigResult <- loadAppEnvironmentConfig
+  startupConfigResult <- loadAppStartupConfig
   either
-    (\loadError -> ioError (userError ("Failed to load app environment config: " <> show loadError)))
-    (runWithEnvironmentConfig outputHandle)
-    environmentConfigResult
+    (\loadError -> ioError (userError ("Failed to load app startup config: " <> show loadError)))
+    ( \AppStartupConfig {startupEnvironmentConfig = environmentConfig, startupAppConfig = appConfig} ->
+        runWithConfig outputHandle appConfig $! environmentConfig
+    )
+    startupConfigResult
 
 runtimeRequestObservabilityReporter :: Observability.RequestObservability -> IO ()
 runtimeRequestObservabilityReporter =
