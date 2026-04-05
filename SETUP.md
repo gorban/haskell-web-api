@@ -538,10 +538,103 @@ That pod removal also removes the `web-api-postgres`, `web-api-jaeger`, and `web
 were created inside it. The built image `localhost/haskell-web-api:dev` is left in your local image
 store so you can restart the stack quickly.
 
+## Reverse-Proxy Compose Example
+
+The repository now includes a canonical reverse-proxy container example under
+`examples/reverse-proxy/`:
+
+- `docker-compose.yml`
+- `app.env`
+- `app.env.local`
+- `nginx/default.conf`
+
+That stack keeps the application container itself on unprivileged HTTP port `5001`, while nginx owns
+public ports `80` and `443` and forwards `Host`, `X-Forwarded-For`, and `X-Forwarded-Proto` to
+`haskell-web-api`.
+
+Because nginx publishes low-numbered host ports, run this example with Docker, with rootful Podman,
+or with a host configuration that allows rootless low-port binds. From a Distrobox shell, the
+rootful Podman form is:
+
+```bash
+distrobox-host-exec sudo podman compose up -d postgres jaeger
+```
+
+Use the same `distrobox-host-exec sudo podman compose ...` prefix for the later `up` and `down`
+commands in this section when you need the rootful path.
+
+1. Generate local development certificates for the nginx TLS listener:
+
+```bash
+mkdir -p examples/reverse-proxy/tls
+
+openssl req -x509 -nodes -newkey rsa:2048 \
+  -keyout examples/reverse-proxy/tls/privkey.pem \
+  -out examples/reverse-proxy/tls/fullchain.pem \
+  -days 7 \
+  -subj "/CN=localhost"
+```
+
+2. Start only PostgreSQL and Jaeger first so the database can be migrated and seeded before the app
+   container joins the stack:
+
+```bash
+cd examples/reverse-proxy
+podman compose up -d postgres jaeger
+# or: docker compose up -d postgres jaeger
+```
+
+3. From the repository root, seed the database with the owner-level migration credentials against the
+   compose-exposed PostgreSQL port:
+
+```bash
+export WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1
+export WEB_API_MIGRATION_DATABASE_PORT=5432
+export WEB_API_MIGRATION_DATABASE_NAME=web_api_dev
+export WEB_API_MIGRATION_DATABASE_USER=web_api_owner
+export WEB_API_MIGRATION_DATABASE_PASSWORD=web_api_owner
+
+cabal run exe:haskell-web-api-db -- migrate-and-seed
+```
+
+4. Bring up the app container and nginx reverse proxy:
+
+```bash
+cd examples/reverse-proxy
+podman compose up -d web-api nginx
+# or: docker compose up -d web-api nginx
+```
+
+5. Verify the end-to-end behavior:
+
+```bash
+curl -I http://127.0.0.1/
+curl -k https://127.0.0.1/api/status
+curl -k https://127.0.0.1/second
+xdg-open http://127.0.0.1:16686
+```
+
+Expected results:
+
+- plain HTTP on port `80` redirects to HTTPS because the app sees `X-Forwarded-Proto: http`,
+- HTTPS on port `443` succeeds with the local certificate and the app sees
+  `X-Forwarded-Proto: https`,
+- Jaeger stays available on `127.0.0.1:16686`.
+
+6. Tear the stack down when finished:
+
+```bash
+cd examples/reverse-proxy
+podman compose down
+# or: docker compose down
+rm -f tls/fullchain.pem tls/privkey.pem
+```
+
 ### Let's Encrypt / port 80 note for Podman
 
-The example above works rootlessly because every published port is above `1024`. ACME `http-01`
-validation is different: the challenge flow needs TCP/80, and `80` is a privileged low-numbered port.
+The earlier rootless Podman pod example works because every published port there is above `1024`.
+ACME `http-01` validation is different: the challenge flow needs TCP/80, and `80` is a privileged
+low-numbered port.
 
 For that case you need one of these approaches:
 
