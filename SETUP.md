@@ -32,10 +32,23 @@ Atomic/immutable edition of Fedora or not. So first, if you don't have [Distrobo
 curl -s https://raw.githubusercontent.com/89luca89/distrobox/main/install | sudo sh
 ```
 
+Before creating the box, enable both the normal user Podman socket and the host rootful Podman socket:
+
+```bash
+systemctl --user enable --now podman.socket
+sudo systemctl enable --now podman.socket
+```
+
+Keep the Distrobox itself **rootless** (`root=false`). That keeps VS Code Remote Containers and similar
+editor integrations aligned with your normal user session, lets ordinary development services keep using the
+rootless Podman socket, and avoids running the whole development environment as root. The main case that
+still needs host root privileges is binding privileged ports such as 80/443, and from inside the rootless
+box you can handle that explicitly with `distrobox-host-exec sudo podman` when needed.
+
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote postgresql"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -51,7 +64,8 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
   optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
-  built-in `vimdiff` tool inside the container.
+  built-in `vimdiff` tool inside the container, and `postgresql` keeps the `psql` CLI available without a
+  separate install step.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
   symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
@@ -62,6 +76,16 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
     ```bash
     systemctl --user enable --now podman.socket
     ```
+  - Normal development services such as PostgreSQL on `5432`, Jaeger on `4318` / `16686`, and the app on
+    `5001` are unprivileged and should keep using plain `podman` inside the rootless box.
+  - For privileged ports below `1024` such as `80` for ACME `http-01`, use `distrobox-host-exec sudo podman`
+    from inside the rootless box. That runs the container rootfully on the host only for the port-binding
+    case and still requires your sudo approval.
+  - A simpler development alternative is to bind the app on a higher port such as `5001` and use a router or
+    host redirect from `80` to that higher port instead of running anything rootfully just to claim port 80.
+  - If you need the app binary itself to bind `80` / `443` directly outside a container, `setcap
+    cap_net_bind_service+ep <binary>` or a host redirect such as `nft add rule nat PREROUTING tcp dport 80
+    redirect to 5001` are narrower-scope alternatives to running the full app as root.
 - The `init_hooks` do git setup overrides inside the container. `additional_flags` sets `GIT_CONFIG_GLOBAL`
   on every container start, and the hooks copy the host `~/.gitconfig` into that container-local file if
   it exists. They then inspect the selected `diff.tool` and `merge.tool` values from that copied config.
