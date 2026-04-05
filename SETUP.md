@@ -393,7 +393,7 @@ When you are done with the container example, stop and remove it with either Doc
 ```bash
 docker rm -f web-api-postgres
 ```
-- **podman**: just replace `docker` with `podman` in the above comman.
+- **podman**: just replace `docker` with `podman` in the above command.
 
 ## Local Jaeger All-in-One Startup Example
 
@@ -427,6 +427,132 @@ When you are done, stop and remove it with either Docker or Podman:
 docker rm -f web-api-jaeger
 ```
 - **podman**: just replace `docker` with `podman` in the above command.
+
+## Podman End-to-End Bring-Up / Tear-Down Example
+
+If you want one reproducible Podman-based local stack for PostgreSQL, Jaeger, and the runtime app
+itself, a single rootless Podman pod is the simplest path. The pod keeps the default localhost
+database and tracing endpoints working between containers, and only publishes the unprivileged ports
+you need on the host:
+
+- PostgreSQL: `127.0.0.1:5432`
+- Jaeger OTLP HTTP ingest: `127.0.0.1:4318`
+- Jaeger UI: `127.0.0.1:16686`
+- web-api HTTP listener: `127.0.0.1:5001`
+
+This example intentionally keeps the app on plain HTTP port `5001`, which matches the currently
+implemented runtime listener path. Manual TLS and ACME runtime listener startup are still separate
+follow-up work.
+
+1. Build the runtime image from this repository:
+
+```bash
+podman build -t localhost/haskell-web-api:dev .
+```
+
+2. Create a pod that exposes all three services on localhost:
+
+```bash
+podman pod create --name web-api-dev \
+  -p 127.0.0.1:5432:5432 \
+  -p 127.0.0.1:4318:4318 \
+  -p 127.0.0.1:16686:16686 \
+  -p 127.0.0.1:5001:5001
+```
+
+3. Start PostgreSQL and Jaeger inside that pod:
+
+```bash
+podman run -d --pod web-api-dev --name web-api-postgres \
+  -e POSTGRES_USER=web_api_owner \
+  -e POSTGRES_PASSWORD=web_api_owner \
+  -e POSTGRES_DB=web_api_dev \
+  docker.io/library/postgres:17
+
+podman run -d --pod web-api-dev --name web-api-jaeger \
+  -e COLLECTOR_OTLP_ENABLED=true \
+  docker.io/jaegertracing/all-in-one
+```
+
+4. Write container-local config files for the runtime app. These are mounted into `/app/.env` and
+   `/app/.env.local` because the runtime executable loads those files from its working directory:
+
+```bash
+cat > ./podman.env <<'EOF'
+APP_MODE=development
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=5432
+DATABASE_NAME=web_api_dev
+DATABASE_USER=web_api_runtime
+DATABASE_PASSWORD=web_api
+EOF
+
+cat > ./podman.env.local <<'EOF'
+APP_TITLE_PREFIX=web-api-podman
+LISTENER_0_HOST=0.0.0.0
+LISTENER_0_PORT=5001
+LISTENER_0_SCHEME=http
+OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+EOF
+```
+
+5. Seed the database once with the owner-level migration credentials:
+
+```bash
+export WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1
+export WEB_API_MIGRATION_DATABASE_PORT=5432
+export WEB_API_MIGRATION_DATABASE_NAME=web_api_dev
+export WEB_API_MIGRATION_DATABASE_USER=web_api_owner
+export WEB_API_MIGRATION_DATABASE_PASSWORD=web_api_owner
+
+cabal run exe:haskell-web-api-db -- migrate-and-seed
+```
+
+6. Start the runtime app container in the same pod:
+
+```bash
+podman run -d --pod web-api-dev --name web-api \
+  -v "$PWD/podman.env:/app/.env:ro" \
+  -v "$PWD/podman.env.local:/app/.env.local:ro" \
+  localhost/haskell-web-api:dev
+```
+
+7. Useful checks after startup:
+
+```bash
+curl http://127.0.0.1:5001/api/status
+curl http://127.0.0.1:5001/second
+xdg-open http://127.0.0.1:16686
+podman pod ps
+podman ps --pod
+```
+
+When you are done, stop and remove the whole stack together:
+
+```bash
+podman pod rm -f web-api-dev
+rm -f ./podman.env ./podman.env.local
+```
+
+That pod removal also removes the `web-api-postgres`, `web-api-jaeger`, and `web-api` containers that
+were created inside it. The built image `localhost/haskell-web-api:dev` is left in your local image
+store so you can restart the stack quickly.
+
+### Let's Encrypt / port 80 note for Podman
+
+The example above works rootlessly because every published port is above `1024`. ACME `http-01`
+validation is different: the challenge flow needs TCP/80, and `80` is a privileged low-numbered port.
+
+For that case you need one of these approaches:
+
+- Run the relevant Podman container or pod rootfully on the host, for example
+  `distrobox-host-exec sudo podman ...` from inside a Distrobox shell.
+- Grant only the runtime binary the bind capability with
+  `setcap cap_net_bind_service+ep /app/haskell-web-api` before switching to the non-root `app` user in
+  the runtime image.
+
+If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
+port binding entirely.
 
 ## External Port 80 Reachability for ACME / http-01
 
