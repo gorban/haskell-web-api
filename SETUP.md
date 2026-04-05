@@ -554,6 +554,29 @@ For that case you need one of these approaches:
 If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
 port binding entirely.
 
+## Request Context In Logs And Traces
+
+For direct requests, runtime traces record the socket peer as both `client.address` and
+`network.peer.address`, and `url.scheme` follows the actual listener (`http` vs `https`).
+
+When the app sits behind a reverse proxy or TLS-terminating load balancer, set
+`X-Forwarded-For` and `X-Forwarded-Proto` on the hop into `haskell-web-api`. The runtime then:
+
+- records `client.address` from the first `X-Forwarded-For` value,
+- keeps the immediate socket peer in `network.peer.address`,
+- derives `url.scheme` from `X-Forwarded-Proto` when it is `http` or `https`,
+- preserves the raw forwarded header values as
+  `http.request.header.x_forwarded_for` / `http.request.header.x_forwarded_proto`,
+- prefixes application `ERROR` log entries with the same request context that appears in
+  `TRACE` request observability output.
+
+Example proxy headers:
+
+```text
+X-Forwarded-For: 203.0.113.10, 10.0.0.15
+X-Forwarded-Proto: https
+```
+
 ## External Port 80 Reachability for ACME / http-01
 
 If you want to test Let's Encrypt or another external `http-01` style flow against this machine from the

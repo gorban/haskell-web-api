@@ -394,18 +394,24 @@ toWaiApplication webApplication request respond =
                 (defaultRequestContext webApplication)
                 (waiRequestPath request)
         response <- renderResponse webApplication routeRequest
-        let extraObservabilityAttributes =
+        let requestContextAttributes = requestContextObservabilityAttributes request
+            requestLogFields = requestLogContextFields request
+            extraObservabilityAttributes =
+              requestContextAttributes
+                <> case response of
+                  PageResponse _ -> []
+                  BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+            contextualizedResponseLogEntries =
               case response of
                 PageResponse _ -> []
-                BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-            responseLogEntriesValue =
-              case response of
-                PageResponse _ -> []
-                BodyResponse responseBodyValue -> responseLogEntries responseBodyValue
+                BodyResponse responseBodyValue ->
+                  map
+                    (prependRequestLogContext requestLogFields)
+                    (responseLogEntries responseBodyValue)
             requestObservability =
               Observability.buildRequestObservability
                 (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                (if Wai.isSecure request then "https" else "http")
+                (requestScheme request)
                 (waiRequestPath request)
                 (renderRoute (routeCodec webApplication) routeRequest)
                 ( case response of
@@ -422,7 +428,7 @@ toWaiApplication webApplication request respond =
                 extraObservabilityAttributes
         Observability.forceRequestObservability requestObservability `seq`
           reportRequestObservability webApplication requestObservability
-            >> mapM_ (reportApplicationLog webApplication) responseLogEntriesValue
+            >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
             >> respond (toWaiResponse webApplication response)
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
@@ -668,6 +674,101 @@ waiRequestPath request =
   if ByteString.null (Wai.rawPathInfo request)
     then "/"
     else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+
+requestContextObservabilityAttributes :: Wai.Request -> [Observability.ObservabilityAttribute]
+requestContextObservabilityAttributes request =
+  [ textObservabilityAttribute "client.address" (effectiveClientAddress request),
+    textObservabilityAttribute "network.peer.address" (peerAddressText request)
+  ]
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.x_forwarded_for")
+      (requestHeaderText "X-Forwarded-For" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.x_forwarded_proto")
+      (requestHeaderText "X-Forwarded-Proto" request)
+
+requestLogContextFields :: Wai.Request -> [Text]
+requestLogContextFields request =
+  [ renderRequestLogField "client.address" (effectiveClientAddress request),
+    renderRequestLogField "network.peer.address" (peerAddressText request)
+  ]
+    ++ optionalRequestLogField
+      "http.request.header.x_forwarded_for"
+      (requestHeaderText "X-Forwarded-For" request)
+    ++ optionalRequestLogField
+      "http.request.header.x_forwarded_proto"
+      (requestHeaderText "X-Forwarded-Proto" request)
+    ++ [renderRequestLogField "url.scheme" (requestScheme request)]
+
+optionalRequestLogField :: Text -> Maybe Text -> [Text]
+optionalRequestLogField fieldName maybeFieldValue =
+  case maybeFieldValue of
+    Just fieldValue -> [renderRequestLogField fieldName fieldValue]
+    Nothing -> []
+
+textObservabilityAttribute :: Text -> Text -> Observability.ObservabilityAttribute
+textObservabilityAttribute name value =
+  Observability.ObservabilityAttribute
+    { Observability.attributeName = name,
+      Observability.attributeValue = Observability.TextAttribute value
+    }
+
+requestScheme :: Wai.Request -> Text
+requestScheme request =
+  case fmap Text.toLower (requestHeaderToken "X-Forwarded-Proto" request) of
+    Just "https" -> "https"
+    Just "http" -> "http"
+    _ ->
+      if Wai.isSecure request
+        then "https"
+        else "http"
+
+effectiveClientAddress :: Wai.Request -> Text
+effectiveClientAddress request =
+  fromMaybe
+    (peerAddressText request)
+    (requestHeaderToken "X-Forwarded-For" request)
+
+peerAddressText :: Wai.Request -> Text
+peerAddressText request =
+  socketAddressText (Wai.remoteHost request)
+
+socketAddressText :: Socket.SockAddr -> Text
+socketAddressText socketAddress =
+  case socketAddress of
+    Socket.SockAddrInet _ hostAddress ->
+      let (firstOctet, secondOctet, thirdOctet, fourthOctet) =
+            Socket.hostAddressToTuple hostAddress
+       in Text.intercalate
+            "."
+            (map (Text.pack . show) [firstOctet, secondOctet, thirdOctet, fourthOctet])
+    _ -> Text.pack (show socketAddress)
+
+requestHeaderToken :: Http.HeaderName -> Wai.Request -> Maybe Text
+requestHeaderToken headerName request =
+  requestHeaderText headerName request >>= firstCommaSeparatedValue
+
+requestHeaderText :: Http.HeaderName -> Wai.Request -> Maybe Text
+requestHeaderText headerName request =
+  fmap
+    (Text.strip . TextEncoding.decodeUtf8)
+    (lookup headerName (Wai.requestHeaders request))
+
+firstCommaSeparatedValue :: Text -> Maybe Text
+firstCommaSeparatedValue value =
+  case filter (not . Text.null) (map Text.strip (Text.splitOn "," value)) of
+    [] -> Nothing
+    firstValue : _ -> Just firstValue
+
+prependRequestLogContext :: [Text] -> Text -> Text
+prependRequestLogContext fields logEntry =
+  "[" <> Text.intercalate " " fields <> "] " <> logEntry
+
+renderRequestLogField :: Text -> Text -> Text
+renderRequestLogField fieldName fieldValue =
+  fieldName <> "=" <> Text.pack (show fieldValue)
 
 htmlContentType :: Text
 htmlContentType = "text/html; charset=utf-8"

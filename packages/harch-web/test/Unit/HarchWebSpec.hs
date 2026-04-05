@@ -252,6 +252,17 @@ waiRequest segments =
         [] -> "/"
         _ -> "/" <> Text.intercalate "/" segments
 
+waiRequestWithRemoteHostAndHeaders ::
+  [Text] ->
+  Socket.SockAddr ->
+  Http.RequestHeaders ->
+  Wai.Request
+waiRequestWithRemoteHostAndHeaders segments remoteHost headers =
+  (waiRequest segments)
+    { Wai.remoteHost = remoteHost,
+      Wai.requestHeaders = headers
+    }
+
 spec :: Spec
 spec = do
   describe "shared config coverage" $ do
@@ -801,6 +812,35 @@ spec = do
               { Observability.attributeName = "exception.type",
                 Observability.attributeValue = Observability.TextAttribute "SampleError"
               }
+          proxiedRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          proxiedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              proxiedRemoteHost
+              [ ("X-Forwarded-For", "203.0.113.10, 10.0.0.1"),
+                ("X-Forwarded-Proto", "https")
+              ]
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "203.0.113.10"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          forwardedForAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_for",
+                Observability.attributeValue = Observability.TextAttribute "203.0.113.10, 10.0.0.1"
+              }
+          forwardedProtoAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_proto",
+                Observability.attributeValue = Observability.TextAttribute "https"
+              }
           diagnosticApplication =
             sampleApplication
               { renderResponse =
@@ -819,20 +859,175 @@ spec = do
                 reportApplicationLog = \logEntry ->
                   modifyIORef' logEntriesReference (<> [logEntry])
               }
-      response <- performWaiRequest (toWaiApplication diagnosticApplication) (waiRequest ["data"])
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) proxiedRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 503
       readResponseBody response `shouldReturn` "{\"error\":\"data-unavailable\"}"
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "https"
+                           "/data"
+                           "/data"
+                           503
+                           Observability.BodyResponseKind
+                           [ clientAddressAttribute,
+                             peerAddressAttribute,
+                             forwardedForAttribute,
+                             forwardedProtoAttribute,
+                             failureAttribute
+                           ]
+                       ]
+      readIORef logEntriesReference
+        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" url.scheme=\"https\"] Sample failure log"
+                       ]
+
+    it "falls back to the direct peer address and request security when forwarding headers are absent" $ do
+      requestObservabilityReference <- newIORef []
+      logEntriesReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          directRequest =
+            (waiRequestWithRemoteHostAndHeaders ["data"] directRemoteHost [])
+              { Wai.isSecure = True
+              }
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { renderResponse =
+                  \_ ->
+                    pure $
+                      BodyResponse
+                        ResponseBody
+                          { responseStatus = 202,
+                            responseContentType = "application/json",
+                            responseBody = "{\"route\":\"data\"}",
+                            responseObservabilityAttributes = [],
+                            responseLogEntries = ["Direct peer log"]
+                          },
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                reportApplicationLog = \logEntry ->
+                  modifyIORef' logEntriesReference (<> [logEntry])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) directRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "https"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       ]
+      readIORef logEntriesReference
+        `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"https\"] Direct peer log"]
+
+    it "ignores empty forwarded-for tokens while still honoring forwarded plain-http scheme" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          forwardedRequest =
+            ( waiRequestWithRemoteHostAndHeaders
+                ["data"]
+                directRemoteHost
+                [ ("X-Forwarded-For", " , "),
+                  ("X-Forwarded-Proto", "http")
+                ]
+            )
+              { Wai.isSecure = True
+              }
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          forwardedForAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_for",
+                Observability.attributeValue = Observability.TextAttribute ","
+              }
+          forwardedProtoAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_proto",
+                Observability.attributeValue = Observability.TextAttribute "http"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) forwardedRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
                            "GET"
                            "http"
                            "/data"
                            "/data"
-                           503
+                           202
                            Observability.BodyResponseKind
-                           [failureAttribute]
+                           [ clientAddressAttribute,
+                             peerAddressAttribute,
+                             forwardedForAttribute,
+                             forwardedProtoAttribute
+                           ]
                        ]
-      readIORef logEntriesReference `shouldReturn` ["Sample failure log"]
+
+    it "renders non-inet peer addresses into forwarded diagnostics" $ do
+      requestObservabilityReference <- newIORef []
+      let unixSocketRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              (Socket.SockAddrUnix "/tmp/harch-web.sock")
+              [("X-Forwarded-For", "198.51.100.24")]
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "198.51.100.24"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "/tmp/harch-web.sock"
+              }
+          forwardedForAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_for",
+                Observability.attributeValue = Observability.TextAttribute "198.51.100.24"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) unixSocketRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute, forwardedForAttribute]
+                       ]
 
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do

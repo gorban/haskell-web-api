@@ -22,7 +22,6 @@ import WebApi.Config
     AppEnvironmentConfig (..),
     AppStartupConfig (..),
     DatabaseConfig,
-    defaultAppConfig,
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
