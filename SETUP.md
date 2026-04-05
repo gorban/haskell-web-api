@@ -608,6 +608,57 @@ This is the simplest local path for proving that the implemented HTTP runtime ca
 port `80`. For longer-lived dev/prod container setups, prefer a reverse proxy in front of the app so
 the application container itself can stay unprivileged on port `5001`.
 
+### Other low-port binding options
+
+If you do not want the rootful host-network path above, the remaining low-port options from
+`TASKS.md` are still viable:
+
+1. **Host-level nftables / iptables redirect**: keep the app itself on `5001`, then redirect host
+   port `80` to that unprivileged listener.
+
+   ```bash
+   sudo nft add table ip nat
+   sudo nft 'add chain ip nat PREROUTING { type nat hook prerouting priority dstnat; }'
+   sudo nft add rule ip nat PREROUTING tcp dport 80 redirect to :5001
+
+   curl http://127.0.0.1/api/status
+   sudo nft list table ip nat
+   ```
+
+   If your host still uses iptables tooling instead of nftables, the equivalent redirect is:
+
+   ```bash
+   sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 5001
+   ```
+
+2. **`setcap` on the runtime binary inside the image**: grant only the bind-low-port capability to
+   `/app/haskell-web-api`, then keep running as the non-root `app` user.
+
+   ```dockerfile
+   RUN apk add --no-cache libcap \
+    && setcap cap_net_bind_service+ep /app/haskell-web-api \
+    && getcap /app/haskell-web-api \
+    && apk del libcap
+   ```
+
+   Place that after the runtime binary is copied into the image and before `USER app`.
+
+3. **Rootless Podman with `--cap-add=NET_BIND_SERVICE --network=host`**: this keeps the container
+   rootless, but it only works when the host allows unprivileged low ports.
+
+   ```bash
+   distrobox-host-exec sysctl net.ipv4.ip_unprivileged_port_start
+
+   distrobox-host-exec podman run --rm --name web-api-host80 \
+     --network=host \
+     --cap-add=NET_BIND_SERVICE \
+     -v "$PWD/podman.env:/app/.env:ro" \
+     -v "$PWD/podman.env.port80:/app/.env.local:ro" \
+     localhost/haskell-web-api:dev
+   ```
+
+   The sysctl output must be `80` or lower for that rootless bind to succeed.
+
 ## Local ACME / certbot config exercise
 
 Runtime ACME listener startup is still a follow-up item, but you can already exercise the full
