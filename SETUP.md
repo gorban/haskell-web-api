@@ -554,6 +554,60 @@ For that case you need one of these approaches:
 If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
 port binding entirely.
 
+### Rootful host-network app container on port 80
+
+If you are developing from inside Distrobox and want the app itself to listen on the real host port
+`80`, keep PostgreSQL and Jaeger on the rootless Podman pod from the section above, but run only the
+runtime app container rootfully on the host network.
+
+1. Follow steps 1-5 from the Podman end-to-end example above, but stop before step 6 so the regular
+   rootless `web-api` container is not started on port `5001`.
+
+2. Write a host-port override file for the runtime app:
+
+   ```bash
+   cat > ./podman.env.port80 <<'EOF'
+   APP_TITLE_PREFIX=web-api-host80
+   LISTENER_0_HOST=0.0.0.0
+   LISTENER_0_PORT=80
+   LISTENER_0_SCHEME=http
+   OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+   EOF
+   ```
+
+3. Start the runtime app rootfully on the host network from the Distrobox shell:
+
+   ```bash
+   distrobox-host-exec sudo podman run --rm --name web-api-host80 \
+     --network=host \
+     -v "$PWD/podman.env:/app/.env:ro" \
+     -v "$PWD/podman.env.port80:/app/.env.local:ro" \
+     localhost/haskell-web-api:dev
+   ```
+
+   Because this container is sharing the host network namespace directly, `127.0.0.1:5432` still
+   reaches the PostgreSQL container from the earlier pod and `127.0.0.1:4318` still reaches Jaeger.
+
+4. From another terminal, verify the runtime is actually serving traffic on host port `80`:
+
+   ```bash
+   curl http://127.0.0.1/api/status
+   curl http://127.0.0.1/second
+   distrobox-host-exec sudo ss -ltnp '( sport = :80 )'
+   distrobox-host-exec sudo podman logs web-api-host80
+   ```
+
+5. When you are done, stop the rootful app container and remove the temporary override file:
+
+   ```bash
+   distrobox-host-exec sudo podman stop web-api-host80
+   rm -f ./podman.env.port80
+   ```
+
+This is the simplest local path for proving that the implemented HTTP runtime can bind the real host
+port `80`. For longer-lived dev/prod container setups, prefer a reverse proxy in front of the app so
+the application container itself can stay unprivileged on port `5001`.
+
 ## Local ACME / certbot config exercise
 
 Runtime ACME listener startup is still a follow-up item, but you can already exercise the full
