@@ -404,6 +404,56 @@ docker rm -f web-api-jaeger
 ```
 - **podman**: just replace `docker` with `podman` in the above command.
 
+## External Port 80 Reachability for ACME / http-01
+
+If you want to test Let's Encrypt or another external `http-01` style flow against this machine from the
+internet, two separate network steps matter:
+
+1. The host firewall must accept inbound TCP/80.
+2. Your router must forward WAN TCP/80 to this host's LAN IP.
+
+That setup is only needed for outside reachability. Local HTTPS binding and other local listener testing can
+still be exercised without exposing the machine publicly, so for ACME-style reachability tests it is usually
+enough to forward **only** TCP/80.
+
+### Firewalld zone awareness
+
+On Fedora-family hosts, do not assume the active firewalld zone is `public`. Check first:
+
+```bash
+sudo firewall-cmd --get-active-zones
+```
+
+Then add the port rule against the active zone you actually see there:
+
+```bash
+sudo firewall-cmd --add-port=80/tcp --zone=<active_zone>
+sudo firewall-cmd --permanent --add-port=80/tcp --zone=<active_zone>
+```
+
+Replace `<active_zone>` with the real zone name from the first command.
+
+This matters especially when you run a container with `--network=host`. With host networking, Podman is
+sharing the host network namespace directly, so it does **not** automatically open firewall rules for you.
+That differs from `-p 80:80`, where the container engine can often arrange the port mapping on its own.
+
+### Router port-forwarding
+
+A host firewall "accept" rule alone is not enough for internet reachability. Your router still needs a DNAT
+/ port-forward rule that rewrites inbound WAN TCP/80 traffic to this machine's LAN IP on TCP/80.
+
+Router UIs differ a lot, but the general steps are:
+
+1. Find this machine's current LAN IP address.
+2. Make that address stable with either a DHCP reservation in the router or a static host configuration.
+3. Add a new router port-forward rule from WAN / internet TCP port `80` to that same host LAN IP on TCP
+   port `80`.
+4. If your router distinguishes firewall-accept rules from port-forward rules, make sure the forward/DNAT
+   rule exists; an accept rule by itself is insufficient.
+
+Without a stable LAN IP, the forward rule can silently break the next time DHCP assigns a different address
+to the host.
+
 #### Additional Build Prerequisites for CI Builds
 
 The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
