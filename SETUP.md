@@ -554,6 +554,65 @@ For that case you need one of these approaches:
 If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
 port binding entirely.
 
+## Local ACME / certbot config exercise
+
+Runtime ACME listener startup is still a follow-up item, but you can already exercise the full
+`LISTENER_<n>_TLS_SOURCE=acme` configuration path locally: `web-api` parses the environment into an
+ACME-backed listener config, `harch-web` translates that into an ACME startup plan, and the runtime
+currently fails explicitly once such a listener reaches the startup boundary.
+
+For development, prefer a staging ACME directory rather than the production Let's Encrypt endpoint.
+Add a temporary ACME listener block like this to `./.env.local`:
+
+```env
+# Listener 0: plain HTTP for ACME http-01 challenge traffic
+LISTENER_0_HOST=0.0.0.0
+LISTENER_0_PORT=80
+LISTENER_0_SCHEME=http
+
+# Listener 1: HTTPS with ACME + certbot
+LISTENER_1_HOST=0.0.0.0
+LISTENER_1_PORT=443
+LISTENER_1_SCHEME=https
+LISTENER_1_TLS_SOURCE=acme
+LISTENER_1_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
+LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
+LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
+LISTENER_1_ACME_CERTBOT_EXECUTABLE=certbot
+LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
+```
+
+Then exercise the current ACME path in three layers:
+
+1. Parse the runtime config shape from environment values:
+
+   ```bash
+   cabal test haskell-web-api-tests --test-options='--match "parses manual and ACME-backed HTTPS listeners distinctly"'
+   ```
+
+2. Confirm the listener plan keeps the ACME/certbot settings intact:
+
+   ```bash
+   cabal test harch-web-tests --test-options='--match "translates ACME-backed HTTPS listeners into certificate-management plans"'
+   ```
+
+3. Confirm the current runtime boundary is explicit instead of silently ignoring the listener:
+
+   ```bash
+   cabal test harch-web-tests --test-options='--match "fails explicitly when only ACME runtime listeners are configured"'
+   ```
+
+If you also run the executable with that `./.env.local`, it should currently stop with:
+
+```text
+Unsupported runtime listener startup plan: ACME listeners are not implemented yet.
+```
+
+That direct run is still useful during development because it proves the layered env loading and
+startup-plan validation are wired correctly. Once live ACME runtime startup lands, reuse the same
+listener block together with the privileged-port guidance above for real `http-01` testing on
+port `80`.
+
 ## Request Context In Logs And Traces
 
 For direct requests, runtime traces record the socket peer as both `client.address` and
