@@ -49,6 +49,7 @@ module HarchWeb
     renderDocument,
     runServer,
     staticAssetHref,
+    staticAssetHrefWithPrefix,
     toWaiApplication,
     withLocalTestServer,
   )
@@ -303,6 +304,7 @@ data RouteCodec route context = RouteCodec
 data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
+    requestContextFromRequest :: Wai.Request -> context -> context,
     applicationStaticAssets :: StaticAssetsConfig,
     applicationRequestPolicy :: RequestPolicyConfig,
     routeCodec :: RouteCodec route context,
@@ -333,17 +335,23 @@ routeHref codec context route =
   renderRoute codec RouteRequest {requestRoute = route, requestContext = context}
 
 staticAssetHref :: StaticAssetRoot -> FilePath -> Text
-staticAssetHref staticRoot assetPath =
+staticAssetHref =
+  staticAssetHrefWithPrefix Text.empty
+
+staticAssetHrefWithPrefix :: Text -> StaticAssetRoot -> FilePath -> Text
+staticAssetHrefWithPrefix pathPrefix staticRoot assetPath =
   let normalizedPrefix = normalizeStaticPrefix (staticUrlPrefix staticRoot)
       normalizedAssetPath = trimLeadingSlash (Text.pack assetPath)
-   in if Text.null normalizedPrefix
-        then "/" <> normalizedAssetPath
-        else
-          Text.concat
-            [ normalizedPrefix,
-              "/",
-              normalizedAssetPath
-            ]
+      assetHref =
+        if Text.null normalizedPrefix
+          then "/" <> normalizedAssetPath
+          else
+            Text.concat
+              [ normalizedPrefix,
+                "/",
+                normalizedAssetPath
+              ]
+   in applyRequestPathPrefix pathPrefix assetHref
 
 buildNavigation :: (Eq route) => RouteCodec route context -> Page route context -> [NavigationItem route] -> [ResolvedNavigationItem route]
 buildNavigation codec page =
@@ -412,10 +420,15 @@ toWaiApplication webApplication request respond =
           respond
             (applyResponseHeaders (requestPolicyResponseHeaders (applicationRequestPolicy webApplication) request) staticResponse)
         Nothing -> do
-          let routeRequest =
+          let requestContext =
+                requestContextFromRequest
+                  webApplication
+                  request
+                  (defaultRequestContext webApplication)
+              routeRequest =
                 matchRoute
                   (routeCodec webApplication)
-                  (defaultRequestContext webApplication)
+                  requestContext
                   (waiRequestPath request)
           response <- renderResponse webApplication routeRequest
           let requestContextAttributes = requestContextObservabilityAttributes request
@@ -712,9 +725,9 @@ isNotFoundPage webApplication page =
 
 waiRequestPath :: Wai.Request -> Text
 waiRequestPath request =
-  if ByteString.null (Wai.rawPathInfo request)
-    then "/"
-    else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+  stripRequestPathPrefix
+    (requestPathPrefix request)
+    (rawRequestPath request)
 
 requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
 requestRedirectLocation requestPolicyConfig request =
@@ -737,13 +750,7 @@ requestRedirectAuthority request =
 
 requestRedirectPathAndQuery :: Wai.Request -> ByteString.ByteString
 requestRedirectPathAndQuery request =
-  requestPathBytes request <> Wai.rawQueryString request
-
-requestPathBytes :: Wai.Request -> ByteString.ByteString
-requestPathBytes request =
-  if ByteString.null (Wai.rawPathInfo request)
-    then "/"
-    else Wai.rawPathInfo request
+  TextEncoding.encodeUtf8 (externalRequestPath request) <> Wai.rawQueryString request
 
 requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
 requestPolicyResponseHeaders requestPolicyConfig request =
@@ -781,6 +788,10 @@ requestContextObservabilityAttributes request =
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_proto")
       (requestHeaderText "X-Forwarded-Proto" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.x_forwarded_prefix")
+      (requestHeaderText "X-Forwarded-Prefix" request)
 
 requestLogContextFields :: Wai.Request -> [Text]
 requestLogContextFields request =
@@ -793,6 +804,9 @@ requestLogContextFields request =
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_proto"
       (requestHeaderText "X-Forwarded-Proto" request)
+    ++ optionalRequestLogField
+      "http.request.header.x_forwarded_prefix"
+      (requestHeaderText "X-Forwarded-Prefix" request)
     ++ [renderRequestLogField "url.scheme" (requestScheme request)]
 
 optionalRequestLogField :: Text -> Maybe Text -> [Text]
@@ -848,6 +862,57 @@ requestHeaderText headerName request =
   fmap
     (Text.strip . TextEncoding.decodeUtf8)
     (lookup headerName (Wai.requestHeaders request))
+
+requestPathPrefix :: Wai.Request -> Text
+requestPathPrefix request =
+  maybe
+    Text.empty
+    normalizeRequestPathPrefix
+    (requestHeaderToken "X-Forwarded-Prefix" request)
+
+rawRequestPath :: Wai.Request -> Text
+rawRequestPath request =
+  if ByteString.null (Wai.rawPathInfo request)
+    then "/"
+    else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+
+externalRequestPath :: Wai.Request -> Text
+externalRequestPath request =
+  applyRequestPathPrefix
+    (requestPathPrefix request)
+    (waiRequestPath request)
+
+normalizeRequestPathPrefix :: Text -> Text
+normalizeRequestPathPrefix pathPrefix =
+  let trimmedPrefix = Text.strip pathPrefix
+      slashPrefixedPrefix =
+        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
+          (True, _) -> Text.empty
+          (False, True) -> trimmedPrefix
+          (False, False) -> "/" <> trimmedPrefix
+      normalizedPrefix =
+        Text.dropWhileEnd (== '/') slashPrefixedPrefix
+   in normalizedPrefix
+
+applyRequestPathPrefix :: Text -> Text -> Text
+applyRequestPathPrefix pathPrefix path =
+  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
+   in if Text.null normalizedPrefix
+        then path
+        else
+          if path == "/"
+            then normalizedPrefix
+            else normalizedPrefix <> path
+
+stripRequestPathPrefix :: Text -> Text -> Text
+stripRequestPathPrefix pathPrefix path =
+  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
+   in if Text.null normalizedPrefix
+        then path
+        else
+          if path == normalizedPrefix
+            then "/"
+            else maybe path ("/" <>) (Text.stripPrefix (normalizedPrefix <> "/") path)
 
 firstCommaSeparatedValue :: Text -> Maybe Text
 firstCommaSeparatedValue value =

@@ -16,11 +16,11 @@ import WebApi.Route
   )
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
-buildAppPageShell config =
-  HarchWeb.buildPageShell routeCodec (appPageShellConfig config)
+buildAppPageShell config page =
+  HarchWeb.buildPageShell routeCodec (appPageShellConfig config page) page
 
-appPageShellConfig :: AppConfig -> HarchWeb.PageShell AppRoute AppRequestContext
-appPageShellConfig config =
+appPageShellConfig :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+appPageShellConfig config page =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute
@@ -51,5 +51,5 @@ appPageShellConfig config =
               HarchWeb.attributeValue = "true"
             }
         ],
-      HarchWeb.shellScriptSources = navigationScriptSources config
+      HarchWeb.shellScriptSources = navigationScriptSources config (HarchWeb.pageContext page)
     }

@@ -27,8 +27,9 @@ import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import Test.Hspec
 
-newtype TestContext = TestContext
-  { requestLanguage :: Text
+data TestContext = TestContext
+  { requestLanguage :: Text,
+    requestPathPrefix :: Text
   }
   deriving (Eq, Show)
 
@@ -39,10 +40,10 @@ data TestRoute
   deriving (Eq, Show)
 
 defaultContext :: TestContext
-defaultContext = TestContext {requestLanguage = "en"}
+defaultContext = TestContext {requestLanguage = "en", requestPathPrefix = ""}
 
 spanishContext :: TestContext
-spanishContext = TestContext {requestLanguage = "es"}
+spanishContext = TestContext {requestLanguage = "es", requestPathPrefix = ""}
 
 sampleCodec :: RouteCodec TestRoute TestContext
 sampleCodec =
@@ -64,12 +65,51 @@ parseSampleRoute routeContext path
 
 renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
 renderSampleRoute request =
-  case (requestLanguage (requestContext request), requestRoute request) of
-    (language, KnownRoute)
-      | language == "es" -> "/es/known"
-      | otherwise -> "/known"
-    (_, DataRoute) -> "/data"
-    (_, MissingRoute) -> "/404"
+  applyTestPathPrefix
+    (requestPathPrefix (requestContext request))
+    ( case (requestLanguage (requestContext request), requestRoute request) of
+        (language, KnownRoute)
+          | language == "es" -> "/es/known"
+          | otherwise -> "/known"
+        (_, DataRoute) -> "/data"
+        (_, MissingRoute) -> "/404"
+    )
+
+applyTestPathPrefix :: Text -> Text -> Text
+applyTestPathPrefix pathPrefix path
+  | Text.null pathPrefix = path
+  | path == "/" = pathPrefix
+  | otherwise = pathPrefix <> path
+
+sampleRequestContextFromRequest :: Wai.Request -> TestContext -> TestContext
+sampleRequestContextFromRequest request requestContext =
+  requestContext
+    { requestPathPrefix =
+        maybe
+          ""
+          normalizeTestPathPrefix
+          ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
+              >>= firstTestHeaderValue
+          )
+    }
+
+normalizeTestPathPrefix :: Text -> Text
+normalizeTestPathPrefix pathPrefix =
+  let trimmedPrefix = Text.strip pathPrefix
+      slashPrefixedPrefix =
+        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
+          (True, _) -> ""
+          (False, True) -> trimmedPrefix
+          (False, False) -> "/" <> trimmedPrefix
+      normalizedPrefix =
+        Text.dropWhileEnd (== '/') slashPrefixedPrefix
+   in normalizedPrefix
+
+firstTestHeaderValue :: ByteString.ByteString -> Maybe Text
+firstTestHeaderValue headerValue =
+  case filter (not . Text.null) (map Text.strip (Text.splitOn "," (TextEncoding.decodeUtf8 headerValue))) of
+    [] -> Nothing
+    firstValue : _ -> Just firstValue
 
 samplePage :: RouteRequest TestRoute TestContext -> Page TestRoute TestContext
 samplePage request =
@@ -149,6 +189,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
       defaultRequestContext = defaultContext,
+      requestContextFromRequest = sampleRequestContextFromRequest,
       applicationStaticAssets = staticAssetsConfig,
       applicationRequestPolicy = requestPolicyConfig,
       routeCodec = sampleCodec,
@@ -197,6 +238,7 @@ rootPathApplication =
   Application
     { appName = "root-path",
       defaultRequestContext = defaultContext,
+      requestContextFromRequest = sampleRequestContextFromRequest,
       applicationStaticAssets = emptyStaticAssets,
       applicationRequestPolicy = defaultRequestPolicy,
       routeCodec = rootPathCodec,
@@ -215,9 +257,9 @@ rootPathCodec =
           else Nothing,
       renderRoute = \request ->
         case requestRoute request of
-          KnownRoute -> "/"
-          DataRoute -> "/data"
-          MissingRoute -> "/404",
+          KnownRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/"
+          DataRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/data"
+          MissingRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
 
@@ -603,6 +645,7 @@ spec = do
       localServerPort localTestServer `shouldBe` 5001
       localServerBaseUrl localTestServer `shouldBe` "http://127.0.0.1:5001"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
+      requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       responseStatus responseBodyValue `shouldBe` 202
       responseContentType responseBodyValue `shouldBe` "application/json"
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
@@ -643,12 +686,12 @@ spec = do
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
-      show request `shouldBe` "RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\"}}"
-      show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\"}}]"
+      show request `shouldBe` "RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}"
+      show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}]"
       (page == page) `shouldBe` True
       (page /= otherPage) `shouldBe` True
-      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
-      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
+      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
+      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
       (attribute == attribute) `shouldBe` True
       (attribute /= otherAttribute) `shouldBe` True
       show attribute `shouldBe` "HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}"
@@ -676,11 +719,11 @@ spec = do
       show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
-      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
-      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -688,6 +731,7 @@ spec = do
 
       appName sampleApplication `shouldBe` "sample"
       defaultRequestContext sampleApplication `shouldBe` defaultContext
+      requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
       parseRoute codec defaultContext "/known" `shouldBe` Just request
       parseRoute codec defaultContext "/data" `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
@@ -741,6 +785,7 @@ spec = do
     it "reuses route rendering for app-provided navigation targets" $ do
       routeHref sampleCodec defaultContext KnownRoute `shouldBe` "/known"
       routeHref sampleCodec spanishContext KnownRoute `shouldBe` "/es/known"
+      routeHref sampleCodec (defaultContext {requestPathPrefix = "/app"}) KnownRoute `shouldBe` "/app/known"
 
   describe "staticAssetHref" $
     it "renders asset URLs from the configured static prefix" $ do
@@ -750,6 +795,10 @@ spec = do
         `shouldBe` "/assets/css/app.css"
       staticAssetHref (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) "/img/logo.svg"
         `shouldBe` "/img/logo.svg"
+      staticAssetHrefWithPrefix "/app" (StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}) ""
+        `shouldBe` "/app"
+      staticAssetHrefWithPrefix "/app" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+        `shouldBe` "/app/assets/app.js"
 
   describe "buildNavigation" $
     it "resolves hrefs and active state from the current page context" $
@@ -844,6 +893,28 @@ spec = do
       readResponseBody response
         `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" aria-current=\"page\">Known</a><a href=\"/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
 
+    it "normalizes forwarded root prefixes for route matching and rendered root links" $ do
+      let prefixedRootRequest =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = "/app",
+                Wai.requestHeaders = [("X-Forwarded-Prefix", "app")]
+              }
+      response <- performWaiRequest (toWaiApplication rootPathApplication) prefixedRootRequest
+      Wai.responseStatus response `shouldBe` Http.status200
+      readResponseBody response
+        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" aria-current=\"page\">Known</a><a href=\"/app/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+
+    it "uses forwarded path prefixes for route matching and rendered navigation links" $ do
+      let prefixedRequest =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = "/app/known",
+                Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
+              }
+      response <- performWaiRequest (toWaiApplication sampleApplication) prefixedRequest
+      Wai.responseStatus response `shouldBe` Http.status200
+      readResponseBody response
+        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app/known\" aria-current=\"page\">Known</a><a href=\"/app/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+
     it "renders the not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
@@ -884,6 +955,20 @@ spec = do
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data?from=plain-http"
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
       readResponseBody response `shouldReturn` "Redirecting to HTTPS"
+
+    it "keeps forwarded path prefixes in HTTPS redirect locations" $ do
+      let redirectRequest =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = "/second",
+                Wai.rawQueryString = "?from=plain",
+                Wai.requestHeaders =
+                  [ ("Host", "app.example.com"),
+                    ("X-Forwarded-Prefix", "/app")
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
 
     it "redirects the root path without requiring an explicit :80 host suffix" $ do
       let redirectRequest =
@@ -951,7 +1036,8 @@ spec = do
               ["data"]
               proxiedRemoteHost
               [ ("X-Forwarded-For", "203.0.113.10, 10.0.0.1"),
-                ("X-Forwarded-Proto", "https")
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Prefix", "/app")
               ]
           clientAddressAttribute =
             Observability.ObservabilityAttribute
@@ -972,6 +1058,11 @@ spec = do
             Observability.ObservabilityAttribute
               { Observability.attributeName = "http.request.header.x_forwarded_proto",
                 Observability.attributeValue = Observability.TextAttribute "https"
+              }
+          forwardedPrefixAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_prefix",
+                Observability.attributeValue = Observability.TextAttribute "/app"
               }
           diagnosticApplication =
             sampleApplication
@@ -999,18 +1090,19 @@ spec = do
                            "GET"
                            "https"
                            "/data"
-                           "/data"
+                           "/app/data"
                            503
                            Observability.BodyResponseKind
                            [ clientAddressAttribute,
                              peerAddressAttribute,
                              forwardedForAttribute,
                              forwardedProtoAttribute,
+                             forwardedPrefixAttribute,
                              failureAttribute
                            ]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" url.scheme=\"https\"] Sample failure log"
+        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log"
                        ]
 
     it "falls back to the direct peer address and request security when forwarding headers are absent" $ do
@@ -1212,6 +1304,26 @@ spec = do
         Wai.responseStatus response `shouldBe` Http.status200
         lookup "Strict-Transport-Security" (Wai.responseHeaders response)
           `shouldBe` Just "max-age=86400"
+        readResponseBody response `shouldReturn` "console.log('asset');"
+
+    it "strips forwarded path prefixes before serving static assets" $
+      withSystemTempDirectory "harch-web-static-prefix" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticCacheControlSeconds = Nothing
+                }
+            prefixedRequest =
+              Wai.defaultRequest
+                { Wai.rawPathInfo = "/app/assets/app.js",
+                  Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/app.js") "console.log('asset');"
+        response <- performWaiRequest (toWaiApplication staticApplication) prefixedRequest
+        Wai.responseStatus response `shouldBe` Http.status200
         readResponseBody response `shouldReturn` "console.log('asset');"
 
     it "serves root-prefixed static assets with the expected content types and no cache header" $

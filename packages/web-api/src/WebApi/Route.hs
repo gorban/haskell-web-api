@@ -10,6 +10,7 @@ module WebApi.Route
     matchRoute,
     parseRoute,
     renderRoutePath,
+    requestContextFromWaiRequest,
     selectRoute,
     routeCodec,
   )
@@ -18,7 +19,9 @@ where
 import Data.Char (isAsciiLower)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import Network.Wai qualified as Wai
 
 data AppLocale
   = English
@@ -33,7 +36,8 @@ data RequestSurface
 data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
     requestCorrelationId :: Maybe Text,
-    requestSurface :: RequestSurface
+    requestSurface :: RequestSurface,
+    requestPathPrefix :: Text
   }
   deriving (Eq, Show)
 
@@ -54,7 +58,8 @@ defaultRequestContext =
   AppRequestContext
     { requestLocale = English,
       requestCorrelationId = Nothing,
-      requestSurface = PageSurface
+      requestSurface = PageSurface,
+      requestPathPrefix = Text.empty
     }
 
 routeCodec :: HarchWeb.RouteCodec AppRoute AppRequestContext
@@ -81,11 +86,14 @@ selectRoute requestContext path = do
 
 renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 renderRoutePath routeRequest =
-  case requestSurface (HarchWeb.requestContext routeRequest) of
-    ApiSurface -> renderApiRoutePath (HarchWeb.requestRoute routeRequest)
-    PageSurface ->
-      let renderedPath = Text.concat [renderLocalePrefix (requestLocale (HarchWeb.requestContext routeRequest)), renderPageRouteSuffix (HarchWeb.requestRoute routeRequest)]
-       in if Text.null renderedPath then "/" else renderedPath
+  applyRequestPathPrefix
+    (requestPathPrefix (HarchWeb.requestContext routeRequest))
+    ( case requestSurface (HarchWeb.requestContext routeRequest) of
+        ApiSurface -> renderApiRoutePath (HarchWeb.requestRoute routeRequest)
+        PageSurface ->
+          let renderedPath = Text.concat [renderLocalePrefix (requestLocale (HarchWeb.requestContext routeRequest)), renderPageRouteSuffix (HarchWeb.requestRoute routeRequest)]
+           in if Text.null renderedPath then "/" else renderedPath
+    )
 
 matchRoute :: AppRequestContext -> Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 matchRoute = HarchWeb.matchRoute routeCodec
@@ -98,6 +106,18 @@ mergeRequestContext requestContext maybeLocale pathSurface =
           Just locale -> locale
           Nothing -> requestLocale requestContext,
       requestSurface = pathSurface
+    }
+
+requestContextFromWaiRequest :: Wai.Request -> AppRequestContext -> AppRequestContext
+requestContextFromWaiRequest request requestContext =
+  requestContext
+    { requestPathPrefix =
+        maybe
+          Text.empty
+          normalizeRequestPathPrefix
+          ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
+              >>= firstCommaSeparatedValue . Text.strip . TextEncoding.decodeUtf8
+          )
     }
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
@@ -185,3 +205,31 @@ renderApiRoutePath route =
     StatusApiRoute -> "/api/status"
     SecondRoute -> "/api/second"
     _ -> "/api/404"
+
+firstCommaSeparatedValue :: Text -> Maybe Text
+firstCommaSeparatedValue value =
+  case filter (not . Text.null) (map Text.strip (Text.splitOn "," value)) of
+    [] -> Nothing
+    firstValue : _ -> Just firstValue
+
+normalizeRequestPathPrefix :: Text -> Text
+normalizeRequestPathPrefix pathPrefix =
+  let trimmedPrefix = Text.strip pathPrefix
+      slashPrefixedPrefix =
+        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
+          (True, _) -> Text.empty
+          (False, True) -> trimmedPrefix
+          (False, False) -> "/" <> trimmedPrefix
+      normalizedPrefix =
+        Text.dropWhileEnd (== '/') slashPrefixedPrefix
+   in normalizedPrefix
+
+applyRequestPathPrefix :: Text -> Text -> Text
+applyRequestPathPrefix pathPrefix path =
+  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
+   in if Text.null normalizedPrefix
+        then path
+        else
+          if path == "/"
+            then normalizedPrefix
+            else normalizedPrefix <> path

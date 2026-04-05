@@ -31,6 +31,7 @@ import WebApi.Route
   ( AppRequestContext,
     AppRoute (..),
     defaultRequestContext,
+    requestContextFromWaiRequest,
     routeCodec,
   )
 
@@ -50,6 +51,7 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
       HarchWeb.Application
         { HarchWeb.appName = "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
+          HarchWeb.requestContextFromRequest = requestContextFromWaiRequest,
           HarchWeb.applicationStaticAssets = staticAssets config,
           HarchWeb.applicationRequestPolicy = requestPolicy config,
           HarchWeb.routeCodec = routeCodec,

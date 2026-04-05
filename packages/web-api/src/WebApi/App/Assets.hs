@@ -8,9 +8,10 @@ where
 import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.Config (AppConfig (..))
+import WebApi.Route (AppRequestContext (..))
 
-navigationScriptSources :: AppConfig -> [Text]
-navigationScriptSources config =
+navigationScriptSources :: AppConfig -> AppRequestContext -> [Text]
+navigationScriptSources config requestContext =
   case HarchWeb.staticAssetRoots (staticAssets config) of
-    primaryRoot : _ -> [HarchWeb.staticAssetHref primaryRoot "navigation.js"]
+    primaryRoot : _ -> [HarchWeb.staticAssetHrefWithPrefix (requestPathPrefix requestContext) primaryRoot "navigation.js"]
     [] -> []

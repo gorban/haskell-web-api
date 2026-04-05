@@ -85,10 +85,12 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
+    bytestring,
     core,
     harch-web,
     process,
     text,
+    wai,
 
   -- Directories containing source files.
   hs-source-dirs: src

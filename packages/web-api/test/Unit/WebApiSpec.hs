@@ -71,11 +71,33 @@ secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, Harc
 frenchRequestContext :: AppRequestContext
 frenchRequestContext = defaultRequestContext {requestLocale = French}
 
+prefixedRequestContext :: AppRequestContext
+prefixedRequestContext = defaultRequestContext {requestPathPrefix = "/app"}
+
+prefixedFrenchRequestContext :: AppRequestContext
+prefixedFrenchRequestContext = frenchRequestContext {requestPathPrefix = "/app"}
+
 frenchHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 frenchHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = frenchRequestContext}
 
 frenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 frenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = frenchRequestContext}
+
+prefixedHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+prefixedHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = prefixedRequestContext}
+
+prefixedSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+prefixedSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = prefixedRequestContext}
+
+prefixedFrenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+prefixedFrenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = prefixedFrenchRequestContext}
+
+prefixedApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+prefixedApiStatusRequest =
+  HarchWeb.RouteRequest
+    { HarchWeb.requestRoute = StatusApiRoute,
+      HarchWeb.requestContext = prefixedRequestContext {requestSurface = ApiSurface}
+    }
 
 frenchApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 frenchApiStatusRequest =
@@ -120,8 +142,17 @@ pureRouteMatcher = WebApi.Route.matchRoute WebApi.Route.defaultRequestContext
 
 renderedShell :: AppConfig -> AppRoute -> IO Text
 renderedShell config route = do
+  renderedShellForRequest
+    config
+    HarchWeb.RouteRequest
+      { HarchWeb.requestRoute = route,
+        HarchWeb.requestContext = defaultRequestContext
+      }
+
+renderedShellForRequest :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO Text
+renderedShellForRequest config routeRequest = do
   let application = buildApp config
-  page <- renderPage config (HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = defaultRequestContext})
+  page <- renderPage config routeRequest
   pure (HarchWeb.pageShell application page)
 
 performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
@@ -3040,7 +3071,8 @@ spec = do
             AppRequestContext
               { requestLocale = French,
                 requestCorrelationId = Just "req-456",
-                requestSurface = PageSurface
+                requestSurface = PageSurface,
+                requestPathPrefix = ""
               }
           callToAction =
             CallToAction
@@ -3243,10 +3275,11 @@ spec = do
         ( AppRequestContext
             { requestLocale = French,
               requestCorrelationId = Just "req-789",
-              requestSurface = PageSurface
+              requestSurface = PageSurface,
+              requestPathPrefix = ""
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface}"
+        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\"}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -3360,7 +3393,8 @@ spec = do
             AppRequestContext
               { requestLocale = French,
                 requestCorrelationId = Just "req-123",
-                requestSurface = PageSurface
+                requestSurface = PageSurface,
+                requestPathPrefix = ""
               }
           callToAction =
             CallToAction
@@ -3495,7 +3529,8 @@ spec = do
             AppRequestContext
               { requestLocale = French,
                 requestCorrelationId = Just "req-999",
-                requestSurface = PageSurface
+                requestSurface = PageSurface,
+                requestPathPrefix = ""
               }
           callToAction =
             CallToAction
@@ -3610,7 +3645,8 @@ spec = do
             AppRequestContext
               { requestLocale = French,
                 requestCorrelationId = Just "req-list",
-                requestSurface = PageSurface
+                requestSurface = PageSurface,
+                requestPathPrefix = ""
               }
           callToAction =
             CallToAction
@@ -3664,7 +3700,7 @@ spec = do
       show [English, French] `shouldBe` "[English,French]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface}]"
+        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\"}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -3753,6 +3789,11 @@ spec = do
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
       renderRoutePath notFoundRequest `shouldBe` "/404"
+
+    it "prepends the forwarded request path prefix to page and API routes" $ do
+      renderRoutePath prefixedHomeRequest `shouldBe` "/app"
+      renderRoutePath prefixedFrenchSecondRequest `shouldBe` "/app/fr/second"
+      renderRoutePath prefixedApiStatusRequest `shouldBe` "/app/api/status"
 
   describe "matchRoute" $ do
     it "remains available separately from HarchWeb.matchRoute" $
@@ -3854,9 +3895,9 @@ spec = do
               }
       show config
         `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
@@ -4272,6 +4313,11 @@ spec = do
       Text.isInfixOf "data-bootstrap-hooks" homeShell `shouldBe` False
       Text.isInfixOf "<main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
+    it "renders navigation and script hrefs under the forwarded request path prefix" $ do
+      prefixedShell <- renderedShellForRequest navigationAppConfig prefixedSecondRequest
+      Text.isInfixOf "<a href=\"/app\">Home</a><a href=\"/app/second\" aria-current=\"page\">Second</a>" prefixedShell `shouldBe` True
+      Text.isInfixOf "<script src=\"/app/assets/navigation.js\" defer></script>" prefixedShell `shouldBe` True
+
     it "serves the bundled navigation asset through configured static roots" $ do
       response <- performWaiRequest (HarchWeb.toWaiApplication (buildApp navigationAppConfig)) (waiRequest ["assets", "navigation.js"])
       Wai.responseStatus response `shouldBe` Http.status200
@@ -4319,6 +4365,20 @@ spec = do
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
+
+    it "derives normalized forwarded path prefixes into the request context used by the WAI adapter" $ do
+      let forwardedPrefixRequest =
+            (waiRequest ["second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "app, /ignored")]
+              }
+          emptyForwardedPrefixRequest =
+            (waiRequest ["second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", ", ")]
+              }
+      HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
+        `shouldBe` defaultRequestContext {requestPathPrefix = "/app"}
+      HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
+        `shouldBe` defaultRequestContext
 
     it "stores the configured static assets used by the WAI adapter" $
       HarchWeb.applicationStaticAssets pureApplication `shouldBe` staticAssets defaultAppConfig
@@ -4400,6 +4460,26 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders apiMissingResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody apiMissingResponse
         `shouldReturn` "{\"error\":\"not-found\"}"
+
+    it "adapts forwarded path prefixes through the WAI facade for pages and static assets" $ do
+      let prefixedPageRequest =
+            (waiRequest ["app", "second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
+              }
+          prefixedAssetRequest =
+            (waiRequest ["app", "assets", "navigation.js"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
+              }
+          prefixedApplication = buildApp navigationAppConfig
+      pageResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedPageRequest
+      Wai.responseStatus pageResponse `shouldBe` Http.status200
+      pageBody <- readResponseBody pageResponse
+      Text.isInfixOf "<a href=\"/app\">Home</a><a href=\"/app/second\" aria-current=\"page\">Second</a>" pageBody `shouldBe` True
+      Text.isInfixOf "<script src=\"/app/assets/navigation.js\" defer></script>" pageBody `shouldBe` True
+
+      assetResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedAssetRequest
+      Wai.responseStatus assetResponse `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders assetResponse) `shouldBe` Just "application/javascript; charset=utf-8"
 
     it "returns HTTP 500 for required page failures while keeping unaffected routes unchanged" $ do
       let failingApplication =
