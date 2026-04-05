@@ -51,6 +51,7 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
         { HarchWeb.appName = "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
           HarchWeb.applicationStaticAssets = staticAssets config,
+          HarchWeb.applicationRequestPolicy = requestPolicy config,
           HarchWeb.routeCodec = routeCodec,
           HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
           HarchWeb.pageShell = buildAppPageShell config,

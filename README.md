@@ -121,6 +121,10 @@ understands the following values:
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
 | `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
+| `REDIRECT_HTTP_TO_HTTPS` | Whether insecure requests should receive an HTTPS redirect before app/static handling. Supported values are `true` / `false`. | (`false`) |
+| `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
+| `HSTS_INCLUDE_SUBDOMAINS` | Whether emitted HSTS headers should include `includeSubDomains`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
+| `HSTS_PRELOAD` | Whether emitted HSTS headers should include `preload`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
 | `OTLP_TRACING_ENDPOINT` | OTLP endpoint for tracing export. | (`unset`) |
 | `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
@@ -223,6 +227,12 @@ STATIC_ASSET_ROOT_0_DIRECTORY=public
 STATIC_ASSET_ROOT_1_URL_PREFIX=/uploads
 STATIC_ASSET_ROOT_1_DIRECTORY=/var/lib/web-api/uploads
 STATIC_CACHE_CONTROL_SECONDS=3600
+
+# Reverse-proxy / TLS-offload policy
+REDIRECT_HTTP_TO_HTTPS=true
+HSTS_MAX_AGE_SECONDS=31536000
+HSTS_INCLUDE_SUBDOMAINS=true
+HSTS_PRELOAD=true
 
 # Observability
 OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces

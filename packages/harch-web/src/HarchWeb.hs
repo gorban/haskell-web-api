@@ -23,6 +23,7 @@ module HarchWeb
     OtlpExporterStartup (..),
     Page (..),
     PageShell (..),
+    RequestPolicyConfig (..),
     Response (..),
     ResponseBody (..),
     ResolvedNavigationItem (..),
@@ -32,6 +33,7 @@ module HarchWeb
     ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
+    StrictTransportSecurityConfig (..),
     TelemetrySignal (..),
     AcmeBindPlan (..),
     TlsCertificateSource (..),
@@ -55,6 +57,7 @@ where
 import Control.Concurrent (MVar, ThreadId, forkIO, killThread, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (bracket, onException)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List (maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
@@ -139,6 +142,19 @@ data ObservabilityConfig = ObservabilityConfig
   }
   deriving (Eq, Show)
 
+data StrictTransportSecurityConfig = StrictTransportSecurityConfig
+  { strictTransportSecurityMaxAgeSeconds :: Int,
+    strictTransportSecurityIncludeSubDomains :: Bool,
+    strictTransportSecurityPreload :: Bool
+  }
+  deriving (Eq, Show)
+
+data RequestPolicyConfig = RequestPolicyConfig
+  { redirectHttpToHttps :: Bool,
+    strictTransportSecurity :: Maybe StrictTransportSecurityConfig
+  }
+  deriving (Eq, Show)
+
 data TelemetrySignal
   = TracingSignal
   | MetricsSignal
@@ -159,6 +175,7 @@ newtype ObservabilityStartupPlan = ObservabilityStartupPlan
 data ServerConfig = ServerConfig
   { listenerConfigs :: [ListenerConfig],
     staticAssets :: StaticAssetsConfig,
+    requestPolicy :: RequestPolicyConfig,
     observability :: ObservabilityConfig
   }
   deriving (Eq, Show)
@@ -287,6 +304,7 @@ data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
     applicationStaticAssets :: StaticAssetsConfig,
+    applicationRequestPolicy :: RequestPolicyConfig,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
     pageShell :: Page route context -> Text,
@@ -383,53 +401,63 @@ matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parse
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
 toWaiApplication webApplication request respond =
-  do
-    maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
-    case maybeStaticResponse of
-      Just staticResponse -> respond staticResponse
-      Nothing -> do
-        let routeRequest =
-              matchRoute
-                (routeCodec webApplication)
-                (defaultRequestContext webApplication)
-                (waiRequestPath request)
-        response <- renderResponse webApplication routeRequest
-        let requestContextAttributes = requestContextObservabilityAttributes request
-            requestLogFields = requestLogContextFields request
-            extraObservabilityAttributes =
-              requestContextAttributes
-                <> case response of
+  case requestRedirectLocation (applicationRequestPolicy webApplication) request of
+    Just redirectLocation ->
+      respond
+        (httpsRedirectResponse redirectLocation)
+    Nothing -> do
+      maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
+      case maybeStaticResponse of
+        Just staticResponse ->
+          respond
+            (applyResponseHeaders (requestPolicyResponseHeaders (applicationRequestPolicy webApplication) request) staticResponse)
+        Nothing -> do
+          let routeRequest =
+                matchRoute
+                  (routeCodec webApplication)
+                  (defaultRequestContext webApplication)
+                  (waiRequestPath request)
+          response <- renderResponse webApplication routeRequest
+          let requestContextAttributes = requestContextObservabilityAttributes request
+              requestLogFields = requestLogContextFields request
+              extraObservabilityAttributes =
+                requestContextAttributes
+                  <> case response of
+                    PageResponse _ -> []
+                    BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+              contextualizedResponseLogEntries =
+                case response of
                   PageResponse _ -> []
-                  BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-            contextualizedResponseLogEntries =
-              case response of
-                PageResponse _ -> []
-                BodyResponse responseBodyValue ->
-                  map
-                    (prependRequestLogContext requestLogFields)
-                    (responseLogEntries responseBodyValue)
-            requestObservability =
-              Observability.buildRequestObservability
-                (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                (requestScheme request)
-                (waiRequestPath request)
-                (renderRoute (routeCodec webApplication) routeRequest)
-                ( case response of
-                    PageResponse page ->
-                      if isNotFoundPage webApplication page
-                        then 404
-                        else 200
-                    BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                  BodyResponse responseBodyValue ->
+                    map
+                      (prependRequestLogContext requestLogFields)
+                      (responseLogEntries responseBodyValue)
+              requestObservability =
+                Observability.buildRequestObservability
+                  (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                  (requestScheme request)
+                  (waiRequestPath request)
+                  (renderRoute (routeCodec webApplication) routeRequest)
+                  ( case response of
+                      PageResponse page ->
+                        if isNotFoundPage webApplication page
+                          then 404
+                          else 200
+                      BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                  )
+                  ( case response of
+                      PageResponse _ -> Observability.PageResponseKind
+                      BodyResponse _ -> Observability.BodyResponseKind
+                  )
+                  extraObservabilityAttributes
+          Observability.forceRequestObservability requestObservability `seq`
+            reportRequestObservability webApplication requestObservability
+              >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
+              >> respond
+                ( applyResponseHeaders
+                    (requestPolicyResponseHeaders (applicationRequestPolicy webApplication) request)
+                    (toWaiResponse [] webApplication response)
                 )
-                ( case response of
-                    PageResponse _ -> Observability.PageResponseKind
-                    BodyResponse _ -> Observability.BodyResponseKind
-                )
-                extraObservabilityAttributes
-        Observability.forceRequestObservability requestObservability `seq`
-          reportRequestObservability webApplication requestObservability
-            >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-            >> respond (toWaiResponse webApplication response)
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -649,19 +677,32 @@ renderScriptSource scriptSource =
       "\" defer></script>"
     ]
 
-toWaiResponse :: (Eq route) => Application route context -> Response route context -> Wai.Response
-toWaiResponse webApplication response =
+toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Application route context -> Response route context -> Wai.Response
+toWaiResponse additionalHeaders webApplication response =
   case response of
     PageResponse page ->
       Wai.responseLBS
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
+        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
         (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
     BodyResponse responseBodyValue ->
       Wai.responseLBS
         (Http.mkStatus (responseStatus responseBodyValue) mempty)
-        [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))]
+        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
         (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
+applyResponseHeaders additionalHeaders =
+  Wai.mapResponseHeaders (additionalHeaders <>)
+
+httpsRedirectResponse :: ByteString.ByteString -> Wai.Response
+httpsRedirectResponse redirectLocation =
+  Wai.responseLBS
+    Http.status308
+    [ (Http.hLocation, redirectLocation),
+      (Http.hContentType, TextEncoding.encodeUtf8 plainTextContentType)
+    ]
+    "Redirecting to HTTPS"
 
 isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
 isNotFoundPage webApplication page =
@@ -674,6 +715,58 @@ waiRequestPath request =
   if ByteString.null (Wai.rawPathInfo request)
     then "/"
     else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+
+requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
+requestRedirectLocation requestPolicyConfig request =
+  if redirectHttpToHttps requestPolicyConfig && requestScheme request == "http"
+    then
+      fmap
+        ( \redirectAuthority ->
+            "https://"
+              <> redirectAuthority
+              <> requestRedirectPathAndQuery request
+        )
+        (requestRedirectAuthority request)
+    else Nothing
+
+requestRedirectAuthority :: Wai.Request -> Maybe ByteString.ByteString
+requestRedirectAuthority request =
+  fmap
+    (\hostHeader -> fromMaybe hostHeader (ByteStringChar8.stripSuffix ":80" hostHeader))
+    (lookup "Host" (Wai.requestHeaders request))
+
+requestRedirectPathAndQuery :: Wai.Request -> ByteString.ByteString
+requestRedirectPathAndQuery request =
+  requestPathBytes request <> Wai.rawQueryString request
+
+requestPathBytes :: Wai.Request -> ByteString.ByteString
+requestPathBytes request =
+  if ByteString.null (Wai.rawPathInfo request)
+    then "/"
+    else Wai.rawPathInfo request
+
+requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+requestPolicyResponseHeaders requestPolicyConfig request =
+  case strictTransportSecurity requestPolicyConfig of
+    Just strictTransportSecurityConfig
+      | requestScheme request == "https" ->
+          [ ( "Strict-Transport-Security",
+              TextEncoding.encodeUtf8 (strictTransportSecurityHeaderValue strictTransportSecurityConfig)
+            )
+          ]
+    _ -> []
+
+strictTransportSecurityHeaderValue :: StrictTransportSecurityConfig -> Text
+strictTransportSecurityHeaderValue strictTransportSecurityConfig =
+  Text.intercalate
+    "; "
+    ( [ "max-age=" <> Text.pack (show (strictTransportSecurityMaxAgeSeconds strictTransportSecurityConfig))
+      ]
+        ++ [ "includeSubDomains"
+           | strictTransportSecurityIncludeSubDomains strictTransportSecurityConfig
+           ]
+        ++ ["preload" | strictTransportSecurityPreload strictTransportSecurityConfig]
+    )
 
 requestContextObservabilityAttributes :: Wai.Request -> [Observability.ObservabilityAttribute]
 requestContextObservabilityAttributes request =
@@ -772,6 +865,9 @@ renderRequestLogField fieldName fieldValue =
 
 htmlContentType :: Text
 htmlContentType = "text/html; charset=utf-8"
+
+plainTextContentType :: Text
+plainTextContentType = "text/plain; charset=utf-8"
 
 serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe Wai.Response)
 serveStaticAssetResponse staticAssetsConfig requestPath =

@@ -577,6 +577,29 @@ X-Forwarded-For: 203.0.113.10, 10.0.0.15
 X-Forwarded-Proto: https
 ```
 
+## TLS-Offload Redirect And HSTS Example
+
+If TLS terminates at a reverse proxy and `haskell-web-api` only sees plain HTTP on the backend hop,
+enable redirect/HSTS policy in the app and make sure the proxy forwards `X-Forwarded-Proto`.
+
+```env
+REDIRECT_HTTP_TO_HTTPS=true
+HSTS_MAX_AGE_SECONDS=31536000
+HSTS_INCLUDE_SUBDOMAINS=true
+HSTS_PRELOAD=true
+```
+
+With that policy:
+
+- requests whose effective scheme is `http` return an HTTPS redirect before app or static handling,
+- requests whose effective scheme is `https` keep their normal response and add
+  `Strict-Transport-Security`,
+- `X-Forwarded-Proto=https` is enough for TLS-offload deployments where the backend listener itself stays
+  on plain HTTP.
+
+That lets a common `80 -> 443` proxy setup enforce browser upgrades and HSTS now, even before native
+runtime HTTPS listener startup is the active deployment path.
+
 ## External Port 80 Reachability for ACME / http-01
 
 If you want to test Let's Encrypt or another external `http-01` style flow against this machine from the

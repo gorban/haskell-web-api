@@ -18,8 +18,10 @@ module WebApi.Config
     ListenerScheme (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
+    RequestPolicyConfig (..),
     StaticAssetsConfig (..),
     StaticAssetRoot (..),
+    StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
     TlsConfig (..),
     committedEnvDefaults,
@@ -50,6 +52,7 @@ import Core.Config
     parseNonNegativeInt,
     parsePositiveInt,
   )
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
@@ -61,9 +64,11 @@ import HarchWeb
     ListenerScheme (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
+    RequestPolicyConfig (..),
     ServerConfig (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
+    StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
     TlsConfig (..),
   )
@@ -98,6 +103,7 @@ data AppConfig = AppConfig
   { appTitlePrefix :: Text,
     listenerConfigs :: [ListenerConfig],
     staticAssets :: StaticAssetsConfig,
+    requestPolicy :: RequestPolicyConfig,
     observability :: ObservabilityConfig
   }
   deriving (Eq, Show)
@@ -114,10 +120,11 @@ data AppStartupConfigLoadError
   deriving (Eq, Show)
 
 instance HasServerConfig AppConfig where
-  toServerConfig AppConfig {listenerConfigs = appListeners, staticAssets = appStaticAssets, observability = appObservability} =
+  toServerConfig AppConfig {listenerConfigs = appListeners, staticAssets = appStaticAssets, requestPolicy = appRequestPolicy, observability = appObservability} =
     ServerConfig
       { listenerConfigs = appListeners,
         staticAssets = appStaticAssets,
+        requestPolicy = appRequestPolicy,
         observability = appObservability
       }
 
@@ -169,6 +176,11 @@ defaultAppConfig =
         StaticAssetsConfig
           { staticAssetRoots = [],
             staticCacheControlSeconds = Nothing
+          },
+      requestPolicy =
+        RequestPolicyConfig
+          { redirectHttpToHttps = False,
+            strictTransportSecurity = Nothing
           },
       observability =
         ObservabilityConfig
@@ -283,12 +295,14 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
   parsedTitlePrefix <- requiredConfigValue "APP_TITLE_PREFIX"
   parsedListeners <- parseListenerConfigs
   parsedStaticAssets <- parseStaticAssetsConfig
+  parsedRequestPolicy <- parseRequestPolicyConfig
   parsedObservability <- parseObservabilityConfig
   pure
     AppConfig
       { appTitlePrefix = parsedTitlePrefix,
         listenerConfigs = parsedListeners,
         staticAssets = parsedStaticAssets,
+        requestPolicy = parsedRequestPolicy,
         observability = parsedObservability
       }
   where
@@ -386,6 +400,39 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         <*> traverse
           (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS")
           (optionalConfigValue "STATIC_CACHE_CONTROL_SECONDS")
+
+    parseRequestPolicyConfig =
+      RequestPolicyConfig
+        <$> parseRedirectHttpToHttps
+        <*> parseOptionalStrictTransportSecurity
+
+    parseRedirectHttpToHttps =
+      case optionalConfigValue "REDIRECT_HTTP_TO_HTTPS" of
+        Nothing -> Right False
+        Just "true" -> Right True
+        Just "false" -> Right False
+        Just value -> Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" value)
+
+    parseOptionalStrictTransportSecurity =
+      case optionalConfigValue "HSTS_MAX_AGE_SECONDS" of
+        Nothing ->
+          if any (isJust . optionalConfigValue) ["HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD"]
+            then Left (MissingConfigValue "HSTS_MAX_AGE_SECONDS")
+            else Right Nothing
+        Just maxAgeValue ->
+          Just
+            <$> ( StrictTransportSecurityConfig
+                    <$> parseNonNegativeInt "HSTS_MAX_AGE_SECONDS" maxAgeValue
+                    <*> parseOptionalBool "HSTS_INCLUDE_SUBDOMAINS"
+                    <*> parseOptionalBool "HSTS_PRELOAD"
+                )
+
+    parseOptionalBool key =
+      case optionalConfigValue key of
+        Nothing -> Right False
+        Just "true" -> Right True
+        Just "false" -> Right False
+        Just value -> Left (InvalidConfigValue key value)
 
     parseStaticAssetRoot staticRootIndex =
       StaticAssetRoot

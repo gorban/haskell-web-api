@@ -133,12 +133,24 @@ emptyStaticAssets =
       staticCacheControlSeconds = Nothing
     }
 
+defaultRequestPolicy :: RequestPolicyConfig
+defaultRequestPolicy =
+  RequestPolicyConfig
+    { redirectHttpToHttps = False,
+      strictTransportSecurity = Nothing
+    }
+
 sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute TestContext
 sampleApplicationWithStaticAssets staticAssetsConfig =
+  sampleApplicationWithConfig staticAssetsConfig defaultRequestPolicy
+
+sampleApplicationWithConfig :: StaticAssetsConfig -> RequestPolicyConfig -> Application TestRoute TestContext
+sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
       defaultRequestContext = defaultContext,
       applicationStaticAssets = staticAssetsConfig,
+      applicationRequestPolicy = requestPolicyConfig,
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
       pageShell = buildPageShell sampleCodec sampleShell,
@@ -166,6 +178,7 @@ sampleServerConfig =
           { staticAssetRoots = [],
             staticCacheControlSeconds = Nothing
           },
+      requestPolicy = defaultRequestPolicy,
       observability =
         ObservabilityConfig
           { tracingExporter = Nothing,
@@ -185,6 +198,7 @@ rootPathApplication =
     { appName = "root-path",
       defaultRequestContext = defaultContext,
       applicationStaticAssets = emptyStaticAssets,
+      applicationRequestPolicy = defaultRequestPolicy,
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
       pageShell = buildPageShell rootPathCodec sampleShell,
@@ -298,6 +312,17 @@ spec = do
             ObservabilityStartupPlan
               { startupExporters = [observabilityStartup]
               }
+          strictTransportSecurityConfig =
+            StrictTransportSecurityConfig
+              { strictTransportSecurityMaxAgeSeconds = 31536000,
+                strictTransportSecurityIncludeSubDomains = True,
+                strictTransportSecurityPreload = True
+              }
+          requestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = True,
+                strictTransportSecurity = Just strictTransportSecurityConfig
+              }
           serverConfig =
             ServerConfig
               { listenerConfigs =
@@ -313,6 +338,7 @@ spec = do
                     { staticAssetRoots = [staticRoot],
                       staticCacheControlSeconds = Just 3600
                     },
+                requestPolicy = requestPolicyConfig,
                 observability = observabilityConfig
               }
           listenerConfig =
@@ -333,6 +359,12 @@ spec = do
       staticDirectory staticRoot `shouldBe` "public"
       staticAssetRoots (staticAssets serverConfig) `shouldBe` [staticRoot]
       staticCacheControlSeconds (staticAssets serverConfig) `shouldBe` Just 3600
+      redirectHttpToHttps requestPolicyConfig `shouldBe` True
+      strictTransportSecurity requestPolicyConfig `shouldBe` Just strictTransportSecurityConfig
+      strictTransportSecurityMaxAgeSeconds strictTransportSecurityConfig `shouldBe` 31536000
+      strictTransportSecurityIncludeSubDomains strictTransportSecurityConfig `shouldBe` True
+      strictTransportSecurityPreload strictTransportSecurityConfig `shouldBe` True
+      requestPolicy serverConfig `shouldBe` requestPolicyConfig
       otlpEndpoint tracingConfig `shouldBe` "http://collector:4318/v1/traces"
       otlpHeaders tracingConfig `shouldBe` [("authorization", "Bearer token")]
       tracingExporter observabilityConfig `shouldBe` Just tracingConfig
@@ -354,6 +386,28 @@ spec = do
               _ -> expectationFailure "expected parenthesized rendering"
           certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
           otherCertbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["renew"]}
+          strictTransportSecurityConfig =
+            StrictTransportSecurityConfig
+              { strictTransportSecurityMaxAgeSeconds = 31536000,
+                strictTransportSecurityIncludeSubDomains = True,
+                strictTransportSecurityPreload = True
+              }
+          otherStrictTransportSecurityConfig =
+            StrictTransportSecurityConfig
+              { strictTransportSecurityMaxAgeSeconds = 60,
+                strictTransportSecurityIncludeSubDomains = False,
+                strictTransportSecurityPreload = False
+              }
+          requestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = True,
+                strictTransportSecurity = Just strictTransportSecurityConfig
+              }
+          otherRequestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = False,
+                strictTransportSecurity = Just otherStrictTransportSecurityConfig
+              }
           acmeConfig =
             AcmeConfig
               { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
@@ -409,11 +463,16 @@ spec = do
             ServerConfig
               { listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
+                requestPolicy = requestPolicyConfig,
                 observability = observabilityConfig
               }
       Http `shouldNotBe` Https
       certbotConfig `shouldBe` certbotConfig
       certbotConfig `shouldNotBe` otherCertbotConfig
+      strictTransportSecurityConfig `shouldBe` strictTransportSecurityConfig
+      strictTransportSecurityConfig `shouldNotBe` otherStrictTransportSecurityConfig
+      requestPolicyConfig `shouldBe` requestPolicyConfig
+      requestPolicyConfig `shouldNotBe` otherRequestPolicyConfig
       InProcessHttp01 `shouldNotBe` CertbotHttp01 certbotConfig
       acmeConfig `shouldBe` acmeConfig
       acmeConfig `shouldNotBe` otherAcmeConfig
@@ -444,6 +503,8 @@ spec = do
       show Http `shouldBe` "Http"
       show Https `shouldBe` "Https"
       show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
+      show strictTransportSecurityConfig `shouldBe` "StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}"
+      show requestPolicyConfig `shouldBe` "RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}"
       show (CertbotHttp01 certbotConfig) `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
       show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show manualCertificateSource `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
@@ -457,8 +518,10 @@ spec = do
       show TracingSignal `shouldBe` "TracingSignal"
       show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
-      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
+      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
+      shouldBeParenthesized (showsPrec 11 strictTransportSecurityConfig "")
+      shouldBeParenthesized (showsPrec 11 requestPolicyConfig "")
       shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
       shouldBeParenthesized (showsPrec 11 manualCertificateSource "")
@@ -474,6 +537,8 @@ spec = do
       shouldBeParenthesized (showsPrec 11 serverConfig "")
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
+      show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
+      show [requestPolicyConfig] `shouldBe` "[RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}]"
       show [InProcessHttp01, CertbotHttp01 certbotConfig] `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
       show [manualCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
@@ -486,7 +551,7 @@ spec = do
       show [TracingSignal, MetricsSignal] `shouldBe` "[TracingSignal,MetricsSignal]"
       show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
-      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
+      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
@@ -804,6 +869,73 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
 
+    it "redirects insecure requests to HTTPS before rendering the application response" $ do
+      let redirectingApplication =
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
+              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}))
+              }
+          redirectRequest =
+            (waiRequest ["data"])
+              { Wai.rawQueryString = "?from=plain-http",
+                Wai.requestHeaders = [("Host", "app.example.com:80")]
+              }
+      response <- performWaiRequest (toWaiApplication redirectingApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data?from=plain-http"
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+      readResponseBody response `shouldReturn` "Redirecting to HTTPS"
+
+    it "redirects the root path without requiring an explicit :80 host suffix" $ do
+      let redirectRequest =
+            Wai.defaultRequest
+              { Wai.requestHeaders = [("Host", "app.example.com")]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/"
+
+    it "uses forwarded HTTPS context to skip redirects and emit HSTS headers" $ do
+      let requestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = True,
+                strictTransportSecurity =
+                  Just
+                    StrictTransportSecurityConfig
+                      { strictTransportSecurityMaxAgeSeconds = 31536000,
+                        strictTransportSecurityIncludeSubDomains = True,
+                        strictTransportSecurityPreload = True
+                      }
+              }
+          proxiedHttpsRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              (Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+              [ ("Host", "app.example.com"),
+                ("X-Forwarded-Proto", "https")
+              ]
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) proxiedHttpsRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Nothing
+      lookup "Strict-Transport-Security" (Wai.responseHeaders response)
+        `shouldBe` Just "max-age=31536000; includeSubDomains; preload"
+      readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
+
+    it "does not emit HSTS headers for requests whose effective scheme stays HTTP" $ do
+      let requestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = False,
+                strictTransportSecurity =
+                  Just
+                    StrictTransportSecurityConfig
+                      { strictTransportSecurityMaxAgeSeconds = 31536000,
+                        strictTransportSecurityIncludeSubDomains = True,
+                        strictTransportSecurityPreload = False
+                      }
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) (waiRequest ["data"])
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      lookup "Strict-Transport-Security" (Wai.responseHeaders response) `shouldBe` Nothing
+
     it "reports body-response observability attributes and logs through the application hooks" $ do
       requestObservabilityReference <- newIORef []
       logEntriesReference <- newIORef []
@@ -1048,6 +1180,39 @@ spec = do
         Wai.responseHeaders secondResponse `shouldBe` Wai.responseHeaders firstResponse
         readResponseBody firstResponse `shouldReturn` "console.log('asset');"
         readResponseBody secondResponse `shouldReturn` "console.log('asset');"
+
+    it "applies HSTS headers to static asset responses when the effective request scheme is HTTPS" $
+      withSystemTempDirectory "harch-web-static-hsts" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticCacheControlSeconds = Nothing
+                }
+            requestPolicyConfig =
+              RequestPolicyConfig
+                { redirectHttpToHttps = False,
+                  strictTransportSecurity =
+                    Just
+                      StrictTransportSecurityConfig
+                        { strictTransportSecurityMaxAgeSeconds = 86400,
+                          strictTransportSecurityIncludeSubDomains = False,
+                          strictTransportSecurityPreload = False
+                        }
+                }
+            staticApplication = sampleApplicationWithConfig assetConfig requestPolicyConfig
+            proxiedHttpsRequest =
+              waiRequestWithRemoteHostAndHeaders
+                ["assets", "app.js"]
+                (Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+                [("X-Forwarded-Proto", "https")]
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/app.js") "console.log('asset');"
+        response <- performWaiRequest (toWaiApplication staticApplication) proxiedHttpsRequest
+        Wai.responseStatus response `shouldBe` Http.status200
+        lookup "Strict-Transport-Security" (Wai.responseHeaders response)
+          `shouldBe` Just "max-age=86400"
+        readResponseBody response `shouldReturn` "console.log('asset');"
 
     it "serves root-prefixed static assets with the expected content types and no cache header" $
       withSystemTempDirectory "harch-web-static-root" $ \tempDirectory -> do

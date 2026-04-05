@@ -36,7 +36,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -476,6 +476,11 @@ spec = do
                 { staticAssetRoots = [],
                   staticCacheControlSeconds = Nothing
                 },
+            requestPolicy =
+              RequestPolicyConfig
+                { redirectHttpToHttps = False,
+                  strictTransportSecurity = Nothing
+                },
             observability =
               ObservabilityConfig
                 { tracingExporter = Nothing,
@@ -485,6 +490,7 @@ spec = do
       let serverConfig = HarchWeb.toServerConfig defaultAppConfig
       HarchWeb.listenerConfigs serverConfig `shouldBe` listenerConfigs defaultAppConfig
       HarchWeb.staticAssets serverConfig `shouldBe` staticAssets defaultAppConfig
+      HarchWeb.requestPolicy serverConfig `shouldBe` requestPolicy defaultAppConfig
       HarchWeb.observability serverConfig `shouldBe` observability defaultAppConfig
 
   describe "parseRuntimeAppConfig" $ do
@@ -532,6 +538,7 @@ spec = do
                   { staticAssetRoots = [],
                     staticCacheControlSeconds = Nothing
                   },
+              requestPolicy = requestPolicy defaultAppConfig,
               observability =
                 ObservabilityConfig
                   { tracingExporter = Nothing,
@@ -639,6 +646,7 @@ spec = do
                   { staticAssetRoots = [],
                     staticCacheControlSeconds = Nothing
                   },
+              requestPolicy = requestPolicy defaultAppConfig,
               observability =
                 ObservabilityConfig
                   { tracingExporter = Nothing,
@@ -705,10 +713,79 @@ spec = do
                       ],
                     staticCacheControlSeconds = Just 3600
                   },
+              requestPolicy = requestPolicy defaultAppConfig,
               observability =
                 ObservabilityConfig
                   { tracingExporter = Nothing,
                     metricsExporter = Nothing
+                  }
+            }
+
+    it "parses redirect and HSTS request policy values for TLS-offload deployments" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("REDIRECT_HTTP_TO_HTTPS", "true"),
+          ("HSTS_MAX_AGE_SECONDS", "31536000"),
+          ("HSTS_INCLUDE_SUBDOMAINS", "true"),
+          ("HSTS_PRELOAD", "true")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = True,
+                    strictTransportSecurity =
+                      Just
+                        StrictTransportSecurityConfig
+                          { strictTransportSecurityMaxAgeSeconds = 31536000,
+                            strictTransportSecurityIncludeSubDomains = True,
+                            strictTransportSecurityPreload = True
+                          }
+                  }
+            }
+
+    it "parses explicit false redirect and HSTS flags without changing the default policy shape" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("REDIRECT_HTTP_TO_HTTPS", "false"),
+          ("HSTS_MAX_AGE_SECONDS", "86400"),
+          ("HSTS_INCLUDE_SUBDOMAINS", "false"),
+          ("HSTS_PRELOAD", "false")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = False,
+                    strictTransportSecurity =
+                      Just
+                        StrictTransportSecurityConfig
+                          { strictTransportSecurityMaxAgeSeconds = 86400,
+                            strictTransportSecurityIncludeSubDomains = False,
+                            strictTransportSecurityPreload = False
+                          }
+                  }
+            }
+
+    it "defaults optional HSTS booleans to false when only max-age is configured" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("HSTS_MAX_AGE_SECONDS", "86400")]
+        `shouldBe` Right
+          defaultAppConfig
+            { requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = False,
+                    strictTransportSecurity =
+                      Just
+                        StrictTransportSecurityConfig
+                          { strictTransportSecurityMaxAgeSeconds = 86400,
+                            strictTransportSecurityIncludeSubDomains = False,
+                            strictTransportSecurityPreload = False
+                          }
                   }
             }
 
@@ -852,6 +929,7 @@ spec = do
                   { staticAssetRoots = [],
                     staticCacheControlSeconds = Nothing
                   },
+              requestPolicy = requestPolicy defaultAppConfig,
               observability =
                 ObservabilityConfig
                   { tracingExporter = Nothing,
@@ -873,6 +951,28 @@ spec = do
         []
         [("OTLP_TRACING_HEADERS", "authorization=Bearer token")]
         `shouldBe` Left (MissingConfigValue "OTLP_TRACING_ENDPOINT")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("REDIRECT_HTTP_TO_HTTPS", "maybe")]
+        `shouldBe` Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" "maybe")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("HSTS_INCLUDE_SUBDOMAINS", "true")]
+        `shouldBe` Left (MissingConfigValue "HSTS_MAX_AGE_SECONDS")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("HSTS_MAX_AGE_SECONDS", "31536000"),
+          ("HSTS_PRELOAD", "sometimes")
+        ]
+        `shouldBe` Left (InvalidConfigValue "HSTS_PRELOAD" "sometimes")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("HSTS_MAX_AGE_SECONDS", "-1")]
+        `shouldBe` Left (InvalidConfigValue "HSTS_MAX_AGE_SECONDS" "-1")
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults aligned with the parsed development config" $ do
@@ -1892,9 +1992,9 @@ spec = do
       startupConfig `shouldBe` startupConfig
       startupConfig `shouldNotBe` differentStartupConfig
       show startupConfig
-        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
+        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
       show [startupConfig]
-        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
+        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -2178,11 +2278,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -2933,6 +3033,7 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observabilityConfig
               }
           requestContext =
@@ -3177,10 +3278,11 @@ spec = do
             { appTitlePrefix = "test-app",
               listenerConfigs = [ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}],
               staticAssets = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600},
+              requestPolicy = requestPolicy defaultAppConfig,
               observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
             }
         )
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
 
     it "covers direct equality branches across the remaining public config and page types" $ do
       let certbotConfig =
@@ -3251,6 +3353,7 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig, secureListenerConfig],
                 staticAssets = staticAssetsConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observabilityConfig
               }
           requestContext =
@@ -3385,6 +3488,7 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observabilityConfig
               }
           requestContext =
@@ -3499,6 +3603,7 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = [listenerConfig],
                 staticAssets = staticAssetsConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observabilityConfig
               }
           requestContext =
@@ -3555,7 +3660,7 @@ spec = do
       show [observabilityConfig]
         `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
       show [appConfig]
-        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
+        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
       show [English, French] `shouldBe` "[English,French]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
@@ -3728,6 +3833,7 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = listenerConfigs defaultAppConfig,
                 staticAssets = staticAssets defaultAppConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observability defaultAppConfig
               }
       renderedShell config HomeRoute
@@ -3743,10 +3849,11 @@ spec = do
               { appTitlePrefix = "test-app",
                 listenerConfigs = listenerConfigs defaultAppConfig,
                 staticAssets = staticAssets defaultAppConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
                 observability = observability defaultAppConfig
               }
       show config
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
