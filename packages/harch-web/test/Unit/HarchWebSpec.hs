@@ -2,12 +2,14 @@
 
 module Unit.HarchWebSpec (spec) where
 
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Exception (SomeException, displayException, finally, try)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
-import Data.Maybe (fromMaybe)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -21,6 +23,7 @@ import qualified Network.Wai.Internal as WaiInternal
 import System.Directory (createDirectoryIfMissing)
 import System.FilePath ((</>))
 import System.IO (hClose)
+import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import Test.Hspec
 
@@ -1137,11 +1140,33 @@ spec = do
           }
 
   describe "runServer" $ do
-    it "writes the stub startup message to the supplied handle" $
-      withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
-        runServer outputHandle sampleServerConfig sampleApplication
-        hClose outputHandle
-        readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+    it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = unusedPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing
+                      }
+                  ]
+          serverThreadId <- forkIO $ do
+            result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          firstResponseText <- waitForServerResponse completionReference unusedPort "/known"
+          Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
+          threadDelay 50000
+          secondResponseText <- readLoopbackHttpResponse unusedPort "/known"
+          Text.isInfixOf "<h1>Known</h1>" secondResponseText `shouldBe` True
+          completionResult <- readIORef completionReference
+          completionResult `shouldSatisfy` isNothing
+          killThread serverThreadId
+          waitForServerExit completionReference
+          hClose outputHandle
+          readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show unusedPort <> "\n")
 
     it "fails before startup when the listener plan is invalid" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
@@ -1156,6 +1181,95 @@ spec = do
                 ]
         runServer outputHandle invalidConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Invalid listener startup plan: InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Nothing}))")
+
+    it "fails explicitly when only manual TLS runtime listeners are configured" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let manualTlsConfig =
+              serverConfigWithListeners
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "cert.pem",
+                                    privateKeyFile = "key.pem"
+                                  }
+                            }
+                    }
+                ]
+        runServer outputHandle manualTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: manual TLS listeners are not implemented yet.)")
+
+    it "fails explicitly when only ACME runtime listeners are configured" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let acmeTlsConfig =
+              serverConfigWithListeners
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
+                                      acmeChallengeBackend = InProcessHttp01
+                                    }
+                            }
+                    }
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+
+    it "fails explicitly when no HTTP runtime listeners are configured" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
+        runServer outputHandle (serverConfigWithListeners []) sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: no HTTP listeners are configured.)")
+
+    it "fails gracefully when the configured HTTP port is already in use" $
+      withOccupiedLoopbackPort $ \occupiedPort ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
+          let runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = occupiedPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing
+                      }
+                  ]
+           in runServer outputHandle runtimeConfig sampleApplication
+                `shouldThrow` isAlreadyInUseError
+
+    it "cleans up already-started HTTP listeners when a later bind fails" $
+      withUnusedLoopbackPort $ \firstPort ->
+        withOccupiedLoopbackPort $ \occupiedPort ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            let multiListenerConfig =
+                  serverConfigWithListeners
+                    [ ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = firstPort,
+                          listenerScheme = Http,
+                          listenerTls = Nothing
+                        },
+                      ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = occupiedPort,
+                          listenerScheme = Http,
+                          listenerTls = Nothing
+                        }
+                    ]
+            runServer outputHandle multiListenerConfig sampleApplication
+              `shouldThrow` isAlreadyInUseError
+            expectLoopbackPortReusable firstPort
 
   describe "withLocalTestServer" $ do
     it "serves the rendered application over a real loopback HTTP listener" $
@@ -1194,14 +1308,104 @@ readLocalTestServerResponse localTestServer path = do
   pure (TextEncoding.decodeUtf8 responseBytes)
 
 readLocalTestServerResponseBytes :: LocalTestServer -> Text -> IO ByteString.ByteString
-readLocalTestServerResponseBytes localTestServer path =
+readLocalTestServerResponseBytes localTestServer =
+  readLoopbackHttpResponseBytes (localServerPort localTestServer)
+
+readLoopbackHttpResponse :: Int -> Text -> IO Text
+readLoopbackHttpResponse port path = do
+  responseBytes <- readLoopbackHttpResponseBytes port path
+  pure (TextEncoding.decodeUtf8 responseBytes)
+
+readLoopbackHttpResponseBytes :: Int -> Text -> IO ByteString.ByteString
+readLoopbackHttpResponseBytes port path =
   Socket.withSocketsDo $ do
     clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
-    Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral (localServerPort localTestServer)) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+    Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
     SocketByteString.sendAll clientSocket (buildHttpRequest path)
     responseBytes <- readAllSocketChunks clientSocket
     Socket.close clientSocket
     pure (extractHttpBody responseBytes)
+
+waitForServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
+waitForServerResponse completionReference port path =
+  waitForResponseAttempts (500 :: Int)
+  where
+    waitForResponseAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just (Left exception) ->
+          expectationFailure ("expected runServer to remain running, but it failed early: " <> displayException exception)
+            >> pure Text.empty
+        Just (Right ()) ->
+          expectationFailure "expected runServer to remain running, but it exited early"
+            >> pure Text.empty
+        Nothing -> do
+          responseResult <- try (readLoopbackHttpResponse port path) :: IO (Either IOError Text)
+          case responseResult of
+            Right responseText -> pure responseText
+            Left _
+              | remainingAttempts > 0 -> do
+                  threadDelay 10000
+                  waitForResponseAttempts (remainingAttempts - 1)
+              | otherwise ->
+                  expectationFailure "expected runServer to accept loopback HTTP requests"
+                    >> pure Text.empty
+
+waitForServerExit :: IORef (Maybe (Either SomeException ())) -> IO ()
+waitForServerExit completionReference =
+  waitForExitAttempts (500 :: Int)
+  where
+    waitForExitAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just _ -> pure ()
+        Nothing
+          | remainingAttempts > 0 -> do
+              threadDelay 10000
+              waitForExitAttempts (remainingAttempts - 1)
+          | otherwise ->
+              expectationFailure "expected runServer to stop after being signalled"
+
+withUnusedLoopbackPort :: (Int -> IO a) -> IO a
+withUnusedLoopbackPort action = do
+  reservedSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+  Socket.bind reservedSocket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+  socketAddress <- Socket.getSocketName reservedSocket
+  case socketAddress of
+    Socket.SockAddrInet port _ -> do
+      Socket.close reservedSocket
+      action (fromIntegral port)
+    _ -> do
+      Socket.close reservedSocket
+      error "expected IPv4 loopback reservation socket"
+
+withOccupiedLoopbackPort :: (Int -> IO a) -> IO a
+withOccupiedLoopbackPort action = do
+  listeningSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+  Socket.bind listeningSocket (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
+  Socket.listen listeningSocket Socket.maxListenQueue
+  socketAddress <- Socket.getSocketName listeningSocket
+  case socketAddress of
+    Socket.SockAddrInet port _ ->
+      action (fromIntegral port)
+        `finally` Socket.close listeningSocket
+    _ ->
+      Socket.close listeningSocket
+        >> error "expected IPv4 loopback listening socket"
+
+expectLoopbackPortReusable :: Int -> IO ()
+expectLoopbackPortReusable port = do
+  bindResult <- try bindTemporaryListener :: IO (Either IOError ())
+  case bindResult of
+    Right () -> pure ()
+    Left bindError ->
+      expectationFailure ("expected loopback port " <> show port <> " to be reusable, but bind failed: " <> displayException bindError)
+  where
+    bindTemporaryListener = do
+      temporarySocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+      Socket.bind temporarySocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+      Socket.listen temporarySocket Socket.maxListenQueue
+      Socket.close temporarySocket
 
 buildHttpRequest :: Text -> ByteString.ByteString
 buildHttpRequest path =

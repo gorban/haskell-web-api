@@ -6,7 +6,7 @@ module WebApi.App
     buildRuntimeApp,
     buildRuntimeAppWithDatabaseBuilder,
     run,
-    runWithEnvironmentConfig,
+    runWithConfig,
   )
 where
 
@@ -80,10 +80,6 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
           databaseEffect
           runtimeRequestObservabilityReporter
           runtimeApplicationLogReporter
-
-runWithEnvironmentConfig :: Handle -> AppEnvironmentConfig -> IO ()
-runWithEnvironmentConfig outputHandle =
-  runWithConfig outputHandle defaultAppConfig
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig =

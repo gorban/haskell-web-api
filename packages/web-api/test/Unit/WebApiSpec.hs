@@ -3,12 +3,15 @@
 
 {-# SPEC #-}
 
-import Control.Exception (IOException, displayException, finally, try)
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Exception (IOException, SomeException, displayException, finally, try)
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
+import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
+import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
-import Data.Maybe (fromMaybe)
+import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -16,17 +19,21 @@ import qualified HarchWeb
 import qualified HarchWeb.Observability as Observability
 import qualified Network.HTTP.Types as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
+import qualified Network.Socket as NetworkSocket
+import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
+import Numeric (readHex)
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.Environment (getEnv, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hClose)
+import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import WebApi (buildApp, run)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithEnvironmentConfig)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
@@ -320,6 +327,135 @@ withListeningTcpEndpoint action = do
     _ ->
       close listenerSocket
         >> error "expected IPv4 loopback test socket"
+
+withUnusedTcpEndpoint :: (TcpEndpoint -> IO a) -> IO a
+withUnusedTcpEndpoint action = do
+  reservedSocket <- socket AF_INET Stream defaultProtocol
+  bind reservedSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  socketAddress <- getSocketName reservedSocket
+  case socketAddress of
+    SockAddrInet port _ -> do
+      close reservedSocket
+      action
+        TcpEndpoint
+          { tcpEndpointHost = "127.0.0.1",
+            tcpEndpointPort = fromIntegral port
+          }
+    _ ->
+      close reservedSocket
+        >> error "expected IPv4 loopback reservation socket"
+
+withDefaultRuntimePortUnavailable :: IO a -> IO a
+withDefaultRuntimePortUnavailable action = do
+  reservedSocketResult <- try (socket AF_INET Stream defaultProtocol >>= reserveDefaultRuntimePort) :: IO (Either IOError NetworkSocket.Socket)
+  case reservedSocketResult of
+    Left bindError
+      | isAlreadyInUseError bindError -> action
+      | otherwise -> ioError bindError
+    Right reservedSocket ->
+      action `finally` close reservedSocket
+  where
+    reserveDefaultRuntimePort reservedSocket = do
+      bind reservedSocket (SockAddrInet 5001 (tupleToHostAddress (127, 0, 0, 1)))
+      listen reservedSocket 1
+      pure reservedSocket
+
+readLoopbackHttpResponse :: Int -> Text -> IO Text
+readLoopbackHttpResponse port path = do
+  responseBytes <- readLoopbackHttpResponseBytes port path
+  pure (TextEncoding.decodeUtf8 responseBytes)
+
+readLoopbackHttpResponseBytes :: Int -> Text -> IO ByteString.ByteString
+readLoopbackHttpResponseBytes port path = do
+  clientSocket <- socket AF_INET Stream defaultProtocol
+  connect clientSocket
+  SocketByteString.sendAll clientSocket (buildHttpRequest path)
+  responseBytes <- readAllSocketChunks clientSocket
+  close clientSocket
+  pure (extractHttpBody responseBytes)
+  where
+    connect clientSocket =
+      NetworkSocket.connect clientSocket (SockAddrInet (fromIntegral port) (tupleToHostAddress (127, 0, 0, 1)))
+
+waitForRuntimeServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
+waitForRuntimeServerResponse completionReference port path =
+  waitForResponseAttempts (500 :: Int)
+  where
+    waitForResponseAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just (Left exception) ->
+          expectationFailure ("expected runtime server to remain running, but it failed early: " <> displayException exception)
+            >> pure Text.empty
+        Just (Right ()) ->
+          expectationFailure "expected runtime server to remain running, but it exited early"
+            >> pure Text.empty
+        Nothing -> do
+          responseResult <- try (readLoopbackHttpResponse port path) :: IO (Either IOError Text)
+          case responseResult of
+            Right responseText -> pure responseText
+            Left _
+              | remainingAttempts > 0 -> do
+                  threadDelay 10000
+                  waitForResponseAttempts (remainingAttempts - 1)
+              | otherwise ->
+                  expectationFailure "expected runtime server to accept loopback HTTP requests"
+                    >> pure Text.empty
+
+waitForRuntimeServerExit :: IORef (Maybe (Either SomeException ())) -> IO ()
+waitForRuntimeServerExit completionReference =
+  waitForExitAttempts (500 :: Int)
+  where
+    waitForExitAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just _ -> pure ()
+        Nothing
+          | remainingAttempts > 0 -> do
+              threadDelay 10000
+              waitForExitAttempts (remainingAttempts - 1)
+          | otherwise ->
+              expectationFailure "expected runtime server to stop after being signalled"
+
+buildHttpRequest :: Text -> ByteString.ByteString
+buildHttpRequest path =
+  ByteStringChar8.pack $
+    "GET "
+      <> Text.unpack path
+      <> " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+
+readAllSocketChunks :: NetworkSocket.Socket -> IO ByteString.ByteString
+readAllSocketChunks clientSocket = do
+  chunk <- SocketByteString.recv clientSocket 4096
+  if ByteString.null chunk
+    then pure ByteString.empty
+    else fmap (chunk <>) (readAllSocketChunks clientSocket)
+
+extractHttpBody :: ByteString.ByteString -> ByteString.ByteString
+extractHttpBody responseBytes =
+  let (headers, withSeparator) = ByteStringChar8.breakSubstring "\r\n\r\n" responseBytes
+      responseBody = ByteString.drop 4 withSeparator
+   in if ByteStringChar8.isInfixOf "Transfer-Encoding: chunked" headers
+        then decodeChunkedBody responseBody
+        else responseBody
+
+decodeChunkedBody :: ByteString.ByteString -> ByteString.ByteString
+decodeChunkedBody chunkedBytes =
+  case ByteStringChar8.breakSubstring "\r\n" chunkedBytes of
+    (chunkSizeHex, withSizeSeparator)
+      | ByteString.null withSizeSeparator ->
+          chunkedBytes
+      | otherwise ->
+          case readHex (ByteStringChar8.unpack chunkSizeHex) of
+            [(chunkSize, "")]
+              | chunkSize == (0 :: Int) ->
+                  ByteString.empty
+              | otherwise ->
+                  let chunkPayload = ByteString.drop 2 withSizeSeparator
+                      (chunk, withChunkSuffix) = ByteString.splitAt chunkSize chunkPayload
+                   in chunk <> decodeChunkedBody (ByteString.drop 2 withChunkSuffix)
+            _ ->
+              chunkedBytes
 
 spec = do
   describe "defaultAppConfig" $ do
@@ -4247,20 +4383,58 @@ spec = do
       HarchWeb.reportApplicationLog runtimeApplication "runtime failure detail"
 
   describe "run" $ do
-    it "starts the runtime server from an explicit environment config" $
-      withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
-        runWithEnvironmentConfig outputHandle defaultAppEnvironmentConfig
-        hClose outputHandle
-        readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+    it "starts the runtime server from an explicit environment and app config" $
+      withUnusedTcpEndpoint $ \unusedEndpoint ->
+        withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeAppConfig =
+                defaultAppConfig
+                  { listenerConfigs =
+                      [ ListenerConfig
+                          { listenerHost = tcpEndpointHost unusedEndpoint,
+                            listenerPort = tcpEndpointPort unusedEndpoint,
+                            listenerScheme = Http,
+                            listenerTls = Nothing
+                          }
+                      ]
+                  }
+          serverThreadId <- forkIO $ do
+            result <- try (runWithConfig outputHandle runtimeAppConfig defaultAppEnvironmentConfig) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/status"
+          responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+          completionResult <- readIORef completionReference
+          completionResult `shouldSatisfy` isNothing
+          killThread serverThreadId
+          waitForRuntimeServerExit completionReference
+          hClose outputHandle
+          readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
 
-    it "writes startup output to the supplied handle for isolated tests" $
+    it "surfaces listener bind failures through the default app config" $
+      withDefaultRuntimePortUnavailable $
+        withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle ->
+          runWithConfig outputHandle defaultAppConfig defaultAppEnvironmentConfig
+            `shouldThrow` isAlreadyInUseError
+
+    it "writes startup output to the supplied handle for isolated tests and serves real requests" $
       withClearedAppEnvironment $
-        withSystemTempDirectory "web-api-run" $ \tempDirectory ->
-          withCurrentDirectory tempDirectory $
-            withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
-              run outputHandle
-              hClose outputHandle
-              readFile outputPath `shouldReturn` "HTTP Server listening at http://localhost:5001\n"
+        withUnusedTcpEndpoint $ \unusedEndpoint ->
+          withSystemTempDirectory "web-api-run" $ \tempDirectory ->
+            withCurrentDirectory tempDirectory $ do
+              writeFile ".env" ("LISTENER_0_PORT=" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
+              withSystemTempFile "web-api-output.txt" $ \outputPath outputHandle -> do
+                completionReference <- newIORef Nothing
+                serverThreadId <- forkIO $ do
+                  result <- try (run outputHandle) :: IO (Either SomeException ())
+                  writeIORef completionReference (Just result)
+                responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/status"
+                responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+                completionResult <- readIORef completionReference
+                completionResult `shouldSatisfy` isNothing
+                killThread serverThreadId
+                waitForRuntimeServerExit completionReference
+                hClose outputHandle
+                readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
 
     it "fails explicitly when the layered runtime startup config is invalid" $
       withClearedAppEnvironment $

@@ -52,8 +52,8 @@ module HarchWeb
   )
 where
 
-import Control.Concurrent (ThreadId, forkIO, killThread, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (bracket)
+import Control.Concurrent (MVar, ThreadId, forkIO, killThread, newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (bracket, onException)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List (maximumBy)
@@ -69,7 +69,7 @@ import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import System.Directory (doesFileExist)
 import System.FilePath (splitDirectories, takeExtension, (</>))
-import System.IO (Handle, hPutStrLn)
+import System.IO (Handle, hFlush, hPutStrLn)
 
 data ListenerScheme
   = Http
@@ -436,21 +436,15 @@ runServer outputHandle config webApplication =
     Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
     Right startupPlan -> do
       let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
-      startupResponse <-
-        fmap
-          (toWaiResponse webApplication)
-          ( renderResponse
-              webApplication
-              ( matchRoute
-                  (routeCodec webApplication)
-                  (defaultRequestContext webApplication)
-                  "/"
-              )
-          )
-      observabilityPlan `seq`
-        startupPlan `seq`
-          Wai.responseStatus startupResponse `seq`
-            hPutStrLn outputHandle "HTTP Server listening at http://localhost:5001"
+      case runtimeStartupValidationError startupPlan of
+        Just runtimeError ->
+          ioError (userError runtimeError)
+        Nothing ->
+          observabilityPlan `seq`
+            bracket
+              (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) (toWaiApplication webApplication))
+              stopHttpRuntimeServers
+              (const (announceRuntimeStartup outputHandle (httpEndpoints (httpBindPlan startupPlan)) >> waitForShutdownSignal))
 
 startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
 startLocalTestServer webApplication = do
@@ -459,13 +453,7 @@ startLocalTestServer webApplication = do
   localPort <- socketPort listeningSocket
   let signalReady = putMVar readySignal localPort
   serverThreadId <-
-    forkIO $
-      Warp.runSettingsSocket
-        ( Warp.setPort localPort $
-            Warp.setBeforeMainLoop signalReady Warp.defaultSettings
-        )
-        listeningSocket
-        (toWaiApplication webApplication)
+    startWarpServerOnSocket localPort signalReady listeningSocket (toWaiApplication webApplication)
   readyPort <- takeMVar readySignal
   readyPort `seq`
     pure
@@ -486,12 +474,69 @@ stopLocalTestServer runningServer = do
   killThread (runningLocalServerThreadId runningServer)
 
 openLoopbackSocket :: IO Socket.Socket
-openLoopbackSocket = do
+openLoopbackSocket =
+  openListenerSocket ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 0}
+
+socketPort :: Socket.Socket -> IO Int
+socketPort listeningSocket = do
+  Socket.SockAddrInet portNumber _ <- Socket.getSocketName listeningSocket
+  pure (fromIntegral portNumber)
+
+data RunningHttpRuntimeServer = RunningHttpRuntimeServer
+  { runningHttpSocket :: Socket.Socket,
+    runningHttpThreadId :: ThreadId
+  }
+
+startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningHttpRuntimeServer]
+startHttpRuntimeServers endpoints waiApplication =
+  go [] endpoints
+  where
+    go runningServers remainingEndpoints =
+      case remainingEndpoints of
+        [] -> pure (reverse runningServers)
+        endpoint : remaining ->
+          ( do
+              runningServer <- startHttpRuntimeServer endpoint waiApplication
+              go (runningServer : runningServers) remaining
+                `onException` stopHttpRuntimeServers (runningServer : runningServers)
+          )
+            `onException` stopHttpRuntimeServers runningServers
+
+startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningHttpRuntimeServer
+startHttpRuntimeServer endpoint waiApplication = do
+  listeningSocket <- openListenerSocket endpoint
+  readySignal <- newEmptyMVar
+  let readyPort = endpointPort endpoint
+  serverThreadId <-
+    startWarpServerOnSocket
+      readyPort
+      (putMVar readySignal readyPort)
+      listeningSocket
+      waiApplication
+  confirmedReadyPort <- takeMVar readySignal
+  confirmedReadyPort `seq`
+    pure
+      RunningHttpRuntimeServer
+        { runningHttpSocket = listeningSocket,
+          runningHttpThreadId = serverThreadId
+        }
+
+stopHttpRuntimeServers :: [RunningHttpRuntimeServer] -> IO ()
+stopHttpRuntimeServers =
+  mapM_ stopHttpRuntimeServer
+
+stopHttpRuntimeServer :: RunningHttpRuntimeServer -> IO ()
+stopHttpRuntimeServer runningServer = do
+  Socket.close (runningHttpSocket runningServer)
+  killThread (runningHttpThreadId runningServer)
+
+openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
+openListenerSocket endpoint = do
   addressInfo :| _ <-
     ( Socket.getAddrInfo
-        (Just hints)
-        (Just "127.0.0.1")
-        (Just "0") ::
+        (Just listenerSocketHints)
+        (Just (Text.unpack (endpointHost endpoint)))
+        (Just (show (endpointPort endpoint))) ::
         IO (NonEmpty Socket.AddrInfo)
     )
   listeningSocket <- Socket.openSocket addressInfo
@@ -499,18 +544,56 @@ openLoopbackSocket = do
   Socket.bind listeningSocket (Socket.addrAddress addressInfo)
   Socket.listen listeningSocket Socket.maxListenQueue
   pure listeningSocket
-  where
-    hints =
-      Socket.defaultHints
-        { Socket.addrFlags = [Socket.AI_NUMERICHOST, Socket.AI_NUMERICSERV],
-          Socket.addrFamily = Socket.AF_INET,
-          Socket.addrSocketType = Socket.Stream
-        }
 
-socketPort :: Socket.Socket -> IO Int
-socketPort listeningSocket = do
-  Socket.SockAddrInet portNumber _ <- Socket.getSocketName listeningSocket
-  pure (fromIntegral portNumber)
+startWarpServerOnSocket :: Int -> IO () -> Socket.Socket -> Wai.Application -> IO ThreadId
+startWarpServerOnSocket portNumber signalReady listeningSocket waiApplication =
+  forkIO $
+    Warp.runSettingsSocket
+      ( Warp.setPort portNumber $
+          Warp.setBeforeMainLoop signalReady Warp.defaultSettings
+      )
+      listeningSocket
+      waiApplication
+
+announceRuntimeStartup :: Handle -> [ListenerEndpoint] -> IO ()
+announceRuntimeStartup outputHandle endpoints = do
+  mapM_ (hPutStrLn outputHandle . listenerStartupMessage) endpoints
+  hFlush outputHandle
+
+listenerStartupMessage :: ListenerEndpoint -> String
+listenerStartupMessage endpoint =
+  "HTTP Server listening at http://"
+    <> Text.unpack (endpointHost endpoint)
+    <> ":"
+    <> show (endpointPort endpoint)
+
+waitForShutdownSignal :: IO ()
+waitForShutdownSignal = do
+  shutdownSignal <- newEmptyMVar :: IO (MVar ())
+  takeMVar shutdownSignal
+
+runtimeStartupValidationError :: ServerStartupPlan -> Maybe String
+runtimeStartupValidationError startupPlan =
+  case ( null (manualTlsBindPlans startupPlan),
+         null (acmeBindPlans startupPlan),
+         null (httpEndpoints (httpBindPlan startupPlan))
+       ) of
+    (False, _, _) ->
+      Just "Unsupported runtime listener startup plan: manual TLS listeners are not implemented yet."
+    (True, False, _) ->
+      Just "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
+    (True, True, True) ->
+      Just "Unsupported runtime listener startup plan: no HTTP listeners are configured."
+    (True, True, False) ->
+      Nothing
+
+listenerSocketHints :: Socket.AddrInfo
+listenerSocketHints =
+  Socket.defaultHints
+    { Socket.addrFlags = [Socket.AI_NUMERICHOST, Socket.AI_NUMERICSERV],
+      Socket.addrFamily = Socket.AF_INET,
+      Socket.addrSocketType = Socket.Stream
+    }
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute
