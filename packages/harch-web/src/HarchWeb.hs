@@ -1,5 +1,6 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module HarchWeb
   ( AcmeChallengeBackend (..),
@@ -55,11 +56,13 @@ module HarchWeb
   )
 where
 
-import Control.Concurrent (MVar, ThreadId, forkIO, killThread, newEmptyMVar, putMVar, takeMVar)
-import Control.Exception (bracket, onException)
+import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, tryPutMVar)
+import Control.Exception (SomeException, bracket, evaluate, onException, throwIO)
+import Control.Monad (unless)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Either (lefts)
 import Data.List (maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe)
@@ -71,6 +74,7 @@ import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
+import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory (doesFileExist)
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
@@ -490,19 +494,26 @@ runServer outputHandle config webApplication =
           observabilityPlan `seq`
             bracket
               (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) (toWaiApplication webApplication))
-              stopHttpRuntimeServers
-              (const (announceRuntimeStartup outputHandle (httpEndpoints (httpBindPlan startupPlan)) >> waitForShutdownSignal))
+              stopRuntimeServers
+              ( \httpServers ->
+                  bracket
+                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) (toWaiApplication webApplication))
+                    stopRuntimeServers
+                    ( \manualTlsServers ->
+                        httpServers `seq`
+                          manualTlsServers `seq`
+                            announceRuntimeStartup outputHandle startupPlan
+                              >> waitForShutdownSignal
+                    )
+              )
 
 startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
 startLocalTestServer webApplication = do
   listeningSocket <- openLoopbackSocket
-  readySignal <- newEmptyMVar
   localPort <- socketPort listeningSocket
-  let signalReady = putMVar readySignal localPort
   serverThreadId <-
-    startWarpServerOnSocket localPort signalReady listeningSocket (toWaiApplication webApplication)
-  readyPort <- takeMVar readySignal
-  readyPort `seq`
+    startWarpServerOnSocket localPort listeningSocket (toWaiApplication webApplication)
+  localPort `seq`
     pure
       RunningLocalTestServer
         { runningLocalServerInfo =
@@ -529,12 +540,12 @@ socketPort listeningSocket = do
   Socket.SockAddrInet portNumber _ <- Socket.getSocketName listeningSocket
   pure (fromIntegral portNumber)
 
-data RunningHttpRuntimeServer = RunningHttpRuntimeServer
-  { runningHttpSocket :: Socket.Socket,
-    runningHttpThreadId :: ThreadId
+data RunningRuntimeServer = RunningRuntimeServer
+  { runningRuntimeSocket :: Socket.Socket,
+    runningRuntimeThreadId :: ThreadId
   }
 
-startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningHttpRuntimeServer]
+startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
 startHttpRuntimeServers endpoints waiApplication =
   go [] endpoints
   where
@@ -545,37 +556,65 @@ startHttpRuntimeServers endpoints waiApplication =
           ( do
               runningServer <- startHttpRuntimeServer endpoint waiApplication
               go (runningServer : runningServers) remaining
-                `onException` stopHttpRuntimeServers (runningServer : runningServers)
+                `onException` stopRuntimeServers (runningServer : runningServers)
           )
-            `onException` stopHttpRuntimeServers runningServers
+            `onException` stopRuntimeServers runningServers
 
-startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningHttpRuntimeServer
+startManualTlsRuntimeServers :: [ManualTlsBindPlan] -> Wai.Application -> IO [RunningRuntimeServer]
+startManualTlsRuntimeServers manualTlsPlans waiApplication =
+  go [] manualTlsPlans
+  where
+    go runningServers remainingPlans =
+      case remainingPlans of
+        [] -> pure (reverse runningServers)
+        manualTlsPlan : remaining ->
+          ( do
+              runningServer <- startManualTlsRuntimeServer manualTlsPlan waiApplication
+              go (runningServer : runningServers) remaining
+                `onException` stopRuntimeServers (runningServer : runningServers)
+          )
+            `onException` stopRuntimeServers runningServers
+
+startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
 startHttpRuntimeServer endpoint waiApplication = do
   listeningSocket <- openListenerSocket endpoint
-  readySignal <- newEmptyMVar
-  let readyPort = endpointPort endpoint
   serverThreadId <-
-    startWarpServerOnSocket
-      readyPort
-      (putMVar readySignal readyPort)
-      listeningSocket
-      waiApplication
-  confirmedReadyPort <- takeMVar readySignal
-  confirmedReadyPort `seq`
+    startWarpServerOnSocket (endpointPort endpoint) listeningSocket waiApplication
+  endpoint `seq`
     pure
-      RunningHttpRuntimeServer
-        { runningHttpSocket = listeningSocket,
-          runningHttpThreadId = serverThreadId
+      RunningRuntimeServer
+        { runningRuntimeSocket = listeningSocket,
+          runningRuntimeThreadId = serverThreadId
         }
 
-stopHttpRuntimeServers :: [RunningHttpRuntimeServer] -> IO ()
-stopHttpRuntimeServers =
-  mapM_ stopHttpRuntimeServer
+startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> IO RunningRuntimeServer
+startManualTlsRuntimeServer manualTlsPlan waiApplication = do
+  ensureRuntimeFileExists "Manual TLS certificate file does not exist: " (tlsCertificateFile manualTlsPlan)
+  ensureRuntimeFileExists "Manual TLS private key file does not exist: " (tlsPrivateKeyFile manualTlsPlan)
+  let endpoint = tlsEndpoint manualTlsPlan
+      tlsSettings =
+        WarpTLS.tlsSettings
+          (tlsCertificateFile manualTlsPlan)
+          (tlsPrivateKeyFile manualTlsPlan)
+  listeningSocket <- openListenerSocket endpoint
+  serverThreadId <-
+    startWarpTlsServerOnSocket (endpointPort endpoint) tlsSettings listeningSocket waiApplication
+      `onException` Socket.close listeningSocket
+  manualTlsPlan `seq`
+    pure
+      RunningRuntimeServer
+        { runningRuntimeSocket = listeningSocket,
+          runningRuntimeThreadId = serverThreadId
+        }
 
-stopHttpRuntimeServer :: RunningHttpRuntimeServer -> IO ()
-stopHttpRuntimeServer runningServer = do
-  Socket.close (runningHttpSocket runningServer)
-  killThread (runningHttpThreadId runningServer)
+stopRuntimeServers :: [RunningRuntimeServer] -> IO ()
+stopRuntimeServers =
+  mapM_ stopRuntimeServer
+
+stopRuntimeServer :: RunningRuntimeServer -> IO ()
+stopRuntimeServer runningServer = do
+  Socket.close (runningRuntimeSocket runningServer)
+  killThread (runningRuntimeThreadId runningServer)
 
 openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
 openListenerSocket endpoint = do
@@ -592,27 +631,78 @@ openListenerSocket endpoint = do
   Socket.listen listeningSocket Socket.maxListenQueue
   pure listeningSocket
 
-startWarpServerOnSocket :: Int -> IO () -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocket portNumber signalReady listeningSocket waiApplication =
-  forkIO $
+data RuntimeServerReady = RuntimeServerReady
+
+startWarpServerOnSocket :: Int -> Socket.Socket -> Wai.Application -> IO ThreadId
+startWarpServerOnSocket portNumber listeningSocket waiApplication =
+  startWarpRuntimeServerOnSocket $ \startupSignal ->
     Warp.runSettingsSocket
-      ( Warp.setPort portNumber $
-          Warp.setBeforeMainLoop signalReady Warp.defaultSettings
-      )
+      (runtimeServerSettings portNumber startupSignal)
       listeningSocket
       waiApplication
 
-announceRuntimeStartup :: Handle -> [ListenerEndpoint] -> IO ()
-announceRuntimeStartup outputHandle endpoints = do
-  mapM_ (hPutStrLn outputHandle . listenerStartupMessage) endpoints
+startWarpTlsServerOnSocket :: Int -> WarpTLS.TLSSettings -> Socket.Socket -> Wai.Application -> IO ThreadId
+startWarpTlsServerOnSocket portNumber tlsSettings listeningSocket waiApplication =
+  startWarpRuntimeServerOnSocket $ \startupSignal ->
+    WarpTLS.runTLSSocket
+      tlsSettings
+      (runtimeServerSettings portNumber startupSignal)
+      listeningSocket
+      waiApplication
+
+startWarpRuntimeServerOnSocket :: (MVar (Either SomeException RuntimeServerReady) -> IO ()) -> IO ThreadId
+startWarpRuntimeServerOnSocket runServerOnSocket = do
+  startupSignal <- newEmptyMVar
+  threadId <-
+    forkFinally
+      (runServerOnSocket startupSignal)
+      (reportRuntimeServerExit startupSignal)
+  _ <- waitForRuntimeServerStartup startupSignal
+  pure threadId
+
+runtimeServerSettings :: Int -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
+runtimeServerSettings portNumber startupSignal =
+  Warp.setPort portNumber $
+    Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings
+
+reportRuntimeServerExit :: MVar (Either SomeException RuntimeServerReady) -> Either SomeException () -> IO ()
+reportRuntimeServerExit startupSignal exitResult =
+  mapM_ (tryPutMVar startupSignal . Left) (lefts [exitResult])
+
+waitForRuntimeServerStartup :: MVar (Either SomeException RuntimeServerReady) -> IO RuntimeServerReady
+waitForRuntimeServerStartup startupSignal = do
+  startupResult <- takeMVar startupSignal
+  case startupResult of
+    Left startupException -> throwIO startupException
+    Right runtimeServerReady@RuntimeServerReady -> evaluate runtimeServerReady
+
+ensureRuntimeFileExists :: String -> FilePath -> IO ()
+ensureRuntimeFileExists errorPrefix filePath = do
+  fileExists <- doesFileExist filePath
+  unless fileExists (ioError (userError (errorPrefix <> filePath)))
+
+announceRuntimeStartup :: Handle -> ServerStartupPlan -> IO ()
+announceRuntimeStartup outputHandle startupPlan = do
+  mapM_ (hPutStrLn outputHandle . uncurry listenerStartupMessage) (runtimeStartupListeners startupPlan)
   hFlush outputHandle
 
-listenerStartupMessage :: ListenerEndpoint -> String
-listenerStartupMessage endpoint =
-  "HTTP Server listening at http://"
+runtimeStartupListeners :: ServerStartupPlan -> [(ListenerScheme, ListenerEndpoint)]
+runtimeStartupListeners startupPlan =
+  map (Http,) (httpEndpoints (httpBindPlan startupPlan))
+    <> map ((Https,) . tlsEndpoint) (manualTlsBindPlans startupPlan)
+
+listenerStartupMessage :: ListenerScheme -> ListenerEndpoint -> String
+listenerStartupMessage listenerScheme endpoint =
+  listenerSchemePrefix listenerScheme
     <> Text.unpack (endpointHost endpoint)
     <> ":"
     <> show (endpointPort endpoint)
+
+listenerSchemePrefix :: ListenerScheme -> String
+listenerSchemePrefix listenerScheme =
+  case listenerScheme of
+    Http -> "HTTP Server listening at http://"
+    Https -> "HTTPS Server listening at https://"
 
 waitForShutdownSignal :: IO ()
 waitForShutdownSignal = do
@@ -621,17 +711,15 @@ waitForShutdownSignal = do
 
 runtimeStartupValidationError :: ServerStartupPlan -> Maybe String
 runtimeStartupValidationError startupPlan =
-  case ( null (manualTlsBindPlans startupPlan),
-         null (acmeBindPlans startupPlan),
-         null (httpEndpoints (httpBindPlan startupPlan))
+  case ( null (acmeBindPlans startupPlan),
+         null (httpEndpoints (httpBindPlan startupPlan)),
+         null (manualTlsBindPlans startupPlan)
        ) of
     (False, _, _) ->
-      Just "Unsupported runtime listener startup plan: manual TLS listeners are not implemented yet."
-    (True, False, _) ->
       Just "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
     (True, True, True) ->
-      Just "Unsupported runtime listener startup plan: no HTTP listeners are configured."
-    (True, True, False) ->
+      Just "Unsupported runtime listener startup plan: no runtime listeners are configured."
+    (True, _, _) ->
       Nothing
 
 listenerSocketHints :: Socket.AddrInfo

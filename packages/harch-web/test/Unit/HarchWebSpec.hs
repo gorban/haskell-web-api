@@ -21,10 +21,12 @@ import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import System.Directory (createDirectoryIfMissing)
+import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
+import System.Process (readProcessWithExitCode)
 import Test.Hspec
 
 data TestContext = TestContext
@@ -1654,27 +1656,115 @@ spec = do
         runServer outputHandle invalidConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Invalid listener startup plan: InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Nothing}))")
 
-    it "fails explicitly when only manual TLS runtime listeners are configured" $
-      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
-        let manualTlsConfig =
-              serverConfigWithListeners
-                [ ListenerConfig
-                    { listenerHost = "127.0.0.1",
-                      listenerPort = 5443,
-                      listenerScheme = Https,
-                      listenerTls =
-                        Just
-                          TlsConfig
-                            { certificateSource =
-                                ManualCertificateFiles
-                                  { certificateFile = "cert.pem",
-                                    privateKeyFile = "key.pem"
-                                  }
-                            }
-                    }
-                ]
-        runServer outputHandle manualTlsConfig sampleApplication
-          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: manual TLS listeners are not implemented yet.)")
+    it "serves responses on the configured manual TLS listener and stays running until signalled to stop" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
+            completionReference <- newIORef Nothing
+            let manualTlsConfig =
+                  serverConfigWithListeners
+                    [ ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = unusedPort,
+                          listenerScheme = Https,
+                          listenerTls =
+                            Just
+                              TlsConfig
+                                { certificateSource =
+                                    ManualCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = privateKeyPath
+                                      }
+                                }
+                        }
+                    ]
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle manualTlsConfig sampleApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            firstResponseText <- waitForHttpsServerResponse completionReference unusedPort "/known"
+            Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
+            threadDelay 50000
+            secondResponseText <- readLoopbackHttpsResponse unusedPort "/known"
+            Text.isInfixOf "<h1>Known</h1>" secondResponseText `shouldBe` True
+            completionResult <- readIORef completionReference
+            completionResult `shouldSatisfy` isNothing
+            killThread serverThreadId
+            waitForServerExit completionReference
+            hClose outputHandle
+            readFile outputPath `shouldReturn` ("HTTPS Server listening at https://127.0.0.1:" <> show unusedPort <> "\n")
+
+    it "fails explicitly when a manual TLS certificate file is missing" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
+        withManualTlsFiles $ \_ privateKeyPath -> do
+          let manualTlsConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = 5443,
+                        listenerScheme = Https,
+                        listenerTls =
+                          Just
+                            TlsConfig
+                              { certificateSource =
+                                  ManualCertificateFiles
+                                    { certificateFile = "missing-cert.pem",
+                                      privateKeyFile = privateKeyPath
+                                    }
+                              }
+                      }
+                  ]
+          runServer outputHandle manualTlsConfig sampleApplication
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Manual TLS certificate file does not exist: missing-cert.pem)")
+
+    it "fails explicitly when a manual TLS private key file is missing" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
+        withManualTlsFiles $ \certificatePath _ -> do
+          let manualTlsConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = 5443,
+                        listenerScheme = Https,
+                        listenerTls =
+                          Just
+                            TlsConfig
+                              { certificateSource =
+                                  ManualCertificateFiles
+                                    { certificateFile = certificatePath,
+                                      privateKeyFile = "missing-key.pem"
+                                    }
+                              }
+                      }
+                  ]
+          runServer outputHandle manualTlsConfig sampleApplication
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Manual TLS private key file does not exist: missing-key.pem)")
+
+    it "fails when manual TLS certificate contents cannot be loaded at runtime" $
+      withSystemTempDirectory "harch-web-invalid-tls" $ \tempDirectory ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+          let certificatePath = tempDirectory </> "cert.pem"
+              privateKeyPath = tempDirectory </> "key.pem"
+              invalidTlsConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = 5443,
+                        listenerScheme = Https,
+                        listenerTls =
+                          Just
+                            TlsConfig
+                              { certificateSource =
+                                  ManualCertificateFiles
+                                    { certificateFile = certificatePath,
+                                      privateKeyFile = privateKeyPath
+                                    }
+                              }
+                      }
+                  ]
+          writeFile certificatePath "not a certificate"
+          writeFile privateKeyPath "not a private key"
+          runServer outputHandle invalidTlsConfig sampleApplication
+            `shouldThrow` anyException
 
     it "fails explicitly when only ACME runtime listeners are configured" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
@@ -1700,10 +1790,10 @@ spec = do
         runServer outputHandle acmeTlsConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
 
-    it "fails explicitly when no HTTP runtime listeners are configured" $
+    it "fails explicitly when no supported runtime listeners are configured" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
         runServer outputHandle (serverConfigWithListeners []) sampleApplication
-          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: no HTTP listeners are configured.)")
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: no runtime listeners are configured.)")
 
     it "fails gracefully when the configured HTTP port is already in use" $
       withOccupiedLoopbackPort $ \occupiedPort ->
@@ -1742,6 +1832,78 @@ spec = do
             runServer outputHandle multiListenerConfig sampleApplication
               `shouldThrow` isAlreadyInUseError
             expectLoopbackPortReusable firstPort
+
+    it "cleans up already-started HTTP listeners when a later manual TLS bind fails" $
+      withUnusedLoopbackPort $ \firstPort ->
+        withOccupiedLoopbackPort $ \occupiedTlsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+              let multiListenerConfig =
+                    serverConfigWithListeners
+                      [ ListenerConfig
+                          { listenerHost = "127.0.0.1",
+                            listenerPort = firstPort,
+                            listenerScheme = Http,
+                            listenerTls = Nothing
+                          },
+                        ListenerConfig
+                          { listenerHost = "127.0.0.1",
+                            listenerPort = occupiedTlsPort,
+                            listenerScheme = Https,
+                            listenerTls =
+                              Just
+                                TlsConfig
+                                  { certificateSource =
+                                      ManualCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
+                                  }
+                          }
+                      ]
+              runServer outputHandle multiListenerConfig sampleApplication
+                `shouldThrow` isAlreadyInUseError
+              expectLoopbackPortReusable firstPort
+
+    it "cleans up already-started manual TLS listeners when a later manual TLS bind fails" $
+      withUnusedLoopbackPort $ \firstTlsPort ->
+        withOccupiedLoopbackPort $ \occupiedTlsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+              let multiListenerConfig =
+                    serverConfigWithListeners
+                      [ ListenerConfig
+                          { listenerHost = "127.0.0.1",
+                            listenerPort = firstTlsPort,
+                            listenerScheme = Https,
+                            listenerTls =
+                              Just
+                                TlsConfig
+                                  { certificateSource =
+                                      ManualCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
+                                  }
+                          },
+                        ListenerConfig
+                          { listenerHost = "127.0.0.1",
+                            listenerPort = occupiedTlsPort,
+                            listenerScheme = Https,
+                            listenerTls =
+                              Just
+                                TlsConfig
+                                  { certificateSource =
+                                      ManualCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
+                                  }
+                          }
+                      ]
+              runServer outputHandle multiListenerConfig sampleApplication
+                `shouldThrow` isAlreadyInUseError
+              expectLoopbackPortReusable firstTlsPort
 
   describe "withLocalTestServer" $ do
     it "serves the rendered application over a real loopback HTTP listener" $
@@ -1788,6 +1950,15 @@ readLoopbackHttpResponse port path = do
   responseBytes <- readLoopbackHttpResponseBytes port path
   pure (TextEncoding.decodeUtf8 responseBytes)
 
+readLoopbackHttpsResponse :: Int -> Text -> IO Text
+readLoopbackHttpsResponse port path = do
+  responseResult <- readLoopbackHttpsResponseResult port path
+  case responseResult of
+    Right responseText -> pure responseText
+    Left responseError ->
+      expectationFailure ("expected curl HTTPS request to succeed: " <> responseError)
+        >> pure Text.empty
+
 readLoopbackHttpResponseBytes :: Int -> Text -> IO ByteString.ByteString
 readLoopbackHttpResponseBytes port path =
   Socket.withSocketsDo $ do
@@ -1797,6 +1968,19 @@ readLoopbackHttpResponseBytes port path =
     responseBytes <- readAllSocketChunks clientSocket
     Socket.close clientSocket
     pure (extractHttpBody responseBytes)
+
+readLoopbackHttpsResponseResult :: Int -> Text -> IO (Either String Text)
+readLoopbackHttpsResponseResult port path = do
+  let url = "https://127.0.0.1:" <> show port <> Text.unpack path
+  (exitCode, stdoutText, stderrText) <-
+    readProcessWithExitCode
+      "curl"
+      ["--silent", "--show-error", "--insecure", "--fail", "--noproxy", "*", url]
+      ""
+  pure $
+    case exitCode of
+      ExitSuccess -> Right (Text.pack stdoutText)
+      ExitFailure _ -> Left stderrText
 
 waitForServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
 waitForServerResponse completionReference port path =
@@ -1821,6 +2005,31 @@ waitForServerResponse completionReference port path =
                   waitForResponseAttempts (remainingAttempts - 1)
               | otherwise ->
                   expectationFailure "expected runServer to accept loopback HTTP requests"
+                    >> pure Text.empty
+
+waitForHttpsServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
+waitForHttpsServerResponse completionReference port path =
+  waitForResponseAttempts (500 :: Int)
+  where
+    waitForResponseAttempts remainingAttempts = do
+      completionResult <- readIORef completionReference
+      case completionResult of
+        Just (Left exception) ->
+          expectationFailure ("expected runServer to remain running, but it failed early: " <> displayException exception)
+            >> pure Text.empty
+        Just (Right ()) ->
+          expectationFailure "expected runServer to remain running, but it exited early"
+            >> pure Text.empty
+        Nothing -> do
+          responseResult <- readLoopbackHttpsResponseResult port path
+          case responseResult of
+            Right responseText -> pure responseText
+            Left _
+              | remainingAttempts > 0 -> do
+                  threadDelay 10000
+                  waitForResponseAttempts (remainingAttempts - 1)
+              | otherwise ->
+                  expectationFailure "expected runServer to accept loopback HTTPS requests"
                     >> pure Text.empty
 
 waitForServerExit :: IORef (Maybe (Either SomeException ())) -> IO ()
@@ -1865,6 +2074,15 @@ withOccupiedLoopbackPort action = do
       Socket.close listeningSocket
         >> error "expected IPv4 loopback listening socket"
 
+withManualTlsFiles :: (FilePath -> FilePath -> IO a) -> IO a
+withManualTlsFiles action =
+  withSystemTempDirectory "harch-web-tls" $ \tempDirectory -> do
+    let certificatePath = tempDirectory </> "cert.pem"
+        privateKeyPath = tempDirectory </> "key.pem"
+    writeFile certificatePath manualTlsCertificatePem
+    writeFile privateKeyPath manualTlsPrivateKeyPem
+    action certificatePath privateKeyPath
+
 expectLoopbackPortReusable :: Int -> IO ()
 expectLoopbackPortReusable port = do
   bindResult <- try bindTemporaryListener :: IO (Either IOError ())
@@ -1885,6 +2103,35 @@ buildHttpRequest path =
     "GET "
       <> Text.unpack path
       <> " HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+
+manualTlsCertificatePem :: String
+manualTlsCertificatePem =
+  unlines
+    [ "-----BEGIN CERTIFICATE-----",
+      "MIICMzCCAdmgAwIBAgIUAliSVDIFHNHzI1q+e3P+1Ah1kbkwCgYIKoZIzj0EAwIw",
+      "QDEXMBUGA1UECgwOdHJ1c3RtZSB2MS4yLjExJTAjBgNVBAsMHFRlc3RpbmcgQ0Eg",
+      "I2JZeVBlbjVhVnQ0MHlLaXAwIBcNMDAwMTAxMDAwMDAwWhgPMzAwMDAxMDEwMDAw",
+      "MDBaMEIxFzAVBgNVBAoMDnRydXN0bWUgdjEuMi4xMScwJQYDVQQLDB5UZXN0aW5n",
+      "IGNlcnQgI3JHR1p2N1VLMVQyd1hjeG8wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNC",
+      "AARK6NEQhfcGYBt2TRWkrktWpYdmCvYo76sciH70kYBcihzjqaKEw5dD/KbdJjmU",
+      "v4pqTQEMnb8hVwKMfSYqOmqwo4GsMIGpMB0GA1UdDgQWBBR8NRVz81tKH8nCWLNI",
+      "Pn7zdlXakTAMBgNVHRMBAf8EAjAAMB8GA1UdIwQYMBaAFCVFUSwlXOOm5JvKD5o1",
+      "fvsmUu2bMB0GA1UdEQEB/wQTMBGHBH8AAAGCCWxvY2FsaG9zdDAOBgNVHQ8BAf8E",
+      "BAMCBaAwKgYDVR0lAQH/BCAwHgYIKwYBBQUHAwIGCCsGAQUFBwMBBggrBgEFBQcD",
+      "AzAKBggqhkjOPQQDAgNIADBFAiEAujBETz7z5tWMOpwL/NQFEX9LcbcuHA3+T2oa",
+      "6z0Y87gCIDvX/o0KT31LKZM9LklDE11u1S63AYjY0948jEd4Jnrx",
+      "-----END CERTIFICATE-----"
+    ]
+
+manualTlsPrivateKeyPem :: String
+manualTlsPrivateKeyPem =
+  unlines
+    [ "-----BEGIN EC PRIVATE KEY-----",
+      "MHcCAQEEIJ9itNr2Vm4XTUo74d26GQWuZNdRfEjN6cZqWK418T5LoAoGCCqGSM49",
+      "AwEHoUQDQgAESujREIX3BmAbdk0VpK5LVqWHZgr2KO+rHIh+9JGAXIoc46mihMOX",
+      "Q/ym3SY5lL+Kak0BDJ2/IVcCjH0mKjpqsA==",
+      "-----END EC PRIVATE KEY-----"
+    ]
 
 readAllSocketChunks :: Socket.Socket -> IO ByteString.ByteString
 readAllSocketChunks clientSocket = do
