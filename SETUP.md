@@ -547,10 +547,12 @@ The repository now includes a canonical reverse-proxy container example under
 - `app.env`
 - `app.env.local`
 - `nginx/default.conf`
+- `nginx/prefixed.conf`
 
 That stack keeps the application container itself on unprivileged HTTP port `5001`, while nginx owns
 public ports `80` and `443` and forwards `Host`, `X-Forwarded-For`, and `X-Forwarded-Proto` to
-`haskell-web-api`.
+`haskell-web-api`. `nginx/default.conf` mounts the app at `/`, while `nginx/prefixed.conf` shows the
+same TLS-offload pattern mounted under `/app/*`.
 
 Because nginx publishes low-numbered host ports, run this example with Docker, with rootful Podman,
 or with a host configuration that allows rootless low-port binds. From a Distrobox shell, the
@@ -629,6 +631,37 @@ podman compose down
 # or: docker compose down
 rm -f tls/fullchain.pem tls/privkey.pem
 ```
+
+### Path-prefix variant (`/app/*`)
+
+If the reverse proxy should publish the app below a path prefix instead of at `/`, switch the nginx
+volume in `examples/reverse-proxy/docker-compose.yml` from `./nginx/default.conf` to
+`./nginx/prefixed.conf` and bring the `web-api` / `nginx` services back up.
+
+That alternate config keeps the backend on the same internal HTTP listener (`web-api:5001`) but now
+forwards:
+
+- `X-Forwarded-Proto: http` / `https` based on the public listener,
+- `X-Forwarded-Prefix: /app` on every proxied request below `/app`.
+
+With those headers in place, `haskell-web-api` still matches internal routes like `/second`, while
+rendered links, redirects, and static asset URLs stay rooted at `/app`.
+
+Verify the prefixed flow with:
+
+```bash
+curl -I http://127.0.0.1/app
+curl -k https://127.0.0.1/app
+curl -k https://127.0.0.1/app/second
+curl -k https://127.0.0.1/app/assets/navigation.js
+```
+
+Expected results:
+
+- plain HTTP on `/app` redirects to `https://.../app` because the app sees
+  `X-Forwarded-Proto: http`,
+- HTTPS responses under `/app` keep working without any backend TLS listener,
+- HTML navigation links and app-owned assets render as `/app/...`, not `/...`.
 
 ### Let's Encrypt / port 80 note for Podman
 
@@ -817,13 +850,17 @@ For direct requests, runtime traces record the socket peer as both `client.addre
 `network.peer.address`, and `url.scheme` follows the actual listener (`http` vs `https`).
 
 When the app sits behind a reverse proxy or TLS-terminating load balancer, set
-`X-Forwarded-For` and `X-Forwarded-Proto` on the hop into `haskell-web-api`. The runtime then:
+`X-Forwarded-For` and `X-Forwarded-Proto` on the hop into `haskell-web-api`, plus
+`X-Forwarded-Prefix` when the proxy mounts the app below a path such as `/app`. The runtime then:
 
 - records `client.address` from the first `X-Forwarded-For` value,
 - keeps the immediate socket peer in `network.peer.address`,
 - derives `url.scheme` from `X-Forwarded-Proto` when it is `http` or `https`,
+- strips `X-Forwarded-Prefix` from the incoming request path for internal route/static matching and
+  reapplies it to rendered links and redirects,
 - preserves the raw forwarded header values as
-  `http.request.header.x_forwarded_for` / `http.request.header.x_forwarded_proto`,
+  `http.request.header.x_forwarded_for` / `http.request.header.x_forwarded_proto` /
+  `http.request.header.x_forwarded_prefix`,
 - prefixes application `ERROR` log entries with the same request context that appears in
   `TRACE` request observability output.
 
@@ -832,6 +869,7 @@ Example proxy headers:
 ```text
 X-Forwarded-For: 203.0.113.10, 10.0.0.15
 X-Forwarded-Proto: https
+X-Forwarded-Prefix: /app
 ```
 
 ## TLS-Offload Redirect And HSTS Example
