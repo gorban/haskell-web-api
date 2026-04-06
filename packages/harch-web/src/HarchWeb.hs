@@ -65,7 +65,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Either (lefts)
 import Data.List (find, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -78,6 +78,7 @@ import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory (doesFileExist)
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
+import Text.Read (readMaybe)
 
 data ListenerScheme
   = Http
@@ -724,27 +725,67 @@ runtimeStartupValidationError startupPlan =
 
 acmeRuntimeValidationError :: ServerStartupPlan -> String
 acmeRuntimeValidationError startupPlan =
-  case firstMissingAcmeChallengeListener startupPlan of
-    Just acmePlan ->
-      "Unsupported runtime listener startup plan: ACME listener on "
-        <> renderListenerEndpoint (acmeEndpoint acmePlan)
-        <> " requires an HTTP listener on port 80 for http-01 challenges."
-    Nothing ->
-      "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
+  fromMaybe
+    "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
+    (firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan))
 
-firstMissingAcmeChallengeListener :: ServerStartupPlan -> Maybe AcmeBindPlan
-firstMissingAcmeChallengeListener startupPlan =
-  find
-    (isNothing . resolveAcmeHttp01ChallengeEndpoint (httpEndpoints (httpBindPlan startupPlan)))
-    (acmeBindPlans startupPlan)
+firstAcmeRuntimeStartupError :: [ListenerEndpoint] -> [AcmeBindPlan] -> Maybe String
+firstAcmeRuntimeStartupError httpListenerEndpoints acmePlans =
+  listToMaybe (mapMaybe (validateAcmeRuntimeBindPlan httpListenerEndpoints) acmePlans)
 
-resolveAcmeHttp01ChallengeEndpoint :: [ListenerEndpoint] -> AcmeBindPlan -> Maybe ListenerEndpoint
-resolveAcmeHttp01ChallengeEndpoint httpListenerEndpoints acmePlan =
-  find (isAcmeHttp01ChallengeEndpointFor (acmeEndpoint acmePlan)) httpListenerEndpoints
+validateAcmeRuntimeBindPlan :: [ListenerEndpoint] -> AcmeBindPlan -> Maybe String
+validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
+  case acmeHttp01ChallengePort acmePlan of
+    Left runtimeError ->
+      Just runtimeError
+    Right challengePort ->
+      if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
+        then Nothing
+        else
+          Just $
+            "Unsupported runtime listener startup plan: ACME listener on "
+              <> renderListenerEndpoint (acmeEndpoint acmePlan)
+              <> " requires an HTTP listener on port "
+              <> show challengePort
+              <> " for http-01 challenges."
 
-isAcmeHttp01ChallengeEndpointFor :: ListenerEndpoint -> ListenerEndpoint -> Bool
-isAcmeHttp01ChallengeEndpointFor acmeListenerEndpoint httpListenerEndpoint =
-  endpointPort httpListenerEndpoint == 80
+hasMatchingAcmeHttp01ChallengeEndpoint :: Int -> [ListenerEndpoint] -> AcmeBindPlan -> Bool
+hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan =
+  case find (isAcmeHttp01ChallengeEndpointFor challengePort (acmeEndpoint acmePlan)) httpListenerEndpoints of
+    Just _ -> True
+    Nothing -> False
+
+acmeHttp01ChallengePort :: AcmeBindPlan -> Either String Int
+acmeHttp01ChallengePort acmePlan =
+  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
+    InProcessHttp01 ->
+      Right 80
+    CertbotHttp01 certbotConfig ->
+      case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
+        Nothing ->
+          Right 80
+        Just portText ->
+          maybe
+            ( Left $
+                "Unsupported runtime listener startup plan: ACME listener on "
+                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
+                  <> " has an invalid certbot http-01 port: "
+                  <> Text.unpack portText
+            )
+            Right
+            (readMaybe (Text.unpack portText))
+
+certbotOptionValue :: Text -> [Text] -> Maybe Text
+certbotOptionValue optionName arguments =
+  listToMaybe
+    [ optionValue
+    | (argument, optionValue) <- zip arguments (drop 1 arguments),
+      argument == optionName
+    ]
+
+isAcmeHttp01ChallengeEndpointFor :: Int -> ListenerEndpoint -> ListenerEndpoint -> Bool
+isAcmeHttp01ChallengeEndpointFor challengePort acmeListenerEndpoint httpListenerEndpoint =
+  endpointPort httpListenerEndpoint == challengePort
     && ( endpointHost httpListenerEndpoint == "0.0.0.0"
            || endpointHost httpListenerEndpoint == endpointHost acmeListenerEndpoint
        )

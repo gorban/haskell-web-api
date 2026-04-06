@@ -263,6 +263,14 @@ acmeHttpsListener host port challengeBackend =
             }
     }
 
+certbotHttp01Backend :: [Text] -> AcmeChallengeBackend
+certbotHttp01Backend certbotArguments =
+  CertbotHttp01
+    CertbotConfig
+      { certbotExecutable = "certbot",
+        certbotArguments = certbotArguments
+      }
+
 rootPathApplication :: Application TestRoute TestContext
 rootPathApplication =
   Application
@@ -1841,6 +1849,62 @@ spec = do
                 ]
         runServer outputHandle acmeTlsConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+
+    it "fails explicitly when certbot-backed ACME listeners do not have the declared http-01 port listener" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withUnusedLoopbackPort $ \otherPort ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            let declaredPort = challengePort
+                certbotBackend =
+                  certbotHttp01Backend
+                    ["certonly", "--http-01-port", Text.pack (show declaredPort)]
+                acmeTlsConfig =
+                  serverConfigWithListeners
+                    [ httpRuntimeListener "127.0.0.1" otherPort,
+                      acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                    ]
+            runServer outputHandle acmeTlsConfig sampleApplication
+              `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires an HTTP listener on port " <> show declaredPort <> " for http-01 challenges.)")
+
+    it "fails explicitly after resolving a certbot-backed ACME challenge listener on the declared http-01 port" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+          let certbotBackend =
+                certbotHttp01Backend
+                  ["certonly", "--http-01-port", Text.pack (show challengePort)]
+              acmeTlsConfig =
+                serverConfigWithListeners
+                  [ httpRuntimeListener "127.0.0.1" challengePort,
+                    acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                  ]
+          runServer outputHandle acmeTlsConfig sampleApplication
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+
+    it "fails explicitly after resolving a certbot-backed ACME challenge listener on the default http-01 port" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let certbotBackend =
+              certbotHttp01Backend
+                ["certonly"]
+            acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "127.0.0.1" 80,
+                  acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+
+    it "fails explicitly when certbot-backed ACME listeners declare an invalid http-01 port" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let certbotBackend =
+              certbotHttp01Backend
+                ["certonly", "--http-01-port", "not-a-port"]
+            acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "127.0.0.1" 80,
+                  acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 has an invalid certbot http-01 port: not-a-port)")
 
     it "fails explicitly when no supported runtime listeners are configured" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
