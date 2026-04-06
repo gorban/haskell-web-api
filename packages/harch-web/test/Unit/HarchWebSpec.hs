@@ -235,6 +235,34 @@ serverConfigWithListeners listeners =
     { listenerConfigs = listeners
     }
 
+httpRuntimeListener :: Text -> Int -> ListenerConfig
+httpRuntimeListener host port =
+  ListenerConfig
+    { listenerHost = host,
+      listenerPort = port,
+      listenerScheme = Http,
+      listenerTls = Nothing
+    }
+
+acmeHttpsListener :: Text -> Int -> AcmeChallengeBackend -> ListenerConfig
+acmeHttpsListener host port challengeBackend =
+  ListenerConfig
+    { listenerHost = host,
+      listenerPort = port,
+      listenerScheme = Https,
+      listenerTls =
+        Just
+          TlsConfig
+            { certificateSource =
+                AcmeCertificateSource
+                  AcmeConfig
+                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                      acmeContactEmails = ["ops@example.com"],
+                      acmeChallengeBackend = challengeBackend
+                    }
+            }
+    }
+
 rootPathApplication :: Application TestRoute TestContext
 rootPathApplication =
   Application
@@ -1766,26 +1794,50 @@ spec = do
           runServer outputHandle invalidTlsConfig sampleApplication
             `shouldThrow` anyException
 
-    it "fails explicitly when only ACME runtime listeners are configured" $
+    it "fails explicitly when ACME runtime listeners are missing any HTTP challenge listener" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
         let acmeTlsConfig =
               serverConfigWithListeners
-                [ ListenerConfig
-                    { listenerHost = "127.0.0.1",
-                      listenerPort = 5443,
-                      listenerScheme = Https,
-                      listenerTls =
-                        Just
-                          TlsConfig
-                            { certificateSource =
-                                AcmeCertificateSource
-                                  AcmeConfig
-                                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
-                                      acmeContactEmails = ["ops@example.com"],
-                                      acmeChallengeBackend = InProcessHttp01
-                                    }
-                            }
-                    }
+                [acmeHttpsListener "127.0.0.1" 5443 InProcessHttp01]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires an HTTP listener on port 80 for http-01 challenges.)")
+
+    it "fails explicitly when ACME runtime listeners do not have an HTTP port 80 challenge listener" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "0.0.0.0" 5001,
+                  acmeHttpsListener "0.0.0.0" 5443 InProcessHttp01
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 0.0.0.0:5443 requires an HTTP listener on port 80 for http-01 challenges.)")
+
+    it "fails explicitly when ACME runtime challenge listeners do not match the HTTPS host" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "127.0.0.1" 80,
+                  acmeHttpsListener "0.0.0.0" 5443 InProcessHttp01
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 0.0.0.0:5443 requires an HTTP listener on port 80 for http-01 challenges.)")
+
+    it "fails explicitly after resolving an exact-host ACME challenge listener" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "127.0.0.1" 80,
+                  acmeHttpsListener "127.0.0.1" 5443 InProcessHttp01
+                ]
+        runServer outputHandle acmeTlsConfig sampleApplication
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+
+    it "fails explicitly after resolving a wildcard-host ACME challenge listener" $
+      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+        let acmeTlsConfig =
+              serverConfigWithListeners
+                [ httpRuntimeListener "0.0.0.0" 80,
+                  acmeHttpsListener "127.0.0.1" 5443 InProcessHttp01
                 ]
         runServer outputHandle acmeTlsConfig sampleApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")

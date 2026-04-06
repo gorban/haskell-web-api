@@ -63,9 +63,9 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Either (lefts)
-import Data.List (maximumBy)
+import Data.List (find, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -715,12 +715,43 @@ runtimeStartupValidationError startupPlan =
          null (httpEndpoints (httpBindPlan startupPlan)),
          null (manualTlsBindPlans startupPlan)
        ) of
-    (False, _, _) ->
-      Just "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
     (True, True, True) ->
       Just "Unsupported runtime listener startup plan: no runtime listeners are configured."
+    (False, _, _) ->
+      Just (acmeRuntimeValidationError startupPlan)
     (True, _, _) ->
       Nothing
+
+acmeRuntimeValidationError :: ServerStartupPlan -> String
+acmeRuntimeValidationError startupPlan =
+  case firstMissingAcmeChallengeListener startupPlan of
+    Just acmePlan ->
+      "Unsupported runtime listener startup plan: ACME listener on "
+        <> renderListenerEndpoint (acmeEndpoint acmePlan)
+        <> " requires an HTTP listener on port 80 for http-01 challenges."
+    Nothing ->
+      "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
+
+firstMissingAcmeChallengeListener :: ServerStartupPlan -> Maybe AcmeBindPlan
+firstMissingAcmeChallengeListener startupPlan =
+  find
+    (isNothing . resolveAcmeHttp01ChallengeEndpoint (httpEndpoints (httpBindPlan startupPlan)))
+    (acmeBindPlans startupPlan)
+
+resolveAcmeHttp01ChallengeEndpoint :: [ListenerEndpoint] -> AcmeBindPlan -> Maybe ListenerEndpoint
+resolveAcmeHttp01ChallengeEndpoint httpListenerEndpoints acmePlan =
+  find (isAcmeHttp01ChallengeEndpointFor (acmeEndpoint acmePlan)) httpListenerEndpoints
+
+isAcmeHttp01ChallengeEndpointFor :: ListenerEndpoint -> ListenerEndpoint -> Bool
+isAcmeHttp01ChallengeEndpointFor acmeListenerEndpoint httpListenerEndpoint =
+  endpointPort httpListenerEndpoint == 80
+    && ( endpointHost httpListenerEndpoint == "0.0.0.0"
+           || endpointHost httpListenerEndpoint == endpointHost acmeListenerEndpoint
+       )
+
+renderListenerEndpoint :: ListenerEndpoint -> String
+renderListenerEndpoint endpoint =
+  Text.unpack (endpointHost endpoint) <> ":" <> show (endpointPort endpoint)
 
 listenerSocketHints :: Socket.AddrInfo
 listenerSocketHints =
