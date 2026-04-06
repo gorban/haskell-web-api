@@ -544,6 +544,7 @@ The repository now includes a canonical reverse-proxy container example under
 `examples/reverse-proxy/`:
 
 - `docker-compose.yml`
+- `podman-compose.yml`
 - `app.env`
 - `app.env.local`
 - `nginx/default.conf`
@@ -552,18 +553,21 @@ The repository now includes a canonical reverse-proxy container example under
 That stack keeps the application container itself on unprivileged HTTP port `5001`, while nginx owns
 public ports `80` and `443` and forwards `Host`, `X-Forwarded-For`, and `X-Forwarded-Proto` to
 `haskell-web-api`. `nginx/default.conf` mounts the app at `/`, while `nginx/prefixed.conf` shows the
-same TLS-offload pattern mounted under `/app/*`.
+same TLS-offload pattern mounted under `/app/*`. The two compose files describe the same stack so you
+can keep `docker compose -f docker-compose.yml ...` and `podman compose -f podman-compose.yml ...`
+spelled explicitly in local notes or automation without relying on tool-specific default filename
+discovery.
 
 Because nginx publishes low-numbered host ports, run this example with Docker, with rootful Podman,
 or with a host configuration that allows rootless low-port binds. From a Distrobox shell, the
 rootful Podman form is:
 
 ```bash
-distrobox-host-exec sudo podman compose up -d postgres jaeger
+distrobox-host-exec sudo podman compose -f podman-compose.yml up -d postgres jaeger
 ```
 
-Use the same `distrobox-host-exec sudo podman compose ...` prefix for the later `up` and `down`
-commands in this section when you need the rootful path.
+Use the same `distrobox-host-exec sudo podman compose -f podman-compose.yml ...` prefix for the later
+`up` and `down` commands in this section when you need the rootful path.
 
 1. Generate local development certificates for the nginx TLS listener:
 
@@ -582,8 +586,8 @@ openssl req -x509 -nodes -newkey rsa:2048 \
 
 ```bash
 cd examples/reverse-proxy
-podman compose up -d postgres jaeger
-# or: docker compose up -d postgres jaeger
+podman compose -f podman-compose.yml up -d postgres jaeger
+# or: docker compose -f docker-compose.yml up -d postgres jaeger
 ```
 
 3. From the repository root, seed the database with the owner-level migration credentials against the
@@ -603,8 +607,8 @@ cabal run exe:haskell-web-api-db -- migrate-and-seed
 
 ```bash
 cd examples/reverse-proxy
-podman compose up -d web-api nginx
-# or: docker compose up -d web-api nginx
+podman compose -f podman-compose.yml up -d web-api nginx
+# or: docker compose -f docker-compose.yml up -d web-api nginx
 ```
 
 5. Verify the end-to-end behavior:
@@ -627,16 +631,17 @@ Expected results:
 
 ```bash
 cd examples/reverse-proxy
-podman compose down
-# or: docker compose down
+podman compose -f podman-compose.yml down
+# or: docker compose -f docker-compose.yml down
 rm -f tls/fullchain.pem tls/privkey.pem
 ```
 
 ### Path-prefix variant (`/app/*`)
 
 If the reverse proxy should publish the app below a path prefix instead of at `/`, switch the nginx
-volume in `examples/reverse-proxy/docker-compose.yml` from `./nginx/default.conf` to
-`./nginx/prefixed.conf` and bring the `web-api` / `nginx` services back up.
+volume in `examples/reverse-proxy/docker-compose.yml` or `examples/reverse-proxy/podman-compose.yml`
+from `./nginx/default.conf` to `./nginx/prefixed.conf` and bring the `web-api` / `nginx` services
+back up.
 
 That alternate config keeps the backend on the same internal HTTP listener (`web-api:5001`) but now
 forwards:

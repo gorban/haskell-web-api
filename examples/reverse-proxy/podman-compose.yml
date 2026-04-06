@@ -1,0 +1,39 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:17
+    environment:
+      POSTGRES_USER: web_api_owner
+      POSTGRES_PASSWORD: web_api_owner
+      POSTGRES_DB: web_api_dev
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  jaeger:
+    image: docker.io/jaegertracing/all-in-one:latest
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "127.0.0.1:16686:16686"
+
+  web-api:
+    build:
+      context: ../..
+    depends_on:
+      - postgres
+      - jaeger
+    volumes:
+      - ./app.env:/app/.env:ro
+      - ./app.env.local:/app/.env.local:ro
+    expose:
+      - "5001"
+
+  nginx:
+    image: docker.io/library/nginx:1.27-alpine
+    depends_on:
+      - web-api
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./tls:/etc/nginx/tls:ro
