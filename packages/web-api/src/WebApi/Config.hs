@@ -52,6 +52,7 @@ import Core.Config
     parseNonNegativeInt,
     parsePositiveInt,
   )
+import Data.Bifunctor (bimap)
 import Data.List (nub)
 import Data.Maybe (isJust)
 import Data.Text (Text)
@@ -73,6 +74,7 @@ import HarchWeb
     TlsCertificateSource (..),
     TlsConfig (..),
   )
+import System.Environment (getEnvironment)
 
 data AppMode
   = Development
@@ -206,10 +208,11 @@ loadAppEnvironmentConfigWithFiles :: FilePath -> FilePath -> IO (Either AppEnvir
 loadAppEnvironmentConfigWithFiles committedDefaultsPath localOverridesPath = do
   committedDefaultsResult <- loadOverridesFile committedDefaultsPath
   localOverridesResult <- loadOverridesFile localOverridesPath
+  environmentOverrides <- loadEnvironmentOverrides
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppEnvironmentConfig committedEnvDefaults committedDefaults localOverrides of
+    case parseAppEnvironmentConfig committedEnvDefaults committedDefaults (localOverrides <> environmentOverrides) of
       Left parseError -> Left (AppEnvironmentConfigParseError parseError)
       Right environmentConfig -> Right environmentConfig
   where
@@ -221,6 +224,12 @@ loadAppEnvironmentConfigWithFiles committedDefaultsPath localOverridesPath = do
         )
         (loadConfigOverridesFile overridesPath)
 
+loadEnvironmentOverrides :: IO [(Text, Text)]
+loadEnvironmentOverrides =
+  fmap
+    (map (bimap Text.pack Text.pack))
+    getEnvironment
+
 loadAppStartupConfig :: IO (Either AppStartupConfigLoadError AppStartupConfig)
 loadAppStartupConfig =
   loadAppStartupConfigWithFiles ".env" ".env.local"
@@ -229,10 +238,11 @@ loadAppStartupConfigWithFiles :: FilePath -> FilePath -> IO (Either AppStartupCo
 loadAppStartupConfigWithFiles committedDefaultsPath localOverridesPath = do
   committedDefaultsResult <- loadOverridesFile committedDefaultsPath
   localOverridesResult <- loadOverridesFile localOverridesPath
+  environmentOverrides <- loadEnvironmentOverrides
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) committedDefaults localOverrides of
+    case parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) committedDefaults (localOverrides <> environmentOverrides) of
       Left parseError -> Left (AppStartupConfigParseError parseError)
       Right startupConfig -> Right startupConfig
   where

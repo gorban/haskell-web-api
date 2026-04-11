@@ -271,6 +271,18 @@ withClearedAppEnvironment =
     . withTemporaryEnvironment "DATABASE_USER" Nothing
     . withTemporaryEnvironment "DATABASE_PASSWORD" Nothing
 
+withClearedRuntimeEnvironment :: IO a -> IO a
+withClearedRuntimeEnvironment =
+  withTemporaryEnvironment "APP_TITLE_PREFIX" Nothing
+    . withTemporaryEnvironment "LISTENER_0_HOST" Nothing
+    . withTemporaryEnvironment "LISTENER_0_PORT" Nothing
+    . withTemporaryEnvironment "LISTENER_0_SCHEME" Nothing
+
+withClearedSetupEnvironment :: IO a -> IO a
+withClearedSetupEnvironment =
+  withTemporaryEnvironment "SETUP_AUTOSTART_DATABASE" Nothing
+    . withTemporaryEnvironment "SETUP_AUTOSTART_JAEGER" Nothing
+
 withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a
 withFakePsqlScriptResults commandResults action =
   withSystemTempDirectory "fake-psql" $ \tempDirectory -> do
@@ -2019,6 +2031,30 @@ spec = do
                     }
               }
 
+    it "lets process environment override .env.local values" $
+      withSystemTempDirectory "app-environment-config-env" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withTemporaryEnvironment "APP_MODE" (Just "production") $
+            withTemporaryEnvironment "DATABASE_PORT" (Just "8432") $
+              withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime_password") $ do
+                let envPath = tempDirectory <> "/.env"
+                    envLocalPath = tempDirectory <> "/.env.local"
+                writeFile envPath "APP_MODE=development\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
+                loadAppEnvironmentConfigWithFiles envPath envLocalPath
+                  `shouldReturn` Right
+                    AppEnvironmentConfig
+                      { appMode = Production,
+                        databaseConfig =
+                          DatabaseConfig
+                            { databaseHost = "db.shared",
+                              databasePort = 8432,
+                              databaseName = "shared_db",
+                              databaseUser = "shared_user",
+                              databasePassword = "runtime_password"
+                            }
+                      }
+
     it "reports invalid override files with the failing path" $
       withSystemTempDirectory "app-environment-config-error" $ \tempDirectory -> do
         let envPath = tempDirectory <> "/.env"
@@ -2115,6 +2151,46 @@ spec = do
                         ]
                     }
               }
+
+    it "lets process environment override .env.local values for runtime startup" $
+      withSystemTempDirectory "app-startup-config-env" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withTemporaryEnvironment "APP_TITLE_PREFIX" (Just "web-api-runtime") $
+              withTemporaryEnvironment "LISTENER_0_HOST" (Just "0.0.0.0") $
+                withTemporaryEnvironment "LISTENER_0_PORT" (Just "80") $ do
+                  let envPath = tempDirectory <> "/.env"
+                      envLocalPath = tempDirectory <> "/.env.local"
+                  writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
+                  writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
+                  loadAppStartupConfigWithFiles envPath envLocalPath
+                    `shouldReturn` Right
+                      AppStartupConfig
+                        { startupEnvironmentConfig =
+                            AppEnvironmentConfig
+                              { appMode = Production,
+                                databaseConfig =
+                                  DatabaseConfig
+                                    { databaseHost = "db.shared",
+                                      databasePort = 6432,
+                                      databaseName = "web_api_dev",
+                                      databaseUser = "web_api_runtime",
+                                      databasePassword = "local_password"
+                                    }
+                              },
+                          startupAppConfig =
+                            defaultAppConfig
+                              { appTitlePrefix = "web-api-runtime",
+                                listenerConfigs =
+                                  [ ListenerConfig
+                                      { listenerHost = "0.0.0.0",
+                                        listenerPort = 80,
+                                        listenerScheme = Http,
+                                        listenerTls = Nothing
+                                      }
+                                  ]
+                              }
+                        }
 
     it "reports invalid override files or parse failures with explicit errors" $
       withSystemTempDirectory "app-startup-config-errors" $ \tempDirectory -> do
@@ -2318,6 +2394,34 @@ spec = do
                       setupAutostartJaeger = True
                     }
               }
+
+    it "lets process environment override .env.local values for setup config" $
+      withSystemTempDirectory "app-setup-config-env" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $
+              withTemporaryEnvironment "APP_TITLE_PREFIX" (Just "web-api-runtime") $
+                withTemporaryEnvironment "SETUP_AUTOSTART_DATABASE" (Just "false") $
+                  withTemporaryEnvironment "SETUP_AUTOSTART_JAEGER" (Just "true") $ do
+                    let envPath = tempDirectory <> "/.env"
+                        envLocalPath = tempDirectory <> "/.env.local"
+                    writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
+                    writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=no\n"
+                    loadAppSetupConfigWithFiles envPath envLocalPath
+                      `shouldReturn` Right
+                        AppSetupConfig
+                          { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+                            setupAppConfig =
+                              defaultAppConfig
+                                { appTitlePrefix = "web-api-runtime"
+                                },
+                            setupMigrationDatabaseConfig = Nothing,
+                            setupAutostartConfig =
+                              SetupAutostartConfig
+                                { setupAutostartDatabase = False,
+                                  setupAutostartJaeger = True
+                                }
+                          }
 
     it "loads optional migration-owner credentials from the same file layers without replacing runtime credentials" $
       withSystemTempDirectory "app-setup-config-migration" $ \tempDirectory -> do

@@ -21,8 +21,11 @@ import Core.Config
     lookupConfigValue,
     parseBoolean,
   )
+import Data.Bifunctor (bimap)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
+import Data.Text qualified as Text
+import System.Environment (getEnvironment)
 import WebApi.Config
   ( AppConfig,
     AppEnvironmentConfig,
@@ -85,13 +88,14 @@ loadAppSetupConfigWithFiles :: FilePath -> FilePath -> IO (Either AppSetupConfig
 loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
   committedDefaultsResult <- loadOverridesFile committedDefaultsPath
   localOverridesResult <- loadOverridesFile localOverridesPath
+  environmentOverrides <- loadEnvironmentOverrides
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
     case parseAppSetupConfig
       (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
       committedDefaults
-      localOverrides of
+      (localOverrides <> environmentOverrides) of
       Left parseError -> Left (AppSetupConfigParseError parseError)
       Right setupConfig -> Right setupConfig
   where
@@ -102,6 +106,12 @@ loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
             Right
         )
         (loadConfigOverridesFile overridesPath)
+
+loadEnvironmentOverrides :: IO [(Text, Text)]
+loadEnvironmentOverrides =
+  fmap
+    (map (bimap Text.pack Text.pack))
+    getEnvironment
 
 parseAppSetupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppSetupConfig
 parseAppSetupConfig committedDefaults localOverrides environmentOverrides = do
