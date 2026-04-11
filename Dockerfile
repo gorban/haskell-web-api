@@ -146,6 +146,16 @@ COPY --from=build-and-test --chown=app:app /app/haskell-web-api-bin /app/haskell
 # as the repository even before runtime config is expanded further.
 COPY --from=build-and-test --chown=app:app /app/packages/web-api/public /app/public
 
+# Grant only the runtime binary the capability to bind privileged ports such as 80/443,
+# then keep the container itself running as the non-root app user.
+RUN <<EOF
+set -e
+apk add --no-cache --virtual .bind-low-port-deps libcap
+setcap cap_net_bind_service+ep /app/haskell-web-api
+getcap /app/haskell-web-api
+apk del .bind-low-port-deps
+EOF
+
 # Switch to non-root user
 USER app
 

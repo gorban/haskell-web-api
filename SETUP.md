@@ -762,8 +762,9 @@ If you do not want the rootful host-network path above, the remaining low-port o
    sudo iptables -t nat -A PREROUTING -p tcp --dport 80 -j REDIRECT --to-ports 5001
    ```
 
-2. **`setcap` on the runtime binary inside the image**: grant only the bind-low-port capability to
-   `/app/haskell-web-api`, then keep running as the non-root `app` user.
+2. **`setcap` on the runtime binary inside the image**: the tracked `Dockerfile` now grants only the
+   bind-low-port capability to `/app/haskell-web-api`, then keeps the container running as the non-root
+   `app` user.
 
    ```dockerfile
    RUN apk add --no-cache libcap \
@@ -772,7 +773,8 @@ If you do not want the rootful host-network path above, the remaining low-port o
     && apk del libcap
    ```
 
-   Place that after the runtime binary is copied into the image and before `USER app`.
+   The runtime stage now does exactly that, so a container built from the repository Dockerfile can bind
+   `80` / `443` directly after you set `LISTENER_<n>_PORT` to those ports.
 
 3. **Rootless Podman with `--cap-add=NET_BIND_SERVICE --network=host`**: this keeps the container
    rootless, but it only works when the host allows unprivileged low ports.
