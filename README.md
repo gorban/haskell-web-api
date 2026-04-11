@@ -121,7 +121,7 @@ understands the following values:
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
 | `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
-| `REDIRECT_HTTP_TO_HTTPS` | Whether insecure requests should receive an HTTPS redirect before app/static handling. Supported values are `true` / `false`. | (`false`) |
+| `REDIRECT_HTTP_TO_HTTPS` | Whether insecure requests should receive an HTTPS redirect before app/static handling. Supported values are `true` / `false`. When unset, runtime config defaults this to `true` if at least one HTTP listener and one HTTPS listener are configured together; otherwise it stays `false`. | (`listener-aware`) |
 | `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
 | `HSTS_INCLUDE_SUBDOMAINS` | Whether emitted HSTS headers should include `includeSubDomains`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
 | `HSTS_PRELOAD` | Whether emitted HSTS headers should include `preload`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
@@ -244,6 +244,13 @@ OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
 SETUP_AUTOSTART_DATABASE=true
 SETUP_AUTOSTART_JAEGER=false
 ```
+
+When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default from the listener plan:
+
+- HTTP-only listener sets keep redirects off.
+- Dual HTTP+HTTPS listener sets default redirects on and target the unique configured HTTPS port.
+- `REDIRECT_HTTP_TO_HTTPS=false` overrides that default and leaves both listeners serving real traffic.
+- `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
 
 ### MacOS / Linux
 

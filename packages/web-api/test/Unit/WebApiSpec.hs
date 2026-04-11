@@ -510,6 +510,7 @@ spec = do
             requestPolicy =
               RequestPolicyConfig
                 { redirectHttpToHttps = False,
+                  httpsRedirectPort = Nothing,
                   strictTransportSecurity = Nothing
                 },
             observability =
@@ -587,6 +588,105 @@ spec = do
         []
         []
         `shouldBe` Left (MissingConfigValue "LISTENER_0_TLS_SOURCE")
+
+    it "defaults redirects on and records the HTTPS port when one HTTP and one manual HTTPS listener are configured" $
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "http"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5443"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "manual"),
+          ("LISTENER_1_TLS_CERTIFICATE_FILE", "cert.pem"),
+          ("LISTENER_1_TLS_PRIVATE_KEY_FILE", "key.pem")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "cert.pem",
+                                    privateKeyFile = "key.pem"
+                                  }
+                            }
+                    }
+                ],
+              requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = True,
+                    httpsRedirectPort = Just 5443,
+                    strictTransportSecurity = Nothing
+                  }
+            }
+
+    it "defaults redirects on for HTTP plus ACME-backed HTTPS listener plans" $
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "80"),
+          ("LISTENER_0_SCHEME", "http"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "443"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "acme"),
+          ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 80,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
+                                      acmeChallengeBackend = InProcessHttp01
+                                    }
+                            }
+                    }
+                ],
+              requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = True,
+                    httpsRedirectPort = Just 443,
+                    strictTransportSecurity = Nothing
+                  }
+            }
 
     it "parses manual and ACME-backed HTTPS listeners distinctly" $ do
       let committedDefaults =
@@ -766,6 +866,7 @@ spec = do
             { requestPolicy =
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
+                    httpsRedirectPort = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -790,6 +891,7 @@ spec = do
             { requestPolicy =
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
+                    httpsRedirectPort = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -810,6 +912,7 @@ spec = do
             { requestPolicy =
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
+                    httpsRedirectPort = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -817,6 +920,54 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
                           }
+                  }
+            }
+
+    it "lets REDIRECT_HTTP_TO_HTTPS=false disable the listener-aware default for dual listeners" $
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "http"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5443"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "manual"),
+          ("LISTENER_1_TLS_CERTIFICATE_FILE", "cert.pem"),
+          ("LISTENER_1_TLS_PRIVATE_KEY_FILE", "key.pem")
+        ]
+        []
+        [("REDIRECT_HTTP_TO_HTTPS", "false")]
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "cert.pem",
+                                    privateKeyFile = "key.pem"
+                                  }
+                            }
+                    }
+                ],
+              requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = False,
+                    httpsRedirectPort = Just 5443,
+                    strictTransportSecurity = Nothing
                   }
             }
 
@@ -2023,9 +2174,9 @@ spec = do
       startupConfig `shouldBe` startupConfig
       startupConfig `shouldNotBe` differentStartupConfig
       show startupConfig
-        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
+        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
       show [startupConfig]
-        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
+        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -2309,11 +2460,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -3315,7 +3466,7 @@ spec = do
               observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
             }
         )
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
 
     it "covers direct equality branches across the remaining public config and page types" $ do
       let certbotConfig =
@@ -3696,7 +3847,7 @@ spec = do
       show [observabilityConfig]
         `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
       show [appConfig]
-        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
+        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
       show [English, French] `shouldBe` "[English,French]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
@@ -3894,7 +4045,7 @@ spec = do
                 observability = observability defaultAppConfig
               }
       show config
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"

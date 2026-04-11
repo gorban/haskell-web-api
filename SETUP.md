@@ -797,6 +797,10 @@ Runtime ACME listener startup is still a follow-up item, but you can already exe
 ACME-backed listener config, `harch-web` translates that into an ACME startup plan, and the runtime
 currently fails explicitly once such a listener reaches the startup boundary.
 
+When a config includes both the plain HTTP challenge listener and an HTTPS listener, leaving
+`REDIRECT_HTTP_TO_HTTPS` unset now defaults non-ACME traffic to HTTPS redirects while keeping
+`/.well-known/acme-challenge/*` exempt for `http-01`.
+
 For development, prefer a staging ACME directory rather than the production Let's Encrypt endpoint.
 Add a temporary ACME listener block like this to `./.env.local`:
 
@@ -899,6 +903,10 @@ With that policy:
 
 That lets a common `80 -> 443` proxy setup enforce browser upgrades and HSTS now, even before native
 runtime HTTPS listener startup is the active deployment path.
+
+For direct app-managed dual listeners, you can now omit `REDIRECT_HTTP_TO_HTTPS` and let the runtime
+default it on whenever both HTTP and HTTPS listeners are configured together. Set
+`REDIRECT_HTTP_TO_HTTPS=false` only when you intentionally want both listeners to serve real traffic.
 
 ## External Port 80 Reachability for ACME / http-01
 

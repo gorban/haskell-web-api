@@ -157,6 +157,7 @@ data StrictTransportSecurityConfig = StrictTransportSecurityConfig
 
 data RequestPolicyConfig = RequestPolicyConfig
   { redirectHttpToHttps :: Bool,
+    httpsRedirectPort :: Maybe Int,
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig
   }
   deriving (Eq, Show)
@@ -891,7 +892,9 @@ waiRequestPath request =
 
 requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
 requestRedirectLocation requestPolicyConfig request =
-  if redirectHttpToHttps requestPolicyConfig && requestScheme request == "http"
+  if redirectHttpToHttps requestPolicyConfig
+    && requestScheme request == "http"
+    && not (isAcmeHttp01ChallengeRequest request)
     then
       fmap
         ( \redirectAuthority ->
@@ -899,18 +902,33 @@ requestRedirectLocation requestPolicyConfig request =
               <> redirectAuthority
               <> requestRedirectPathAndQuery request
         )
-        (requestRedirectAuthority request)
+        (requestRedirectAuthority requestPolicyConfig request)
     else Nothing
 
-requestRedirectAuthority :: Wai.Request -> Maybe ByteString.ByteString
-requestRedirectAuthority request =
+requestRedirectAuthority :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
+requestRedirectAuthority requestPolicyConfig request =
   fmap
-    (\hostHeader -> fromMaybe hostHeader (ByteStringChar8.stripSuffix ":80" hostHeader))
+    (applyHttpsRedirectPort (httpsRedirectPort requestPolicyConfig))
     (lookup "Host" (Wai.requestHeaders request))
 
 requestRedirectPathAndQuery :: Wai.Request -> ByteString.ByteString
 requestRedirectPathAndQuery request =
   TextEncoding.encodeUtf8 (externalRequestPath request) <> Wai.rawQueryString request
+
+applyHttpsRedirectPort :: Maybe Int -> ByteString.ByteString -> ByteString.ByteString
+applyHttpsRedirectPort maybeRedirectPort hostHeader =
+  let normalizedDefaultHostHeader =
+        fromMaybe hostHeader (ByteStringChar8.stripSuffix ":80" hostHeader)
+      hostOnly = ByteStringChar8.takeWhile (/= ':') normalizedDefaultHostHeader
+   in case maybeRedirectPort of
+        Nothing -> normalizedDefaultHostHeader
+        Just 443 -> hostOnly
+        Just redirectPort ->
+          hostOnly <> ":" <> ByteStringChar8.pack (show redirectPort)
+
+isAcmeHttp01ChallengeRequest :: Wai.Request -> Bool
+isAcmeHttp01ChallengeRequest request =
+  Text.isPrefixOf "/.well-known/acme-challenge/" (waiRequestPath request)
 
 requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
 requestPolicyResponseHeaders requestPolicyConfig request =

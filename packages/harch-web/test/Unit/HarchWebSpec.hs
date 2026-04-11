@@ -179,6 +179,7 @@ defaultRequestPolicy :: RequestPolicyConfig
 defaultRequestPolicy =
   RequestPolicyConfig
     { redirectHttpToHttps = False,
+      httpsRedirectPort = Nothing,
       strictTransportSecurity = Nothing
     }
 
@@ -401,6 +402,7 @@ spec = do
           requestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = True,
+                httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig
               }
           serverConfig =
@@ -440,6 +442,7 @@ spec = do
       staticAssetRoots (staticAssets serverConfig) `shouldBe` [staticRoot]
       staticCacheControlSeconds (staticAssets serverConfig) `shouldBe` Just 3600
       redirectHttpToHttps requestPolicyConfig `shouldBe` True
+      httpsRedirectPort requestPolicyConfig `shouldBe` Just 5443
       strictTransportSecurity requestPolicyConfig `shouldBe` Just strictTransportSecurityConfig
       strictTransportSecurityMaxAgeSeconds strictTransportSecurityConfig `shouldBe` 31536000
       strictTransportSecurityIncludeSubDomains strictTransportSecurityConfig `shouldBe` True
@@ -481,11 +484,13 @@ spec = do
           requestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = True,
+                httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig
               }
           otherRequestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = False,
+                httpsRedirectPort = Nothing,
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig
               }
           acmeConfig =
@@ -584,7 +589,7 @@ spec = do
       show Https `shouldBe` "Https"
       show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
       show strictTransportSecurityConfig `shouldBe` "StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}"
-      show requestPolicyConfig `shouldBe` "RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}"
+      show requestPolicyConfig `shouldBe` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}"
       show (CertbotHttp01 certbotConfig) `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
       show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show manualCertificateSource `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
@@ -598,7 +603,7 @@ spec = do
       show TracingSignal `shouldBe` "TracingSignal"
       show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
-      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
+      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 strictTransportSecurityConfig "")
       shouldBeParenthesized (showsPrec 11 requestPolicyConfig "")
@@ -618,7 +623,7 @@ spec = do
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
-      show [requestPolicyConfig] `shouldBe` "[RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}]"
+      show [requestPolicyConfig] `shouldBe` "[RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}]"
       show [InProcessHttp01, CertbotHttp01 certbotConfig] `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
       show [manualCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
@@ -631,7 +636,7 @@ spec = do
       show [TracingSignal, MetricsSignal] `shouldBe` "[TracingSignal,MetricsSignal]"
       show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
-      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
+      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
@@ -994,6 +999,35 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
       readResponseBody response `shouldReturn` "Redirecting to HTTPS"
 
+    it "rewrites redirects to the configured HTTPS listener port" $ do
+      let redirectRequest =
+            (waiRequest ["data"])
+              { Wai.rawQueryString = "?from=runtime-http",
+                Wai.requestHeaders = [("Host", "app.example.com:5001")]
+              }
+          requestPolicyConfig =
+            defaultRequestPolicy
+              { redirectHttpToHttps = True,
+                httpsRedirectPort = Just 5443
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com:5443/data?from=runtime-http"
+
+    it "drops the default HTTPS port from redirect locations when configured explicitly" $ do
+      let redirectRequest =
+            (waiRequest ["data"])
+              { Wai.requestHeaders = [("Host", "app.example.com:80")]
+              }
+          requestPolicyConfig =
+            defaultRequestPolicy
+              { redirectHttpToHttps = True,
+                httpsRedirectPort = Just 443
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data"
+
     it "keeps forwarded path prefixes in HTTPS redirect locations" $ do
       let redirectRequest =
             Wai.defaultRequest
@@ -1008,6 +1042,21 @@ spec = do
       Wai.responseStatus response `shouldBe` Http.status308
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
 
+    it "does not redirect ACME http-01 challenge paths" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { redirectHttpToHttps = True,
+                httpsRedirectPort = Just 5443
+              }
+          acmeRequest =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = "/.well-known/acme-challenge/token",
+                Wai.requestHeaders = [("Host", "app.example.com:5001")]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) acmeRequest
+      Wai.responseStatus response `shouldBe` Http.status404
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Nothing
+
     it "redirects the root path without requiring an explicit :80 host suffix" $ do
       let redirectRequest =
             Wai.defaultRequest
@@ -1021,6 +1070,7 @@ spec = do
       let requestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = True,
+                httpsRedirectPort = Nothing,
                 strictTransportSecurity =
                   Just
                     StrictTransportSecurityConfig
@@ -1047,6 +1097,7 @@ spec = do
       let requestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = False,
+                httpsRedirectPort = Nothing,
                 strictTransportSecurity =
                   Just
                     StrictTransportSecurityConfig
@@ -1322,6 +1373,7 @@ spec = do
             requestPolicyConfig =
               RequestPolicyConfig
                 { redirectHttpToHttps = False,
+                  httpsRedirectPort = Nothing,
                   strictTransportSecurity =
                     Just
                       StrictTransportSecurityConfig

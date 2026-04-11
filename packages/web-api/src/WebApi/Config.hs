@@ -52,6 +52,7 @@ import Core.Config
     parseNonNegativeInt,
     parsePositiveInt,
   )
+import Data.List (nub)
 import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -180,6 +181,7 @@ defaultAppConfig =
       requestPolicy =
         RequestPolicyConfig
           { redirectHttpToHttps = False,
+            httpsRedirectPort = Nothing,
             strictTransportSecurity = Nothing
           },
       observability =
@@ -295,7 +297,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
   parsedTitlePrefix <- requiredConfigValue "APP_TITLE_PREFIX"
   parsedListeners <- parseListenerConfigs
   parsedStaticAssets <- parseStaticAssetsConfig
-  parsedRequestPolicy <- parseRequestPolicyConfig
+  parsedRequestPolicy <- parseRequestPolicyConfig parsedListeners
   parsedObservability <- parseObservabilityConfig
   pure
     AppConfig
@@ -401,17 +403,29 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
           (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS")
           (optionalConfigValue "STATIC_CACHE_CONTROL_SECONDS")
 
-    parseRequestPolicyConfig =
+    parseRequestPolicyConfig parsedListeners =
       RequestPolicyConfig
-        <$> parseRedirectHttpToHttps
+        <$> parseRedirectHttpToHttps parsedListeners
+        <*> pure (defaultHttpsRedirectPort parsedListeners)
         <*> parseOptionalStrictTransportSecurity
 
-    parseRedirectHttpToHttps =
+    parseRedirectHttpToHttps parsedListeners =
       case optionalConfigValue "REDIRECT_HTTP_TO_HTTPS" of
-        Nothing -> Right False
+        Nothing -> Right (defaultRedirectHttpToHttps parsedListeners)
         Just "true" -> Right True
         Just "false" -> Right False
         Just value -> Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" value)
+
+    defaultRedirectHttpToHttps parsedListeners =
+      any ((== Http) . listenerScheme) parsedListeners
+        && any ((== Https) . listenerScheme) parsedListeners
+
+    defaultHttpsRedirectPort parsedListeners =
+      if any ((== Http) . listenerScheme) parsedListeners
+        then case nub [listenerPort listener | listener <- parsedListeners, listenerScheme listener == Https] of
+          [redirectPort] -> Just redirectPort
+          _ -> Nothing
+        else Nothing
 
     parseOptionalStrictTransportSecurity =
       case optionalConfigValue "HSTS_MAX_AGE_SECONDS" of

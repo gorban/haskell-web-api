@@ -3,7 +3,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent (threadDelay)
-import Control.Exception (finally, try)
+import Control.Exception (finally)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.Text as Text
@@ -14,16 +14,18 @@ import qualified Network.Socket.ByteString as SocketByteString
 import Numeric (readHex)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (ExitSuccess))
+import System.FilePath ((</>))
 import System.IO (hClose)
+import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, std_out, terminateProcess, waitForProcess)
+import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Database (DatabaseEffect (..), HomePageData (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresDatabaseEffect)
 import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
 
 spec = do
-  describe "main" $
+  describe "main" $ do
     it "stays running, serves real HTTP traffic, and only stops when terminated" $ do
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
@@ -49,6 +51,102 @@ spec = do
             responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
             runningExitCode `shouldBe` Nothing
             readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show unusedPort <> "\n")
+
+    it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
+      withUnusedLoopbackPort $ \httpPort ->
+        withUnusedLoopbackPort $ \httpsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempDirectory "haskell-web-api-https-redirect" $ \workingDirectory -> do
+              writeFile
+                (workingDirectory <> "/.env")
+                ( unlines
+                    [ "LISTENER_0_HOST=127.0.0.1",
+                      "LISTENER_0_PORT=" <> show httpPort,
+                      "LISTENER_0_SCHEME=http",
+                      "LISTENER_1_HOST=127.0.0.1",
+                      "LISTENER_1_PORT=" <> show httpsPort,
+                      "LISTENER_1_SCHEME=https",
+                      "LISTENER_1_TLS_SOURCE=manual",
+                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath
+                    ]
+                )
+              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+                (_, _, _, processHandle) <-
+                  createProcess
+                    ( (proc "haskell-web-api" [])
+                        { cwd = Just workingDirectory,
+                          std_out = UseHandle outputHandle
+                        }
+                    )
+                (redirectHeaders, httpsResponseText, runningExitCode) <-
+                  ( do
+                      readyRedirectHeaders <- waitForProcessHttpHeaders processHandle httpPort "/api/status"
+                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                      stillRunningExitCode <- getProcessExitCode processHandle
+                      pure (readyRedirectHeaders, readyHttpsResponse, stillRunningExitCode)
+                  )
+                    `finally` do
+                      terminateProcess processHandle
+                      _ <- waitForProcess processHandle
+                      hClose outputHandle
+                redirectHeaders `shouldContain` "308 Permanent Redirect"
+                redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status")
+                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+                runningExitCode `shouldBe` Nothing
+                readFile outputPath
+                  `shouldReturn` unlines
+                    [ "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                    ]
+
+    it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $
+      withUnusedLoopbackPort $ \httpPort ->
+        withUnusedLoopbackPort $ \httpsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withSystemTempDirectory "haskell-web-api-dual-listener" $ \workingDirectory -> do
+              writeFile
+                (workingDirectory <> "/.env")
+                ( unlines
+                    [ "LISTENER_0_HOST=127.0.0.1",
+                      "LISTENER_0_PORT=" <> show httpPort,
+                      "LISTENER_0_SCHEME=http",
+                      "LISTENER_1_HOST=127.0.0.1",
+                      "LISTENER_1_PORT=" <> show httpsPort,
+                      "LISTENER_1_SCHEME=https",
+                      "LISTENER_1_TLS_SOURCE=manual",
+                      "LISTENER_1_TLS_CERTIFICATE_FILE=" <> certificatePath,
+                      "LISTENER_1_TLS_PRIVATE_KEY_FILE=" <> privateKeyPath,
+                      "REDIRECT_HTTP_TO_HTTPS=false"
+                    ]
+                )
+              withSystemTempFile "haskell-web-api-stdout.txt" $ \outputPath outputHandle -> do
+                (_, _, _, processHandle) <-
+                  createProcess
+                    ( (proc "haskell-web-api" [])
+                        { cwd = Just workingDirectory,
+                          std_out = UseHandle outputHandle
+                        }
+                    )
+                (httpResponseText, httpsResponseText, runningExitCode) <-
+                  ( do
+                      readyHttpResponse <- waitForProcessResponse processHandle httpPort "/api/status"
+                      readyHttpsResponse <- waitForProcessTrustedHttpsResponse processHandle certificatePath httpsPort "/api/status"
+                      stillRunningExitCode <- getProcessExitCode processHandle
+                      pure (readyHttpResponse, readyHttpsResponse, stillRunningExitCode)
+                  )
+                    `finally` do
+                      terminateProcess processHandle
+                      _ <- waitForProcess processHandle
+                      hClose outputHandle
+                httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
+                runningExitCode `shouldBe` Nothing
+                readFile outputPath
+                  `shouldReturn` unlines
+                    [ "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                    ]
 
   describe "database integration" $
     it "runs migrate-and-seed, verifies the supported PostgreSQL major version, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL" $
@@ -164,6 +262,27 @@ withUnusedLoopbackPort action = do
 
 waitForProcessResponse :: ProcessHandle -> Int -> Text.Text -> IO Text.Text
 waitForProcessResponse processHandle port path =
+  waitForProcessReadiness
+    processHandle
+    "expected haskell-web-api to accept loopback HTTP requests"
+    (readLoopbackHttpResponse port path)
+
+waitForProcessTrustedHttpsResponse :: ProcessHandle -> FilePath -> Int -> Text.Text -> IO Text.Text
+waitForProcessTrustedHttpsResponse processHandle certificatePath port path =
+  waitForProcessReadiness
+    processHandle
+    "expected haskell-web-api to accept loopback HTTPS requests"
+    (readTrustedLoopbackHttpsResponse certificatePath port path)
+
+waitForProcessHttpHeaders :: ProcessHandle -> Int -> Text.Text -> IO String
+waitForProcessHttpHeaders processHandle port path =
+  waitForProcessReadiness
+    processHandle
+    "expected haskell-web-api to accept loopback HTTP requests"
+    (readLoopbackHttpResponseHeaders port path)
+
+waitForProcessReadiness :: ProcessHandle -> String -> IO response -> IO response
+waitForProcessReadiness processHandle failureMessage readResponse =
   waitForResponseAttempts (500 :: Int)
   where
     waitForResponseAttempts remainingAttempts = do
@@ -171,23 +290,47 @@ waitForProcessResponse processHandle port path =
       case exitCode of
         Just completedExitCode ->
           expectationFailure ("expected haskell-web-api to keep running, but it exited early with " <> show completedExitCode)
-            >> pure Text.empty
+            >> readResponse
         Nothing -> do
-          responseResult <- try (readLoopbackHttpResponse port path) :: IO (Either IOError Text.Text)
+          responseResult <- tryIOError readResponse
           case responseResult of
-            Right responseText -> pure responseText
+            Right responseValue -> pure responseValue
             Left _
               | remainingAttempts > 0 -> do
                   threadDelay 10000
                   waitForResponseAttempts (remainingAttempts - 1)
               | otherwise ->
-                  expectationFailure "expected haskell-web-api to accept loopback HTTP requests"
-                    >> pure Text.empty
+                  expectationFailure failureMessage
+                    >> readResponse
 
 readLoopbackHttpResponse :: Int -> Text.Text -> IO Text.Text
 readLoopbackHttpResponse port path = do
   responseBytes <- readLoopbackHttpResponseBytes port path
   pure (TextEncoding.decodeUtf8 responseBytes)
+
+readLoopbackHttpResponseHeaders :: Int -> Text.Text -> IO String
+readLoopbackHttpResponseHeaders port path = do
+  let url = "http://127.0.0.1:" <> show port <> Text.unpack path
+  (exitCode, stdoutText, stderrText) <-
+    readProcessWithExitCode
+      "curl"
+      ["--silent", "--show-error", "--noproxy", "*", "--dump-header", "-", "--output", "/dev/null", url]
+      ""
+  case exitCode of
+    ExitSuccess -> pure stdoutText
+    _ -> ioError (userError stderrText)
+
+readTrustedLoopbackHttpsResponse :: FilePath -> Int -> Text.Text -> IO Text.Text
+readTrustedLoopbackHttpsResponse certificatePath port path = do
+  let url = "https://127.0.0.1:" <> show port <> Text.unpack path
+  (exitCode, stdoutText, stderrText) <-
+    readProcessWithExitCode
+      "curl"
+      ["--silent", "--show-error", "--fail", "--noproxy", "*", "--cacert", certificatePath, url]
+      ""
+  case exitCode of
+    ExitSuccess -> pure (Text.pack stdoutText)
+    _ -> ioError (userError stderrText)
 
 readLoopbackHttpResponseBytes :: Int -> Text.Text -> IO ByteString.ByteString
 readLoopbackHttpResponseBytes port path = do
@@ -237,3 +380,41 @@ decodeChunkedBody chunkedBytes =
                    in chunk <> decodeChunkedBody (ByteString.drop 2 withChunkSuffix)
             _ ->
               chunkedBytes
+
+withManualTlsFiles :: (FilePath -> FilePath -> IO a) -> IO a
+withManualTlsFiles action =
+  withSystemTempDirectory "web-api-integration-tls" $ \tempDirectory -> do
+    let certificatePath = tempDirectory </> "cert.pem"
+        privateKeyPath = tempDirectory </> "key.pem"
+    writeFile certificatePath manualTlsCertificatePem
+    writeFile privateKeyPath manualTlsPrivateKeyPem
+    action certificatePath privateKeyPath
+
+manualTlsCertificatePem :: String
+manualTlsCertificatePem =
+  unlines
+    [ "-----BEGIN CERTIFICATE-----",
+      "MIICMzCCAdmgAwIBAgIUAliSVDIFHNHzI1q+e3P+1Ah1kbkwCgYIKoZIzj0EAwIw",
+      "QDEXMBUGA1UECgwOdHJ1c3RtZSB2MS4yLjExJTAjBgNVBAsMHFRlc3RpbmcgQ0Eg",
+      "I2JZeVBlbjVhVnQ0MHlLaXAwIBcNMDAwMTAxMDAwMDAwWhgPMzAwMDAxMDEwMDAw",
+      "MDBaMEIxFzAVBgNVBAoMDnRydXN0bWUgdjEuMi4xMScwJQYDVQQLDB5UZXN0aW5n",
+      "IGNlcnQgI3JHR1p2N1VLMVQyd1hjeG8wWTATBgcqhkjOPQIBBggqhkjOPQMBBwNC",
+      "AARK6NEQhfcGYBt2TRWkrktWpYdmCvYo76sciH70kYBcihzjqaKEw5dD/KbdJjmU",
+      "v4pqTQEMnb8hVwKMfSYqOmqwo4GsMIGpMB0GA1UdDgQWBBR8NRVz81tKH8nCWLNI",
+      "Pn7zdlXakTAMBgNVHRMBAf8EAjAAMB8GA1UdIwQYMBaAFCVFUSwlXOOm5JvKD5o1",
+      "fvsmUu2bMB0GA1UdEQEB/wQTMBGHBH8AAAGCCWxvY2FsaG9zdDAOBgNVHQ8BAf8E",
+      "BAMCBaAwKgYDVR0lAQH/BCAwHgYIKwYBBQUHAwIGCCsGAQUFBwMBBggrBgEFBQcD",
+      "AzAKBggqhkjOPQQDAgNIADBFAiEAujBETz7z5tWMOpwL/NQFEX9LcbcuHA3+T2oa",
+      "6z0Y87gCIDvX/o0KT31LKZM9LklDE11u1S63AYjY0948jEd4Jnrx",
+      "-----END CERTIFICATE-----"
+    ]
+
+manualTlsPrivateKeyPem :: String
+manualTlsPrivateKeyPem =
+  unlines
+    [ "-----BEGIN EC PRIVATE KEY-----",
+      "MHcCAQEEIJ9itNr2Vm4XTUo74d26GQWuZNdRfEjN6cZqWK418T5LoAoGCCqGSM49",
+      "AwEHoUQDQgAESujREIX3BmAbdk0VpK5LVqWHZgr2KO+rHIh+9JGAXIoc46mihMOX",
+      "Q/ym3SY5lL+Kak0BDJ2/IVcCjH0mKjpqsA==",
+      "-----END EC PRIVATE KEY-----"
+    ]
