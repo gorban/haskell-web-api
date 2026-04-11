@@ -678,9 +678,9 @@ For that case you need one of these approaches:
 
 - Run the relevant Podman container or pod rootfully on the host, for example
   `distrobox-host-exec sudo podman ...` from inside a Distrobox shell.
-- Grant only the runtime binary the bind capability with
-  `setcap cap_net_bind_service+ep /app/haskell-web-api` before switching to the non-root `app` user in
-  the runtime image.
+- Use a runtime path that actually grants low-port bind privileges end-to-end. The tracked image already
+  sets `cap_net_bind_service` on `/app/haskell-web-api`, but rootless Podman may still need a rootful run
+  or explicit runtime capability/host-network allowances before port `80` binding succeeds.
 
 If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
 port binding entirely.
@@ -773,8 +773,10 @@ If you do not want the rootful host-network path above, the remaining low-port o
     && apk del libcap
    ```
 
-   The runtime stage now does exactly that, so a container built from the repository Dockerfile can bind
-   `80` / `443` directly after you set `LISTENER_<n>_PORT` to those ports.
+   The runtime stage now does exactly that, but whether `80` / `443` actually bind still depends on the
+   container runtime honoring that file capability. If a rootless runtime still fails with `permission
+   denied`, use the rootful host-network path above, a host redirect, or explicit runtime capability
+   grants.
 
 3. **Rootless Podman with `--cap-add=NET_BIND_SERVICE --network=host`**: this keeps the container
    rootless, but it only works when the host allows unprivileged low ports.
