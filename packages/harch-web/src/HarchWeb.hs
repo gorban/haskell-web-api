@@ -57,8 +57,8 @@ module HarchWeb
 where
 
 import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (SomeException, bracket, evaluate, onException, throwIO)
-import Control.Monad (forever, unless)
+import Control.Exception (IOException, SomeException, bracket, bracketOnError, evaluate, onException, throwIO, try)
+import Control.Monad (forever, unless, void)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -75,9 +75,12 @@ import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Handler.WarpTLS qualified as WarpTLS
-import System.Directory (doesFileExist)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removePathForcibly)
+import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
+import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
+import System.Process (proc, readCreateProcessWithExitCode)
 import Text.Read (readMaybe)
 
 data ListenerScheme
@@ -502,10 +505,16 @@ runServer outputHandle config webApplication =
                     (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) (toWaiApplication webApplication))
                     stopRuntimeServers
                     ( \manualTlsServers ->
-                        httpServers `seq`
-                          manualTlsServers `seq`
-                            announceRuntimeStartup outputHandle startupPlan
-                              >> waitForShutdownSignal
+                        bracket
+                          (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) (toWaiApplication webApplication))
+                          stopAcmeRuntimeServers
+                          ( \acmeServers ->
+                              httpServers `seq`
+                                manualTlsServers `seq`
+                                  acmeServers `seq`
+                                    announceRuntimeStartup outputHandle startupPlan
+                                      >> waitForShutdownSignal
+                          )
                     )
               )
 
@@ -547,6 +556,28 @@ data RunningRuntimeServer = RunningRuntimeServer
     runningRuntimeThreadId :: ThreadId
   }
 
+data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
+  { runningAcmeRuntimeServer :: RunningRuntimeServer,
+    runningAcmeStateDirectory :: FilePath
+  }
+
+data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
+  { runtimeAcmeEndpoint :: ListenerEndpoint,
+    runtimeAcmeListenerConfig :: AcmeConfig,
+    runtimeAcmeCertbotConfig :: CertbotConfig
+  }
+
+runtimeAcmeBindPlans :: ServerStartupPlan -> [RuntimeAcmeBindPlan]
+runtimeAcmeBindPlans startupPlan =
+  [ RuntimeAcmeBindPlan
+      { runtimeAcmeEndpoint = acmeEndpoint acmePlan,
+        runtimeAcmeListenerConfig = acmeListenerConfig acmePlan,
+        runtimeAcmeCertbotConfig = certbotConfig
+      }
+  | acmePlan <- acmeBindPlans startupPlan,
+    CertbotHttp01 certbotConfig <- [acmeChallengeBackend (acmeListenerConfig acmePlan)]
+  ]
+
 startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
 startHttpRuntimeServers endpoints waiApplication =
   go [] endpoints
@@ -576,6 +607,21 @@ startManualTlsRuntimeServers manualTlsPlans waiApplication =
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
+
+startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServers acmePlans waiApplication =
+  go [] acmePlans
+  where
+    go runningServers remainingPlans =
+      case remainingPlans of
+        [] -> pure (reverse runningServers)
+        acmePlan : remaining ->
+          ( do
+              runningServer <- startAcmeRuntimeServer acmePlan waiApplication
+              go (runningServer : runningServers) remaining
+                `onException` stopAcmeRuntimeServers (runningServer : runningServers)
+          )
+            `onException` stopAcmeRuntimeServers runningServers
 
 startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
 startHttpRuntimeServer endpoint waiApplication = do
@@ -609,6 +655,139 @@ startManualTlsRuntimeServer manualTlsPlan waiApplication = do
           runningRuntimeThreadId = serverThreadId
         }
 
+startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer runtimeAcmePlan waiApplication = do
+  (manualTlsPlan, stateDirectory) <- prepareCertbotManualTlsBindPlan runtimeAcmePlan
+  runningServer <-
+    startManualTlsRuntimeServer manualTlsPlan waiApplication
+      `onException` removePathForcibly stateDirectory
+  pure
+    RunningAcmeRuntimeServer
+      { runningAcmeRuntimeServer = runningServer,
+        runningAcmeStateDirectory = stateDirectory
+      }
+
+prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> IO (ManualTlsBindPlan, FilePath)
+prepareCertbotManualTlsBindPlan runtimeAcmePlan = do
+  tempDirectory <- getCanonicalTemporaryDirectory
+  bracketOnError
+    (createTempDirectory tempDirectory "harch-web-certbot")
+    removePathForcibly
+    $ \stateDirectory -> do
+      let configDirectory = stateDirectory </> "config"
+          workDirectory = stateDirectory </> "work"
+          logsDirectory = stateDirectory </> "logs"
+      mapM_ (createDirectoryIfMissing True) [configDirectory, workDirectory, logsDirectory]
+      certificateName <-
+        either
+          (ioError . userError)
+          pure
+          (certbotCertificateName runtimeAcmePlan)
+      runCertbotAcmeChallenge runtimeAcmePlan configDirectory workDirectory logsDirectory
+      let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
+          certificatePath = certificateDirectory </> "fullchain.pem"
+          privateKeyPath = certificateDirectory </> "privkey.pem"
+      ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
+      ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
+      pure
+        ( ManualTlsBindPlan
+            { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
+              tlsCertificateFile = certificatePath,
+              tlsPrivateKeyFile = privateKeyPath
+            },
+          stateDirectory
+        )
+
+runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> FilePath -> IO ()
+runCertbotAcmeChallenge runtimeAcmePlan configDirectory workDirectory logsDirectory = do
+  let commandArguments =
+        certbotRuntimeArguments runtimeAcmePlan configDirectory workDirectory logsDirectory
+  processResult <-
+    try (readCreateProcessWithExitCode (proc (certbotExecutable (runtimeAcmeCertbotConfig runtimeAcmePlan)) commandArguments) "") ::
+      IO (Either IOException (ExitCode, String, String))
+  case processResult of
+    Left launchError ->
+      ioError . userError $
+        "Failed to launch certbot for ACME listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> ": "
+          <> show launchError
+    Right (ExitSuccess, stdoutText, stderrText) -> do
+      void (evaluate (length stdoutText + length stderrText))
+    Right (exitCode, stdoutText, stderrText) ->
+      ioError . userError $
+        "Certbot failed for ACME listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " with exit code "
+          <> show exitCode
+          <> ".\nstdout:\n"
+          <> stdoutText
+          <> "\nstderr:\n"
+          <> stderrText
+
+certbotRuntimeArguments :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> FilePath -> [String]
+certbotRuntimeArguments runtimeAcmePlan configDirectory workDirectory logsDirectory =
+  map Text.unpack (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+    <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
+    <> certbotDirectoryUrlArguments runtimeAcmePlan
+    <> certbotContactEmailArguments runtimeAcmePlan
+
+certbotDirectoryUrlArguments :: RuntimeAcmeBindPlan -> [String]
+certbotDirectoryUrlArguments runtimeAcmePlan =
+  if certbotHasOption "--server" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+    then []
+    else ["--server", Text.unpack (acmeDirectoryUrl (runtimeAcmeListenerConfig runtimeAcmePlan))]
+
+certbotContactEmailArguments :: RuntimeAcmeBindPlan -> [String]
+certbotContactEmailArguments runtimeAcmePlan =
+  if certbotHasOption "--email" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+    || certbotHasOption "-m" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+    then []
+    else case acmeContactEmails (runtimeAcmeListenerConfig runtimeAcmePlan) of
+      firstContact : _ -> ["--email", Text.unpack firstContact]
+      [] -> []
+
+certbotCertificateName :: RuntimeAcmeBindPlan -> Either String Text
+certbotCertificateName runtimeAcmePlan =
+  maybe
+    ( maybe
+        ( Left $
+            "Unsupported runtime listener startup plan: ACME listener on "
+              <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+              <> " requires certbot arguments to declare --cert-name or a domain via -d/--domain/--domains."
+        )
+        Right
+        (firstCertbotDomain (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan)))
+    )
+    Right
+    (listToMaybe (certbotOptionValues "--cert-name" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))))
+
+firstCertbotDomain :: [Text] -> Maybe Text
+firstCertbotDomain arguments =
+  listToMaybe . concatMap splitCertbotDomainValue $
+    certbotOptionValues "-d" arguments
+      <> certbotOptionValues "--domain" arguments
+      <> certbotOptionValues "--domains" arguments
+
+splitCertbotDomainValue :: Text -> [Text]
+splitCertbotDomainValue =
+  filter (not . Text.null) . map Text.strip . Text.splitOn ","
+
+certbotOptionValues :: Text -> [Text] -> [Text]
+certbotOptionValues optionName arguments =
+  [ optionValue
+  | (argument, optionValue) <- zip arguments (drop 1 arguments),
+    argument == optionName
+  ]
+    <> [ optionValue
+       | argument <- arguments,
+         Just optionValue <- [Text.stripPrefix (optionName <> "=") argument]
+       ]
+
+certbotHasOption :: Text -> [Text] -> Bool
+certbotHasOption optionName =
+  not . null . certbotOptionValues optionName
+
 stopRuntimeServers :: [RunningRuntimeServer] -> IO ()
 stopRuntimeServers =
   mapM_ stopRuntimeServer
@@ -617,6 +796,15 @@ stopRuntimeServer :: RunningRuntimeServer -> IO ()
 stopRuntimeServer runningServer = do
   Socket.close (runningRuntimeSocket runningServer)
   killThread (runningRuntimeThreadId runningServer)
+
+stopAcmeRuntimeServers :: [RunningAcmeRuntimeServer] -> IO ()
+stopAcmeRuntimeServers =
+  mapM_ stopAcmeRuntimeServer
+
+stopAcmeRuntimeServer :: RunningAcmeRuntimeServer -> IO ()
+stopAcmeRuntimeServer runningServer = do
+  stopRuntimeServer (runningAcmeRuntimeServer runningServer)
+  removePathForcibly (runningAcmeStateDirectory runningServer)
 
 openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
 openListenerSocket endpoint = do
@@ -692,6 +880,7 @@ runtimeStartupListeners :: ServerStartupPlan -> [(ListenerScheme, ListenerEndpoi
 runtimeStartupListeners startupPlan =
   map (Http,) (httpEndpoints (httpBindPlan startupPlan))
     <> map ((Https,) . tlsEndpoint) (manualTlsBindPlans startupPlan)
+    <> map ((Https,) . acmeEndpoint) (acmeBindPlans startupPlan)
 
 listenerStartupMessage :: ListenerScheme -> ListenerEndpoint -> String
 listenerStartupMessage listenerScheme endpoint =
@@ -719,15 +908,20 @@ runtimeStartupValidationError startupPlan =
     (True, True, True) ->
       Just "Unsupported runtime listener startup plan: no runtime listeners are configured."
     (False, _, _) ->
-      Just (acmeRuntimeValidationError startupPlan)
+      case firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan) of
+        Just runtimeError -> Just runtimeError
+        Nothing ->
+          if any isUnsupportedInProcessAcmePlan (acmeBindPlans startupPlan)
+            then Just "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
+            else Nothing
     (True, _, _) ->
       Nothing
 
-acmeRuntimeValidationError :: ServerStartupPlan -> String
-acmeRuntimeValidationError startupPlan =
-  fromMaybe
-    "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
-    (firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan))
+isUnsupportedInProcessAcmePlan :: AcmeBindPlan -> Bool
+isUnsupportedInProcessAcmePlan acmePlan =
+  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
+    InProcessHttp01 -> True
+    CertbotHttp01 _ -> False
 
 firstAcmeRuntimeStartupError :: [ListenerEndpoint] -> [AcmeBindPlan] -> Maybe String
 firstAcmeRuntimeStartupError httpListenerEndpoints acmePlans =
@@ -777,11 +971,7 @@ acmeHttp01ChallengePort acmePlan =
 
 certbotOptionValue :: Text -> [Text] -> Maybe Text
 certbotOptionValue optionName arguments =
-  listToMaybe
-    [ optionValue
-    | (argument, optionValue) <- zip arguments (drop 1 arguments),
-      argument == optionName
-    ]
+  listToMaybe (certbotOptionValues optionName arguments)
 
 isAcmeHttp01ChallengeEndpointFor :: Int -> ListenerEndpoint -> ListenerEndpoint -> Bool
 isAcmeHttp01ChallengeEndpointFor challengePort acmeListenerEndpoint httpListenerEndpoint =

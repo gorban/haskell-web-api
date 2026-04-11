@@ -9,6 +9,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -26,7 +27,7 @@ import System.FilePath ((</>))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Process (readProcessWithExitCode)
+import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec
 
 data TestContext = TestContext
@@ -245,8 +246,8 @@ httpRuntimeListener host port =
       listenerTls = Nothing
     }
 
-acmeHttpsListener :: Text -> Int -> AcmeChallengeBackend -> ListenerConfig
-acmeHttpsListener host port challengeBackend =
+acmeHttpsListenerWithContacts :: Text -> Int -> [Text] -> AcmeChallengeBackend -> ListenerConfig
+acmeHttpsListenerWithContacts host port contactEmails challengeBackend =
   ListenerConfig
     { listenerHost = host,
       listenerPort = port,
@@ -258,19 +259,75 @@ acmeHttpsListener host port challengeBackend =
                 AcmeCertificateSource
                   AcmeConfig
                     { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
-                      acmeContactEmails = ["ops@example.com"],
+                      acmeContactEmails = contactEmails,
                       acmeChallengeBackend = challengeBackend
                     }
             }
     }
 
+acmeHttpsListener :: Text -> Int -> AcmeChallengeBackend -> ListenerConfig
+acmeHttpsListener host port =
+  acmeHttpsListenerWithContacts host port ["ops@example.com"]
+
 certbotHttp01Backend :: [Text] -> AcmeChallengeBackend
-certbotHttp01Backend certbotArguments =
+certbotHttp01Backend =
+  certbotHttp01BackendWithExecutable "certbot"
+
+certbotHttp01BackendWithExecutable :: FilePath -> [Text] -> AcmeChallengeBackend
+certbotHttp01BackendWithExecutable executablePath certbotArguments =
   CertbotHttp01
     CertbotConfig
-      { certbotExecutable = "certbot",
+      { certbotExecutable = executablePath,
         certbotArguments = certbotArguments
       }
+
+withCustomFakeCertbotExecutable :: [String] -> (FilePath -> IO a) -> IO a
+withCustomFakeCertbotExecutable scriptLines action =
+  withSystemTempDirectory "fake-certbot" $ \tempDirectory -> do
+    let scriptPath = tempDirectory </> "certbot"
+    writeFile scriptPath (unlines scriptLines)
+    callProcess "chmod" ["+x", scriptPath]
+    action scriptPath
+
+withFakeCertbotExecutable :: FilePath -> FilePath -> (FilePath -> IO a) -> IO a
+withFakeCertbotExecutable certificatePath privateKeyPath =
+  withCustomFakeCertbotExecutable
+    ( fakeCertbotScriptPreamble
+        <> [ "mkdir -p \"$config_dir/live/$cert_name\"",
+             "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+             "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+           ]
+    )
+
+withFailingFakeCertbotExecutable :: (FilePath -> IO a) -> IO a
+withFailingFakeCertbotExecutable =
+  withCustomFakeCertbotExecutable
+    [ "#!/bin/sh",
+      "echo fake certbot failure >&2",
+      "exit 42"
+    ]
+
+fakeCertbotScriptPreamble :: [String]
+fakeCertbotScriptPreamble =
+  [ "#!/bin/sh",
+    "set -eu",
+    "config_dir=''",
+    "cert_name=''",
+    "domain=''",
+    "while [ \"$#\" -gt 0 ]; do",
+    "  case \"$1\" in",
+    "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+    "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+    "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+    "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+    "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+    "    *) shift ;;",
+    "  esac",
+    "done",
+    "if [ -z \"$cert_name\" ]; then",
+    "  cert_name=\"${domain%%,*}\"",
+    "fi"
+  ]
 
 rootPathApplication :: Application TestRoute TestContext
 rootPathApplication =
@@ -1909,7 +1966,7 @@ spec = do
             let declaredPort = challengePort
                 certbotBackend =
                   certbotHttp01Backend
-                    ["certonly", "--http-01-port", Text.pack (show declaredPort)]
+                    ["certonly", "--http-01-port", Text.pack (show declaredPort), "--cert-name", "loopback.example"]
                 acmeTlsConfig =
                   serverConfigWithListeners
                     [ httpRuntimeListener "127.0.0.1" otherPort,
@@ -1918,32 +1975,201 @@ spec = do
             runServer outputHandle acmeTlsConfig sampleApplication
               `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires an HTTP listener on port " <> show declaredPort <> " for http-01 challenges.)")
 
-    it "fails explicitly after resolving a certbot-backed ACME challenge listener on the declared http-01 port" $
+    it "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \challengePort ->
+        withUnusedLoopbackPort $ \httpsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withFakeCertbotExecutable certificatePath privateKeyPath $
+              \certbotExecutable ->
+                withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
+                  completionReference <- newIORef Nothing
+                  let certbotBackend =
+                        certbotHttp01BackendWithExecutable
+                          certbotExecutable
+                          ["certonly", "--http-01-port", Text.pack (show challengePort), "--cert-name", "loopback.example"]
+                      acmeTlsConfig =
+                        serverConfigWithListeners
+                          [ httpRuntimeListener "127.0.0.1" challengePort,
+                            acmeHttpsListener "127.0.0.1" httpsPort certbotBackend
+                          ]
+                  serverThreadId <- forkIO $ do
+                    result <- try (runServer outputHandle acmeTlsConfig sampleApplication) :: IO (Either SomeException ())
+                    writeIORef completionReference (Just result)
+                  firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
+                  Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
+                  threadDelay 50000
+                  secondResponseText <- readLoopbackHttpsResponse httpsPort "/known"
+                  Text.isInfixOf "<h1>Known</h1>" secondResponseText `shouldBe` True
+                  completionResult <- readIORef completionReference
+                  completionResult `shouldSatisfy` isNothing
+                  killThread serverThreadId
+                  waitForServerExit completionReference
+                  hClose outputHandle
+                  readFile outputPath
+                    `shouldReturn` unlines
+                      [ "HTTP Server listening at http://127.0.0.1:" <> show challengePort,
+                        "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                      ]
+
+    it "fails explicitly when certbot-backed ACME listeners do not have the default http-01 port listener" $
+      withUnusedLoopbackPort $ \otherPort ->
         withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
           let certbotBackend =
                 certbotHttp01Backend
-                  ["certonly", "--http-01-port", Text.pack (show challengePort)]
+                  ["certonly", "--cert-name", "loopback.example"]
               acmeTlsConfig =
                 serverConfigWithListeners
-                  [ httpRuntimeListener "127.0.0.1" challengePort,
+                  [ httpRuntimeListener "127.0.0.1" otherPort,
                     acmeHttpsListener "127.0.0.1" 5443 certbotBackend
                   ]
           runServer outputHandle acmeTlsConfig sampleApplication
-            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires an HTTP listener on port 80 for http-01 challenges.)")
 
-    it "fails explicitly after resolving a certbot-backed ACME challenge listener on the default http-01 port" $
-      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
-        let certbotBackend =
-              certbotHttp01Backend
-                ["certonly"]
-            acmeTlsConfig =
-              serverConfigWithListeners
-                [ httpRuntimeListener "127.0.0.1" 80,
-                  acmeHttpsListener "127.0.0.1" 5443 certbotBackend
-                ]
-        runServer outputHandle acmeTlsConfig sampleApplication
-          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listeners are not implemented yet.)")
+    it "fails explicitly when certbot-backed ACME listeners do not declare a cert name or domain" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withFakeCertbotExecutable certificatePath privateKeyPath $
+            \certbotExecutable ->
+              withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                let certbotBackend =
+                      certbotHttp01BackendWithExecutable
+                        certbotExecutable
+                        ["certonly", "--http-01-port", Text.pack (show challengePort)]
+                    acmeTlsConfig =
+                      serverConfigWithListeners
+                        [ httpRuntimeListener "127.0.0.1" challengePort,
+                          acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                        ]
+                runServer outputHandle acmeTlsConfig sampleApplication
+                  `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires certbot arguments to declare --cert-name or a domain via -d/--domain/--domains.)")
+
+    it "fails explicitly when certbot-backed ACME listeners propagate certbot runtime failures" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withFailingFakeCertbotExecutable $ \certbotExecutable ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            let certbotBackend =
+                  certbotHttp01BackendWithExecutable
+                    certbotExecutable
+                    [ "certonly",
+                      "--http-01-port",
+                      Text.pack (show challengePort),
+                      "--cert-name",
+                      "loopback.example",
+                      "--email",
+                      "already-set@example.com",
+                      "--server",
+                      "https://acme-staging.example/directory"
+                    ]
+                acmeTlsConfig =
+                  serverConfigWithListeners
+                    [ httpRuntimeListener "127.0.0.1" challengePort,
+                      acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                    ]
+            runServer outputHandle acmeTlsConfig sampleApplication
+              `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n)")
+
+    it "fails explicitly when certbot-backed ACME listeners cannot launch the certbot executable" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+          let certbotBackend =
+                certbotHttp01BackendWithExecutable
+                  "/definitely/missing/certbot"
+                  ["certonly", "--http-01-port", Text.pack (show challengePort), "--domains=loopback.example,alt.example"]
+              acmeTlsConfig =
+                serverConfigWithListeners
+                  [ httpRuntimeListener "127.0.0.1" challengePort,
+                    acmeHttpsListenerWithContacts "127.0.0.1" 5443 [] certbotBackend
+                  ]
+          runServer outputHandle acmeTlsConfig sampleApplication
+            `shouldThrow` ( \exception ->
+                              let rendered = show (exception :: IOError)
+                               in "user error (Failed to launch certbot for ACME listener on 127.0.0.1:5443:" `isPrefixOf` rendered
+                                    && "/definitely/missing/certbot" `isInfixOf` rendered
+                          )
+
+    it "fails explicitly when certbot-backed ACME listeners do not produce a certificate file" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withCustomFakeCertbotExecutable
+          ( fakeCertbotScriptPreamble
+              <> ["mkdir -p \"$config_dir/live/$cert_name\""]
+          )
+          ( \certbotExecutable ->
+              withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                let certbotBackend =
+                      certbotHttp01BackendWithExecutable
+                        certbotExecutable
+                        ["certonly", "--http-01-port", Text.pack (show challengePort), "--domains=loopback.example,alt.example"]
+                    acmeTlsConfig =
+                      serverConfigWithListeners
+                        [ httpRuntimeListener "127.0.0.1" challengePort,
+                          acmeHttpsListenerWithContacts "127.0.0.1" 5443 [] certbotBackend
+                        ]
+                runServer outputHandle acmeTlsConfig sampleApplication
+                  `shouldThrow` (\exception -> "user error (Certbot ACME certificate file does not exist: " `isPrefixOf` show (exception :: IOError))
+          )
+
+    it "fails explicitly when certbot-backed ACME listeners do not produce a private key file" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withManualTlsFiles $ \certificatePath _ ->
+          withCustomFakeCertbotExecutable
+            ( fakeCertbotScriptPreamble
+                <> [ "mkdir -p \"$config_dir/live/$cert_name\"",
+                     "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\""
+                   ]
+            )
+            ( \certbotExecutable ->
+                withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                  let certbotBackend =
+                        certbotHttp01BackendWithExecutable
+                          certbotExecutable
+                          ["certonly", "--http-01-port", Text.pack (show challengePort), "--cert-name=loopback.example"]
+                      acmeTlsConfig =
+                        serverConfigWithListeners
+                          [ httpRuntimeListener "127.0.0.1" challengePort,
+                            acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                          ]
+                  runServer outputHandle acmeTlsConfig sampleApplication
+                    `shouldThrow` (\exception -> "user error (Certbot ACME private key file does not exist: " `isPrefixOf` show (exception :: IOError))
+            )
+
+    it "cleans up already-started ACME listeners when a later ACME bind fails" $
+      withUnusedLoopbackPort $ \firstChallengePort ->
+        withUnusedLoopbackPort $ \secondChallengePort ->
+          withUnusedLoopbackPort $ \firstHttpsPort ->
+            withUnusedLoopbackPort $ \blockedHttpsPort ->
+              withManualTlsFiles $ \certificatePath privateKeyPath ->
+                withFakeCertbotExecutable certificatePath privateKeyPath $
+                  \certbotExecutable ->
+                    withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                      addressInfo : _ <-
+                        Socket.getAddrInfo
+                          (Just (Socket.defaultHints {Socket.addrFlags = [Socket.AI_PASSIVE]}))
+                          (Just "127.0.0.1")
+                          (Just (show blockedHttpsPort))
+                      blockingSocket <- Socket.openSocket addressInfo
+                      Socket.setSocketOption blockingSocket Socket.ReuseAddr 1
+                      Socket.bind blockingSocket (Socket.addrAddress addressInfo)
+                      Socket.listen blockingSocket Socket.maxListenQueue
+                      let certbotBackend =
+                            certbotHttp01BackendWithExecutable
+                              certbotExecutable
+                              ["certonly", "--http-01-port", Text.pack (show firstChallengePort), "--cert-name", "loopback.example"]
+                          secondCertbotBackend =
+                            certbotHttp01BackendWithExecutable
+                              certbotExecutable
+                              ["certonly", "--http-01-port", Text.pack (show secondChallengePort), "--domains=second.example"]
+                          acmeTlsConfig =
+                            serverConfigWithListeners
+                              [ httpRuntimeListener "127.0.0.1" firstChallengePort,
+                                httpRuntimeListener "127.0.0.1" secondChallengePort,
+                                acmeHttpsListener "127.0.0.1" firstHttpsPort certbotBackend,
+                                acmeHttpsListenerWithContacts "127.0.0.1" blockedHttpsPort [] secondCertbotBackend
+                              ]
+                      (runServer outputHandle acmeTlsConfig sampleApplication `shouldThrow` anyException)
+                        `finally` Socket.close blockingSocket
+                      threadDelay 50000
+                      readLoopbackHttpsResponseResult firstHttpsPort "/known"
+                        >>= (`shouldSatisfy` either (const True) (const False))
 
     it "fails explicitly when certbot-backed ACME listeners declare an invalid http-01 port" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
