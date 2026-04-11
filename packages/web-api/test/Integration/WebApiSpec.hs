@@ -26,7 +26,7 @@ import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestC
 
 spec = do
   describe "main" $ do
-    it "stays running, serves real HTTP traffic, and only stops when terminated" $ do
+    it "stays running while idle, serves real HTTP traffic, and only stops when terminated" $ do
       withUnusedLoopbackPort $ \unusedPort ->
         withSystemTempDirectory "haskell-web-api-run" $ \workingDirectory -> do
           writeFile (workingDirectory <> "/.env") ("LISTENER_0_PORT=" <> show unusedPort <> "\n")
@@ -40,8 +40,11 @@ spec = do
                 )
             (responseText, runningExitCode) <-
               ( do
+                  threadDelay 1500000
+                  idleExitCode <- getProcessExitCode processHandle
                   readyResponse <- waitForProcessResponse processHandle unusedPort "/api/status"
                   stillRunningExitCode <- getProcessExitCode processHandle
+                  idleExitCode `shouldBe` Nothing
                   pure (readyResponse, stillRunningExitCode)
               )
                 `finally` do

@@ -56,9 +56,9 @@ module HarchWeb
   )
 where
 
-import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, tryPutMVar)
+import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (SomeException, bracket, evaluate, onException, throwIO)
-import Control.Monad (unless)
+import Control.Monad (forever, unless)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -707,9 +707,8 @@ listenerSchemePrefix listenerScheme =
     Https -> "HTTPS Server listening at https://"
 
 waitForShutdownSignal :: IO ()
-waitForShutdownSignal = do
-  shutdownSignal <- newEmptyMVar :: IO (MVar ())
-  takeMVar shutdownSignal
+waitForShutdownSignal =
+  forever (threadDelay maxBound)
 
 runtimeStartupValidationError :: ServerStartupPlan -> Maybe String
 runtimeStartupValidationError startupPlan =
