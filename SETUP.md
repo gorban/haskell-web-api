@@ -1049,6 +1049,57 @@ Router UIs differ a lot, but the general steps are:
 Without a stable LAN IP, the forward rule can silently break the next time DHCP assigns a different address
 to the host.
 
+## Manual Off-LAN Reachability Verification
+
+Once one of the public listener setups above is running, the final "does real outside traffic reach the
+app?" check is an operator step rather than an automated test. Run it from a phone on cellular or from a
+different external network so the request really arrives through the router / WAN path instead of through
+local NAT loopback.
+
+Use one of these public listener shapes:
+
+- **Reverse proxy (recommended)**: the nginx example on ports `80` / `443`.
+- **Direct app bind**: the rootful host-network app flow on port `80`, or on ports `80` + `443`.
+
+If you test HTTPS from off-LAN, use a publicly trusted certificate. The local CA from
+`examples/reverse-proxy/generate-local-tls.sh` is only for loopback-style local verification on the same
+machine.
+
+1. Start watching the app logs on the host:
+
+   ```bash
+   podman compose -f examples/reverse-proxy/podman-compose.yml logs -f web-api nginx
+   # or, for the direct host-network container:
+   distrobox-host-exec sudo podman logs -f web-api-host443
+   ```
+
+2. Open Jaeger locally so you can search for the request trace after the off-LAN request lands:
+
+   ```bash
+   xdg-open http://127.0.0.1:16686
+   ```
+
+3. From the external client, request the public endpoint:
+
+   ```text
+   http://<public-host-or-ip>/api/status
+   https://<public-host-or-domain>/api/status
+   ```
+
+   Use the HTTP form when you are only exposing port `80`. Use the HTTPS form when you have a real TLS
+   listener on `443` with a cert that the external client already trusts.
+
+4. Confirm the request reached the runtime:
+
+   - the app or proxy logs now show the incoming request,
+   - Jaeger has a new request span for `/api/status`,
+   - `client.address` matches the external client IP (or the first `X-Forwarded-For` value when a proxy is
+     in front),
+   - `network.peer.address` still shows the immediate peer on the last hop into `haskell-web-api`.
+
+If the request does not appear, re-check the firewall and router steps above first, then confirm the test
+device is really off the LAN (for example, disable Wi-Fi on the phone before retrying).
+
 #### Additional Build Prerequisites for CI Builds
 
 The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
