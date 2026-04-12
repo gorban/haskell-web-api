@@ -11,6 +11,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -25,7 +26,7 @@ import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import Numeric (readHex)
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
-import System.Environment (getEnv, lookupEnv, setEnv, unsetEnv)
+import System.Environment (getEnv, getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
@@ -271,17 +272,36 @@ withClearedAppEnvironment =
     . withTemporaryEnvironment "DATABASE_USER" Nothing
     . withTemporaryEnvironment "DATABASE_PASSWORD" Nothing
 
+withClearedEnvironmentPrefixes :: [String] -> IO a -> IO a
+withClearedEnvironmentPrefixes prefixes action = do
+  environment <- getEnvironment
+  let matchingKeys =
+        [ key
+        | (key, _) <- environment,
+          any (`isPrefixOf` key) prefixes
+        ]
+  foldr (`withTemporaryEnvironment` Nothing) action matchingKeys
+
 withClearedRuntimeEnvironment :: IO a -> IO a
 withClearedRuntimeEnvironment =
-  withTemporaryEnvironment "APP_TITLE_PREFIX" Nothing
-    . withTemporaryEnvironment "LISTENER_0_HOST" Nothing
-    . withTemporaryEnvironment "LISTENER_0_PORT" Nothing
-    . withTemporaryEnvironment "LISTENER_0_SCHEME" Nothing
+  withClearedEnvironmentPrefixes
+    [ "APP_TITLE_PREFIX",
+      "LISTENER_",
+      "STATIC_ASSET_ROOT_",
+      "STATIC_CACHE_CONTROL_SECONDS",
+      "REDIRECT_HTTP_TO_HTTPS",
+      "HTTPS_REDIRECT_PORT",
+      "HSTS_",
+      "OTLP_TRACING_",
+      "OTLP_METRICS_"
+    ]
 
 withClearedSetupEnvironment :: IO a -> IO a
 withClearedSetupEnvironment =
-  withTemporaryEnvironment "SETUP_AUTOSTART_DATABASE" Nothing
-    . withTemporaryEnvironment "SETUP_AUTOSTART_JAEGER" Nothing
+  withClearedEnvironmentPrefixes
+    [ "SETUP_AUTOSTART_",
+      "WEB_API_MIGRATION_DATABASE_"
+    ]
 
 withFakePsqlScriptResults :: [(Text, PostgresCommandResult)] -> (FilePath -> IO a) -> IO a
 withFakePsqlScriptResults commandResults action =
