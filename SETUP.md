@@ -440,9 +440,9 @@ you need on the host:
 - Jaeger UI: `127.0.0.1:16686`
 - web-api HTTP listener: `127.0.0.1:5001`
 
-This example intentionally keeps the app on plain HTTP port `5001`, which matches the currently
-implemented runtime listener path. Manual TLS and ACME runtime listener startup are still separate
-follow-up work.
+This example intentionally keeps the app on plain HTTP port `5001` so everyday development avoids
+privileged port handling. The runtime can also start manual TLS listeners plus ACME listeners when you
+explicitly configure them.
 
 1. Build the runtime image from this repository:
 
@@ -794,19 +794,19 @@ If you do not want the rootful host-network path above, the remaining low-port o
 
    The sysctl output must be `80` or lower for that rootless bind to succeed.
 
-## Local ACME / certbot config exercise
+## Local ACME runtime exercise
 
-Certbot-backed ACME listener startup now runs through the real runtime path: `web-api` parses the
-environment into an ACME-backed listener config, `harch-web` translates that into an ACME startup plan,
-and `HarchWeb.runServer` can invoke certbot, load the issued certificate, and start the HTTPS listener.
-The in-process `http-01` backend is still a follow-up item.
+Both ACME backends now run through the real runtime path: `web-api` parses the environment into an
+ACME-backed listener config, `harch-web` translates that into an ACME startup plan, and `HarchWeb.runServer`
+can either invoke certbot or complete the `in-process-http01` flow before starting the HTTPS listener.
+The native backend needs `openssl` on `PATH` for RSA key generation, CSR generation, and RS256 signing.
 
 When a config includes both the plain HTTP challenge listener and an HTTPS listener, leaving
 `REDIRECT_HTTP_TO_HTTPS` unset now defaults non-ACME traffic to HTTPS redirects while keeping
 `/.well-known/acme-challenge/*` exempt for `http-01`.
 
-For development, prefer a staging ACME directory rather than the production Let's Encrypt endpoint.
-Add a temporary ACME listener block like this to `./.env.local`:
+For development, prefer a staging ACME directory rather than the production Let's Encrypt endpoint. Add a
+temporary ACME listener block like this to `./.env.local`:
 
 ```env
 # Listener 0: plain HTTP for ACME http-01 challenge traffic
@@ -829,10 +829,9 @@ LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
-`--domains`, and the same domain list is what the remaining native in-process backend will need once
-that runtime path lands.
+`--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
 
-Then exercise the ACME path in three layers:
+Then exercise the ACME path in four layers:
 
 1. Parse the runtime config shape from environment values:
 
@@ -840,13 +839,19 @@ Then exercise the ACME path in three layers:
    cabal test haskell-web-api-tests --test-options='--match "parses manual and ACME-backed HTTPS listeners distinctly"'
    ```
 
-2. Confirm the listener plan keeps the ACME/certbot settings intact:
+2. Confirm the listener plan keeps the ACME settings intact:
 
    ```bash
    cabal test harch-web-tests --test-options='--match "translates ACME-backed HTTPS listeners into certificate-management plans"'
    ```
 
-3. Confirm the certbot-backed runtime path starts successfully once the HTTP challenge listener exists:
+3. Confirm the native in-process runtime path can acquire TLS material before the HTTPS listener starts:
+
+   ```bash
+   cabal test harch-web-tests --test-options='--match "starts in-process ACME listeners on the configured http-01 port and stays running until signalled to stop"'
+   ```
+
+4. Confirm the certbot-backed runtime path still starts successfully once the HTTP challenge listener exists:
 
    ```bash
    cabal test harch-web-tests --test-options='--match "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop"'
@@ -854,15 +859,10 @@ Then exercise the ACME path in three layers:
 
 If you also run the executable with that `./.env.local` and the challenge listener is reachable on the
 declared `http-01` port, it should now start both listeners instead of stopping at the runtime boundary.
-The remaining unsupported path is the native in-process ACME backend, which still stops with:
-
-```text
-Unsupported runtime listener startup plan: ACME listeners are not implemented yet.
-```
-
-That direct run is still useful during development because it proves the layered env loading, startup-plan
-validation, and certbot runtime wiring are aligned. For real `http-01` testing on port `80`, reuse the
-same listener block together with the privileged-port guidance above.
+To exercise the native backend directly, switch `LISTENER_1_ACME_CHALLENGE_BACKEND` to
+`in-process-http01`, remove the certbot-specific variables, and keep `openssl` installed on the machine or
+in the container image. For real `http-01` testing on port `80`, reuse the same listener block together
+with the privileged-port guidance above.
 
 ## Request Context In Logs And Traces
 

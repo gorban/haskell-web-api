@@ -383,6 +383,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
                   (Right [])
                   (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
                   (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
+                <*> pure 80
                 <*> parseAcmeChallengeBackend listenerIndex
             )
 

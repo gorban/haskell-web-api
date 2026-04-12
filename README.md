@@ -115,10 +115,10 @@ understands the following values:
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
-| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` reuses it when certbot args do not already declare domains. | (`unset`) |
+| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
 | `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Executable path for the `certbot-http01` backend. | (`unset`) |
-| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` / `--http-01-port` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
 | `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
@@ -253,6 +253,10 @@ When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default fro
 - Dual HTTP+HTTPS listener sets default redirects on and target the unique configured HTTPS port.
 - `REDIRECT_HTTP_TO_HTTPS=false` overrides that default and leaves both listeners serving real traffic.
 - `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
+
+The native `in-process-http01` ACME backend now starts through the same runtime path as the certbot backend.
+It requires a plain HTTP listener on the real `http-01` port (`80`) and needs `openssl` available on
+`PATH` for key, CSR, and RS256 operations.
 
 ### MacOS / Linux
 

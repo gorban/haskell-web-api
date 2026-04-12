@@ -128,11 +128,12 @@ FROM alpine:3.20 AS runtime
 # Install runtime dependencies and create non-root user
 RUN <<EOF
 set -e
-apk add --no-cache \
+  apk add --no-cache \
     gmp \
     libffi \
     gcompat \
-    ca-certificates
+    ca-certificates \
+    openssl
 addgroup -g 1000 app
 adduser -D -u 1000 -G app app
 EOF

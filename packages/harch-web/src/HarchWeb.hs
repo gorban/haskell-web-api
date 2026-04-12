@@ -1,16 +1,28 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
 module HarchWeb
-  ( AcmeChallengeBackend (..),
+  ( AcmeBindPlan (..),
+    AcmeAuthorizationResponse (..),
+    AcmeChallengeBackend (..),
+    AcmeChallengeResponse (..),
+    AcmeChallengeStore (..),
     AcmeConfig (..),
+    AcmeDirectoryResponse (..),
+    AcmeJwk (..),
+    AcmeOrderIdentifier (..),
+    AcmeOrderResponse (..),
+    AcmeRequestAuth (..),
+    ActiveAcmeChallenge (..),
     Application (..),
     CertbotConfig (..),
     Document (..),
     HasServerConfig (..),
     HtmlAttribute (..),
     HttpBindPlan (..),
+    JsonValue (..),
     ListenerConfig (..),
     ListenerEndpoint (..),
     ListenerScheme (..),
@@ -24,53 +36,124 @@ module HarchWeb
     OtlpExporterStartup (..),
     Page (..),
     PageShell (..),
+    PreparedAcmeChallenge (..),
     RequestPolicyConfig (..),
     Response (..),
     ResponseBody (..),
     ResolvedNavigationItem (..),
     RouteCodec (..),
     RouteRequest (..),
+    RuntimeAcmeBindPlan (..),
     ServerConfig (..),
     ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
     StrictTransportSecurityConfig (..),
     TelemetrySignal (..),
-    AcmeBindPlan (..),
     TlsCertificateSource (..),
     TlsConfig (..),
+    acmeCertificateRequestConfig,
+    acmeChallengeResponseForRequest,
+    acmeHttp01ChallengeToken,
+    acmeJwkThumbprintBytes,
     application,
+    base64urlText,
+    buildAcmeJwsBody,
+    buildAcmeKeyAuthorization,
     buildDocument,
     buildNavigation,
     buildPageShell,
+    certbotCertificateName,
+    certbotHasOption,
+    certbotOptionValues,
+    createAcmeAccount,
+    createAcmeOrder,
+    decodeAcmeJsonResponse,
+    escapeJsonCharacter,
+    fetchAcmeCertificate,
+    fetchAcmeDirectory,
+    fetchAcmeNonce,
+    finalizeAcmeOrder,
+    firstCertbotDomain,
+    generateAcmeAccountKey,
+    generateAcmeCertificateRequest,
+    hexTextToByteString,
+    jsonArrayBytes,
+    jsonArrayItems,
+    jsonBoolBytes,
+    jsonObjectEntryParser,
+    jsonObjectBytes,
+    jsonObjectFields,
+    jsonOptionalTextArrayField,
+    jsonOptionalTextField,
+    jsonRequiredField,
+    jsonRequiredTextField,
+    jsonStringCharacterParser,
+    jsonStringBytes,
+    jsonTextField,
+    jsonValueParser,
+    loadAcmeJwk,
+    mailtoAcmeContact,
     matchRoute,
+    matchesRuntimeAcmeChallenge,
+    openSslSha256,
+    parseAcmeAuthorizationResponse,
+    parseAcmeChallengeResponse,
+    parseAcmeDirectoryResponse,
+    parseAcmeOrderIdentifier,
+    parseAcmeOrderResponse,
+    parseJsonValue,
+    performAcmeJwsRequest,
+    performAcmeRequest,
     planObservabilityStartup,
     planServerStartup,
-    routeHref,
+    pollAcmeOrder,
+    pollAcmeOrderWithRetries,
+    prepareAcmeAuthorization,
+    prepareInProcessManualTlsBindPlan,
+    registerAcmeChallenges,
+    renderAcmeResponseBody,
     renderDocument,
+    responseHeaderText,
+    requestHostWithoutPort,
+    routeHref,
+    runInProcessAcmeChallenge,
+    runOpenSslCommand,
+    runOpenSslTextCommand,
     runServer,
+    runtimeCertbotArguments,
+    signOpenSslRs256,
+    splitCertbotDomainValue,
     staticAssetHref,
     staticAssetHrefWithPrefix,
     toWaiApplication,
+    triggerAcmeChallenge,
+    unicodeJsonCharacterParser,
+    unregisterAcmeChallenges,
     withLocalTestServer,
   )
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (IOException, SomeException, bracket, bracketOnError, evaluate, onException, throwIO, try)
-import Control.Monad (forever, unless, void)
+import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, modifyMVar_, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
+import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, evaluate, onException, throwIO, try)
+import Control.Monad (forever, replicateM, unless, void, when)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Char (digitToInt, isDigit)
 import Data.Either (lefts)
-import Data.List (find, maximumBy)
+import Data.Functor (($>))
+import Data.List (find, intercalate, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Observability qualified as Observability
+import Network.HTTP.Client qualified as HttpClient
+import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
@@ -82,6 +165,7 @@ import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.Process (proc, readCreateProcessWithExitCode)
+import Text.ParserCombinators.ReadP (ReadP, char, choice, eof, get, manyTill, pfail, readP_to_S, sepBy, skipSpaces, string, (<++))
 import Text.Read (readMaybe)
 
 data ListenerScheme
@@ -104,6 +188,7 @@ data AcmeConfig = AcmeConfig
   { acmeDirectoryUrl :: Text,
     acmeContactEmails :: [Text],
     acmeDomains :: [Text],
+    acmeHttp01Port :: Int,
     acmeChallengeBackend :: AcmeChallengeBackend
   }
   deriving (Eq, Show)
@@ -494,21 +579,23 @@ runServer outputHandle config webApplication =
     Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
     Right startupPlan -> do
       let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
+      challengeStore <- AcmeChallengeStore <$> newMVar []
+      let runtimeApplication = toRuntimeWaiApplication challengeStore webApplication
       case runtimeStartupValidationError startupPlan of
         Just runtimeError ->
           ioError (userError runtimeError)
         Nothing ->
           observabilityPlan `seq`
             bracket
-              (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) (toWaiApplication webApplication))
+              (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
               stopRuntimeServers
               ( \httpServers ->
                   bracket
-                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) (toWaiApplication webApplication))
+                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication)
                     stopRuntimeServers
                     ( \manualTlsServers ->
                         bracket
-                          (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) (toWaiApplication webApplication))
+                          (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication challengeStore)
                           stopAcmeRuntimeServers
                           ( \acmeServers ->
                               httpServers `seq`
@@ -565,20 +652,25 @@ data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
 
 data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
   { runtimeAcmeEndpoint :: ListenerEndpoint,
-    runtimeAcmeListenerConfig :: AcmeConfig,
-    runtimeAcmeCertbotConfig :: CertbotConfig
+    runtimeAcmeListenerConfig :: AcmeConfig
   }
 
 runtimeAcmeBindPlans :: ServerStartupPlan -> [RuntimeAcmeBindPlan]
 runtimeAcmeBindPlans startupPlan =
   [ RuntimeAcmeBindPlan
       { runtimeAcmeEndpoint = acmeEndpoint acmePlan,
-        runtimeAcmeListenerConfig = acmeListenerConfig acmePlan,
-        runtimeAcmeCertbotConfig = certbotConfig
+        runtimeAcmeListenerConfig = acmeListenerConfig acmePlan
       }
-  | acmePlan <- acmeBindPlans startupPlan,
-    CertbotHttp01 certbotConfig <- [acmeChallengeBackend (acmeListenerConfig acmePlan)]
+  | acmePlan <- acmeBindPlans startupPlan
   ]
+
+data ActiveAcmeChallenge = ActiveAcmeChallenge
+  { activeAcmeChallengeDomain :: Text,
+    activeAcmeChallengeToken :: Text,
+    activeAcmeChallengeResponse :: Text
+  }
+
+newtype AcmeChallengeStore = AcmeChallengeStore (MVar [ActiveAcmeChallenge])
 
 startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
 startHttpRuntimeServers endpoints waiApplication =
@@ -610,8 +702,8 @@ startManualTlsRuntimeServers manualTlsPlans waiApplication =
           )
             `onException` stopRuntimeServers runningServers
 
-startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServers acmePlans waiApplication =
+startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> AcmeChallengeStore -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServers acmePlans waiApplication challengeStore =
   go [] acmePlans
   where
     go runningServers remainingPlans =
@@ -619,7 +711,7 @@ startAcmeRuntimeServers acmePlans waiApplication =
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer acmePlan waiApplication
+              runningServer <- startAcmeRuntimeServer acmePlan waiApplication challengeStore
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
@@ -657,9 +749,14 @@ startManualTlsRuntimeServer manualTlsPlan waiApplication = do
           runningRuntimeThreadId = serverThreadId
         }
 
-startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer runtimeAcmePlan waiApplication = do
-  (manualTlsPlan, stateDirectory) <- prepareCertbotManualTlsBindPlan runtimeAcmePlan
+startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
+  (manualTlsPlan, stateDirectory) <-
+    case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
+      CertbotHttp01 certbotConfig ->
+        prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
+      InProcessHttp01 ->
+        prepareInProcessManualTlsBindPlan runtimeAcmePlan challengeStore
   runningServer <-
     startManualTlsRuntimeServer manualTlsPlan waiApplication
       `onException` removePathForcibly stateDirectory
@@ -669,8 +766,8 @@ startAcmeRuntimeServer runtimeAcmePlan waiApplication = do
         runningAcmeStateDirectory = stateDirectory
       }
 
-prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> IO (ManualTlsBindPlan, FilePath)
-prepareCertbotManualTlsBindPlan runtimeAcmePlan = do
+prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (ManualTlsBindPlan, FilePath)
+prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
   tempDirectory <- getCanonicalTemporaryDirectory
   bracketOnError
     (createTempDirectory tempDirectory "harch-web-certbot")
@@ -685,7 +782,7 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan = do
           (ioError . userError)
           pure
           (certbotCertificateName runtimeAcmePlan)
-      runCertbotAcmeChallenge runtimeAcmePlan configDirectory workDirectory logsDirectory
+      runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory
       let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
           certificatePath = certificateDirectory </> "fullchain.pem"
           privateKeyPath = certificateDirectory </> "privkey.pem"
@@ -700,12 +797,12 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan = do
           stateDirectory
         )
 
-runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> FilePath -> IO ()
-runCertbotAcmeChallenge runtimeAcmePlan configDirectory workDirectory logsDirectory = do
+runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> IO ()
+runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory = do
   let commandArguments =
-        certbotRuntimeArguments runtimeAcmePlan configDirectory workDirectory logsDirectory
+        certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory
   processResult <-
-    try (readCreateProcessWithExitCode (proc (certbotExecutable (runtimeAcmeCertbotConfig runtimeAcmePlan)) commandArguments) "") ::
+    try (readCreateProcessWithExitCode (proc (certbotExecutable certbotConfig) commandArguments) "") ::
       IO (Either IOException (ExitCode, String, String))
   case processResult of
     Left launchError ->
@@ -727,38 +824,99 @@ runCertbotAcmeChallenge runtimeAcmePlan configDirectory workDirectory logsDirect
           <> "\nstderr:\n"
           <> stderrText
 
-certbotRuntimeArguments :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> FilePath -> [String]
-certbotRuntimeArguments runtimeAcmePlan configDirectory workDirectory logsDirectory =
-  map Text.unpack (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> [String]
+certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory =
+  map Text.unpack (certbotArguments certbotConfig)
     <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
     <> certbotDirectoryUrlArguments runtimeAcmePlan
-    <> certbotContactEmailArguments runtimeAcmePlan
-    <> certbotDomainArguments runtimeAcmePlan
+    <> certbotContactEmailArguments runtimeAcmePlan certbotConfig
+    <> certbotDomainArguments runtimeAcmePlan certbotConfig
 
 certbotDirectoryUrlArguments :: RuntimeAcmeBindPlan -> [String]
 certbotDirectoryUrlArguments runtimeAcmePlan =
-  if certbotHasOption "--server" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+  if certbotHasOption "--server" (runtimeCertbotArguments runtimeAcmePlan)
     then []
     else ["--server", Text.unpack (acmeDirectoryUrl (runtimeAcmeListenerConfig runtimeAcmePlan))]
 
-certbotContactEmailArguments :: RuntimeAcmeBindPlan -> [String]
-certbotContactEmailArguments runtimeAcmePlan =
-  if certbotHasOption "--email" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
-    || certbotHasOption "-m" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+certbotContactEmailArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> [String]
+certbotContactEmailArguments runtimeAcmePlan certbotConfig =
+  if certbotHasOption "--email" (certbotArguments certbotConfig)
+    || certbotHasOption "-m" (certbotArguments certbotConfig)
     then []
     else case acmeContactEmails (runtimeAcmeListenerConfig runtimeAcmePlan) of
       firstContact : _ -> ["--email", Text.unpack firstContact]
       [] -> []
 
-certbotDomainArguments :: RuntimeAcmeBindPlan -> [String]
-certbotDomainArguments runtimeAcmePlan =
+certbotDomainArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> [String]
+certbotDomainArguments runtimeAcmePlan certbotConfig =
   if any (`certbotHasOption` configuredArguments) ["-d", "--domain", "--domains"]
     then []
     else case acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan) of
       [] -> []
       domains -> ["--domains", Text.unpack (Text.intercalate "," domains)]
   where
-    configuredArguments = certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan)
+    configuredArguments = certbotArguments certbotConfig
+
+runtimeCertbotArguments :: RuntimeAcmeBindPlan -> [Text]
+runtimeCertbotArguments runtimeAcmePlan =
+  case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
+    CertbotHttp01 certbotConfig -> certbotArguments certbotConfig
+    InProcessHttp01 -> []
+
+toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
+toRuntimeWaiApplication challengeStore webApplication request respond = do
+  maybeChallengeResponse <- acmeChallengeResponseForRequest challengeStore request
+  case maybeChallengeResponse of
+    Just challengeResponse -> respond challengeResponse
+    Nothing -> toWaiApplication webApplication request respond
+
+acmeChallengeResponseForRequest :: AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
+acmeChallengeResponseForRequest (AcmeChallengeStore challengeStore) request = do
+  challenges <- readMVar challengeStore
+  pure $
+    fmap
+      ( Wai.responseLBS
+          Http.ok200
+          [("Content-Type", "text/plain; charset=utf-8")]
+          . LazyByteString.fromStrict
+          . TextEncoding.encodeUtf8
+          . activeAcmeChallengeResponse
+      )
+      (find (matchesRuntimeAcmeChallenge request) challenges)
+
+matchesRuntimeAcmeChallenge :: Wai.Request -> ActiveAcmeChallenge -> Bool
+matchesRuntimeAcmeChallenge request challenge =
+  case acmeHttp01ChallengeToken request of
+    Just challengeToken ->
+      challengeToken == activeAcmeChallengeToken challenge
+        && maybe True (== activeAcmeChallengeDomain challenge) (requestHostWithoutPort request)
+    Nothing -> False
+
+acmeHttp01ChallengeToken :: Wai.Request -> Maybe Text
+acmeHttp01ChallengeToken request =
+  Text.stripPrefix "/.well-known/acme-challenge/" (waiRequestPath request)
+
+requestHostWithoutPort :: Wai.Request -> Maybe Text
+requestHostWithoutPort request =
+  fmap (Text.takeWhile (/= ':')) (requestHeaderToken "Host" request)
+
+registerAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
+registerAcmeChallenges (AcmeChallengeStore challengeStore) newChallenges =
+  modifyMVar_ challengeStore (pure . (newChallenges <>))
+
+unregisterAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
+unregisterAcmeChallenges (AcmeChallengeStore challengeStore) completedChallenges =
+  modifyMVar_ challengeStore (pure . filter (not . (`sameActiveAcmeChallengeAny` completedChallenges)))
+
+sameActiveAcmeChallengeAny :: ActiveAcmeChallenge -> [ActiveAcmeChallenge] -> Bool
+sameActiveAcmeChallengeAny candidate =
+  any (sameActiveAcmeChallenge candidate)
+
+sameActiveAcmeChallenge :: ActiveAcmeChallenge -> ActiveAcmeChallenge -> Bool
+sameActiveAcmeChallenge left right =
+  activeAcmeChallengeDomain left == activeAcmeChallengeDomain right
+    && activeAcmeChallengeToken left == activeAcmeChallengeToken right
+    && activeAcmeChallengeResponse left == activeAcmeChallengeResponse right
 
 certbotCertificateName :: RuntimeAcmeBindPlan -> Either String Text
 certbotCertificateName runtimeAcmePlan =
@@ -770,12 +928,12 @@ certbotCertificateName runtimeAcmePlan =
               <> " requires ACME domains or certbot arguments to declare --cert-name or a domain via -d/--domain/--domains."
         )
         Right
-        ( firstCertbotDomain (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+        ( firstCertbotDomain (runtimeCertbotArguments runtimeAcmePlan)
             <|> listToMaybe (acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan))
         )
     )
     Right
-    (listToMaybe (certbotOptionValues "--cert-name" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))))
+    (listToMaybe (certbotOptionValues "--cert-name" (runtimeCertbotArguments runtimeAcmePlan)))
 
 firstCertbotDomain :: [Text] -> Maybe Text
 firstCertbotDomain arguments =
@@ -802,6 +960,901 @@ certbotOptionValues optionName arguments =
 certbotHasOption :: Text -> [Text] -> Bool
 certbotHasOption optionName =
   not . null . certbotOptionValues optionName
+
+data AcmeDirectoryResponse = AcmeDirectoryResponse
+  { acmeNewNonceUrl :: Text,
+    acmeNewAccountUrl :: Text,
+    acmeNewOrderUrl :: Text
+  }
+
+data AcmeOrderIdentifier = AcmeOrderIdentifier
+  { acmeIdentifierKind :: Text,
+    acmeIdentifierValue :: Text
+  }
+
+data AcmeChallengeResponse = AcmeChallengeResponse
+  { acmeChallengeKind :: Text,
+    acmeChallengeUrl :: Text,
+    acmeChallengeTokenValue :: Text
+  }
+
+data AcmeAuthorizationResponse = AcmeAuthorizationResponse
+  { acmeAuthorizationIdentifier :: AcmeOrderIdentifier,
+    acmeAuthorizationChallenges :: [AcmeChallengeResponse]
+  }
+
+data AcmeOrderResponse = AcmeOrderResponse
+  { acmeOrderStatus :: Text,
+    acmeOrderAuthorizations :: Maybe [Text],
+    acmeOrderFinalizeUrl :: Maybe Text,
+    acmeOrderCertificateUrl :: Maybe Text
+  }
+
+data AcmeJwk = AcmeJwk
+  { acmeJwkExponent :: Text,
+    acmeJwkModulus :: Text
+  }
+
+data AcmeRequestAuth
+  = AcmeRequestJwk AcmeJwk
+  | AcmeRequestKid Text
+
+data PreparedAcmeChallenge = PreparedAcmeChallenge
+  { preparedAcmeChallengeRegistration :: ActiveAcmeChallenge,
+    preparedAcmeChallengeUrl :: Text
+  }
+
+data JsonValue
+  = JsonObject [(Text, JsonValue)]
+  | JsonArray [JsonValue]
+  | JsonString Text
+  | JsonBool Bool
+  | JsonNull
+
+parseAcmeDirectoryResponse :: JsonValue -> Either String AcmeDirectoryResponse
+parseAcmeDirectoryResponse value = do
+  fields <- jsonObjectFields "AcmeDirectoryResponse" value
+  AcmeDirectoryResponse
+    <$> jsonRequiredTextField "newNonce" fields
+    <*> jsonRequiredTextField "newAccount" fields
+    <*> jsonRequiredTextField "newOrder" fields
+
+parseAcmeOrderIdentifier :: JsonValue -> Either String AcmeOrderIdentifier
+parseAcmeOrderIdentifier value = do
+  fields <- jsonObjectFields "AcmeOrderIdentifier" value
+  AcmeOrderIdentifier
+    <$> jsonRequiredTextField "type" fields
+    <*> jsonRequiredTextField "value" fields
+
+parseAcmeChallengeResponse :: JsonValue -> Either String AcmeChallengeResponse
+parseAcmeChallengeResponse value = do
+  fields <- jsonObjectFields "AcmeChallengeResponse" value
+  AcmeChallengeResponse
+    <$> jsonRequiredTextField "type" fields
+    <*> jsonRequiredTextField "url" fields
+    <*> jsonRequiredTextField "token" fields
+
+parseAcmeAuthorizationResponse :: JsonValue -> Either String AcmeAuthorizationResponse
+parseAcmeAuthorizationResponse value = do
+  fields <- jsonObjectFields "AcmeAuthorizationResponse" value
+  AcmeAuthorizationResponse
+    <$> (jsonRequiredField "identifier" fields >>= parseAcmeOrderIdentifier)
+    <*> (jsonRequiredField "challenges" fields >>= jsonArrayItems "challenges" >>= traverse parseAcmeChallengeResponse)
+
+parseAcmeOrderResponse :: JsonValue -> Either String AcmeOrderResponse
+parseAcmeOrderResponse value = do
+  fields <- jsonObjectFields "AcmeOrderResponse" value
+  AcmeOrderResponse
+    <$> jsonRequiredTextField "status" fields
+    <*> jsonOptionalTextArrayField "authorizations" fields
+    <*> jsonOptionalTextField "finalize" fields
+    <*> jsonOptionalTextField "certificate" fields
+
+jsonObjectFields :: String -> JsonValue -> Either String [(Text, JsonValue)]
+jsonObjectFields label value =
+  case value of
+    JsonObject fields -> Right fields
+    _ -> Left (label <> " was not a JSON object")
+
+jsonArrayItems :: String -> JsonValue -> Either String [JsonValue]
+jsonArrayItems label value =
+  case value of
+    JsonArray items -> Right items
+    _ -> Left (label <> " was not a JSON array")
+
+jsonRequiredField :: Text -> [(Text, JsonValue)] -> Either String JsonValue
+jsonRequiredField fieldName fields =
+  maybe
+    (Left ("missing required field " <> Text.unpack fieldName))
+    Right
+    (lookup fieldName fields)
+
+jsonRequiredTextField :: Text -> [(Text, JsonValue)] -> Either String Text
+jsonRequiredTextField fieldName fields =
+  jsonTextField fieldName =<< jsonRequiredField fieldName fields
+
+jsonOptionalTextField :: Text -> [(Text, JsonValue)] -> Either String (Maybe Text)
+jsonOptionalTextField !fieldName fields =
+  case lookup fieldName fields of
+    Nothing -> Right Nothing
+    Just JsonNull -> Right Nothing
+    Just fieldValue -> Just <$> jsonTextField fieldName fieldValue
+
+jsonOptionalTextArrayField :: Text -> [(Text, JsonValue)] -> Either String (Maybe [Text])
+jsonOptionalTextArrayField !fieldName fields =
+  case lookup fieldName fields of
+    Nothing -> Right Nothing
+    Just JsonNull -> Right Nothing
+    Just fieldValue -> Just <$> (jsonArrayItems (Text.unpack fieldName) fieldValue >>= traverse (jsonTextField fieldName))
+
+jsonTextField :: Text -> JsonValue -> Either String Text
+jsonTextField fieldName fieldValue =
+  case fieldValue of
+    JsonString fieldText -> Right fieldText
+    _ -> Left ("field " <> Text.unpack fieldName <> " was not a JSON string")
+
+parseJsonValue :: LazyByteString.ByteString -> Either String JsonValue
+parseJsonValue inputBytes =
+  case [parsedValue | (parsedValue, _remainingInput) <- readP_to_S (jsonValueParser <* skipSpaces <* eof) inputText] of
+    parsedValue : _ -> Right parsedValue
+    [] -> Left "invalid JSON"
+  where
+    inputText = Text.unpack (TextEncoding.decodeUtf8 (LazyByteString.toStrict inputBytes))
+
+jsonValueParser :: ReadP JsonValue
+jsonValueParser =
+  skipSpaces
+    *> choice
+      [ JsonObject <$> jsonObjectParser,
+        JsonArray <$> jsonArrayParser,
+        JsonString . Text.pack <$> jsonStringParser,
+        JsonBool True <$ string "true",
+        JsonBool False <$ string "false",
+        JsonNull <$ string "null"
+      ]
+    <* skipSpaces
+
+jsonObjectParser :: ReadP [(Text, JsonValue)]
+jsonObjectParser = do
+  _ <- char '{'
+  skipSpaces
+  (char '}' $> [])
+    <++ do
+      fields <- sepBy jsonObjectEntryParser (skipSpaces *> char ',' <* skipSpaces)
+      skipSpaces
+      _ <- char '}'
+      pure fields
+
+jsonObjectEntryParser :: ReadP (Text, JsonValue)
+jsonObjectEntryParser = do
+  fieldName <- Text.pack <$> jsonStringParser
+  skipSpaces
+  _ <- char ':'
+  fieldValue <- jsonValueParser
+  pure (fieldName, fieldValue)
+
+jsonArrayParser :: ReadP [JsonValue]
+jsonArrayParser = do
+  _ <- char '['
+  skipSpaces
+  (char ']' $> [])
+    <++ do
+      items <- sepBy jsonValueParser (skipSpaces *> char ',' <* skipSpaces)
+      skipSpaces
+      _ <- char ']'
+      pure items
+
+jsonStringParser :: ReadP String
+jsonStringParser =
+  char '"' *> manyTill jsonStringCharacterParser (char '"')
+
+jsonStringCharacterParser :: ReadP Char
+jsonStringCharacterParser = do
+  nextCharacter <- get
+  if nextCharacter == '\\'
+    then escapedJsonCharacterParser
+    else pure nextCharacter
+
+escapedJsonCharacterParser :: ReadP Char
+escapedJsonCharacterParser = do
+  choice
+    [ '"' <$ char '"',
+      '\\' <$ char '\\',
+      '/' <$ char '/',
+      '\b' <$ char 'b',
+      '\f' <$ char 'f',
+      '\n' <$ char 'n',
+      '\r' <$ char 'r',
+      '\t' <$ char 't',
+      unicodeJsonCharacterParser
+    ]
+
+unicodeJsonCharacterParser :: ReadP Char
+unicodeJsonCharacterParser = do
+  _ <- char 'u'
+  hexDigits <- replicateM 4 get
+  maybe pfail (pure . toEnum) (readMaybe ("0x" <> hexDigits))
+
+jsonStringBytes :: Text -> LazyByteString.ByteString
+jsonStringBytes textValue =
+  LazyByteString.fromStrict . TextEncoding.encodeUtf8 $
+    "\""
+      <> Text.concatMap escapeJsonCharacter textValue
+      <> "\""
+
+escapeJsonCharacter :: Char -> Text
+escapeJsonCharacter character =
+  case character of
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\b' -> "\\b"
+    '\f' -> "\\f"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _ -> Text.singleton character
+
+jsonBoolBytes :: Bool -> LazyByteString.ByteString
+jsonBoolBytes boolValue =
+  if boolValue
+    then "true"
+    else "false"
+
+jsonArrayBytes :: [LazyByteString.ByteString] -> LazyByteString.ByteString
+jsonArrayBytes items =
+  "[" <> LazyByteString.intercalate "," items <> "]"
+
+jsonObjectBytes :: [(Text, LazyByteString.ByteString)] -> LazyByteString.ByteString
+jsonObjectBytes fields =
+  "{"
+    <> LazyByteString.intercalate
+      ","
+      [ jsonStringBytes fieldName <> ":" <> fieldValue
+      | (fieldName, fieldValue) <- fields
+      ]
+    <> "}"
+
+prepareInProcessManualTlsBindPlan :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> IO (ManualTlsBindPlan, FilePath)
+prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
+  tempDirectory <- getCanonicalTemporaryDirectory
+  bracketOnError
+    (createTempDirectory tempDirectory "harch-web-acme")
+    removePathForcibly
+    $ \stateDirectory -> do
+      let privateKeyPath = stateDirectory </> "privkey.pem"
+          certificatePath = stateDirectory </> "fullchain.pem"
+      runInProcessAcmeChallenge runtimeAcmePlan challengeStore stateDirectory certificatePath privateKeyPath
+      pure
+        ( ManualTlsBindPlan
+            { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
+              tlsCertificateFile = certificatePath,
+              tlsPrivateKeyFile = privateKeyPath
+            },
+          stateDirectory
+        )
+
+runInProcessAcmeChallenge :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> FilePath -> FilePath -> FilePath -> IO ()
+runInProcessAcmeChallenge !runtimeAcmePlan challengeStore stateDirectory certificatePath privateKeyPath = do
+  let domains = acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan)
+  when
+    (null domains)
+    ( ioError . userError $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " requires ACME domains for in-process http-01 runtime startup."
+    )
+  let accountKeyPath = stateDirectory </> "account-key.pem"
+      csrConfigPath = stateDirectory </> "csr.cnf"
+      csrPemPath = stateDirectory </> "request.csr"
+      csrDerPath = stateDirectory </> "request.der"
+  generateAcmeAccountKey runtimeAcmePlan accountKeyPath
+  accountJwk <- loadAcmeJwk runtimeAcmePlan accountKeyPath
+  generateAcmeCertificateRequest runtimeAcmePlan domains privateKeyPath csrConfigPath csrPemPath csrDerPath
+  ensureRuntimeFileExists "In-process ACME private key file does not exist: " privateKeyPath
+  csrDerBytes <- ByteString.readFile csrDerPath
+  manager <- HttpClient.newManager HttpClientTls.tlsManagerSettings
+  directory <- fetchAcmeDirectory runtimeAcmePlan manager
+  accountKid <-
+    createAcmeAccount
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      accountJwk
+      (map mailtoAcmeContact (acmeContactEmails (runtimeAcmeListenerConfig runtimeAcmePlan)))
+  (orderUrl, createdOrder) <-
+    createAcmeOrder
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      accountKid
+      domains
+  authorizationUrls <-
+    maybe
+      ( ioError . userError $
+          "In-process ACME new-order response for listener on "
+            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+            <> " did not include authorization URLs."
+      )
+      pure
+      (acmeOrderAuthorizations createdOrder)
+  preparedChallenges <-
+    mapM
+      (prepareAcmeAuthorization runtimeAcmePlan manager directory accountKeyPath accountKid accountJwk)
+      authorizationUrls
+  let activeChallenges = map preparedAcmeChallengeRegistration preparedChallenges
+  bracket_
+    (registerAcmeChallenges challengeStore activeChallenges)
+    (unregisterAcmeChallenges challengeStore activeChallenges)
+    $ do
+      mapM_
+        (triggerAcmeChallenge runtimeAcmePlan manager directory accountKeyPath accountKid . preparedAcmeChallengeUrl)
+        preparedChallenges
+      readyOrder <-
+        pollAcmeOrder
+          runtimeAcmePlan
+          manager
+          directory
+          accountKeyPath
+          accountKid
+          orderUrl
+          ["ready", "valid"]
+      finalizedOrder <-
+        if acmeOrderStatus readyOrder == "valid"
+          then pure readyOrder
+          else do
+            finalizeUrl <-
+              maybe
+                ( ioError . userError $
+                    "In-process ACME ready order for listener on "
+                      <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+                      <> " did not include a finalize URL."
+                )
+                pure
+                (acmeOrderFinalizeUrl readyOrder)
+            finalizeAcmeOrder runtimeAcmePlan manager directory accountKeyPath accountKid finalizeUrl csrDerBytes
+            pollAcmeOrder runtimeAcmePlan manager directory accountKeyPath accountKid orderUrl ["valid"]
+      certificateUrl <-
+        maybe
+          ( ioError . userError $
+              "In-process ACME valid order for listener on "
+                <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+                <> " did not include a certificate URL."
+          )
+          pure
+          (acmeOrderCertificateUrl finalizedOrder)
+      certificatePem <- fetchAcmeCertificate runtimeAcmePlan manager directory accountKeyPath accountKid certificateUrl
+      LazyByteString.writeFile certificatePath certificatePem
+
+generateAcmeAccountKey :: RuntimeAcmeBindPlan -> FilePath -> IO ()
+generateAcmeAccountKey !runtimeAcmePlan accountKeyPath =
+  runOpenSslCommand runtimeAcmePlan ["genrsa", "-out", accountKeyPath, "4096"]
+
+generateAcmeCertificateRequest :: RuntimeAcmeBindPlan -> [Text] -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+generateAcmeCertificateRequest !runtimeAcmePlan domains privateKeyPath csrConfigPath csrPemPath csrDerPath = do
+  writeFile csrConfigPath (acmeCertificateRequestConfig domains)
+  runOpenSslCommand
+    runtimeAcmePlan
+    [ "req",
+      "-new",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      privateKeyPath,
+      "-out",
+      csrPemPath,
+      "-config",
+      csrConfigPath
+    ]
+  runOpenSslCommand
+    runtimeAcmePlan
+    ["req", "-in", csrPemPath, "-outform", "DER", "-out", csrDerPath]
+
+acmeCertificateRequestConfig :: [Text] -> String
+acmeCertificateRequestConfig domains =
+  unlines
+    [ "[req]",
+      "distinguished_name = req_distinguished_name",
+      "prompt = no",
+      "req_extensions = req_ext",
+      "",
+      "[req_distinguished_name]",
+      "CN = " <> Text.unpack firstDomain,
+      "",
+      "[req_ext]",
+      "subjectAltName = " <> intercalate "," (map (("DNS:" <>) . Text.unpack) domains)
+    ]
+  where
+    firstDomain =
+      case domains of
+        domain : _ -> domain
+        [] -> "localhost"
+
+loadAcmeJwk :: RuntimeAcmeBindPlan -> FilePath -> IO AcmeJwk
+loadAcmeJwk !runtimeAcmePlan accountKeyPath = do
+  modulusOutput <- runOpenSslTextCommand runtimeAcmePlan ["rsa", "-in", accountKeyPath, "-modulus", "-noout"]
+  modulusText <-
+    maybe
+      ( ioError . userError $
+          "OpenSSL did not return an RSA modulus for ACME listener on "
+            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+      )
+      pure
+      (Text.stripPrefix "Modulus=" (Text.strip (Text.pack modulusOutput)))
+  modulusBytes <-
+    either
+      ( \decodeError ->
+          ioError . userError $
+            "OpenSSL returned an invalid RSA modulus for ACME listener on "
+              <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+              <> ": "
+              <> decodeError
+      )
+      pure
+      (hexTextToByteString modulusText)
+  pure
+    AcmeJwk
+      { acmeJwkExponent = "AQAB",
+        acmeJwkModulus = base64urlText modulusBytes
+      }
+
+fetchAcmeDirectory :: RuntimeAcmeBindPlan -> HttpClient.Manager -> IO AcmeDirectoryResponse
+fetchAcmeDirectory !runtimeAcmePlan manager = do
+  request <- HttpClient.parseRequest (Text.unpack (acmeDirectoryUrl (runtimeAcmeListenerConfig runtimeAcmePlan)))
+  response <- performAcmeRequest runtimeAcmePlan manager "directory fetch" request [200]
+  decodeAcmeJsonResponse runtimeAcmePlan "directory fetch" parseAcmeDirectoryResponse response
+
+createAcmeAccount :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> AcmeJwk -> [Text] -> IO Text
+createAcmeAccount !runtimeAcmePlan manager directory accountKeyPath accountJwk contacts = do
+  response <-
+    performAcmeJwsRequest
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      "account creation"
+      (AcmeRequestJwk accountJwk)
+      (acmeNewAccountUrl directory)
+      ( jsonObjectBytes
+          [ ("termsOfServiceAgreed", jsonBoolBytes True),
+            ("contact", jsonArrayBytes (map jsonStringBytes contacts))
+          ]
+      )
+      Nothing
+      [200, 201]
+  maybe
+    ( ioError . userError $
+        "ACME account creation for listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " did not return an account location header."
+    )
+    pure
+    (responseHeaderText "Location" response)
+
+createAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> [Text] -> IO (Text, AcmeOrderResponse)
+createAcmeOrder !runtimeAcmePlan manager directory accountKeyPath accountKid domains = do
+  response <-
+    performAcmeJwsRequest
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      "new order"
+      (AcmeRequestKid accountKid)
+      (acmeNewOrderUrl directory)
+      ( jsonObjectBytes
+          [ ( "identifiers",
+              jsonArrayBytes
+                [ jsonObjectBytes
+                    [ ("type", jsonStringBytes "dns"),
+                      ("value", jsonStringBytes domain)
+                    ]
+                | domain <- domains
+                ]
+            )
+          ]
+      )
+      Nothing
+      [200, 201]
+  orderUrl <-
+    maybe
+      ( ioError . userError $
+          "ACME new-order response for listener on "
+            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+            <> " did not return an order location header."
+      )
+      pure
+      (responseHeaderText "Location" response)
+  createdOrder <- decodeAcmeJsonResponse runtimeAcmePlan "new order" parseAcmeOrderResponse response
+  pure (orderUrl, createdOrder)
+
+prepareAcmeAuthorization :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> AcmeJwk -> Text -> IO PreparedAcmeChallenge
+prepareAcmeAuthorization !runtimeAcmePlan manager directory accountKeyPath accountKid accountJwk authorizationUrl = do
+  response <-
+    performAcmeJwsRequest
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      "authorization fetch"
+      (AcmeRequestKid accountKid)
+      authorizationUrl
+      LazyByteString.empty
+      Nothing
+      [200]
+  authorization <- decodeAcmeJsonResponse runtimeAcmePlan "authorization fetch" parseAcmeAuthorizationResponse response
+  challenge <-
+    maybe
+      ( ioError . userError $
+          "ACME authorization for listener on "
+            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+            <> " did not provide an http-01 challenge."
+      )
+      pure
+      (find ((== "http-01") . acmeChallengeKind) (acmeAuthorizationChallenges authorization))
+  keyAuthorization <- buildAcmeKeyAuthorization runtimeAcmePlan accountJwk (acmeChallengeTokenValue challenge)
+  pure
+    PreparedAcmeChallenge
+      { preparedAcmeChallengeRegistration =
+          ActiveAcmeChallenge
+            { activeAcmeChallengeDomain = acmeIdentifierValue (acmeAuthorizationIdentifier authorization),
+              activeAcmeChallengeToken = acmeChallengeTokenValue challenge,
+              activeAcmeChallengeResponse = keyAuthorization
+            },
+        preparedAcmeChallengeUrl = acmeChallengeUrl challenge
+      }
+
+triggerAcmeChallenge :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> IO ()
+triggerAcmeChallenge !runtimeAcmePlan manager directory accountKeyPath accountKid challengeUrl =
+  void
+    ( performAcmeJwsRequest
+        runtimeAcmePlan
+        manager
+        directory
+        accountKeyPath
+        "challenge acknowledgement"
+        (AcmeRequestKid accountKid)
+        challengeUrl
+        (jsonObjectBytes [])
+        Nothing
+        [200]
+    )
+
+pollAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> [Text] -> IO AcmeOrderResponse
+pollAcmeOrder !runtimeAcmePlan =
+  pollAcmeOrderWithRetries 60 1000000 runtimeAcmePlan
+
+pollAcmeOrderWithRetries ::
+  Int ->
+  Int ->
+  RuntimeAcmeBindPlan ->
+  HttpClient.Manager ->
+  AcmeDirectoryResponse ->
+  FilePath ->
+  Text ->
+  Text ->
+  [Text] ->
+  IO AcmeOrderResponse
+pollAcmeOrderWithRetries !maxAttempts !retryDelayMicros !runtimeAcmePlan manager directory accountKeyPath accountKid orderUrl wantedStatuses =
+  go maxAttempts
+  where
+    go !remainingAttempts = do
+      response <-
+        performAcmeJwsRequest
+          runtimeAcmePlan
+          manager
+          directory
+          accountKeyPath
+          "order fetch"
+          (AcmeRequestKid accountKid)
+          orderUrl
+          LazyByteString.empty
+          Nothing
+          [200]
+      order <- decodeAcmeJsonResponse runtimeAcmePlan "order fetch" parseAcmeOrderResponse response
+      if acmeOrderStatus order `elem` wantedStatuses
+        then pure order
+        else case acmeOrderStatus order of
+          "pending"
+            | remainingAttempts > 0 -> threadDelay retryDelayMicros >> go (remainingAttempts - 1)
+          "processing"
+            | remainingAttempts > 0 -> threadDelay retryDelayMicros >> go (remainingAttempts - 1)
+          "invalid" ->
+            ioError . userError $
+              "ACME order for listener on "
+                <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+                <> " became invalid."
+          statusText ->
+            if remainingAttempts > 0
+              then threadDelay retryDelayMicros >> go (remainingAttempts - 1)
+              else
+                ioError . userError $
+                  "ACME order for listener on "
+                    <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+                    <> " did not reach the expected status. Last status: "
+                    <> Text.unpack statusText
+
+finalizeAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> ByteString.ByteString -> IO ()
+finalizeAcmeOrder !runtimeAcmePlan manager directory accountKeyPath accountKid finalizeUrl csrDerBytes =
+  void
+    ( performAcmeJwsRequest
+        runtimeAcmePlan
+        manager
+        directory
+        accountKeyPath
+        "order finalization"
+        (AcmeRequestKid accountKid)
+        finalizeUrl
+        (jsonObjectBytes [("csr", jsonStringBytes (base64urlText csrDerBytes))])
+        Nothing
+        [200]
+    )
+
+fetchAcmeCertificate :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> IO LazyByteString.ByteString
+fetchAcmeCertificate !runtimeAcmePlan manager directory accountKeyPath accountKid certificateUrl = do
+  response <-
+    performAcmeJwsRequest
+      runtimeAcmePlan
+      manager
+      directory
+      accountKeyPath
+      "certificate fetch"
+      (AcmeRequestKid accountKid)
+      certificateUrl
+      LazyByteString.empty
+      (Just "application/pem-certificate-chain")
+      [200]
+  pure (HttpClient.responseBody response)
+
+performAcmeJwsRequest ::
+  RuntimeAcmeBindPlan ->
+  HttpClient.Manager ->
+  AcmeDirectoryResponse ->
+  FilePath ->
+  String ->
+  AcmeRequestAuth ->
+  Text ->
+  LazyByteString.ByteString ->
+  Maybe ByteString.ByteString ->
+  [Int] ->
+  IO (HttpClient.Response LazyByteString.ByteString)
+performAcmeJwsRequest !runtimeAcmePlan manager directory accountKeyPath !actionLabel requestAuth endpointUrl payload maybeAcceptHeader expectedStatusCodes = do
+  nonce <- fetchAcmeNonce runtimeAcmePlan manager (acmeNewNonceUrl directory)
+  requestBody <- buildAcmeJwsBody runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload
+  baseRequest <- HttpClient.parseRequest (Text.unpack endpointUrl)
+  let request =
+        baseRequest
+          { HttpClient.method = "POST",
+            HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody,
+            HttpClient.requestHeaders =
+              [("Content-Type", "application/jose+json")]
+                <> maybe [] (\acceptHeader -> [("Accept", acceptHeader)]) maybeAcceptHeader
+          }
+  performAcmeRequest runtimeAcmePlan manager actionLabel request expectedStatusCodes
+
+fetchAcmeNonce :: RuntimeAcmeBindPlan -> HttpClient.Manager -> Text -> IO Text
+fetchAcmeNonce !runtimeAcmePlan manager nonceUrl = do
+  request <- HttpClient.parseRequest (Text.unpack nonceUrl)
+  response <-
+    performAcmeRequest
+      runtimeAcmePlan
+      manager
+      "nonce fetch"
+      (request {HttpClient.method = "HEAD"})
+      [200, 204]
+  maybe
+    ( ioError . userError $
+        "ACME nonce response for listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " did not include a replay-nonce header."
+    )
+    pure
+    (responseHeaderText "Replay-Nonce" response)
+
+buildAcmeJwsBody :: RuntimeAcmeBindPlan -> FilePath -> AcmeRequestAuth -> Text -> Text -> LazyByteString.ByteString -> IO LazyByteString.ByteString
+buildAcmeJwsBody !runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload = do
+  let protectedBytes =
+        LazyByteString.toStrict $
+          jsonObjectBytes
+            ( [ ("alg", jsonStringBytes "RS256"),
+                ("nonce", jsonStringBytes nonce),
+                ("url", jsonStringBytes endpointUrl)
+              ]
+                <> case requestAuth of
+                  AcmeRequestJwk jwk ->
+                    [ ( "jwk",
+                        jsonObjectBytes
+                          [ ("e", jsonStringBytes (acmeJwkExponent jwk)),
+                            ("kty", jsonStringBytes "RSA"),
+                            ("n", jsonStringBytes (acmeJwkModulus jwk))
+                          ]
+                      )
+                    ]
+                  AcmeRequestKid accountKid ->
+                    [("kid", jsonStringBytes accountKid)]
+            )
+      protectedText = base64urlText protectedBytes
+      payloadText = base64urlText (LazyByteString.toStrict payload)
+      signingInput =
+        LazyByteString.fromStrict
+          (TextEncoding.encodeUtf8 protectedText <> "." <> TextEncoding.encodeUtf8 payloadText)
+  signatureBytes <- signOpenSslRs256 runtimeAcmePlan accountKeyPath signingInput
+  pure $
+    jsonObjectBytes
+      [ ("protected", jsonStringBytes protectedText),
+        ("payload", jsonStringBytes payloadText),
+        ("signature", jsonStringBytes (base64urlText signatureBytes))
+      ]
+
+performAcmeRequest ::
+  RuntimeAcmeBindPlan ->
+  HttpClient.Manager ->
+  String ->
+  HttpClient.Request ->
+  [Int] ->
+  IO (HttpClient.Response LazyByteString.ByteString)
+performAcmeRequest !runtimeAcmePlan manager !actionLabel request expectedStatusCodes = do
+  responseResult <- try (HttpClient.httpLbs request manager) :: IO (Either SomeException (HttpClient.Response LazyByteString.ByteString))
+  response <-
+    either
+      ( \requestError ->
+          ioError . userError $
+            "Failed "
+              <> actionLabel
+              <> " for ACME listener on "
+              <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+              <> ": "
+              <> show requestError
+      )
+      pure
+      responseResult
+  let statusCode = Http.statusCode (HttpClient.responseStatus response)
+  if statusCode `elem` expectedStatusCodes
+    then pure response
+    else
+      ioError . userError $
+        "ACME "
+          <> actionLabel
+          <> " for listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " failed with status "
+          <> show statusCode
+          <> ".\nbody:\n"
+          <> renderAcmeResponseBody response
+
+decodeAcmeJsonResponse ::
+  RuntimeAcmeBindPlan ->
+  String ->
+  (JsonValue -> Either String a) ->
+  HttpClient.Response LazyByteString.ByteString ->
+  IO a
+decodeAcmeJsonResponse !runtimeAcmePlan !actionLabel decodeJson response =
+  either
+    ( \decodeError ->
+        ioError . userError $
+          "Failed to decode ACME "
+            <> actionLabel
+            <> " response for listener on "
+            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+            <> ": "
+            <> decodeError
+            <> ".\nbody:\n"
+            <> renderAcmeResponseBody response
+    )
+    pure
+    (parseJsonValue (HttpClient.responseBody response) >>= decodeJson)
+
+responseHeaderText :: Http.HeaderName -> HttpClient.Response body -> Maybe Text
+responseHeaderText headerName response =
+  fmap
+    (Text.strip . TextEncoding.decodeUtf8)
+    (lookup headerName (HttpClient.responseHeaders response))
+
+renderAcmeResponseBody :: HttpClient.Response LazyByteString.ByteString -> String
+renderAcmeResponseBody =
+  Text.unpack . TextEncoding.decodeUtf8 . LazyByteString.toStrict . HttpClient.responseBody
+
+buildAcmeKeyAuthorization :: RuntimeAcmeBindPlan -> AcmeJwk -> Text -> IO Text
+buildAcmeKeyAuthorization !runtimeAcmePlan accountJwk challengeToken = do
+  thumbprintDigest <- openSslSha256 runtimeAcmePlan (LazyByteString.fromStrict (acmeJwkThumbprintBytes accountJwk))
+  pure (challengeToken <> "." <> base64urlText thumbprintDigest)
+
+acmeJwkThumbprintBytes :: AcmeJwk -> ByteString.ByteString
+acmeJwkThumbprintBytes accountJwk =
+  TextEncoding.encodeUtf8 $
+    "{\"e\":\""
+      <> acmeJwkExponent accountJwk
+      <> "\",\"kty\":\"RSA\",\"n\":\""
+      <> acmeJwkModulus accountJwk
+      <> "\"}"
+
+mailtoAcmeContact :: Text -> Text
+mailtoAcmeContact contactAddress =
+  if "mailto:" `Text.isPrefixOf` contactAddress
+    then contactAddress
+    else "mailto:" <> contactAddress
+
+base64urlText :: ByteString.ByteString -> Text
+base64urlText =
+  TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded
+
+hexTextToByteString :: Text -> Either String ByteString.ByteString
+hexTextToByteString hexText =
+  if odd (length cleanedHex)
+    then Left "hex string had an odd length"
+    else ByteString.pack <$> traverse hexPairToWord8 digitPairs
+  where
+    cleanedHex = filter (not . (`elem` [' ', '\n', '\r', '\t'])) (Text.unpack hexText)
+    digitPairs =
+      [ (cleanedHex !! pairIndex, cleanedHex !! (pairIndex + 1))
+      | pairIndex <- [0, 2 .. length cleanedHex - 2]
+      ]
+    hexPairToWord8 (firstDigit, secondDigit) =
+      if isHexDigitChar firstDigit && isHexDigitChar secondDigit
+        then Right (fromIntegral (digitToInt firstDigit * 16 + digitToInt secondDigit))
+        else Left ("invalid hex digit pair: " <> [firstDigit, secondDigit])
+    isHexDigitChar hexDigit =
+      isDigit hexDigit
+        || ('a' <= hexDigit && hexDigit <= 'f')
+        || ('A' <= hexDigit && hexDigit <= 'F')
+
+runOpenSslTextCommand :: RuntimeAcmeBindPlan -> [String] -> IO String
+runOpenSslTextCommand !runtimeAcmePlan arguments = do
+  processResult <-
+    try (readCreateProcessWithExitCode (proc "openssl" arguments) "") ::
+      IO (Either IOException (ExitCode, String, String))
+  case processResult of
+    Left launchError ->
+      ioError . userError $
+        "Failed to launch openssl for ACME listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> ": "
+          <> show launchError
+    Right (ExitSuccess, stdoutText, stderrText) -> do
+      void (evaluate (length stderrText))
+      pure stdoutText
+    Right (exitCode, stdoutText, stderrText) ->
+      ioError . userError $
+        "OpenSSL failed for ACME listener on "
+          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
+          <> " with exit code "
+          <> show exitCode
+          <> ".\nstdout:\n"
+          <> stdoutText
+          <> "\nstderr:\n"
+          <> stderrText
+
+runOpenSslCommand :: RuntimeAcmeBindPlan -> [String] -> IO ()
+runOpenSslCommand !runtimeAcmePlan arguments =
+  void (runOpenSslTextCommand runtimeAcmePlan arguments)
+
+signOpenSslRs256 :: RuntimeAcmeBindPlan -> FilePath -> LazyByteString.ByteString -> IO ByteString.ByteString
+signOpenSslRs256 !runtimeAcmePlan accountKeyPath signingInput = do
+  temporaryDirectory <- getCanonicalTemporaryDirectory
+  bracket
+    (createTempDirectory temporaryDirectory "harch-web-acme-sign")
+    removePathForcibly
+    $ \signatureDirectory -> do
+      let inputPath = signatureDirectory </> "signing-input.bin"
+          outputPath = signatureDirectory </> "signature.bin"
+      LazyByteString.writeFile inputPath signingInput
+      runOpenSslCommand runtimeAcmePlan ["dgst", "-sha256", "-binary", "-sign", accountKeyPath, "-out", outputPath, inputPath]
+      ByteString.readFile outputPath
+
+openSslSha256 :: RuntimeAcmeBindPlan -> LazyByteString.ByteString -> IO ByteString.ByteString
+openSslSha256 !runtimeAcmePlan inputBytes = do
+  temporaryDirectory <- getCanonicalTemporaryDirectory
+  bracket
+    (createTempDirectory temporaryDirectory "harch-web-acme-sha256")
+    removePathForcibly
+    $ \hashDirectory -> do
+      let inputPath = hashDirectory </> "hash-input.bin"
+          outputPath = hashDirectory </> "hash-output.bin"
+      LazyByteString.writeFile inputPath inputBytes
+      runOpenSslCommand runtimeAcmePlan ["dgst", "-sha256", "-binary", "-out", outputPath, inputPath]
+      ByteString.readFile outputPath
 
 stopRuntimeServers :: [RunningRuntimeServer] -> IO ()
 stopRuntimeServers =
@@ -923,20 +1976,9 @@ runtimeStartupValidationError startupPlan =
     (True, True, True) ->
       Just "Unsupported runtime listener startup plan: no runtime listeners are configured."
     (False, _, _) ->
-      case firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan) of
-        Just runtimeError -> Just runtimeError
-        Nothing ->
-          if any isUnsupportedInProcessAcmePlan (acmeBindPlans startupPlan)
-            then Just "Unsupported runtime listener startup plan: ACME listeners are not implemented yet."
-            else Nothing
+      firstAcmeRuntimeStartupError (httpEndpoints (httpBindPlan startupPlan)) (acmeBindPlans startupPlan)
     (True, _, _) ->
       Nothing
-
-isUnsupportedInProcessAcmePlan :: AcmeBindPlan -> Bool
-isUnsupportedInProcessAcmePlan acmePlan =
-  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
-    InProcessHttp01 -> True
-    CertbotHttp01 _ -> False
 
 firstAcmeRuntimeStartupError :: [ListenerEndpoint] -> [AcmeBindPlan] -> Maybe String
 firstAcmeRuntimeStartupError httpListenerEndpoints acmePlans =
@@ -949,7 +1991,7 @@ validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
       Just runtimeError
     Right challengePort ->
       if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
-        then Nothing
+        then validateAcmeRuntimeConfiguration acmePlan
         else
           Just $
             "Unsupported runtime listener startup plan: ACME listener on "
@@ -957,6 +1999,18 @@ validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
               <> " requires an HTTP listener on port "
               <> show challengePort
               <> " for http-01 challenges."
+
+validateAcmeRuntimeConfiguration :: AcmeBindPlan -> Maybe String
+validateAcmeRuntimeConfiguration acmePlan =
+  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
+    InProcessHttp01
+      | null (acmeDomains (acmeListenerConfig acmePlan)) ->
+          Just $
+            "Unsupported runtime listener startup plan: ACME listener on "
+              <> renderListenerEndpoint (acmeEndpoint acmePlan)
+              <> " requires ACME domains for in-process http-01 runtime startup."
+    _ ->
+      Nothing
 
 hasMatchingAcmeHttp01ChallengeEndpoint :: Int -> [ListenerEndpoint] -> AcmeBindPlan -> Bool
 hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan =
@@ -968,7 +2022,7 @@ acmeHttp01ChallengePort :: AcmeBindPlan -> Either String Int
 acmeHttp01ChallengePort acmePlan =
   case acmeChallengeBackend (acmeListenerConfig acmePlan) of
     InProcessHttp01 ->
-      Right 80
+      Right (acmeHttp01Port (acmeListenerConfig acmePlan))
     CertbotHttp01 certbotConfig ->
       case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
         Nothing ->
