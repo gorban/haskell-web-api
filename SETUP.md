@@ -544,6 +544,7 @@ The repository now includes a canonical reverse-proxy container example under
 `examples/reverse-proxy/`:
 
 - `docker-compose.yml`
+- `generate-local-tls.sh`
 - `podman-compose.yml`
 - `app.env`
 - `app.env.local`
@@ -569,25 +570,23 @@ distrobox-host-exec sudo podman compose -f podman-compose.yml up -d postgres jae
 Use the same `distrobox-host-exec sudo podman compose -f podman-compose.yml ...` prefix for the later
 `up` and `down` commands in this section when you need the rootful path.
 
-1. Generate local development certificates for the nginx TLS listener:
+1. Generate a local root CA plus a `localhost` / `127.0.0.1` server certificate for the nginx TLS
+   listener:
 
 ```bash
-mkdir -p examples/reverse-proxy/tls
-
-openssl req -x509 -nodes -newkey rsa:2048 \
-  -keyout examples/reverse-proxy/tls/privkey.pem \
-  -out examples/reverse-proxy/tls/fullchain.pem \
-  -days 7 \
-  -subj "/CN=localhost"
+./examples/reverse-proxy/generate-local-tls.sh
 ```
+
+   That helper writes `examples/reverse-proxy/tls/local-root-ca.pem`,
+   `examples/reverse-proxy/tls/fullchain.pem`, and `examples/reverse-proxy/tls/privkey.pem`. The CA
+   is only for local development; do not reuse it anywhere else.
 
 2. Start only PostgreSQL and Jaeger first so the database can be migrated and seeded before the app
    container joins the stack:
 
 ```bash
-cd examples/reverse-proxy
-podman compose -f podman-compose.yml up -d postgres jaeger
-# or: docker compose -f docker-compose.yml up -d postgres jaeger
+podman compose -f examples/reverse-proxy/podman-compose.yml up -d postgres jaeger
+# or: docker compose -f examples/reverse-proxy/docker-compose.yml up -d postgres jaeger
 ```
 
 3. From the repository root, seed the database with the owner-level migration credentials against the
@@ -606,34 +605,36 @@ cabal run exe:haskell-web-api-db -- migrate-and-seed
 4. Bring up the app container and nginx reverse proxy:
 
 ```bash
-cd examples/reverse-proxy
-podman compose -f podman-compose.yml up -d web-api nginx
-# or: docker compose -f docker-compose.yml up -d web-api nginx
+podman compose -f examples/reverse-proxy/podman-compose.yml up -d web-api nginx
+# or: docker compose -f examples/reverse-proxy/docker-compose.yml up -d web-api nginx
 ```
 
 5. Verify the end-to-end behavior:
 
 ```bash
 curl -I http://127.0.0.1/
-curl -k https://127.0.0.1/api/status
-curl -k https://127.0.0.1/second
+curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/api/status
+curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/second
 xdg-open http://127.0.0.1:16686
 ```
 
 Expected results:
 
 - plain HTTP on port `80` redirects to HTTPS because the app sees `X-Forwarded-Proto: http`,
-- HTTPS on port `443` succeeds with the local certificate and the app sees
+- HTTPS on port `443` succeeds with the local certificate chain from `tls/local-root-ca.pem`, and the app sees
   `X-Forwarded-Proto: https`,
 - Jaeger stays available on `127.0.0.1:16686`.
 
 6. Tear the stack down when finished:
 
 ```bash
-cd examples/reverse-proxy
-podman compose -f podman-compose.yml down
-# or: docker compose -f docker-compose.yml down
-rm -f tls/fullchain.pem tls/privkey.pem
+podman compose -f examples/reverse-proxy/podman-compose.yml down
+# or: docker compose -f examples/reverse-proxy/docker-compose.yml down
+rm -f examples/reverse-proxy/tls/fullchain.pem \
+  examples/reverse-proxy/tls/localhost.pem \
+  examples/reverse-proxy/tls/local-root-ca.key \
+  examples/reverse-proxy/tls/local-root-ca.pem \
+  examples/reverse-proxy/tls/privkey.pem
 ```
 
 ### Path-prefix variant (`/app/*`)
@@ -656,9 +657,9 @@ Verify the prefixed flow with:
 
 ```bash
 curl -I http://127.0.0.1/app
-curl -k https://127.0.0.1/app
-curl -k https://127.0.0.1/app/second
-curl -k https://127.0.0.1/app/assets/navigation.js
+curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/app
+curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/app/second
+curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/app/assets/navigation.js
 ```
 
 Expected results:
