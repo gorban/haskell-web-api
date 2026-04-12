@@ -740,6 +740,85 @@ This is the simplest local path for proving that the implemented HTTP runtime ca
 port `80`. For longer-lived dev/prod container setups, prefer a reverse proxy in front of the app so
 the application container itself can stay unprivileged on port `5001`.
 
+### Rootful host-network app container on ports 80 and 443
+
+If you want the app container itself to own both public ports and prove the listener-aware default
+redirect behavior without a reverse proxy, run the same host-network pattern with one HTTP listener and
+one manual-TLS HTTPS listener.
+
+1. Follow steps 1-5 from the Podman end-to-end example above, but stop before step 6 so the regular
+   rootless `web-api` container is not started on port `5001`.
+
+2. Generate a local root CA plus a `localhost` / `127.0.0.1` certificate chain for the HTTPS listener:
+
+   ```bash
+   ./examples/reverse-proxy/generate-local-tls.sh
+   ```
+
+3. Write a dual-listener override file for the runtime app:
+
+   ```bash
+   cat > ./podman.env.ports80-443 <<'EOF'
+   APP_TITLE_PREFIX=web-api-host443
+   LISTENER_0_HOST=0.0.0.0
+   LISTENER_0_PORT=80
+   LISTENER_0_SCHEME=http
+   LISTENER_1_HOST=0.0.0.0
+   LISTENER_1_PORT=443
+   LISTENER_1_SCHEME=https
+   LISTENER_1_TLS_SOURCE=manual
+   LISTENER_1_TLS_CERTIFICATE_FILE=/app/tls/fullchain.pem
+   LISTENER_1_TLS_PRIVATE_KEY_FILE=/app/tls/privkey.pem
+   OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+   EOF
+   ```
+
+4. Start the runtime app rootfully on the host network from the Distrobox shell:
+
+   ```bash
+   distrobox-host-exec sudo podman run --rm --name web-api-host443 \
+     --network=host \
+     -v "$PWD/podman.env:/app/.env:ro" \
+     -v "$PWD/podman.env.ports80-443:/app/.env.local:ro" \
+     -v "$PWD/examples/reverse-proxy/tls:/app/tls:ro" \
+     localhost/haskell-web-api:dev
+   ```
+
+5. From another terminal, verify both low ports are bound and that plain HTTP now redirects to HTTPS by
+   default:
+
+   ```bash
+   curl -I http://127.0.0.1/api/status
+   curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/api/status
+   curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/second
+   distrobox-host-exec sudo ss -ltnp '( sport = :80 or sport = :443 )'
+   distrobox-host-exec sudo podman logs web-api-host443
+   ```
+
+   Expected results:
+
+   - `curl -I http://127.0.0.1/api/status` returns `308 Permanent Redirect`.
+   - The `Location` header points at `https://127.0.0.1/api/status`.
+   - The HTTPS requests succeed with the local certificate chain from
+     `examples/reverse-proxy/tls/local-root-ca.pem`.
+
+6. If you want to prove the redirect override, add `REDIRECT_HTTP_TO_HTTPS=false` to
+   `./podman.env.ports80-443`, restart the container, then rerun the same `curl` commands. HTTP on port
+   `80` should now serve the app directly while HTTPS on `443` keeps working.
+
+7. When you are done, stop the rootful app container and remove the temporary override file. If you do
+   not need the generated local CA anymore, remove those TLS files too:
+
+   ```bash
+   distrobox-host-exec sudo podman stop web-api-host443
+   rm -f ./podman.env.ports80-443 \
+     examples/reverse-proxy/tls/fullchain.pem \
+     examples/reverse-proxy/tls/localhost.pem \
+     examples/reverse-proxy/tls/local-root-ca.key \
+     examples/reverse-proxy/tls/local-root-ca.pem \
+     examples/reverse-proxy/tls/privkey.pem
+   ```
+
 ### Other low-port binding options
 
 If you do not want the rootful host-network path above, the remaining low-port options from
