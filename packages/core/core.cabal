@@ -40,8 +40,8 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
-    Cabal,
     base ^>=4.22.0.0,
+    Cabal,
     directory,
     filepath,
 
@@ -74,8 +74,8 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    Cabal,
     base ^>=4.22.0.0,
+    Cabal,
     directory,
     filepath,
     mtl,

@@ -20,10 +20,16 @@ if [ "${#missing_commands[@]}" -ne 0 ]; then
   exit 1
 fi
 
+if ! cabal-gild --help 2>&1 | grep -q '^Usage: cabal-gild \[OPTIONS\] \[FILE \.\.\.\]$'; then
+  printf '%s\n' 'cabal-gild with positional FILE arguments is required for formatting checks.' >&2
+  printf '%s\n' 'Run .github/scripts/install-formatting-tools.sh to install the pinned version used by CI.' >&2
+  exit 1
+fi
+
 format_ok=0
 
 while IFS= read -r cabal_file; do
-  output="$(cabal-gild -i "$cabal_file" -m check 2>&1)" || {
+  output="$(cabal-gild "$cabal_file" --mode check 2>&1)" || {
     printf '%s: %s\n\n' "$cabal_file" "$output"
     format_ok=1
   }

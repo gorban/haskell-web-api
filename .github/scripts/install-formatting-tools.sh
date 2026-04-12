@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
+LANG=C.UTF-8 cabal install cabal-gild-1.8.4.1 --install-method=copy --overwrite-policy=always --ignore-project
 
 temp_dir="$(mktemp -d)"
 trap 'rm -rf "$temp_dir"' EXIT

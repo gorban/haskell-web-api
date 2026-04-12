@@ -41,9 +41,9 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
+    base ^>=4.22.0.0,
     Cabal,
     Cabal-syntax,
-    base ^>=4.22.0.0,
     core,
     directory,
     filepath,

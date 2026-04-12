@@ -982,9 +982,12 @@ fail fast on formatting regressions before a push or pull request.
 ```
 
 Those commands install:
-- `cabal-gild`
+- `cabal-gild` `1.8.4.1`
 - `hlint`
 - `ormolu`
+
+The formatting-check script requires the positional `cabal-gild FILE --mode check` interface, and the
+installer intentionally pins `cabal-gild` to `1.8.4.1` so local installs match CI.
 
 To fail fast on formatting regressions before a push or pull request, copy the tracked pre-commit hook into
 your local git hooks directory:
