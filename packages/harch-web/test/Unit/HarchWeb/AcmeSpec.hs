@@ -1063,10 +1063,11 @@ withPrependedPathDirectory pathDirectory action = do
   action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
 
 withEmptyExecutablePath :: IO a -> IO a
-withEmptyExecutablePath action = do
-  originalPath <- lookupEnv "PATH"
-  setEnv "PATH" ""
-  action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
+withEmptyExecutablePath action =
+  withSystemTempDirectory "missing-executable-path" $ \tempDirectory -> do
+    originalPath <- lookupEnv "PATH"
+    setEnv "PATH" tempDirectory
+    action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
 
 withFakeOpenSslScript :: [String] -> (FilePath -> IO a) -> IO a
 withFakeOpenSslScript scriptLines action =

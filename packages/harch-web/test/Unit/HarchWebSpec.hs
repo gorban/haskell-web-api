@@ -2665,10 +2665,11 @@ withPrependedPathDirectory pathDirectory action = do
   action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
 
 withEmptyExecutablePath :: IO a -> IO a
-withEmptyExecutablePath action = do
-  originalPath <- lookupEnv "PATH"
-  setEnv "PATH" ""
-  action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
+withEmptyExecutablePath action =
+  withSystemTempDirectory "missing-executable-path" $ \tempDirectory -> do
+    originalPath <- lookupEnv "PATH"
+    setEnv "PATH" tempDirectory
+    action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
 
 withFakeAcmeServer :: Int -> Int -> FilePath -> (Text -> IO a) -> IO a
 withFakeAcmeServer acmePort challengePort certificatePath action = do
