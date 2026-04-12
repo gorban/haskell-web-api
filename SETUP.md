@@ -821,13 +821,16 @@ LISTENER_1_SCHEME=https
 LISTENER_1_TLS_SOURCE=acme
 LISTENER_1_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
+LISTENER_1_ACME_DOMAINS=example.com,www.example.com
 LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
 LISTENER_1_ACME_CERTBOT_EXECUTABLE=certbot
-LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80,-d,example.com,--cert-name,example.com
+LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
 ```
 
-The certbot arguments need to declare `--cert-name` or `-d` / `--domains` so the runtime can locate the
-issued certificate files after certbot finishes.
+Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
+certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
+`--domains`, and the same domain list is what the remaining native in-process backend will need once
+that runtime path lands.
 
 Then exercise the ACME path in three layers:
 

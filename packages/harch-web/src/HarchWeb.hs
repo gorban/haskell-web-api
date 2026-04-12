@@ -56,6 +56,7 @@ module HarchWeb
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, newEmptyMVar, putMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracketOnError, evaluate, onException, throwIO, try)
 import Control.Monad (forever, unless, void)
@@ -102,6 +103,7 @@ data AcmeChallengeBackend
 data AcmeConfig = AcmeConfig
   { acmeDirectoryUrl :: Text,
     acmeContactEmails :: [Text],
+    acmeDomains :: [Text],
     acmeChallengeBackend :: AcmeChallengeBackend
   }
   deriving (Eq, Show)
@@ -731,6 +733,7 @@ certbotRuntimeArguments runtimeAcmePlan configDirectory workDirectory logsDirect
     <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
     <> certbotDirectoryUrlArguments runtimeAcmePlan
     <> certbotContactEmailArguments runtimeAcmePlan
+    <> certbotDomainArguments runtimeAcmePlan
 
 certbotDirectoryUrlArguments :: RuntimeAcmeBindPlan -> [String]
 certbotDirectoryUrlArguments runtimeAcmePlan =
@@ -747,6 +750,16 @@ certbotContactEmailArguments runtimeAcmePlan =
       firstContact : _ -> ["--email", Text.unpack firstContact]
       [] -> []
 
+certbotDomainArguments :: RuntimeAcmeBindPlan -> [String]
+certbotDomainArguments runtimeAcmePlan =
+  if any (`certbotHasOption` configuredArguments) ["-d", "--domain", "--domains"]
+    then []
+    else case acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan) of
+      [] -> []
+      domains -> ["--domains", Text.unpack (Text.intercalate "," domains)]
+  where
+    configuredArguments = certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan)
+
 certbotCertificateName :: RuntimeAcmeBindPlan -> Either String Text
 certbotCertificateName runtimeAcmePlan =
   maybe
@@ -754,10 +767,12 @@ certbotCertificateName runtimeAcmePlan =
         ( Left $
             "Unsupported runtime listener startup plan: ACME listener on "
               <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-              <> " requires certbot arguments to declare --cert-name or a domain via -d/--domain/--domains."
+              <> " requires ACME domains or certbot arguments to declare --cert-name or a domain via -d/--domain/--domains."
         )
         Right
-        (firstCertbotDomain (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan)))
+        ( firstCertbotDomain (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))
+            <|> listToMaybe (acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan))
+        )
     )
     Right
     (listToMaybe (certbotOptionValues "--cert-name" (certbotArguments (runtimeAcmeCertbotConfig runtimeAcmePlan))))

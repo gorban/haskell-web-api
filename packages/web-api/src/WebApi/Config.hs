@@ -379,6 +379,10 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
                         (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
                         =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
                     )
+                <*> maybe
+                  (Right [])
+                  (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
+                  (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
                 <*> parseAcmeChallengeBackend listenerIndex
             )
 
