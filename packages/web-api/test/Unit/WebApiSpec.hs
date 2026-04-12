@@ -2140,24 +2140,25 @@ spec = do
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $
-      withSystemTempDirectory "app-environment-config" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-        writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
-        loadAppEnvironmentConfigWithFiles envPath envLocalPath
-          `shouldReturn` Right
-            AppEnvironmentConfig
-              { appMode = Test,
-                databaseConfig =
-                  DatabaseConfig
-                    { databaseHost = "db.shared",
-                      databasePort = 7432,
-                      databaseName = "shared_db",
-                      databaseUser = "shared_user",
-                      databasePassword = "local_password"
-                    }
-              }
+      withSystemTempDirectory "app-environment-config" $ \tempDirectory ->
+        withClearedAppEnvironment $ do
+          let envPath = tempDirectory <> "/.env"
+              envLocalPath = tempDirectory <> "/.env.local"
+          writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+          writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
+          loadAppEnvironmentConfigWithFiles envPath envLocalPath
+            `shouldReturn` Right
+              AppEnvironmentConfig
+                { appMode = Test,
+                  databaseConfig =
+                    DatabaseConfig
+                      { databaseHost = "db.shared",
+                        databasePort = 7432,
+                        databaseName = "shared_db",
+                        databaseUser = "shared_user",
+                        databasePassword = "local_password"
+                      }
+                }
 
     it "lets process environment override .env.local values" $
       withSystemTempDirectory "app-environment-config-env" $ \tempDirectory ->
@@ -2184,42 +2185,45 @@ spec = do
                       }
 
     it "reports invalid override files with the failing path" $
-      withSystemTempDirectory "app-environment-config-error" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile envPath "DATABASE_HOST\n"
-        loadAppEnvironmentConfigWithFiles envPath envLocalPath
-          `shouldReturn` Left
-            (AppEnvironmentOverridesFileError envPath (InvalidConfigOverridesLine 1 "DATABASE_HOST"))
+      withSystemTempDirectory "app-environment-config-error" $ \tempDirectory ->
+        withClearedAppEnvironment $ do
+          let envPath = tempDirectory <> "/.env"
+              envLocalPath = tempDirectory <> "/.env.local"
+          writeFile envPath "DATABASE_HOST\n"
+          loadAppEnvironmentConfigWithFiles envPath envLocalPath
+            `shouldReturn` Left
+              (AppEnvironmentOverridesFileError envPath (InvalidConfigOverridesLine 1 "DATABASE_HOST"))
 
     it "reports parse errors after both files load successfully" $
-      withSystemTempDirectory "app-environment-config-parse-error" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile envPath "DATABASE_PORT=0\n"
-        loadAppEnvironmentConfigWithFiles envPath envLocalPath
-          `shouldReturn` Left
-            (AppEnvironmentConfigParseError (InvalidConfigValue "DATABASE_PORT" "0"))
+      withSystemTempDirectory "app-environment-config-parse-error" $ \tempDirectory ->
+        withClearedAppEnvironment $ do
+          let envPath = tempDirectory <> "/.env"
+              envLocalPath = tempDirectory <> "/.env.local"
+          writeFile envPath "DATABASE_PORT=0\n"
+          loadAppEnvironmentConfigWithFiles envPath envLocalPath
+            `shouldReturn` Left
+              (AppEnvironmentConfigParseError (InvalidConfigValue "DATABASE_PORT" "0"))
 
   describe "loadAppEnvironmentConfig" $
     it "loads the default .env file names from the current directory" $
-      withSystemTempDirectory "app-environment-config-current-directory" $ \tempDirectory -> do
-        writeFile (tempDirectory <> "/.env") "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-        writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\n"
-        withCurrentDirectory tempDirectory $
-          loadAppEnvironmentConfig
-            `shouldReturn` Right
-              AppEnvironmentConfig
-                { appMode = Test,
-                  databaseConfig =
-                    DatabaseConfig
-                      { databaseHost = "db.shared",
-                        databasePort = 6432,
-                        databaseName = "shared_db",
-                        databaseUser = "shared_user",
-                        databasePassword = "local_password"
-                      }
-                }
+      withSystemTempDirectory "app-environment-config-current-directory" $ \tempDirectory ->
+        withClearedAppEnvironment $ do
+          writeFile (tempDirectory <> "/.env") "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+          writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nDATABASE_PASSWORD=local_password\n"
+          withCurrentDirectory tempDirectory $
+            loadAppEnvironmentConfig
+              `shouldReturn` Right
+                AppEnvironmentConfig
+                  { appMode = Test,
+                    databaseConfig =
+                      DatabaseConfig
+                        { databaseHost = "db.shared",
+                          databasePort = 6432,
+                          databaseName = "shared_db",
+                          databaseUser = "shared_user",
+                          databasePassword = "local_password"
+                        }
+                  }
 
   describe "AppEnvironmentConfigLoadError" $
     it "keeps load-error equality and rendering deterministic" $ do
@@ -2246,39 +2250,41 @@ spec = do
 
   describe "loadAppStartupConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers for runtime startup" $
-      withSystemTempDirectory "app-startup-config" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
-        writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
-        loadAppStartupConfigWithFiles envPath envLocalPath
-          `shouldReturn` Right
-            AppStartupConfig
-              { startupEnvironmentConfig =
-                  AppEnvironmentConfig
-                    { appMode = Production,
-                      databaseConfig =
-                        DatabaseConfig
-                          { databaseHost = "db.shared",
-                            databasePort = 6432,
-                            databaseName = "web_api_dev",
-                            databaseUser = "web_api_runtime",
-                            databasePassword = "local_password"
-                          }
-                    },
-                startupAppConfig =
-                  defaultAppConfig
-                    { appTitlePrefix = "web-api-local",
-                      listenerConfigs =
-                        [ ListenerConfig
-                            { listenerHost = "127.0.0.1",
-                              listenerPort = 7443,
-                              listenerScheme = Http,
-                              listenerTls = Nothing
-                            }
-                        ]
-                    }
-              }
+      withSystemTempDirectory "app-startup-config" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $ do
+            let envPath = tempDirectory <> "/.env"
+                envLocalPath = tempDirectory <> "/.env.local"
+            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
+            writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
+            loadAppStartupConfigWithFiles envPath envLocalPath
+              `shouldReturn` Right
+                AppStartupConfig
+                  { startupEnvironmentConfig =
+                      AppEnvironmentConfig
+                        { appMode = Production,
+                          databaseConfig =
+                            DatabaseConfig
+                              { databaseHost = "db.shared",
+                                databasePort = 6432,
+                                databaseName = "web_api_dev",
+                                databaseUser = "web_api_runtime",
+                                databasePassword = "local_password"
+                              }
+                        },
+                    startupAppConfig =
+                      defaultAppConfig
+                        { appTitlePrefix = "web-api-local",
+                          listenerConfigs =
+                            [ ListenerConfig
+                                { listenerHost = "127.0.0.1",
+                                  listenerPort = 7443,
+                                  listenerScheme = Http,
+                                  listenerTls = Nothing
+                                }
+                            ]
+                        }
+                  }
 
     it "lets process environment override .env.local values for runtime startup" $
       withSystemTempDirectory "app-startup-config-env" $ \tempDirectory ->
@@ -2321,45 +2327,49 @@ spec = do
                         }
 
     it "reports invalid override files or parse failures with explicit errors" $
-      withSystemTempDirectory "app-startup-config-errors" $ \tempDirectory -> do
-        let brokenEnvPath = tempDirectory <> "/broken.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-            invalidEnvPath = tempDirectory <> "/invalid.env"
-        writeFile brokenEnvPath "APP_TITLE_PREFIX\n"
-        loadAppStartupConfigWithFiles brokenEnvPath envLocalPath
-          `shouldReturn` Left
-            (AppStartupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "APP_TITLE_PREFIX"))
-        writeFile invalidEnvPath "LISTENER_0_PORT=0\n"
-        loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
-          `shouldReturn` Left
-            (AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0"))
+      withSystemTempDirectory "app-startup-config-errors" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $ do
+            let brokenEnvPath = tempDirectory <> "/broken.env"
+                envLocalPath = tempDirectory <> "/.env.local"
+                invalidEnvPath = tempDirectory <> "/invalid.env"
+            writeFile brokenEnvPath "APP_TITLE_PREFIX\n"
+            loadAppStartupConfigWithFiles brokenEnvPath envLocalPath
+              `shouldReturn` Left
+                (AppStartupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "APP_TITLE_PREFIX"))
+            writeFile invalidEnvPath "LISTENER_0_PORT=0\n"
+            loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
+              `shouldReturn` Left
+                (AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0"))
 
   describe "loadAppStartupConfig" $
     it "loads the default .env file names for runtime startup from the current directory" $
-      withSystemTempDirectory "app-startup-config-current-directory" $ \tempDirectory -> do
-        writeFile (tempDirectory <> "/.env") "APP_MODE=production\nAPP_TITLE_PREFIX=web-api-shared\n"
-        writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nLISTENER_0_PORT=6001\n"
-        withCurrentDirectory tempDirectory $
-          loadAppStartupConfig
-            `shouldReturn` Right
-              defaultAppStartupConfig
-                { startupEnvironmentConfig =
-                    defaultAppEnvironmentConfig
-                      { appMode = Test
-                      },
-                  startupAppConfig =
-                    defaultAppConfig
-                      { appTitlePrefix = "web-api-shared",
-                        listenerConfigs =
-                          [ ListenerConfig
-                              { listenerHost = "127.0.0.1",
-                                listenerPort = 6001,
-                                listenerScheme = Http,
-                                listenerTls = Nothing
-                              }
-                          ]
-                      }
-                }
+      withSystemTempDirectory "app-startup-config-current-directory" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $ do
+            writeFile (tempDirectory <> "/.env") "APP_MODE=production\nAPP_TITLE_PREFIX=web-api-shared\n"
+            writeFile (tempDirectory <> "/.env.local") "APP_MODE=test\nLISTENER_0_PORT=6001\n"
+            withCurrentDirectory tempDirectory $
+              loadAppStartupConfig
+                `shouldReturn` Right
+                  defaultAppStartupConfig
+                    { startupEnvironmentConfig =
+                        defaultAppEnvironmentConfig
+                          { appMode = Test
+                          },
+                      startupAppConfig =
+                        defaultAppConfig
+                          { appTitlePrefix = "web-api-shared",
+                            listenerConfigs =
+                              [ ListenerConfig
+                                  { listenerHost = "127.0.0.1",
+                                    listenerPort = 6001,
+                                    listenerScheme = Http,
+                                    listenerTls = Nothing
+                                  }
+                              ]
+                          }
+                    }
 
   describe "AppStartupConfig and AppStartupConfigLoadError" $
     it "keep equality and rendering deterministic" $ do
@@ -2502,26 +2512,29 @@ spec = do
 
   describe "loadAppSetupConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers for setup config" $
-      withSystemTempDirectory "app-setup-config" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
-        writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
-        loadAppSetupConfigWithFiles envPath envLocalPath
-          `shouldReturn` Right
-            AppSetupConfig
-              { setupEnvironmentConfig = defaultAppEnvironmentConfig,
-                setupAppConfig =
-                  defaultAppConfig
-                    { appTitlePrefix = "web-api-local"
-                    },
-                setupMigrationDatabaseConfig = Nothing,
-                setupAutostartConfig =
-                  SetupAutostartConfig
-                    { setupAutostartDatabase = True,
-                      setupAutostartJaeger = True
+      withSystemTempDirectory "app-setup-config" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $ do
+              let envPath = tempDirectory <> "/.env"
+                  envLocalPath = tempDirectory <> "/.env.local"
+              writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
+              writeFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n"
+              loadAppSetupConfigWithFiles envPath envLocalPath
+                `shouldReturn` Right
+                  AppSetupConfig
+                    { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+                      setupAppConfig =
+                        defaultAppConfig
+                          { appTitlePrefix = "web-api-local"
+                          },
+                      setupMigrationDatabaseConfig = Nothing,
+                      setupAutostartConfig =
+                        SetupAutostartConfig
+                          { setupAutostartDatabase = True,
+                            setupAutostartJaeger = True
+                          }
                     }
-              }
 
     it "lets process environment override .env.local values for setup config" $
       withSystemTempDirectory "app-setup-config-env" $ \tempDirectory ->
@@ -2552,82 +2565,91 @@ spec = do
                           }
 
     it "loads optional migration-owner credentials from the same file layers without replacing runtime credentials" $
-      withSystemTempDirectory "app-setup-config-migration" $ \tempDirectory -> do
-        let envPath = tempDirectory <> "/.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-        writeFile
-          envPath
-          ( unlines
-              [ "DATABASE_USER=web_api_runtime",
-                "WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1",
-                "WEB_API_MIGRATION_DATABASE_PORT=5432",
-                "WEB_API_MIGRATION_DATABASE_NAME=web_api_dev",
-                "WEB_API_MIGRATION_DATABASE_USER=web_api_owner"
-              ]
-          )
-        writeFile envLocalPath "WEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
-        loadAppSetupConfigWithFiles envPath envLocalPath
-          `shouldReturn` Right
-            AppSetupConfig
-              { setupEnvironmentConfig =
-                  defaultAppEnvironmentConfig
-                    { databaseConfig =
-                        DatabaseConfig
-                          { databaseHost = "127.0.0.1",
-                            databasePort = 5432,
-                            databaseName = "web_api_dev",
-                            databaseUser = "web_api_runtime",
-                            databasePassword = "web_api"
-                          }
-                    },
-                setupAppConfig = defaultAppConfig,
-                setupMigrationDatabaseConfig =
-                  Just
-                    DatabaseConfig
-                      { databaseHost = "127.0.0.1",
-                        databasePort = 5432,
-                        databaseName = "web_api_dev",
-                        databaseUser = "web_api_owner",
-                        databasePassword = "owner-secret"
-                      },
-                setupAutostartConfig = defaultSetupAutostartConfig
-              }
+      withSystemTempDirectory "app-setup-config-migration" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $ do
+              let envPath = tempDirectory <> "/.env"
+                  envLocalPath = tempDirectory <> "/.env.local"
+              writeFile
+                envPath
+                ( unlines
+                    [ "DATABASE_USER=web_api_runtime",
+                      "WEB_API_MIGRATION_DATABASE_HOST=127.0.0.1",
+                      "WEB_API_MIGRATION_DATABASE_PORT=5432",
+                      "WEB_API_MIGRATION_DATABASE_NAME=web_api_dev",
+                      "WEB_API_MIGRATION_DATABASE_USER=web_api_owner"
+                    ]
+                )
+              writeFile envLocalPath "WEB_API_MIGRATION_DATABASE_PASSWORD=owner-secret\n"
+              loadAppSetupConfigWithFiles envPath envLocalPath
+                `shouldReturn` Right
+                  AppSetupConfig
+                    { setupEnvironmentConfig =
+                        defaultAppEnvironmentConfig
+                          { databaseConfig =
+                              DatabaseConfig
+                                { databaseHost = "127.0.0.1",
+                                  databasePort = 5432,
+                                  databaseName = "web_api_dev",
+                                  databaseUser = "web_api_runtime",
+                                  databasePassword = "web_api"
+                                }
+                          },
+                      setupAppConfig = defaultAppConfig,
+                      setupMigrationDatabaseConfig =
+                        Just
+                          DatabaseConfig
+                            { databaseHost = "127.0.0.1",
+                              databasePort = 5432,
+                              databaseName = "web_api_dev",
+                              databaseUser = "web_api_owner",
+                              databasePassword = "owner-secret"
+                            },
+                      setupAutostartConfig = defaultSetupAutostartConfig
+                    }
 
     it "reports invalid override files or parse failures with explicit errors" $
-      withSystemTempDirectory "app-setup-config-errors" $ \tempDirectory -> do
-        let brokenEnvPath = tempDirectory <> "/broken.env"
-            envLocalPath = tempDirectory <> "/.env.local"
-            invalidEnvPath = tempDirectory <> "/invalid.env"
-        writeFile brokenEnvPath "SETUP_AUTOSTART_DATABASE\n"
-        loadAppSetupConfigWithFiles brokenEnvPath envLocalPath
-          `shouldReturn` Left
-            (AppSetupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "SETUP_AUTOSTART_DATABASE"))
-        writeFile invalidEnvPath "SETUP_AUTOSTART_JAEGER=maybe\n"
-        loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
-          `shouldReturn` Left
-            (AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_JAEGER" "maybe"))
+      withSystemTempDirectory "app-setup-config-errors" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $ do
+              let brokenEnvPath = tempDirectory <> "/broken.env"
+                  envLocalPath = tempDirectory <> "/.env.local"
+                  invalidEnvPath = tempDirectory <> "/invalid.env"
+              writeFile brokenEnvPath "SETUP_AUTOSTART_DATABASE\n"
+              loadAppSetupConfigWithFiles brokenEnvPath envLocalPath
+                `shouldReturn` Left
+                  (AppSetupOverridesFileError brokenEnvPath (InvalidConfigOverridesLine 1 "SETUP_AUTOSTART_DATABASE"))
+              writeFile invalidEnvPath "SETUP_AUTOSTART_JAEGER=maybe\n"
+              loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
+                `shouldReturn` Left
+                  (AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_JAEGER" "maybe"))
 
   describe "loadAppSetupConfig" $
     it "loads the default .env file names for setup config from the current directory" $
-      withSystemTempDirectory "app-setup-config-current-directory" $ \tempDirectory -> do
-        writeFile (tempDirectory <> "/.env") "SETUP_AUTOSTART_DATABASE=true\n"
-        writeFile (tempDirectory <> "/.env.local") "APP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
-        withCurrentDirectory tempDirectory $
-          loadAppSetupConfig
-            `shouldReturn` Right
-              AppSetupConfig
-                { setupEnvironmentConfig = defaultAppEnvironmentConfig,
-                  setupAppConfig =
-                    defaultAppConfig
-                      { appTitlePrefix = "web-api-dev"
-                      },
-                  setupMigrationDatabaseConfig = Nothing,
-                  setupAutostartConfig =
-                    SetupAutostartConfig
-                      { setupAutostartDatabase = True,
-                        setupAutostartJaeger = True
+      withSystemTempDirectory "app-setup-config-current-directory" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $ do
+              writeFile (tempDirectory <> "/.env") "SETUP_AUTOSTART_DATABASE=true\n"
+              writeFile (tempDirectory <> "/.env.local") "APP_TITLE_PREFIX=web-api-dev\nSETUP_AUTOSTART_JAEGER=true\n"
+              withCurrentDirectory tempDirectory $
+                loadAppSetupConfig
+                  `shouldReturn` Right
+                    AppSetupConfig
+                      { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+                        setupAppConfig =
+                          defaultAppConfig
+                            { appTitlePrefix = "web-api-dev"
+                            },
+                        setupMigrationDatabaseConfig = Nothing,
+                        setupAutostartConfig =
+                          SetupAutostartConfig
+                            { setupAutostartDatabase = True,
+                              setupAutostartJaeger = True
+                            }
                       }
-                }
 
   describe "AppSetupConfig and AppSetupConfigLoadError" $
     it "keep selectors, equality, and rendering deterministic" $ do
