@@ -47,6 +47,7 @@ data CallToAction = CallToAction
 data HomePageModel = HomePageModel
   { homeHeading :: Text,
     homeSummary :: Text,
+    homeErrorMessage :: Maybe Text,
     homePrimaryAction :: CallToAction
   }
   deriving (Eq, Show)
@@ -113,13 +114,8 @@ buildPageModelWithDatabase databaseEffect routeRequest =
 buildPageModelFromRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> AppPageModel
 buildPageModelFromRouteData routeRequest routeData =
   case routeData of
-    HomeRouteDataResult homeRouteData ->
-      HomePage
-        HomePageModel
-          { homeHeading = "Home",
-            homeSummary = homeRouteSummary homeRouteData,
-            homePrimaryAction = buildCallToAction routeRequest SecondRoute "Browse the second page"
-          }
+    HomeRouteDataResult homeRouteDataResult ->
+      buildHomePageModel routeRequest homeRouteDataResult
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
     _ ->
@@ -129,6 +125,27 @@ buildPageModelFromRouteData routeRequest routeData =
             notFoundSummary = "The requested page could not be found.",
             notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute "Return home"
           }
+
+buildHomePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError HomeRouteData -> AppPageModel
+buildHomePageModel routeRequest homeRouteDataResult =
+  let browseSecond = buildCallToAction routeRequest SecondRoute "Browse the second page"
+   in case homeRouteDataResult of
+        Right homeRouteData ->
+          HomePage
+            HomePageModel
+              { homeHeading = "Home",
+                homeSummary = homeRouteSummary homeRouteData,
+                homeErrorMessage = Nothing,
+                homePrimaryAction = browseSecond
+              }
+        Left _ ->
+          HomePage
+            HomePageModel
+              { homeHeading = "Home",
+                homeSummary = "Home page content is temporarily unavailable.",
+                homeErrorMessage = Just "Could not load home page data.",
+                homePrimaryAction = browseSecond
+              }
 
 buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
 buildSecondPageModel routeRequest secondRouteDataResult =
@@ -175,6 +192,7 @@ renderPageBody pageModel =
           "<h1 data-page-title=\"true\">",
           homeHeading homePage,
           "</h1>",
+          renderPageError (homeErrorMessage homePage),
           "<p>",
           homeSummary homePage,
           "</p>",
@@ -187,7 +205,7 @@ renderPageBody pageModel =
           "<h1 data-page-title=\"true\">",
           secondHeading secondPage,
           "</h1>",
-          renderSecondPageError (secondErrorMessage secondPage),
+          renderPageError (secondErrorMessage secondPage),
           "<p>",
           secondSummary secondPage,
           "</p>",
@@ -219,8 +237,8 @@ renderHighlights highlights =
           "</ul>"
         ]
 
-renderSecondPageError :: Maybe Text -> Text
-renderSecondPageError maybeErrorMessage =
+renderPageError :: Maybe Text -> Text
+renderPageError maybeErrorMessage =
   case maybeErrorMessage of
     Nothing -> Text.empty
     Just errorMessage ->

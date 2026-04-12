@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.RouteData
   ( HomeRouteData (..),
     RouteDataResult (..),
@@ -16,6 +14,8 @@ import WebApi.Database
   ( DatabaseEffect,
     DatabaseError,
     defaultDatabaseEffect,
+    homePageDataSummary,
+    loadHomePageData,
     loadSecondPageData,
     secondPageDataHighlights,
     secondPageDataSummary,
@@ -44,7 +44,7 @@ newtype StatusApiData = StatusApiData
   deriving (Eq, Show)
 
 data RouteDataResult
-  = HomeRouteDataResult HomeRouteData
+  = HomeRouteDataResult (Either DatabaseError HomeRouteData)
   | SecondRouteDataResult (Either DatabaseError SecondRouteData)
   | StatusApiDataResult StatusApiData
   | NotFoundRouteDataResult
@@ -58,11 +58,16 @@ selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute 
 selectRouteDataWithDatabase databaseEffect routeRequest =
   case HarchWeb.requestRoute routeRequest of
     HomeRoute ->
-      pure $
-        HomeRouteDataResult
-          HomeRouteData
-            { homeRouteSummary = "Server-rendered home page with stubbed content."
-            }
+      fmap
+        ( HomeRouteDataResult
+            . fmap
+              ( \homePageData ->
+                  HomeRouteData
+                    { homeRouteSummary = homePageDataSummary homePageData
+                    }
+              )
+        )
+        (loadHomePageData databaseEffect (HarchWeb.requestContext routeRequest))
     SecondRoute ->
       fmap
         ( SecondRouteDataResult

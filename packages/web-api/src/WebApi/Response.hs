@@ -51,10 +51,14 @@ renderPageResponseFromRouteData ::
   HarchWeb.Response AppRoute AppRequestContext
 renderPageResponseFromRouteData config routeRequest routeData =
   case routeData of
+    HomeRouteDataResult (Left databaseError) ->
+      let renderedPage = renderPageFromRouteData config routeRequest routeData
+       in HarchWeb.BodyResponse
+            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (pageFailureDiagnostics PageSurface "/" "home-page" databaseError))
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.BodyResponse
-            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (secondPageFailureDiagnostics PageSurface databaseError))
+            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (pageFailureDiagnostics PageSurface "/second" "second-page" databaseError))
     _ ->
       HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
 
@@ -66,7 +70,7 @@ renderApiResponseFromRouteData routeData =
     SecondRouteDataResult (Right secondRouteData) ->
       jsonResponseBody 200 (secondRouteApiBody secondRouteData)
     SecondRouteDataResult (Left databaseError) ->
-      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (secondPageFailureDiagnostics ApiSurface databaseError)
+      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseError)
     _ ->
       jsonResponseBody 404 "{\"error\":\"not-found\"}"
 
@@ -138,8 +142,8 @@ data FailureDiagnostics = FailureDiagnostics
     diagnosticsLogEntries :: [Text]
   }
 
-secondPageFailureDiagnostics :: RequestSurface -> DatabaseError -> FailureDiagnostics
-secondPageFailureDiagnostics requestSurfaceValue databaseError =
+pageFailureDiagnostics :: RequestSurface -> Text -> Text -> DatabaseError -> FailureDiagnostics
+pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseError =
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
@@ -152,7 +156,7 @@ secondPageFailureDiagnostics requestSurfaceValue databaseError =
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.route",
-              Observability.attributeValue = Observability.TextAttribute "/second"
+              Observability.attributeValue = Observability.TextAttribute routePath
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.surface",
@@ -161,7 +165,9 @@ secondPageFailureDiagnostics requestSurfaceValue databaseError =
         ],
       diagnosticsLogEntries =
         [ Text.concat
-            [ "Database failure while rendering required second-page ",
+            [ "Database failure while rendering required ",
+              routeLabel,
+              " ",
               renderRequestSurface requestSurfaceValue,
               " response: ",
               Text.pack (show databaseError)

@@ -1559,6 +1559,30 @@ spec = do
           )
       selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldReturn` selectedRouteData
 
+    it "loads home-route data from the database effect and preserves explicit failures" $ do
+      let seededDatabaseEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData =
+                    Right
+                      HomePageData
+                        { homePageDataSummary = "Loaded from the seeded database effect."
+                        },
+                  frenchHomePageData = Left (HomePageDataError "home seed unavailable"),
+                  englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
+                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                }
+      selectRouteDataWithDatabase seededDatabaseEffect homeRequest
+        `shouldReturn` HomeRouteDataResult
+          ( Right
+              HomeRouteData
+                { homeRouteSummary = "Loaded from the seeded database effect."
+                }
+          )
+      selectRouteDataWithDatabase seededDatabaseEffect frenchHomeRequest
+        `shouldReturn` HomeRouteDataResult
+          (Left (HomePageDataError "home seed unavailable"))
+
     it "keeps route-data selectors and derived instances deterministic for tests" $ do
       let homeRouteData =
             HomeRouteData
@@ -1577,7 +1601,7 @@ spec = do
             StatusApiData
               { statusApiLocale = French
               }
-          routeDataResult = HomeRouteDataResult homeRouteData
+          routeDataResult = HomeRouteDataResult (Right homeRouteData)
       homeRouteSummary homeRouteData `shouldBe` "Stubbed home summary"
       secondRouteSummary secondRouteData `shouldBe` "Shared domain summary"
       secondRouteHighlights secondRouteData `shouldBe` ["Shared loader"]
@@ -1594,7 +1618,7 @@ spec = do
         `shouldBe` "SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}"
       show statusApiData `shouldBe` "StatusApiData {statusApiLocale = French}"
       show routeDataResult
-        `shouldBe` "HomeRouteDataResult (HomeRouteData {homeRouteSummary = \"Stubbed home summary\"})"
+        `shouldBe` "HomeRouteDataResult (Right (HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}))"
       show (SecondRouteDataResult (Right secondRouteData))
         `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
       show (StatusApiDataResult statusApiData)
@@ -1608,9 +1632,11 @@ spec = do
     it "selects default stubbed and status route data without extra wiring" $ do
       selectRouteData homeRequest
         `shouldReturn` HomeRouteDataResult
-          HomeRouteData
-            { homeRouteSummary = "Server-rendered home page with stubbed content."
-            }
+          ( Right
+              HomeRouteData
+                { homeRouteSummary = "Server-rendered home page with stubbed content."
+                }
+          )
       selectRouteData secondRequest
         `shouldReturn` SecondRouteDataResult
           ( Right
@@ -3519,6 +3545,7 @@ spec = do
             HomePageModel
               { homeHeading = "Home",
                 homeSummary = "Server-rendered home page with stubbed content.",
+                homeErrorMessage = Nothing,
                 homePrimaryAction =
                   CallToAction
                     { callToActionLabel = "Browse the second page",
@@ -3635,6 +3662,7 @@ spec = do
             HomePageModel
               { homeHeading = "Home",
                 homeSummary = "Server-rendered home page with stubbed content.",
+                homeErrorMessage = Nothing,
                 homePrimaryAction =
                   CallToAction
                     { callToActionLabel = "Browse the second page",
@@ -3730,11 +3758,11 @@ spec = do
       show (UnsupportedLocalePrefix "de") `shouldBe` "UnsupportedLocalePrefix \"de\""
       show (UnsupportedPath "/missing") `shouldBe` "UnsupportedPath \"/missing\""
       show homePageModel
-        `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}}"
+        `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}}"
       show secondPageModel
         `shouldBe` "SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}"
       show (HomePage homePageModel)
-        `shouldBe` "HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}})"
+        `shouldBe` "HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = \"/second\"}})"
       show (SecondPage secondPageModel)
         `shouldBe` "SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})"
       show notFoundPageModel
@@ -3845,6 +3873,7 @@ spec = do
             HomePageModel
               { homeHeading = "Home",
                 homeSummary = "Server-rendered home page with stubbed content.",
+                homeErrorMessage = Nothing,
                 homePrimaryAction = callToAction
               }
           secondPageModel =
@@ -3983,6 +4012,7 @@ spec = do
             HomePageModel
               { homeHeading = "Home",
                 homeSummary = "Server-rendered home page with stubbed content.",
+                homeErrorMessage = Nothing,
                 homePrimaryAction = callToAction
               }
           secondPageModel =
@@ -4101,6 +4131,7 @@ spec = do
             HomePageModel
               { homeHeading = "Home",
                 homeSummary = "Server-rendered home page with stubbed content.",
+                homeErrorMessage = Nothing,
                 homePrimaryAction = callToAction
               }
           secondPageModel =
@@ -4147,13 +4178,13 @@ spec = do
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
-        `shouldBe` "[HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
+        `shouldBe` "[HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [secondPageModel]
         `shouldBe` "[SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [notFoundPageModel]
         `shouldBe` "[NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}]"
       show [HomePage homePageModel, SecondPage secondPageModel, NotFoundPage notFoundPageModel]
-        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
+        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
       show [HomeRoute, SecondRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,StatusApiRoute,NotFoundRoute]"
@@ -4510,6 +4541,48 @@ spec = do
                 ["Database failure while rendering required second-page page response: SecondPageDataError \"seed unavailable\""]
             }
 
+    it "maps required home-page failures into explicit HTML 500 responses" $ do
+      let failingDatabaseEffect =
+            buildSeededDatabaseEffect
+              DatabaseSeed
+                { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
+                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
+                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                }
+          renderedPage =
+            renderPageFromRouteData
+              defaultAppConfig
+              homeRequest
+              (HomeRouteDataResult (Left (HomePageDataError "home seed unavailable")))
+      selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 500,
+              HarchWeb.responseContentType = "text/html; charset=utf-8",
+              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage,
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "HomePageDataError"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.message",
+                      Observability.attributeValue = Observability.TextAttribute "home seed unavailable"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.route",
+                      Observability.attributeValue = Observability.TextAttribute "/"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.surface",
+                      Observability.attributeValue = Observability.TextAttribute "page"
+                    }
+                ],
+              HarchWeb.responseLogEntries =
+                ["Database failure while rendering required home-page page response: HomePageDataError \"home seed unavailable\""]
+            }
+
     it "keeps routes without required database data on their existing responses" $ do
       let failingDatabaseEffect =
             buildSeededDatabaseEffect
@@ -4544,6 +4617,7 @@ spec = do
           HomePageModel
             { homeHeading = "Home",
               homeSummary = "Server-rendered home page with stubbed content.",
+              homeErrorMessage = Nothing,
               homePrimaryAction =
                 CallToAction
                   { callToActionLabel = "Browse the second page",
@@ -4557,12 +4631,37 @@ spec = do
         `shouldReturn` HomePage
           HomePageModel
             { homeHeading = "Home",
-              homeSummary = "Server-rendered home page with stubbed content.",
+              homeSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees.",
+              homeErrorMessage = Nothing,
               homePrimaryAction =
                 CallToAction
                   { callToActionLabel = "Browse the second page",
                     callToActionRoute = SecondRoute,
                     callToActionHref = "/fr/second"
+                  }
+            }
+
+    it "builds explicit home-page error state when the database effect fails" $
+      buildPageModelWithDatabase
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        homeRequest
+        `shouldReturn` HomePage
+          HomePageModel
+            { homeHeading = "Home",
+              homeSummary = "Home page content is temporarily unavailable.",
+              homeErrorMessage = Just "Could not load home page data.",
+              homePrimaryAction =
+                CallToAction
+                  { callToActionLabel = "Browse the second page",
+                    callToActionRoute = SecondRoute,
+                    callToActionHref = "/second"
                   }
             }
 
@@ -4718,6 +4817,26 @@ spec = do
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
             HarchWeb.pageBootstrapHooks = ["second-page"]
+          }
+
+    it "renders an explicit error state when the home-page load fails" $
+      renderPageWithDatabase
+        defaultAppConfig
+        ( buildSeededDatabaseEffect
+            DatabaseSeed
+              { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
+                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
+                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+              }
+        )
+        homeRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Home",
+            HarchWeb.pageRoute = HomeRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p data-error-state=\"true\">Could not load home page data.</p><p>Home page content is temporarily unavailable.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>",
+            HarchWeb.pageBootstrapHooks = []
           }
 
   describe "page shell integration" $ do
