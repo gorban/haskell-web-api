@@ -263,6 +263,12 @@ withCurrentDirectory directory action = do
   setCurrentDirectory directory
   action `finally` setCurrentDirectory previousDirectory
 
+withUnreadableFile :: FilePath -> String -> IO a -> IO a
+withUnreadableFile filePath fileContents action = do
+  writeFile filePath fileContents
+  callProcess "chmod" ["000", filePath]
+  action `finally` callProcess "chmod" ["600", filePath]
+
 withClearedAppEnvironment :: IO a -> IO a
 withClearedAppEnvironment =
   withTemporaryEnvironment "APP_MODE" Nothing
@@ -2364,6 +2370,21 @@ spec = do
             `shouldReturn` Left
               (AppEnvironmentOverridesFileError envPath (InvalidConfigOverridesLine 1 "DATABASE_HOST"))
 
+    it "reports unreadable override files with the failing path" $
+      withSystemTempDirectory "app-environment-config-unreadable" $ \tempDirectory ->
+        withClearedAppEnvironment $ do
+          let envPath = tempDirectory <> "/.env"
+              envLocalPath = tempDirectory <> "/.env.local"
+          writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
+          withUnreadableFile envLocalPath "APP_MODE=test\n" $ do
+            result <- loadAppEnvironmentConfigWithFiles envPath envLocalPath
+            result `shouldSatisfy` \case
+              Left
+                (AppEnvironmentOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
+                  | failingPath == envLocalPath ->
+                      "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+              _ -> False
+
     it "reports parse errors after both files load successfully" $
       withSystemTempDirectory "app-environment-config-parse-error" $ \tempDirectory ->
         withClearedAppEnvironment $ do
@@ -2511,6 +2532,22 @@ spec = do
             loadAppStartupConfigWithFiles invalidEnvPath envLocalPath
               `shouldReturn` Left
                 (AppStartupConfigParseError (InvalidConfigValue "LISTENER_0_PORT" "0"))
+
+    it "reports unreadable override files with the failing path" $
+      withSystemTempDirectory "app-startup-config-unreadable" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $ do
+            let envPath = tempDirectory <> "/.env"
+                envLocalPath = tempDirectory <> "/.env.local"
+            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
+            withUnreadableFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\n" $ do
+              result <- loadAppStartupConfigWithFiles envPath envLocalPath
+              result `shouldSatisfy` \case
+                Left
+                  (AppStartupOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
+                    | failingPath == envLocalPath ->
+                        "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                _ -> False
 
   describe "loadAppStartupConfig" $
     it "loads the default .env file names for runtime startup from the current directory" $
@@ -2822,6 +2859,23 @@ spec = do
               loadAppSetupConfigWithFiles invalidEnvPath envLocalPath
                 `shouldReturn` Left
                   (AppSetupConfigParseError (InvalidConfigValue "SETUP_AUTOSTART_JAEGER" "maybe"))
+
+    it "reports unreadable override files with the failing path" $
+      withSystemTempDirectory "app-setup-config-unreadable" $ \tempDirectory ->
+        withClearedAppEnvironment $
+          withClearedRuntimeEnvironment $
+            withClearedSetupEnvironment $ do
+              let envPath = tempDirectory <> "/.env"
+                  envLocalPath = tempDirectory <> "/.env.local"
+              writeFile envPath "APP_TITLE_PREFIX=web-api-shared\nSETUP_AUTOSTART_DATABASE=true\n"
+              withUnreadableFile envLocalPath "APP_TITLE_PREFIX=web-api-local\nSETUP_AUTOSTART_JAEGER=yes\n" $ do
+                result <- loadAppSetupConfigWithFiles envPath envLocalPath
+                result `shouldSatisfy` \case
+                  Left
+                    (AppSetupOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
+                      | failingPath == envLocalPath ->
+                          "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                  _ -> False
 
   describe "loadAppSetupConfig" $
     it "loads the default .env file names for setup config from the current directory" $

@@ -18,6 +18,7 @@ module Core.Config
 where
 
 import Control.Applicative ((<|>))
+import Control.Exception (IOException, displayException, evaluate, try)
 import Data.Char (isDigit)
 import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
@@ -34,13 +35,29 @@ data ConfigParseError
 
 data ConfigOverridesFileError
   = InvalidConfigOverridesLine Int Text
+  | UnreadableConfigOverridesFile Text
   deriving (Eq, Show)
 
 loadConfigOverridesFile :: FilePath -> IO (Either ConfigOverridesFileError [(Text, Text)])
 loadConfigOverridesFile overridesPath = do
   overridesFileExists <- doesFileExist overridesPath
   if overridesFileExists
-    then parseConfigOverridesFile <$> TextIO.readFile overridesPath
+    then do
+      overridesReadResult <-
+        ( try $ do
+            fileContents <- TextIO.readFile overridesPath
+            evaluate (Text.length fileContents)
+            pure fileContents
+        ) ::
+          IO (Either IOException Text)
+      pure $
+        case overridesReadResult of
+          Left readError ->
+            Left
+              ( UnreadableConfigOverridesFile
+                  (Text.pack (displayException readError))
+              )
+          Right fileContents -> parseConfigOverridesFile fileContents
     else pure (Right [])
 
 parseConfigOverridesFile :: Text -> Either ConfigOverridesFileError [(Text, Text)]

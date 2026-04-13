@@ -1,11 +1,20 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
+import Control.Exception (finally)
 import qualified Core.Config as CoreConfig
 import qualified Data.Text as Text
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
+import System.Process (callProcess)
+
+withUnreadableFile :: FilePath -> String -> IO a -> IO a
+withUnreadableFile filePath fileContents action = do
+  writeFile filePath fileContents
+  callProcess "chmod" ["000", filePath]
+  action `finally` callProcess "chmod" ["600", filePath]
 
 spec = do
   describe "parseConfigOverridesFile" $ do
@@ -51,6 +60,16 @@ spec = do
             [ ("APP_TITLE_PREFIX", "loaded-from-file"),
               ("LISTENER_0_PORT", "5100")
             ]
+
+    it "reports an explicit unreadable-file error when the file exists but cannot be read" $
+      withSystemTempDirectory "core-config-unreadable" $ \tempDirectory -> do
+        let overridesPath = tempDirectory <> "/runtime.overrides"
+        withUnreadableFile overridesPath "APP_TITLE_PREFIX=hidden\n" $ do
+          result <- CoreConfig.loadConfigOverridesFile overridesPath
+          result `shouldSatisfy` \case
+            Left (CoreConfig.UnreadableConfigOverridesFile errorMessage) ->
+              "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+            _ -> False
 
   describe "lookupConfigValue" $ do
     it "prefers environment overrides over local overrides over committed defaults" $ do
@@ -155,10 +174,13 @@ spec = do
       let missingPort = CoreConfig.MissingConfigValue "PORT"
           invalidPort = CoreConfig.InvalidConfigValue "PORT" "abc"
           brokenLine = CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE"
+          unreadableFile = CoreConfig.UnreadableConfigOverridesFile "permission denied"
       show (CoreConfig.MissingConfigValue "PORT")
         `shouldBe` "MissingConfigValue \"PORT\""
       show (CoreConfig.InvalidConfigValue "PORT" "abc")
         `shouldBe` "InvalidConfigValue \"PORT\" \"abc\""
+      show unreadableFile
+        `shouldBe` "UnreadableConfigOverridesFile \"permission denied\""
       showsPrec 11 missingPort ""
         `shouldBe` "(MissingConfigValue \"PORT\")"
       showsPrec 11 invalidPort ""
@@ -167,7 +189,11 @@ spec = do
         `shouldBe` "[MissingConfigValue \"PORT\"]"
       show [brokenLine]
         `shouldBe` "[InvalidConfigOverridesLine 2 \"BROKEN_LINE\"]"
+      show [unreadableFile]
+        `shouldBe` "[UnreadableConfigOverridesFile \"permission denied\"]"
       missingPort `shouldBe` missingPort
       missingPort `shouldNotBe` invalidPort
       brokenLine `shouldBe` brokenLine
       brokenLine `shouldNotBe` CoreConfig.InvalidConfigOverridesLine 3 "OTHER_LINE"
+      unreadableFile `shouldBe` unreadableFile
+      unreadableFile `shouldNotBe` brokenLine

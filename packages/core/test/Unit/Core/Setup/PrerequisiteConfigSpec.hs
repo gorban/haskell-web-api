@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
@@ -6,14 +7,22 @@ import Control.Exception (finally)
 import qualified Core.Config as CoreConfig
 import qualified Core.Setup.Prerequisite as Prerequisite
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
+import qualified Data.Text as Text
 import System.Directory (getCurrentDirectory, setCurrentDirectory)
 import System.IO.Temp (withSystemTempDirectory)
+import System.Process (callProcess)
 
 withCurrentDirectory :: FilePath -> IO a -> IO a
 withCurrentDirectory directory action = do
   previousDirectory <- getCurrentDirectory
   setCurrentDirectory directory
   action `finally` setCurrentDirectory previousDirectory
+
+withUnreadableFile :: FilePath -> String -> IO a -> IO a
+withUnreadableFile filePath fileContents action = do
+  writeFile filePath fileContents
+  callProcess "chmod" ["000", filePath]
+  action `finally` callProcess "chmod" ["600", filePath]
 
 spec = do
   describe "defaultSetupPrerequisiteConfig" $ do
@@ -208,6 +217,23 @@ spec = do
             ( PrerequisiteConfig.SetupPrerequisiteConfigParseError
                 (CoreConfig.InvalidConfigValue "SETUP_AUTOSTART_JAEGER" "later")
             )
+
+    it "reports unreadable override files with the failing path" $
+      withSystemTempDirectory "setup-prerequisite-config-unreadable" $ \tempDirectory -> do
+        let envPath = tempDirectory <> "/.env"
+            envLocalPath = tempDirectory <> "/.env.local"
+        writeFile envPath "DATABASE_HOST=db.internal\nDATABASE_PORT=6543\nDATABASE_NAME=web_api_build\nDATABASE_USER=web_api_runtime\nDATABASE_PASSWORD=secret\n"
+        withUnreadableFile envLocalPath "SETUP_AUTOSTART_JAEGER=true\n" $ do
+          result <- PrerequisiteConfig.loadSetupPrerequisiteConfigWithFiles envPath envLocalPath
+          result `shouldSatisfy` \case
+            Left
+              ( PrerequisiteConfig.SetupPrerequisiteOverridesFileError
+                  failingPath
+                  (CoreConfig.UnreadableConfigOverridesFile errorMessage)
+                )
+                | failingPath == envLocalPath ->
+                    "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+            _ -> False
 
   describe "loadSetupPrerequisiteConfig" $ do
     it "loads the default .env filenames from the current directory" $
