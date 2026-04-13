@@ -805,9 +805,37 @@ one manual-TLS HTTPS listener.
    - The HTTPS requests succeed with the local certificate chain from
      `examples/reverse-proxy/tls/local-root-ca.pem`.
 
-6. If you want to prove the redirect override, add `REDIRECT_HTTP_TO_HTTPS=false` to
-   `./podman.env.ports80-443`, restart the container, then rerun the same `curl` commands. HTTP on port
-   `80` should now serve the app directly while HTTPS on `443` keeps working.
+6. If you want a dedicated verification pass for the redirect override, add
+   `REDIRECT_HTTP_TO_HTTPS=false` to `./podman.env.ports80-443`, restart the container, then prove that
+   both listeners now serve real traffic side by side:
+
+   ```bash
+   printf '\nREDIRECT_HTTP_TO_HTTPS=false\n' >> ./podman.env.ports80-443
+   distrobox-host-exec sudo podman stop web-api-host443
+   distrobox-host-exec sudo podman run --rm --name web-api-host443 \
+     --network=host \
+     -v "$PWD/podman.env:/app/.env:ro" \
+     -v "$PWD/podman.env.ports80-443:/app/.env.local:ro" \
+     -v "$PWD/examples/reverse-proxy/tls:/app/tls:ro" \
+     localhost/haskell-web-api:dev
+   ```
+
+   Then from another terminal:
+
+   ```bash
+   curl -i http://127.0.0.1/api/status
+   curl -I http://127.0.0.1/second
+   curl --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/api/status
+   curl -I --cacert examples/reverse-proxy/tls/local-root-ca.pem https://127.0.0.1/second
+   ```
+
+   Expected results:
+
+   - `http://127.0.0.1/api/status` returns `200 OK` with the same JSON status payload that HTTPS serves.
+   - `http://127.0.0.1/second` returns `200 OK` instead of redirecting to HTTPS.
+   - The HTTPS `api/status` and `/second` requests still succeed with the local certificate chain from
+     `examples/reverse-proxy/tls/local-root-ca.pem`.
+   - No `Location: https://...` redirect header appears while the override is enabled.
 
 7. When you are done, stop the rootful app container and remove the temporary override file. If you do
    not need the generated local CA anymore, remove those TLS files too:
