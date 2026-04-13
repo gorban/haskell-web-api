@@ -4719,11 +4719,11 @@ spec = do
               secondRequest
               (SecondRouteDataResult (Left (SecondPageDataError "seed unavailable")))
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect secondRequest
-        `shouldReturn` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.PageResponseWithMetadata
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 500,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
-              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage,
+              HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
                     { Observability.attributeName = "exception.type",
@@ -4745,6 +4745,7 @@ spec = do
               HarchWeb.responseLogEntries =
                 ["Database failure while rendering required second-page page response: SecondPageDataError \"seed unavailable\""]
             }
+          renderedPage
 
     it "maps required home-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
@@ -4761,11 +4762,11 @@ spec = do
               homeRequest
               (HomeRouteDataResult (Left (HomePageDataError "home seed unavailable")))
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` HarchWeb.BodyResponse
+        `shouldReturn` HarchWeb.PageResponseWithMetadata
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 500,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
-              HarchWeb.responseBody = buildAppPageShell defaultAppConfig renderedPage,
+              HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
                     { Observability.attributeName = "exception.type",
@@ -4787,6 +4788,7 @@ spec = do
               HarchWeb.responseLogEntries =
                 ["Database failure while rendering required home-page page response: HomePageDataError \"home seed unavailable\""]
             }
+          renderedPage
 
     it "keeps routes without required database data on their existing responses" $ do
       let failingDatabaseEffect =

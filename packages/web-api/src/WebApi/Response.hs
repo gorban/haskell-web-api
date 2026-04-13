@@ -11,7 +11,6 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
-import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseEffect, DatabaseError (..), defaultDatabaseEffect)
 import WebApi.Page (renderPageFromRouteData)
@@ -53,12 +52,14 @@ renderPageResponseFromRouteData config routeRequest routeData =
   case routeData of
     HomeRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.BodyResponse
-            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (pageFailureDiagnostics PageSurface "/" "home-page" databaseError))
+       in HarchWeb.PageResponseWithMetadata
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/" "home-page" databaseError))
+            renderedPage
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.BodyResponse
-            (htmlErrorResponseBody (buildAppPageShell config renderedPage) (pageFailureDiagnostics PageSurface "/second" "second-page" databaseError))
+       in HarchWeb.PageResponseWithMetadata
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/second" "second-page" databaseError))
+            renderedPage
     _ ->
       HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
 
@@ -127,12 +128,12 @@ jsonErrorResponseBody statusCode bodyText diagnostics =
       HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
     }
 
-htmlErrorResponseBody :: Text -> FailureDiagnostics -> HarchWeb.ResponseBody
-htmlErrorResponseBody bodyText diagnostics =
+pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
+pageErrorResponseMetadata diagnostics =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = 500,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
-      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseBody = "",
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
       HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
     }

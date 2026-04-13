@@ -859,10 +859,16 @@ spec = do
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellScriptSources = []}
           body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
+          pageMetadata = ResponseBody {responseStatus = 500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
+          otherPageMetadata = ResponseBody {responseStatus = 503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"]}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
           otherPageResponse :: Response TestRoute TestContext
           otherPageResponse = PageResponse otherPage
+          pageResponseWithMetadata :: Response TestRoute TestContext
+          pageResponseWithMetadata = PageResponseWithMetadata pageMetadata page
+          otherPageResponseWithMetadata :: Response TestRoute TestContext
+          otherPageResponseWithMetadata = PageResponseWithMetadata otherPageMetadata otherPage
           bodyResponseValue :: Response TestRoute TestContext
           bodyResponseValue = BodyResponse body
           otherBodyResponseValue :: Response TestRoute TestContext
@@ -901,13 +907,19 @@ spec = do
       (body /= otherBody) `shouldBe` True
       show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
       show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
+      (pageMetadata == pageMetadata) `shouldBe` True
+      (pageMetadata /= otherPageMetadata) `shouldBe` True
+      show pageMetadata `shouldBe` "ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      (pageResponseWithMetadata == pageResponseWithMetadata) `shouldBe` True
+      (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
+      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
-      show [pageResponse, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -1386,6 +1398,64 @@ spec = do
                        ]
       readIORef logEntriesReference
         `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"https\"] Direct peer log"]
+
+    it "preserves page response semantics while surfacing page-level failure status, observability, and logs" $ do
+      requestObservabilityReference <- newIORef []
+      logEntriesReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          pageRequest =
+            waiRequestWithRemoteHostAndHeaders ["known"] directRemoteHost []
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          failureAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "exception.type",
+                Observability.attributeValue = Observability.TextAttribute "SampleError"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { renderResponse =
+                  pure
+                    . PageResponseWithMetadata
+                      ResponseBody
+                        { responseStatus = 500,
+                          responseContentType = "text/html; charset=utf-8",
+                          responseBody = "",
+                          responseObservabilityAttributes = [failureAttribute],
+                          responseLogEntries = ["Sample page failure log"]
+                        }
+                    . samplePage,
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                reportApplicationLog = \logEntry ->
+                  modifyIORef' logEntriesReference (<> [logEntry])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) pageRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 500
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` ""
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8"
+      readResponseBody response `shouldReturn` pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/known"
+                           "/known"
+                           500
+                           Observability.PageResponseKind
+                           [clientAddressAttribute, peerAddressAttribute, failureAttribute]
+                       ]
+      readIORef logEntriesReference
+        `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"http\"] Sample page failure log"]
 
     it "ignores empty forwarded-for tokens while still honoring forwarded plain-http scheme" $ do
       requestObservabilityReference <- newIORef []

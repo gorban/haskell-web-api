@@ -388,6 +388,7 @@ data ResponseBody = ResponseBody
 
 data Response route context
   = PageResponse (Page route context)
+  | PageResponseWithMetadata ResponseBody (Page route context)
   | BodyResponse ResponseBody
   deriving (Eq, Show)
 
@@ -533,10 +534,16 @@ toWaiApplication webApplication request respond =
                 requestContextAttributes
                   <> case response of
                     PageResponse _ -> []
+                    PageResponseWithMetadata pageResponseBodyValue _ ->
+                      responseObservabilityAttributes pageResponseBodyValue
                     BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
               contextualizedResponseLogEntries =
                 case response of
                   PageResponse _ -> []
+                  PageResponseWithMetadata pageResponseBodyValue _ ->
+                    map
+                      (prependRequestLogContext requestLogFields)
+                      (responseLogEntries pageResponseBodyValue)
                   BodyResponse responseBodyValue ->
                     map
                       (prependRequestLogContext requestLogFields)
@@ -552,10 +559,13 @@ toWaiApplication webApplication request respond =
                         if isNotFoundPage webApplication page
                           then 404
                           else 200
+                      PageResponseWithMetadata pageResponseBodyValue _ ->
+                        responseStatus pageResponseBodyValue
                       BodyResponse responseBodyValue -> responseStatus responseBodyValue
                   )
                   ( case response of
                       PageResponse _ -> Observability.PageResponseKind
+                      PageResponseWithMetadata _ _ -> Observability.PageResponseKind
                       BodyResponse _ -> Observability.BodyResponseKind
                   )
                   extraObservabilityAttributes
@@ -2117,6 +2127,14 @@ toWaiResponse additionalHeaders webApplication response =
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
         (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
         (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
+    PageResponseWithMetadata pageResponseBodyValue page ->
+      let !pageStatusMessage = ByteString.empty
+          !pageStatusMessageLength = ByteString.length pageStatusMessage
+          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
+       in Wai.responseLBS
+            pageStatus
+            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
     BodyResponse responseBodyValue ->
       Wai.responseLBS
         (Http.mkStatus (responseStatus responseBodyValue) mempty)
