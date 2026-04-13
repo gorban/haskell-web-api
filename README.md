@@ -234,6 +234,9 @@ LISTENER_3_SCHEME=https
 LISTENER_3_TLS_SOURCE=shared
 LISTENER_3_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 
+# Shared listeners wait for fullchain.pem / privkey.pem to appear, then later HTTPS
+# handshakes reload updated certificate files so ACME renewals do not require a restart.
+
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
 STATIC_ASSET_ROOT_0_DIRECTORY=public

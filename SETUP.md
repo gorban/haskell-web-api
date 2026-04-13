@@ -970,6 +970,8 @@ certbot runtime path reuses that list when its arguments do not already declare 
 When `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` is set, the runtime copies the issued `fullchain.pem` and
 `privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared` HTTPS listener can reuse
 the same certificate material.
+Shared HTTPS listeners wait for those files to appear before finishing startup, and later HTTPS
+handshakes reload updated certificate/key files so renewals do not require a full app restart.
 
 Then exercise the ACME path in four layers:
 

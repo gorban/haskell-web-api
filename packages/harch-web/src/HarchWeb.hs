@@ -38,6 +38,7 @@ module HarchWeb
     PageShell (..),
     PreparedAcmeChallenge (..),
     RequestPolicyConfig (..),
+    ReloadingTlsCredentials,
     Response (..),
     ResponseBody (..),
     ResolvedNavigationItem (..),
@@ -112,16 +113,21 @@ module HarchWeb
     pollAcmeOrderWithRetries,
     prepareAcmeAuthorization,
     prepareInProcessManualTlsBindPlan,
+    reloadTlsCredentialsIfChanged,
     registerAcmeChallenges,
     renderAcmeResponseBody,
     renderDocument,
     responseHeaderText,
     requestHostWithoutPort,
     routeHref,
+    loadReloadingTlsCredentials,
+    loadTlsCredentialSnapshotOrThrowWithLoader,
+    startManualTlsRuntimeServerWithStarter,
     runInProcessAcmeChallenge,
     runOpenSslCommand,
     runOpenSslTextCommand,
     runServer,
+    startWarpRuntimeServerOnSocket,
     runtimeCertbotArguments,
     signOpenSslRs256,
     splitCertbotDomainValue,
@@ -156,6 +162,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Time.Clock (UTCTime)
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
@@ -163,10 +170,11 @@ import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
+import Network.TLS qualified as TLS
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Handler.WarpTLS qualified as WarpTLS
-import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, removePathForcibly)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
@@ -309,7 +317,8 @@ newtype HttpBindPlan = HttpBindPlan
 data ManualTlsBindPlan = ManualTlsBindPlan
   { tlsEndpoint :: ListenerEndpoint,
     tlsCertificateFile :: FilePath,
-    tlsPrivateKeyFile :: FilePath
+    tlsPrivateKeyFile :: FilePath,
+    tlsWaitForCertificateFiles :: Bool
   }
   deriving (Eq, Show)
 
@@ -672,6 +681,17 @@ data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
     runningAcmeCleanupDirectory :: FilePath
   }
 
+data TlsCredentialSnapshot = TlsCredentialSnapshot
+  { tlsCredentialModifiedTimes :: (UTCTime, UTCTime),
+    tlsCredentialValues :: TLS.Credentials
+  }
+
+data ReloadingTlsCredentials = ReloadingTlsCredentials
+  { tlsCredentialCertificatePath :: FilePath,
+    tlsCredentialPrivateKeyPath :: FilePath,
+    tlsCredentialSnapshotReference :: IORef TlsCredentialSnapshot
+  }
+
 data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
   { runtimeAcmeEndpoint :: ListenerEndpoint,
     runtimeAcmeListenerConfig :: AcmeConfig
@@ -752,17 +772,32 @@ startHttpRuntimeServer endpoint waiApplication = do
         }
 
 startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> IO RunningRuntimeServer
-startManualTlsRuntimeServer manualTlsPlan waiApplication = do
-  ensureRuntimeFileExists "Manual TLS certificate file does not exist: " (tlsCertificateFile manualTlsPlan)
-  ensureRuntimeFileExists "Manual TLS private key file does not exist: " (tlsPrivateKeyFile manualTlsPlan)
+startManualTlsRuntimeServer =
+  startManualTlsRuntimeServerWithStarter startWarpTlsServerOnSocket
+
+startManualTlsRuntimeServerWithStarter :: (Int -> WarpTLS.TLSSettings -> Socket.Socket -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> IO RunningRuntimeServer
+startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplication = do
+  reloadingTlsCredentials <-
+    if tlsWaitForCertificateFiles manualTlsPlan
+      then awaitReloadingTlsCredentials (tlsCertificateFile manualTlsPlan) (tlsPrivateKeyFile manualTlsPlan)
+      else loadReloadingTlsCredentials (tlsCertificateFile manualTlsPlan) (tlsPrivateKeyFile manualTlsPlan)
+  initialTlsCredentials <- reloadTlsCredentialsIfChanged reloadingTlsCredentials
   let endpoint = tlsEndpoint manualTlsPlan
-      tlsSettings =
+      baseTlsSettings =
         WarpTLS.tlsSettings
           (tlsCertificateFile manualTlsPlan)
           (tlsPrivateKeyFile manualTlsPlan)
+      tlsSettings =
+        baseTlsSettings
+          { WarpTLS.tlsCredentials = Just initialTlsCredentials,
+            WarpTLS.tlsServerHooks =
+              (WarpTLS.tlsServerHooks baseTlsSettings)
+                { TLS.onServerNameIndication = const (reloadTlsCredentialsIfChanged reloadingTlsCredentials)
+                }
+          }
   listeningSocket <- openListenerSocket endpoint
   serverThreadId <-
-    startWarpTlsServerOnSocket (endpointPort endpoint) tlsSettings listeningSocket waiApplication
+    startTlsServer (endpointPort endpoint) tlsSettings listeningSocket waiApplication
       `onException` Socket.close listeningSocket
   manualTlsPlan `seq`
     pure
@@ -820,7 +855,8 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
         ( ManualTlsBindPlan
             { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
               tlsCertificateFile = resolvedCertificatePath,
-              tlsPrivateKeyFile = resolvedPrivateKeyPath
+              tlsPrivateKeyFile = resolvedPrivateKeyPath,
+              tlsWaitForCertificateFiles = False
             },
           stateDirectory
         )
@@ -1262,7 +1298,8 @@ prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
         ( ManualTlsBindPlan
             { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
               tlsCertificateFile = resolvedCertificatePath,
-              tlsPrivateKeyFile = resolvedPrivateKeyPath
+              tlsPrivateKeyFile = resolvedPrivateKeyPath,
+              tlsWaitForCertificateFiles = False
             },
           stateDirectory
         )
@@ -2563,7 +2600,8 @@ planServerStartup config = do
                 ManualTlsBindPlan
                   { tlsEndpoint = listenerEndpoint listenerConfig,
                     tlsCertificateFile = certificatePath,
-                    tlsPrivateKeyFile = privateKeyPath
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsWaitForCertificateFiles = False
                   }
             )
         (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory}}) ->
@@ -2573,7 +2611,8 @@ planServerStartup config = do
                     ManualTlsBindPlan
                       { tlsEndpoint = listenerEndpoint listenerConfig,
                         tlsCertificateFile = certificatePath,
-                        tlsPrivateKeyFile = privateKeyPath
+                        tlsPrivateKeyFile = privateKeyPath,
+                        tlsWaitForCertificateFiles = True
                       }
                 )
         (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}) ->
@@ -2596,6 +2635,102 @@ publishCertificateFiles certificateDirectory sourceCertificatePath sourcePrivate
   copyFile sourceCertificatePath certificatePath
   copyFile sourcePrivateKeyPath privateKeyPath
   pure (certificatePath, privateKeyPath)
+
+loadReloadingTlsCredentials :: FilePath -> FilePath -> IO ReloadingTlsCredentials
+loadReloadingTlsCredentials certificatePath privateKeyPath = do
+  snapshot <- loadTlsCredentialSnapshotOrThrow certificatePath privateKeyPath
+  snapshotReference <- newIORef snapshot
+  pure
+    ReloadingTlsCredentials
+      { tlsCredentialCertificatePath = certificatePath,
+        tlsCredentialPrivateKeyPath = privateKeyPath,
+        tlsCredentialSnapshotReference = snapshotReference
+      }
+
+awaitReloadingTlsCredentials :: FilePath -> FilePath -> IO ReloadingTlsCredentials
+awaitReloadingTlsCredentials certificatePath privateKeyPath =
+  go
+  where
+    go = do
+      snapshotResult <- loadTlsCredentialSnapshotIfPresent certificatePath privateKeyPath
+      case snapshotResult of
+        Just (Right snapshot) -> do
+          snapshotReference <- newIORef snapshot
+          pure
+            ReloadingTlsCredentials
+              { tlsCredentialCertificatePath = certificatePath,
+                tlsCredentialPrivateKeyPath = privateKeyPath,
+                tlsCredentialSnapshotReference = snapshotReference
+              }
+        _ -> threadDelay 100000 >> go
+
+reloadTlsCredentialsIfChanged :: ReloadingTlsCredentials -> IO TLS.Credentials
+reloadTlsCredentialsIfChanged reloadingTlsCredentials = do
+  cachedSnapshot <-
+    atomicModifyIORef'
+      (tlsCredentialSnapshotReference reloadingTlsCredentials)
+      (\snapshot -> (snapshot, snapshot))
+  latestSnapshotResult <-
+    loadTlsCredentialSnapshotIfPresent
+      (tlsCredentialCertificatePath reloadingTlsCredentials)
+      (tlsCredentialPrivateKeyPath reloadingTlsCredentials)
+  case latestSnapshotResult of
+    Just (Right latestSnapshot)
+      | tlsCredentialModifiedTimes latestSnapshot /= tlsCredentialModifiedTimes cachedSnapshot ->
+          latestSnapshot `seq`
+            atomicModifyIORef'
+              (tlsCredentialSnapshotReference reloadingTlsCredentials)
+              (const (latestSnapshot, tlsCredentialValues latestSnapshot))
+    _ ->
+      pure (tlsCredentialValues cachedSnapshot)
+
+loadTlsCredentialSnapshotOrThrow :: FilePath -> FilePath -> IO TlsCredentialSnapshot
+loadTlsCredentialSnapshotOrThrow certificatePath privateKeyPath =
+  loadTlsCredentialSnapshotOrThrowWithLoader
+    certificatePath
+    privateKeyPath
+    (loadTlsCredentialSnapshotIfPresent certificatePath privateKeyPath)
+
+loadTlsCredentialSnapshotOrThrowWithLoader :: FilePath -> FilePath -> IO (Maybe (Either String TlsCredentialSnapshot)) -> IO TlsCredentialSnapshot
+loadTlsCredentialSnapshotOrThrowWithLoader certificatePath privateKeyPath loadSnapshot = do
+  ensureRuntimeFileExists "Manual TLS certificate file does not exist: " certificatePath
+  ensureRuntimeFileExists "Manual TLS private key file does not exist: " privateKeyPath
+  snapshotResult <- loadSnapshot
+  case fromMaybe (Left "credential files disappeared while loading") snapshotResult of
+    Right snapshot ->
+      pure snapshot
+    Left loadError ->
+      ioError . userError $
+        "Failed to load manual TLS credentials from "
+          <> certificatePath
+          <> " and "
+          <> privateKeyPath
+          <> ": "
+          <> loadError
+
+loadTlsCredentialSnapshotIfPresent :: FilePath -> FilePath -> IO (Maybe (Either String TlsCredentialSnapshot))
+loadTlsCredentialSnapshotIfPresent certificatePath privateKeyPath = do
+  certificateExists <- doesFileExist certificatePath
+  privateKeyExists <- doesFileExist privateKeyPath
+  if certificateExists && privateKeyExists
+    then do
+      certificateModifiedAt <- getModificationTime certificatePath
+      privateKeyModifiedAt <- getModificationTime privateKeyPath
+      credentialResult <- TLS.credentialLoadX509 certificatePath privateKeyPath
+      pure
+        ( Just
+            ( fmap
+                ( \credential ->
+                    TlsCredentialSnapshot
+                      { tlsCredentialModifiedTimes = (certificateModifiedAt, privateKeyModifiedAt),
+                        tlsCredentialValues = TLS.Credentials [credential]
+                      }
+                )
+                credentialResult
+            )
+        )
+    else
+      pure Nothing
 
 planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
 planObservabilityStartup observabilityConfig =

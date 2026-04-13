@@ -3,7 +3,7 @@
 module Unit.HarchWebSpec (spec) where
 
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (SomeException, displayException, finally, try)
+import Control.Exception (SomeException, displayException, evaluate, finally, try)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
@@ -22,7 +22,7 @@ import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Internal as WaiInternal
-import System.Directory (createDirectoryIfMissing)
+import System.Directory (createDirectoryIfMissing, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -1841,7 +1841,8 @@ spec = do
             ManualTlsBindPlan
               { tlsEndpoint = endpoint,
                 tlsCertificateFile = "cert.pem",
-                tlsPrivateKeyFile = "key.pem"
+                tlsPrivateKeyFile = "key.pem",
+                tlsWaitForCertificateFiles = False
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -1852,8 +1853,8 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsCertificateFile = "other.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\"}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\"}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsWaitForCertificateFiles = False}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsWaitForCertificateFiles = False}]"
 
     it "translates shared certificate directories into TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5444}
@@ -1869,7 +1870,8 @@ spec = do
             ManualTlsBindPlan
               { tlsEndpoint = endpoint,
                 tlsCertificateFile = "/var/lib/harch-web/shared-certs/fullchain.pem",
-                tlsPrivateKeyFile = "/var/lib/harch-web/shared-certs/privkey.pem"
+                tlsPrivateKeyFile = "/var/lib/harch-web/shared-certs/privkey.pem",
+                tlsWaitForCertificateFiles = True
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -1880,8 +1882,8 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsPrivateKeyFile = "other-privkey.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\"}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\"}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsWaitForCertificateFiles = True}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsWaitForCertificateFiles = True}]"
 
     it "translates ACME-backed HTTPS listeners into certificate-management plans" $ do
       let httpEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
@@ -1984,6 +1986,109 @@ spec = do
         `shouldBe` "DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})"
       show [DuplicateListenerEndpoint duplicateEndpoint]
         `shouldBe` "[DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})]"
+
+  describe "reloadTlsCredentialsIfChanged" $ do
+    it "fails explicitly when initial TLS files exist but do not load as credentials" $
+      withSystemTempDirectory "harch-web-reloading-tls" $ \tempDirectory -> do
+        let certificatePath = tempDirectory </> "fullchain.pem"
+            privateKeyPath = tempDirectory </> "privkey.pem"
+        writeFile certificatePath "not a certificate"
+        writeFile privateKeyPath "not a private key"
+        startupResult <- try (loadReloadingTlsCredentials certificatePath privateKeyPath)
+        case startupResult of
+          Left exception -> do
+            let renderedException = show (exception :: IOError)
+            evaluate (length renderedException) `shouldReturn` length renderedException
+            renderedException `shouldSatisfy` ("Failed to load manual TLS credentials from " `isInfixOf`)
+            renderedException `shouldSatisfy` (certificatePath `isInfixOf`)
+            renderedException `shouldSatisfy` (privateKeyPath `isInfixOf`)
+          Right _ ->
+            expectationFailure "Expected invalid TLS credentials to fail during initial load"
+
+    it "reloads rewritten TLS files and keeps the last valid credentials across missing or invalid updates" $
+      withSystemTempDirectory "harch-web-reloading-tls" $ \tempDirectory -> do
+        let certificatePath = tempDirectory </> "fullchain.pem"
+            privateKeyPath = tempDirectory </> "privkey.pem"
+        writeFile certificatePath manualTlsCertificatePem
+        writeFile privateKeyPath manualTlsPrivateKeyPem
+        reloadingTlsCredentials <- loadReloadingTlsCredentials certificatePath privateKeyPath
+        initialCredentials <- show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
+        threadDelay 100000
+        writeFile certificatePath manualTlsCertificatePem
+        writeFile privateKeyPath manualTlsPrivateKeyPem
+        show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
+          `shouldReturn` initialCredentials
+        threadDelay 100000
+        writeFile certificatePath "not a certificate"
+        writeFile privateKeyPath "not a private key"
+        show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
+          `shouldReturn` initialCredentials
+        removePathForcibly certificatePath
+        removePathForcibly privateKeyPath
+        show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
+          `shouldReturn` initialCredentials
+
+  describe "loadTlsCredentialSnapshotOrThrowWithLoader" $ do
+    it "fails explicitly when the TLS credential files disappear during startup loading" $
+      withManualTlsFiles $ \certificatePath privateKeyPath -> do
+        startupResult <-
+          try
+            ( loadTlsCredentialSnapshotOrThrowWithLoader
+                certificatePath
+                privateKeyPath
+                (pure Nothing)
+            )
+        case startupResult of
+          Left exception -> do
+            let renderedException = show (exception :: IOError)
+            evaluate (length renderedException) `shouldReturn` length renderedException
+            renderedException
+              `shouldBe` ("user error (Failed to load manual TLS credentials from " <> certificatePath <> " and " <> privateKeyPath <> ": credential files disappeared while loading)")
+          Right _ ->
+            expectationFailure "Expected disappearing TLS credential files to fail during startup loading"
+
+    it "fails explicitly when the TLS loader returns a startup credential error" $
+      withManualTlsFiles $ \certificatePath privateKeyPath -> do
+        startupResult <-
+          try
+            ( loadTlsCredentialSnapshotOrThrowWithLoader
+                certificatePath
+                privateKeyPath
+                (pure (Just (Left "synthetic TLS credential error")))
+            )
+        case startupResult of
+          Left exception -> do
+            let renderedException = show (exception :: IOError)
+            evaluate (length renderedException) `shouldReturn` length renderedException
+            renderedException
+              `shouldBe` ("user error (Failed to load manual TLS credentials from " <> certificatePath <> " and " <> privateKeyPath <> ": synthetic TLS credential error)")
+          Right _ ->
+            expectationFailure "Expected startup TLS credential errors to surface explicitly"
+
+  describe "startWarpRuntimeServerOnSocket" $ do
+    it "surfaces startup exceptions that happen before the runtime server becomes ready" $
+      startWarpRuntimeServerOnSocket (\_ -> ioError (userError "synthetic runtime startup failure"))
+        `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic runtime startup failure)")
+
+  describe "startManualTlsRuntimeServerWithStarter" $ do
+    it "closes the listener socket when TLS startup throws before the server thread starts" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath -> do
+          let manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsWaitForCertificateFiles = False
+                  }
+          startManualTlsRuntimeServerWithStarter
+            (\_ _ _ _ -> ioError (userError "synthetic tls startup failure"))
+            manualTlsPlan
+            (toWaiApplication sampleApplication)
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic tls startup failure)")
+          reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+          Socket.bind reboundSocket (Socket.SockAddrInet (fromIntegral httpsPort) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+          Socket.close reboundSocket
 
   describe "planObservabilityStartup" $ do
     it "produces no exporter startup actions when tracing and metrics are disabled" $
@@ -2513,6 +2618,26 @@ spec = do
                       readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
                       killThread serverThreadId
                       waitForServerExit completionReference
+
+    it "waits for shared TLS certificate files to appear before starting the HTTPS listener" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-certs" $ \sharedDirectory ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            let runtimeConfig =
+                  serverConfigWithListeners
+                    [sharedHttpsListener "127.0.0.1" httpsPort sharedDirectory]
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            threadDelay 100000
+            readIORef completionReference >>= (`shouldSatisfy` isNothing)
+            writeFile (sharedDirectory </> "fullchain.pem") manualTlsCertificatePem
+            writeFile (sharedDirectory </> "privkey.pem") manualTlsPrivateKeyPem
+            responseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
+            Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+            killThread serverThreadId
+            waitForServerExit completionReference
 
     it "fails explicitly when certbot-backed ACME listeners do not have the default http-01 port listener" $
       withUnusedLoopbackPort $ \otherPort ->
