@@ -46,6 +46,7 @@ import Core.Config
     indexedConfigKey,
     loadConfigOverridesFile,
     lookupConfigValue,
+    parseBoolean,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
     parseHeadersUnsafe,
@@ -148,6 +149,9 @@ committedRuntimeDefaults =
     ("LISTENER_0_PORT", "5001"),
     ("LISTENER_0_SCHEME", "http")
   ]
+
+defaultLocalTracingEndpoint :: Text
+defaultLocalTracingEndpoint = "http://127.0.0.1:4318/v1/traces"
 
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
@@ -470,10 +474,23 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     parseObservabilityConfig =
       ObservabilityConfig
-        <$> parseOptionalOtlpExporter "OTLP_TRACING"
+        <$> parseOptionalTracingExporter
         <*> parseOptionalOtlpExporter "OTLP_METRICS"
 
+    parseOptionalTracingExporter =
+      case optionalConfigValue "OTLP_TRACING_ENABLED" of
+        Just tracingEnabledValue -> do
+          tracingEnabled <- parseBoolean "OTLP_TRACING_ENABLED" tracingEnabledValue
+          if tracingEnabled
+            then parseOptionalOtlpExporterWithDefault "OTLP_TRACING" (Just defaultLocalTracingEndpoint)
+            else Right Nothing
+        Nothing ->
+          parseOptionalOtlpExporterWithDefault "OTLP_TRACING" Nothing
+
     parseOptionalOtlpExporter exporterPrefix =
+      parseOptionalOtlpExporterWithDefault exporterPrefix Nothing
+
+    parseOptionalOtlpExporterWithDefault exporterPrefix defaultEndpoint =
       case optionalConfigValue (exporterPrefix <> "_ENDPOINT") of
         Just endpoint ->
           Right
@@ -488,9 +505,23 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
                   }
             )
         Nothing ->
-          case optionalConfigValue (exporterPrefix <> "_HEADERS") of
-            Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
-            Nothing -> Right Nothing
+          case defaultEndpoint of
+            Just endpoint ->
+              Right
+                ( Just
+                    OtlpExporter
+                      { otlpEndpoint = endpoint,
+                        otlpHeaders =
+                          maybe
+                            []
+                            (parseHeadersUnsafe . Text.strip)
+                            (optionalConfigValue (exporterPrefix <> "_HEADERS"))
+                      }
+                )
+            Nothing ->
+              case optionalConfigValue (exporterPrefix <> "_HEADERS") of
+                Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
+                Nothing -> Right Nothing
 
     requiredIndexedConfigValue prefix configIndex suffix =
       requiredConfigValue (indexedConfigKey prefix configIndex suffix)

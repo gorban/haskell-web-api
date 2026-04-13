@@ -1055,6 +1055,40 @@ spec = do
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
+        [ ("OTLP_TRACING_ENABLED", "true"),
+          ("OTLP_TRACING_HEADERS", "authorization=Bearer token")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter =
+                      Just
+                        OtlpExporter
+                          { otlpEndpoint = "http://127.0.0.1:4318/v1/traces",
+                            otlpHeaders = [("authorization", "Bearer token")]
+                          },
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("OTLP_TRACING_ENABLED", "false"),
+          ("OTLP_TRACING_ENDPOINT", "http://collector:4318/v1/traces"),
+          ("OTLP_TRACING_HEADERS", "authorization=Bearer token")
+        ]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter = Nothing,
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
         [ ("OTLP_METRICS_ENDPOINT", "http://collector:4318/v1/metrics"),
           ("OTLP_METRICS_HEADERS", "x-scope=metrics;broken-entry")
         ]
@@ -1293,6 +1327,11 @@ spec = do
         []
         [("OTLP_TRACING_HEADERS", "authorization=Bearer token")]
         `shouldBe` Left (MissingConfigValue "OTLP_TRACING_ENDPOINT")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("OTLP_TRACING_ENABLED", "maybe")]
+        `shouldBe` Left (InvalidConfigValue "OTLP_TRACING_ENABLED" "maybe")
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
@@ -2491,6 +2530,33 @@ spec = do
                   { setupAutostartDatabase = True,
                     setupAutostartJaeger = True
                   }
+            }
+
+    it "lets OTLP_TRACING_ENABLED use the default local endpoint while still flowing into setup config" $
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        []
+        [ ("OTLP_TRACING_ENABLED", "true"),
+          ("OTLP_TRACING_HEADERS", "authorization=Bearer token")
+        ]
+        `shouldBe` Right
+          AppSetupConfig
+            { setupEnvironmentConfig = defaultAppEnvironmentConfig,
+              setupAppConfig =
+                defaultAppConfig
+                  { observability =
+                      ObservabilityConfig
+                        { tracingExporter =
+                            Just
+                              OtlpExporter
+                                { otlpEndpoint = "http://127.0.0.1:4318/v1/traces",
+                                  otlpHeaders = [("authorization", "Bearer token")]
+                                },
+                          metricsExporter = Nothing
+                        }
+                  },
+              setupMigrationDatabaseConfig = Nothing,
+              setupAutostartConfig = defaultSetupAutostartConfig
             }
 
     it "parses optional migration-owner credentials separately from the runtime database config" $

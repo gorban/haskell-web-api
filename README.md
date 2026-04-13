@@ -126,6 +126,7 @@ understands the following values:
 | `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
 | `HSTS_INCLUDE_SUBDOMAINS` | Whether emitted HSTS headers should include `includeSubDomains`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
 | `HSTS_PRELOAD` | Whether emitted HSTS headers should include `preload`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
+| `OTLP_TRACING_ENABLED` | Whether tracing export should be enabled. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. `true` uses the default local endpoint `http://127.0.0.1:4318/v1/traces` unless `OTLP_TRACING_ENDPOINT` overrides it; `false` disables tracing even if tracing endpoint/headers are set. | (`unset`) |
 | `OTLP_TRACING_ENDPOINT` | OTLP endpoint for tracing export. | (`unset`) |
 | `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
 | `OTLP_METRICS_ENDPOINT` | OTLP endpoint for metrics export. | (`unset`) |
@@ -237,7 +238,7 @@ HSTS_INCLUDE_SUBDOMAINS=true
 HSTS_PRELOAD=true
 
 # Observability
-OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTLP_TRACING_ENABLED=true
 OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
 OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
 OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api

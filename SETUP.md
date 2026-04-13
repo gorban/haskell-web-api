@@ -397,12 +397,15 @@ docker rm -f web-api-postgres
 
 ## Local Jaeger All-in-One Startup Example
 
-If you want a local tracing backend that matches the current OTLP tracing configuration seam, point
-`OTLP_TRACING_ENDPOINT` at Jaeger's OTLP HTTP listener, for example:
+If you want a local tracing backend that matches the current OTLP tracing configuration seam, the
+shortest path is:
 
 ```dotenv
-OTLP_TRACING_ENDPOINT=http://127.0.0.1:4318/v1/traces
+OTLP_TRACING_ENABLED=true
 ```
+
+That uses the default local OTLP tracing endpoint `http://127.0.0.1:4318/v1/traces`. If you need a
+different collector address, override `OTLP_TRACING_ENDPOINT` explicitly instead.
 
 Then start Jaeger all-in-one with OTLP enabled.
 
