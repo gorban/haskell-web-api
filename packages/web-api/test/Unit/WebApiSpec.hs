@@ -5287,7 +5287,7 @@ spec = do
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
 
-  describe "buildRuntimeApp" $
+  describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
       let runtimeEnvironmentConfig =
             defaultAppEnvironmentConfig
@@ -5362,13 +5362,84 @@ spec = do
           killThread serverThreadId
           waitForRuntimeServerExit completionReference
           hClose outputHandle
-          readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
+          readFile outputPath
+            `shouldReturn` unlines
+              [ "Parsed listener config: http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint),
+                "HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint)
+              ]
 
     it "surfaces listener bind failures through the default app config" $
       withDefaultRuntimePortUnavailable $
         withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle ->
           runWithConfig outputHandle defaultAppConfig defaultAppEnvironmentConfig
             `shouldThrow` isAlreadyInUseError
+
+    it "serves database-backed runtime routes from the supplied environment config" $
+      withContainerizedPsqlOnPath $ do
+        ensureDefaultPostgresAvailable
+        runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+        runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
+        withUnusedTcpEndpoint $ \unusedEndpoint ->
+          withSystemTempFile "web-api-runtime-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            let runtimeAppConfig =
+                  defaultAppConfig
+                    { listenerConfigs =
+                        [ ListenerConfig
+                            { listenerHost = tcpEndpointHost unusedEndpoint,
+                              listenerPort = tcpEndpointPort unusedEndpoint,
+                              listenerScheme = Http,
+                              listenerTls = Nothing
+                            }
+                        ]
+                    }
+                runtimeEnvironmentConfig =
+                  defaultAppEnvironmentConfig
+                    { databaseConfig = defaultMigrationPostgresConfig
+                    }
+            serverThreadId <- forkIO $ do
+              result <- try (runWithConfig outputHandle runtimeAppConfig runtimeEnvironmentConfig) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            responseText <- waitForRuntimeServerResponse completionReference (tcpEndpointPort unusedEndpoint) "/api/second"
+            responseText `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+            completionResult <- readIORef completionReference
+            completionResult `shouldSatisfy` isNothing
+            killThread serverThreadId
+            waitForRuntimeServerExit completionReference
+            hClose outputHandle
+
+    it "announces parsed HTTPS listener configs before surfacing manual TLS startup failures" $
+      withUnusedTcpEndpoint $ \unusedEndpoint ->
+        withSystemTempFile "web-api-runtime-output.txt" $ \outputPath outputHandle -> do
+          let runtimeAppConfig =
+                defaultAppConfig
+                  { listenerConfigs =
+                      [ ListenerConfig
+                          { listenerHost = tcpEndpointHost unusedEndpoint,
+                            listenerPort = tcpEndpointPort unusedEndpoint,
+                            listenerScheme = Https,
+                            listenerTls =
+                              Just
+                                TlsConfig
+                                  { certificateSource =
+                                      ManualCertificateFiles
+                                        { certificateFile = "/tmp/missing-cert.pem",
+                                          privateKeyFile = "/tmp/missing-key.pem"
+                                        }
+                                  }
+                          }
+                      ]
+                  }
+          result <- try (runWithConfig outputHandle runtimeAppConfig defaultAppEnvironmentConfig) :: IO (Either IOException ())
+          hClose outputHandle
+          case result of
+            Left exception ->
+              displayException exception
+                `shouldContain` "Manual TLS certificate file does not exist: /tmp/missing-cert.pem"
+            Right () ->
+              expectationFailure "expected runWithConfig to fail when manual TLS files are missing"
+          readFile outputPath
+            `shouldReturn` ("Parsed listener config: https://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
 
     it "writes startup output to the supplied handle for isolated tests and serves real requests" $
       withClearedAppEnvironment $
@@ -5388,7 +5459,13 @@ spec = do
                 killThread serverThreadId
                 waitForRuntimeServerExit completionReference
                 hClose outputHandle
-                readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint) <> "\n")
+                readFile outputPath
+                  `shouldReturn` unlines
+                    [ "Loaded config file: ./.env",
+                      "Config file missing: ./.env.local",
+                      "Parsed listener config: http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint),
+                      "HTTP Server listening at http://127.0.0.1:" <> show (tcpEndpointPort unusedEndpoint)
+                    ]
 
     it "fails explicitly when the layered runtime startup config is invalid" $
       withClearedAppEnvironment $

@@ -53,7 +53,13 @@ spec = do
                   hClose outputHandle
             responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
             runningExitCode `shouldBe` Nothing
-            readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show unusedPort <> "\n")
+            readFile outputPath
+              `shouldReturn` unlines
+                [ "Loaded config file: ./.env",
+                  "Config file missing: ./.env.local",
+                  "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
+                  "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
+                ]
 
     it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
       withUnusedLoopbackPort $ \httpPort ->
@@ -99,7 +105,11 @@ spec = do
                 runningExitCode `shouldBe` Nothing
                 readFile outputPath
                   `shouldReturn` unlines
-                    [ "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                    [ "Loaded config file: ./.env",
+                      "Config file missing: ./.env.local",
+                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
                       "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
                     ]
 
@@ -147,7 +157,11 @@ spec = do
                 runningExitCode `shouldBe` Nothing
                 readFile outputPath
                   `shouldReturn` unlines
-                    [ "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                    [ "Loaded config file: ./.env",
+                      "Config file missing: ./.env.local",
+                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
                       "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
                     ]
 

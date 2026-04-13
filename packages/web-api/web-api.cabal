@@ -87,6 +87,7 @@ library
     base ^>=4.22.0.0,
     bytestring,
     core,
+    directory,
     harch-web,
     process,
     text,

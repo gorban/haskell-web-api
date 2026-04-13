@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.App
@@ -15,13 +16,16 @@ import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
-import System.IO (Handle, stderr)
+import System.Directory (doesFileExist)
+import System.IO (Handle, hFlush, stderr)
 import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
     AppStartupConfig (..),
     DatabaseConfig,
+    ListenerConfig (..),
+    ListenerScheme (..),
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
@@ -84,18 +88,55 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
           runtimeApplicationLogReporter
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
-runWithConfig outputHandle appConfig =
-  HarchWeb.runServer outputHandle appConfig . buildRuntimeApp appConfig
+runWithConfig outputHandle appConfig !environmentConfig = do
+  announceParsedListenerConfigs outputHandle appConfig
+  HarchWeb.runServer outputHandle appConfig (buildRuntimeApp appConfig environmentConfig)
 
 run :: Handle -> IO ()
 run outputHandle = do
+  configFileStatuses <- loadDefaultStartupConfigFileStatuses
   startupConfigResult <- loadAppStartupConfig
   either
     (\loadError -> ioError (userError ("Failed to load app startup config: " <> show loadError)))
     ( \AppStartupConfig {startupEnvironmentConfig = environmentConfig, startupAppConfig = appConfig} ->
-        runWithConfig outputHandle appConfig $! environmentConfig
+        announceConfigFileStatuses outputHandle configFileStatuses
+          >> runWithConfig outputHandle appConfig environmentConfig
     )
     startupConfigResult
+
+loadDefaultStartupConfigFileStatuses :: IO [(FilePath, Bool)]
+loadDefaultStartupConfigFileStatuses =
+  traverse
+    (\filePath -> (filePath,) <$> doesFileExist filePath)
+    [".env", ".env.local"]
+
+announceConfigFileStatuses :: Handle -> [(FilePath, Bool)] -> IO ()
+announceConfigFileStatuses outputHandle configFileStatuses = do
+  mapM_ (TextIO.hPutStrLn outputHandle . renderConfigFileStatus) configFileStatuses
+  hFlush outputHandle
+  where
+    renderConfigFileStatus (filePath, fileExists) =
+      if fileExists
+        then "Loaded config file: ./" <> Text.pack filePath
+        else "Config file missing: ./" <> Text.pack filePath
+
+announceParsedListenerConfigs :: Handle -> AppConfig -> IO ()
+announceParsedListenerConfigs outputHandle appConfig = do
+  mapM_ (TextIO.hPutStrLn outputHandle . renderParsedListenerConfig) (listenerConfigs appConfig)
+  hFlush outputHandle
+  where
+    renderParsedListenerConfig listenerConfig =
+      "Parsed listener config: "
+        <> listenerUrlPrefix (listenerScheme listenerConfig)
+        <> listenerHost listenerConfig
+        <> ":"
+        <> Text.pack (show (listenerPort listenerConfig))
+
+listenerUrlPrefix :: ListenerScheme -> Text.Text
+listenerUrlPrefix listenerScheme =
+  case listenerScheme of
+    Http -> "http://"
+    Https -> "https://"
 
 runtimeRequestObservabilityReporter :: Observability.RequestObservability -> IO ()
 runtimeRequestObservabilityReporter =
