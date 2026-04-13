@@ -106,10 +106,11 @@ buildRequestObservability ::
   RequestObservability
 buildRequestObservability method scheme requestPath routePath statusCode responseKind extraAttributes =
   let attributes = requestObservabilityAttributes method scheme requestPath routePath statusCode responseKind extraAttributes
+      displayPath = requestSpanPath requestPath routePath statusCode
    in RequestObservability
         { observabilityRequestSpan =
             RequestSpan
-              { requestSpanDisplayName = requestSpanName method routePath,
+              { requestSpanDisplayName = requestSpanName method displayPath,
                 requestSpanAttributes = attributes
               },
           observabilityHttpServerMetrics =
@@ -119,6 +120,12 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
                 httpServerMetricAttributes = attributes
               }
         }
+
+requestSpanPath :: Text -> Text -> Int -> Text
+requestSpanPath requestPath routePath statusCode =
+  if statusCode == 404 && requestPath /= routePath && Text.isSuffixOf "/404" routePath
+    then requestPath
+    else routePath
 
 forceRequestObservability :: RequestObservability -> ()
 forceRequestObservability requestObservability =

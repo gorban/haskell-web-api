@@ -238,3 +238,77 @@ spec = do
                     ]
                 }
           }
+
+  describe "buildRequestObservability" $
+    it "keeps unmatched request paths in the span display name while retaining the synthetic not-found route attribute" $
+      Observability.buildRequestObservability
+        "GET"
+        "http"
+        "/favicon.ico"
+        "/404"
+        404
+        Observability.PageResponseKind
+        []
+        `shouldBe` Observability.RequestObservability
+          { Observability.observabilityRequestSpan =
+              Observability.RequestSpan
+                { Observability.requestSpanDisplayName = "GET /favicon.ico",
+                  Observability.requestSpanAttributes =
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.request.method",
+                          Observability.attributeValue = Observability.TextAttribute "GET"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "url.scheme",
+                          Observability.attributeValue = Observability.TextAttribute "http"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "url.path",
+                          Observability.attributeValue = Observability.TextAttribute "/favicon.ico"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.route",
+                          Observability.attributeValue = Observability.TextAttribute "/404"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.response.status_code",
+                          Observability.attributeValue = Observability.IntAttribute 404
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.response.kind",
+                          Observability.attributeValue = Observability.TextAttribute "page"
+                        }
+                    ]
+                },
+            Observability.observabilityHttpServerMetrics =
+              Observability.HttpServerMetrics
+                { Observability.requestDurationMetricName = "http.server.request.duration",
+                  Observability.activeRequestsMetricName = "http.server.active_requests",
+                  Observability.httpServerMetricAttributes =
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.request.method",
+                          Observability.attributeValue = Observability.TextAttribute "GET"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "url.scheme",
+                          Observability.attributeValue = Observability.TextAttribute "http"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "url.path",
+                          Observability.attributeValue = Observability.TextAttribute "/favicon.ico"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.route",
+                          Observability.attributeValue = Observability.TextAttribute "/404"
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "http.response.status_code",
+                          Observability.attributeValue = Observability.IntAttribute 404
+                        },
+                      Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.response.kind",
+                          Observability.attributeValue = Observability.TextAttribute "page"
+                        }
+                    ]
+                }
+          }

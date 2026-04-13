@@ -1483,6 +1483,43 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute, forwardedForAttribute]
                        ]
 
+    it "keeps unmatched request paths in request span display names instead of collapsing them to the synthetic not-found route" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          missingRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["favicon.ico"]
+              directRemoteHost
+              []
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) missingRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 404
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/favicon.ico"
+                           "/404"
+                           404
+                           Observability.PageResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       ]
+
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
         let assetDirectory = tempDirectory <> "/public"
