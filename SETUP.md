@@ -951,21 +951,32 @@ LISTENER_1_TLS_SOURCE=acme
 LISTENER_1_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_1_ACME_DOMAINS=example.com,www.example.com
+LISTENER_1_ACME_CERTIFICATE_DIRECTORY=/app/acme/example.com
 LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
 LISTENER_1_ACME_CERTBOT_EXECUTABLE=certbot
 LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
+
+# Listener 2: Optional HTTPS listener that reuses the ACME certificate directory
+LISTENER_2_HOST=0.0.0.0
+LISTENER_2_PORT=5443
+LISTENER_2_SCHEME=https
+LISTENER_2_TLS_SOURCE=shared
+LISTENER_2_TLS_CERTIFICATE_DIRECTORY=/app/acme/example.com
 ```
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
 `--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
+When `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` is set, the runtime copies the issued `fullchain.pem` and
+`privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared` HTTPS listener can reuse
+the same certificate material.
 
 Then exercise the ACME path in four layers:
 
-1. Parse the runtime config shape from environment values:
+1. Parse the runtime config shape from environment values, including shared-certificate directories:
 
    ```bash
-   cabal test haskell-web-api-tests --test-options='--match "parses manual and ACME-backed HTTPS listeners distinctly"'
+   cabal test haskell-web-api-tests --test-options='--match "parses shared HTTPS directories and ACME certificate publishing directories"'
    ```
 
 2. Confirm the listener plan keeps the ACME settings intact:
@@ -984,6 +995,12 @@ Then exercise the ACME path in four layers:
 
    ```bash
    cabal test harch-web-tests --test-options='--match "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop"'
+   ```
+
+5. Confirm a second HTTPS listener can reuse the ACME-published certificate directory:
+
+   ```bash
+   cabal test harch-web-tests --test-options='--match "lets other HTTPS listeners reuse ACME certificates from a shared directory"'
    ```
 
 If you also run the executable with that `./.env.local` and the challenge listener is reachable on the

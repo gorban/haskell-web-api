@@ -792,6 +792,66 @@ spec = do
                   }
             }
 
+    it "parses shared HTTPS directories and ACME certificate publishing directories" $
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "shared"),
+          ("LISTENER_0_TLS_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5444"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "acme"),
+          ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
+          ("LISTENER_1_ACME_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
+          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                SharedCertificateFiles
+                                  { certificateDirectory = "/var/lib/web-api/shared-certs"
+                                  }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5444,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
+                                      acmeDomains = ["example.com", "www.example.com"],
+                                      acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Just "/var/lib/web-api/shared-certs",
+                                      acmeChallengeBackend = InProcessHttp01
+                                    }
+                            }
+                    }
+                ],
+              requestPolicy = requestPolicy defaultAppConfig
+            }
+
     it "defaults redirects on for HTTP plus ACME-backed HTTPS listener plans" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
@@ -833,6 +893,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -908,6 +969,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com", "alerts@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -926,6 +988,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com"],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -1397,6 +1460,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -1450,6 +1514,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -1498,6 +1563,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = [],
                                       acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Nothing,
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -3840,11 +3906,15 @@ spec = do
           readFile migrateAndSeedOutputPath `shouldReturn` "Applied database migrations and seed data.\n"
 
   describe "config model values" $ do
-    it "can represent manual certificates, certbot-backed ACME, and exporter endpoints" $ do
+    it "can represent manual, shared, and certbot-backed ACME certificates plus exporter endpoints" $ do
       let certbotConfig =
             CertbotConfig
               { certbotExecutable = "certbot",
                 certbotArguments = ["certonly", "--webroot"]
+              }
+          sharedCertificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/web-api/shared-certs"
               }
           tlsSource =
             AcmeCertificateSource
@@ -3853,6 +3923,7 @@ spec = do
                   acmeContactEmails = ["ops@example.com"],
                   acmeDomains = ["example.com", "www.example.com"],
                   acmeHttp01Port = 80,
+                  acmeCertificateDirectory = Nothing,
                   acmeChallengeBackend = CertbotHttp01 certbotConfig
                 }
           exporter =
@@ -3862,8 +3933,10 @@ spec = do
               }
       TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
         `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
+      show sharedCertificateSource
+        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\"}"
       show tlsSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
+        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show exporter
         `shouldBe` "OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}"
 
@@ -3879,7 +3952,12 @@ spec = do
                 acmeContactEmails = ["ops@example.com", "alerts@example.com"],
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
                 acmeChallengeBackend = InProcessHttp01
+              }
+          sharedCertificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/web-api/shared-certs"
               }
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
@@ -3961,11 +4039,18 @@ spec = do
           certificateFile source `shouldBe` "cert.pem"
           privateKeyFile source `shouldBe` "key.pem"
         AcmeCertificateSource _ -> expectationFailure "expected manual certificate files"
+        SharedCertificateFiles {} -> expectationFailure "expected manual certificate files"
       acmeDirectoryUrl inProcessAcmeConfig `shouldBe` "https://acme-staging-v02.api.letsencrypt.org/directory"
       acmeContactEmails inProcessAcmeConfig `shouldBe` ["ops@example.com", "alerts@example.com"]
       acmeDomains inProcessAcmeConfig `shouldBe` ["example.com", "www.example.com"]
       acmeHttp01Port inProcessAcmeConfig `shouldBe` 80
+      acmeCertificateDirectory inProcessAcmeConfig `shouldBe` Nothing
       acmeChallengeBackend inProcessAcmeConfig `shouldBe` InProcessHttp01
+      case sharedCertificateSource of
+        SharedCertificateFiles {certificateDirectory = sharedDirectory} ->
+          sharedDirectory `shouldBe` "/var/lib/web-api/shared-certs"
+        _ ->
+          expectationFailure "expected shared certificate files"
       certificateSource tlsConfig `shouldBe` manualCertificateSource
       listenerHost listenerConfig `shouldBe` "0.0.0.0"
       listenerPort listenerConfig `shouldBe` 5443
@@ -4022,8 +4107,13 @@ spec = do
                   acmeContactEmails = ["ops@example.com"],
                   acmeDomains = ["example.com", "www.example.com"],
                   acmeHttp01Port = 80,
+                  acmeCertificateDirectory = Nothing,
                   acmeChallengeBackend = CertbotHttp01 certbotConfig
                 }
+          sharedCertificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/web-api/shared-certs"
+              }
           staticRoot =
             StaticAssetRoot
               { staticUrlPrefix = "/assets",
@@ -4072,6 +4162,7 @@ spec = do
       CertbotHttp01 certbotConfig `shouldBe` CertbotHttp01 certbotConfig
       TlsConfig {certificateSource = manualCertificateSource}
         `shouldBe` TlsConfig {certificateSource = manualCertificateSource}
+      sharedCertificateSource `shouldBe` sharedCertificateSource
       acmeCertificateSource `shouldBe` acmeCertificateSource
       staticRoot `shouldBe` staticRoot
       English `shouldBe` English
@@ -4098,13 +4189,16 @@ spec = do
             acmeContactEmails = ["ops@example.com"],
             acmeDomains = ["example.com", "www.example.com"],
             acmeHttp01Port = 80,
+            acmeCertificateDirectory = Nothing,
             acmeChallengeBackend = CertbotHttp01 certbotConfig
           }
-        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
+        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show acmeCertificateSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
+        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show (TlsConfig {certificateSource = manualCertificateSource})
         `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
+      show sharedCertificateSource
+        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\"}"
       show manualCertificateSource
         `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
       show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})
@@ -4192,6 +4286,7 @@ spec = do
                 acmeContactEmails = ["ops@example.com"],
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           otherAcmeConfig =
@@ -4200,6 +4295,7 @@ spec = do
                 acmeContactEmails = ["ops@example.com"],
                 acmeDomains = ["staging.example.com"],
                 acmeHttp01Port = 80,
+                acmeCertificateDirectory = Just "/var/lib/web-api/staging-certs",
                 acmeChallengeBackend = InProcessHttp01
               }
           manualCertificateSource =
@@ -4346,6 +4442,7 @@ spec = do
                 acmeContactEmails = ["ops@example.com"],
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           manualCertificateSource =
@@ -4465,6 +4562,7 @@ spec = do
                 acmeContactEmails = ["ops@example.com"],
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
+                acmeCertificateDirectory = Nothing,
                 acmeChallengeBackend = CertbotHttp01 certbotConfig
               }
           manualCertificateSource =
@@ -4550,13 +4648,13 @@ spec = do
       show [InProcessHttp01, CertbotHttp01 certbotConfig]
         `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
       show [acmeConfig]
-        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
+        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
       show [manualCertificateSource, acmeCertificateSource]
-        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
+        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
       show [tlsConfig]
-        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
+        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
       show [listenerConfig]
-        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
+        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
         `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
@@ -4565,7 +4663,7 @@ spec = do
       show [observabilityConfig]
         `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
       show [appConfig]
-        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
+        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
       show [English, French] `shouldBe` "[English,French]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]

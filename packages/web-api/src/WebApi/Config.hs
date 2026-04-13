@@ -367,6 +367,9 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
           ManualCertificateFiles
             <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE"
             <*> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
+        "shared" ->
+          SharedCertificateFiles
+            <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"
         "acme" -> parseAcmeCertificateSource listenerIndex
         _ ->
           Left
@@ -388,6 +391,8 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
                   (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
                   (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
                 <*> pure 80
+                <*> pure
+                  (Text.unpack <$> optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY")
                 <*> parseAcmeChallengeBackend listenerIndex
             )
 

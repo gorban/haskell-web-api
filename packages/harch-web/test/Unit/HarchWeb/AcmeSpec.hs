@@ -58,6 +58,7 @@ inProcessConfig =
       acmeContactEmails = ["ops@example.com"],
       acmeDomains = ["example.com", "www.example.com"],
       acmeHttp01Port = 80,
+      acmeCertificateDirectory = Nothing,
       acmeChallengeBackend = InProcessHttp01
     }
 
@@ -68,6 +69,7 @@ certbotConfigValue =
       acmeContactEmails = ["ops@example.com"],
       acmeDomains = ["example.com", "www.example.com"],
       acmeHttp01Port = 8080,
+      acmeCertificateDirectory = Nothing,
       acmeChallengeBackend = certbotBackend
     }
 

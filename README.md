@@ -110,12 +110,14 @@ understands the following values:
 | `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
 | `LISTENER_<n>_PORT` | Port to bind for listener `n`. | (`LISTENER_0_PORT=5001`) |
 | `LISTENER_<n>_SCHEME` | Listener scheme, either `http` or `https`. | (`LISTENER_0_SCHEME=http`) |
-| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners, either `manual` or `acme`. | (`unset`) |
+| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners, either `manual`, `shared`, or `acme`. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
+| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. | (`unset`) |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. | (`unset`) |
 | `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Executable path for the `certbot-http01` backend. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` / `--http-01-port` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
@@ -220,9 +222,17 @@ LISTENER_2_TLS_SOURCE=acme
 LISTENER_2_ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
 LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
+LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
 LISTENER_2_ACME_CERTBOT_EXECUTABLE=/usr/bin/certbot
 LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com
+
+# Listener 3: HTTPS that reuses ACME-published certificate files
+LISTENER_3_HOST=0.0.0.0
+LISTENER_3_PORT=9443
+LISTENER_3_SCHEME=https
+LISTENER_3_TLS_SOURCE=shared
+LISTENER_3_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets

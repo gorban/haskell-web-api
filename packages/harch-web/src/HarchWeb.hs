@@ -166,7 +166,7 @@ import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Handler.WarpTLS qualified as WarpTLS
-import System.Directory (createDirectoryIfMissing, doesFileExist, removePathForcibly)
+import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
@@ -197,6 +197,7 @@ data AcmeConfig = AcmeConfig
     acmeContactEmails :: [Text],
     acmeDomains :: [Text],
     acmeHttp01Port :: Int,
+    acmeCertificateDirectory :: Maybe FilePath,
     acmeChallengeBackend :: AcmeChallengeBackend
   }
   deriving (Eq, Show)
@@ -205,6 +206,9 @@ data TlsCertificateSource
   = ManualCertificateFiles
       { certificateFile :: FilePath,
         privateKeyFile :: FilePath
+      }
+  | SharedCertificateFiles
+      { certificateDirectory :: FilePath
       }
   | AcmeCertificateSource AcmeConfig
   deriving (Eq, Show)
@@ -609,16 +613,16 @@ runServer outputHandle config webApplication =
               stopRuntimeServers
               ( \httpServers ->
                   bracket
-                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication)
-                    stopRuntimeServers
-                    ( \manualTlsServers ->
+                    (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication challengeStore)
+                    stopAcmeRuntimeServers
+                    ( \acmeServers ->
                         bracket
-                          (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication challengeStore)
-                          stopAcmeRuntimeServers
-                          ( \acmeServers ->
+                          (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication)
+                          stopRuntimeServers
+                          ( \manualTlsServers ->
                               httpServers `seq`
-                                manualTlsServers `seq`
-                                  acmeServers `seq`
+                                acmeServers `seq`
+                                  manualTlsServers `seq`
                                     announceRuntimeStartup outputHandle startupPlan
                                       >> waitForShutdownSignal
                           )
@@ -665,7 +669,7 @@ data RunningRuntimeServer = RunningRuntimeServer
 
 data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
   { runningAcmeRuntimeServer :: RunningRuntimeServer,
-    runningAcmeStateDirectory :: FilePath
+    runningAcmeCleanupDirectory :: FilePath
   }
 
 data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
@@ -769,7 +773,7 @@ startManualTlsRuntimeServer manualTlsPlan waiApplication = do
 
 startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
 startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
-  (manualTlsPlan, stateDirectory) <-
+  (manualTlsPlan, cleanupDirectory) <-
     case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
       CertbotHttp01 certbotConfig ->
         prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
@@ -777,11 +781,11 @@ startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
         prepareInProcessManualTlsBindPlan runtimeAcmePlan challengeStore
   runningServer <-
     startManualTlsRuntimeServer manualTlsPlan waiApplication
-      `onException` removePathForcibly stateDirectory
+      `onException` removePathForcibly cleanupDirectory
   pure
     RunningAcmeRuntimeServer
       { runningAcmeRuntimeServer = runningServer,
-        runningAcmeStateDirectory = stateDirectory
+        runningAcmeCleanupDirectory = cleanupDirectory
       }
 
 prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (ManualTlsBindPlan, FilePath)
@@ -806,11 +810,17 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
           privateKeyPath = certificateDirectory </> "privkey.pem"
       ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
       ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
+      (resolvedCertificatePath, resolvedPrivateKeyPath) <-
+        case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
+          Nothing ->
+            pure (certificatePath, privateKeyPath)
+          Just sharedDirectory ->
+            publishCertificateFiles sharedDirectory certificatePath privateKeyPath
       pure
         ( ManualTlsBindPlan
             { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
-              tlsCertificateFile = certificatePath,
-              tlsPrivateKeyFile = privateKeyPath
+              tlsCertificateFile = resolvedCertificatePath,
+              tlsPrivateKeyFile = resolvedPrivateKeyPath
             },
           stateDirectory
         )
@@ -1242,11 +1252,17 @@ prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
       let privateKeyPath = stateDirectory </> "privkey.pem"
           certificatePath = stateDirectory </> "fullchain.pem"
       runInProcessAcmeChallenge runtimeAcmePlan challengeStore stateDirectory certificatePath privateKeyPath
+      (resolvedCertificatePath, resolvedPrivateKeyPath) <-
+        case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
+          Nothing ->
+            pure (certificatePath, privateKeyPath)
+          Just sharedDirectory ->
+            publishCertificateFiles sharedDirectory certificatePath privateKeyPath
       pure
         ( ManualTlsBindPlan
             { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
-              tlsCertificateFile = certificatePath,
-              tlsPrivateKeyFile = privateKeyPath
+              tlsCertificateFile = resolvedCertificatePath,
+              tlsPrivateKeyFile = resolvedPrivateKeyPath
             },
           stateDirectory
         )
@@ -1890,7 +1906,7 @@ stopAcmeRuntimeServers =
 stopAcmeRuntimeServer :: RunningAcmeRuntimeServer -> IO ()
 stopAcmeRuntimeServer runningServer = do
   stopRuntimeServer (runningAcmeRuntimeServer runningServer)
-  removePathForcibly (runningAcmeStateDirectory runningServer)
+  removePathForcibly (runningAcmeCleanupDirectory runningServer)
 
 openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
 openListenerSocket endpoint = do
@@ -2550,6 +2566,16 @@ planServerStartup config = do
                     tlsPrivateKeyFile = privateKeyPath
                   }
             )
+        (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory}}) ->
+          let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
+           in Right
+                ( PlannedManualTls
+                    ManualTlsBindPlan
+                      { tlsEndpoint = listenerEndpoint listenerConfig,
+                        tlsCertificateFile = certificatePath,
+                        tlsPrivateKeyFile = privateKeyPath
+                      }
+                )
         (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}) ->
           Right
             ( PlannedAcme
@@ -2558,6 +2584,18 @@ planServerStartup config = do
                     acmeListenerConfig = acmeConfig
                   }
             )
+
+sharedCertificatePaths :: FilePath -> (FilePath, FilePath)
+sharedCertificatePaths certificateDirectory =
+  (certificateDirectory </> "fullchain.pem", certificateDirectory </> "privkey.pem")
+
+publishCertificateFiles :: FilePath -> FilePath -> FilePath -> IO (FilePath, FilePath)
+publishCertificateFiles certificateDirectory sourceCertificatePath sourcePrivateKeyPath = do
+  createDirectoryIfMissing True certificateDirectory
+  let (certificatePath, privateKeyPath) = sharedCertificatePaths certificateDirectory
+  copyFile sourceCertificatePath certificatePath
+  copyFile sourcePrivateKeyPath privateKeyPath
+  pure (certificatePath, privateKeyPath)
 
 planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
 planObservabilityStartup observabilityConfig =
