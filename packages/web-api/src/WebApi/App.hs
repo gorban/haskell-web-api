@@ -11,7 +11,8 @@ module WebApi.App
   )
 where
 
-import Control.Exception (evaluate)
+import Control.Exception (SomeException, displayException, evaluate, try)
+import Control.Monad (forM_)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
@@ -84,7 +85,7 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
         buildAppWithDatabaseAndReporters
           config
           databaseEffect
-          runtimeRequestObservabilityReporter
+          (runtimeRequestObservabilityReporter config)
           runtimeApplicationLogReporter
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
@@ -138,9 +139,20 @@ listenerUrlPrefix listenerScheme =
     Http -> "http://"
     Https -> "https://"
 
-runtimeRequestObservabilityReporter :: Observability.RequestObservability -> IO ()
-runtimeRequestObservabilityReporter =
-  TextIO.hPutStrLn stderr . ("TRACE " <>) . Text.pack . show
+runtimeRequestObservabilityReporter :: AppConfig -> Observability.RequestObservability -> IO ()
+runtimeRequestObservabilityReporter config requestObservability = do
+  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show requestObservability))
+  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
+    exportResult <-
+      try
+        (HarchWeb.exportRequestObservabilityToOtlp "web-api" exporter requestObservability) ::
+        IO (Either SomeException ())
+    case exportResult of
+      Left exportError ->
+        runtimeApplicationLogReporter
+          ("Failed to export request observability to OTLP: " <> Text.pack (displayException exportError))
+      Right () ->
+        hFlush stderr
 
 runtimeApplicationLogReporter :: Text.Text -> IO ()
 runtimeApplicationLogReporter =

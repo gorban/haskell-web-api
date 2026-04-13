@@ -2,7 +2,7 @@
 
 module Unit.HarchWebSpec (spec) where
 
-import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (SomeException, displayException, finally, try)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
@@ -37,6 +37,13 @@ data TestContext = TestContext
     requestPathPrefix :: Text
   }
   deriving (Eq, Show)
+
+data CapturedCollectorRequest = CapturedCollectorRequest
+  { capturedCollectorMethod :: ByteString.ByteString,
+    capturedCollectorPath :: ByteString.ByteString,
+    capturedCollectorHeaders :: [Http.Header],
+    capturedCollectorBody :: LazyByteString.ByteString
+  }
 
 data TestRoute
   = KnownRoute
@@ -1951,6 +1958,71 @@ spec = do
               ]
           }
 
+  describe "exportRequestObservabilityToOtlp" $ do
+    it "posts OTLP trace payloads with request attributes, resource attributes, and custom headers" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportRequestObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = [("authorization", "Bearer sample-token")]
+            }
+          ( Observability.buildRequestObservability
+              "GET"
+              "https"
+              "/known"
+              "/known"
+              503
+              Observability.PageResponseKind
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.type",
+                    Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
+                  }
+              ]
+          )
+        CapturedCollectorRequest
+          { capturedCollectorMethod = requestMethod,
+            capturedCollectorPath = requestPath,
+            capturedCollectorHeaders = requestHeaders,
+            capturedCollectorBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
+        lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token"
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"service.name\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"sample-app\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"telemetry.sdk.language\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+        extractQuotedJsonField "traceId" requestBodyText `shouldSatisfy` maybe False (not . Text.null)
+        extractQuotedJsonField "spanId" requestBodyText `shouldSatisfy` maybe False (not . Text.null)
+
+    it "fails explicitly when the collector rejects the export request" $
+      withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
+        exportResult <-
+          try
+            ( exportRequestObservabilityToOtlp
+                "sample-app"
+                OtlpExporter
+                  { otlpEndpoint = collectorUrl,
+                    otlpHeaders = []
+                  }
+                (Observability.buildRequestObservability "GET" "http" "/" "/" 200 Observability.BodyResponseKind [])
+            ) ::
+            IO (Either IOError ())
+        _ <- readMVar capturedRequestReference
+        case exportResult of
+          Left exportError -> do
+            show exportError `shouldContain` "OTLP trace export failed with status 503"
+            show exportError `shouldContain` "collector unavailable"
+          Right () ->
+            expectationFailure "expected OTLP export to fail when the collector returns a non-2xx status"
+
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -2876,6 +2948,43 @@ withFakeAcmeServer acmePort challengePort certificatePath action = do
   serverThreadId <- forkIO (Warp.run acmePort fakeAcmeApplication)
   threadDelay 50000
   action directoryUrl `finally` killThread serverThreadId
+
+withOtlpCollector ::
+  Http.Status ->
+  LazyByteString.ByteString ->
+  (Text -> MVar CapturedCollectorRequest -> IO a) ->
+  IO a
+withOtlpCollector responseStatus responseBody action =
+  withUnusedLoopbackPort $ \collectorPort -> do
+    capturedRequestReference <- newEmptyMVar
+    let collectorUrl = Text.pack ("http://127.0.0.1:" <> show collectorPort <> "/v1/traces")
+        collectorApplication request respond = do
+          requestBody <- Wai.strictRequestBody request
+          putMVar
+            capturedRequestReference
+            CapturedCollectorRequest
+              { capturedCollectorMethod = Wai.requestMethod request,
+                capturedCollectorPath = Wai.rawPathInfo request,
+                capturedCollectorHeaders = Wai.requestHeaders request,
+                capturedCollectorBody = requestBody
+              }
+          respond (Wai.responseLBS responseStatus [("Content-Type", "application/json")] responseBody)
+    serverThreadId <- forkIO (Warp.run collectorPort collectorApplication)
+    threadDelay 50000
+    action collectorUrl capturedRequestReference `finally` killThread serverThreadId
+
+extractQuotedJsonField :: Text -> Text -> Maybe Text
+extractQuotedJsonField fieldName bodyText =
+  if Text.null withField
+    then Nothing
+    else
+      Just
+        ( Text.takeWhile (/= '"') $
+            Text.drop (Text.length fieldPrefix) withField
+        )
+  where
+    fieldPrefix = "\"" <> fieldName <> "\":\""
+    (_, withField) = Text.breakOn fieldPrefix bodyText
 
 expectLoopbackPortReusable :: Int -> IO ()
 expectLoopbackPortReusable port = do

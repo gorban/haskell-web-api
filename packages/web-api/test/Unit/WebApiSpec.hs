@@ -3,16 +3,17 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (IOException, SomeException, displayException, finally, try)
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
+import Data.Char (toLower)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isPrefixOf)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -33,6 +34,7 @@ import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
+import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -155,6 +157,13 @@ renderedShellForRequest config routeRequest = do
   let application = buildApp config
   page <- renderPage config routeRequest
   pure (HarchWeb.pageShell application page)
+
+data CapturedOtlpRequest = CapturedOtlpRequest
+  { capturedOtlpMethod :: ByteString.ByteString,
+    capturedOtlpPath :: ByteString.ByteString,
+    capturedOtlpHeaders :: [(ByteString.ByteString, ByteString.ByteString)],
+    capturedOtlpBody :: ByteString.ByteString
+  }
 
 performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
 performWaiRequest webApplication request = do
@@ -428,6 +437,114 @@ withDefaultRuntimePortUnavailable action = do
       bind reservedSocket (SockAddrInet 5001 (tupleToHostAddress (127, 0, 0, 1)))
       listen reservedSocket 1
       pure reservedSocket
+
+withOtlpCaptureServer ::
+  Http.Status ->
+  ByteString.ByteString ->
+  (Text -> MVar CapturedOtlpRequest -> IO a) ->
+  IO a
+withOtlpCaptureServer responseStatus responseBody action = do
+  listenerSocket <- socket AF_INET Stream defaultProtocol
+  bind listenerSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  listen listenerSocket 1
+  socketAddress <- getSocketName listenerSocket
+  case socketAddress of
+    SockAddrInet port _ -> do
+      capturedRequestReference <- newEmptyMVar
+      let collectorUrl = Text.pack ("http://127.0.0.1:" <> show (fromIntegral port :: Int) <> "/v1/traces")
+      serverThreadId <-
+        forkIO $
+          ( do
+              (clientSocket, _) <- NetworkSocket.accept listenerSocket
+              capturedRequest <- readCapturedHttpRequest clientSocket
+              putMVar capturedRequestReference capturedRequest
+              SocketByteString.sendAll clientSocket (buildHttpResponse responseStatus responseBody)
+              close clientSocket
+          )
+            `finally` close listenerSocket
+      action collectorUrl capturedRequestReference `finally` killThread serverThreadId
+    _ ->
+      close listenerSocket
+        >> error "expected IPv4 loopback OTLP capture socket"
+
+readCapturedHttpRequest :: NetworkSocket.Socket -> IO CapturedOtlpRequest
+readCapturedHttpRequest clientSocket = do
+  requestBytes <- readHttpRequestBytes clientSocket
+  let (headerBytes, withSeparator) = ByteStringChar8.breakSubstring "\r\n\r\n" requestBytes
+      requestBody = ByteString.drop 4 withSeparator
+      headerLines = map stripHeaderLineEnd (ByteStringChar8.split '\n' headerBytes)
+      requestLine =
+        case headerLines of
+          line : _ -> line
+          [] -> ByteString.empty
+      (requestMethod, requestPath) =
+        case ByteStringChar8.words requestLine of
+          method : path : _ -> (method, path)
+          _ -> (ByteString.empty, ByteString.empty)
+  pure
+    CapturedOtlpRequest
+      { capturedOtlpMethod = requestMethod,
+        capturedOtlpPath = requestPath,
+        capturedOtlpHeaders = mapMaybe parseCapturedHeader (drop 1 headerLines),
+        capturedOtlpBody = requestBody
+      }
+
+readHttpRequestBytes :: NetworkSocket.Socket -> IO ByteString.ByteString
+readHttpRequestBytes clientSocket =
+  readRequestChunks ByteString.empty Nothing
+  where
+    readRequestChunks accumulatedRequest knownContentLength = do
+      chunk <- SocketByteString.recv clientSocket 4096
+      let accumulatedRequest' = accumulatedRequest <> chunk
+          contentLength =
+            case knownContentLength of
+              Just value -> Just value
+              Nothing -> parseHttpContentLength accumulatedRequest'
+      case contentLength of
+        Just bodyLength
+          | ByteString.length (extractHttpBody accumulatedRequest') >= bodyLength ->
+              pure accumulatedRequest'
+        _ ->
+          if ByteString.null chunk
+            then pure accumulatedRequest'
+            else readRequestChunks accumulatedRequest' contentLength
+
+parseHttpContentLength :: ByteString.ByteString -> Maybe Int
+parseHttpContentLength requestBytes =
+  case ByteStringChar8.breakSubstring "\r\n\r\n" requestBytes of
+    (_, withSeparator)
+      | ByteString.null withSeparator -> Nothing
+    (headerBytes, _) ->
+      lookup "content-length" (mapMaybe parseCapturedHeader (drop 1 headerLines)) >>= readMaybe . ByteStringChar8.unpack
+      where
+        headerLines = map stripHeaderLineEnd (ByteStringChar8.split '\n' headerBytes)
+
+parseCapturedHeader :: ByteString.ByteString -> Maybe (ByteString.ByteString, ByteString.ByteString)
+parseCapturedHeader headerLine =
+  case ByteStringChar8.break (== ':') headerLine of
+    (headerName, withSeparator)
+      | ByteString.null withSeparator -> Nothing
+      | otherwise ->
+          Just
+            ( ByteStringChar8.map toLower headerName,
+              ByteStringChar8.dropWhile (== ' ') (stripHeaderLineEnd (ByteString.drop 1 withSeparator))
+            )
+
+stripHeaderLineEnd :: ByteString.ByteString -> ByteString.ByteString
+stripHeaderLineEnd =
+  ByteStringChar8.filter (/= '\r')
+
+buildHttpResponse :: Http.Status -> ByteString.ByteString -> ByteString.ByteString
+buildHttpResponse responseStatus responseBody =
+  ByteStringChar8.pack $
+    "HTTP/1.1 "
+      <> show (Http.statusCode responseStatus)
+      <> " "
+      <> ByteStringChar8.unpack (Http.statusMessage responseStatus)
+      <> "\r\nContent-Type: application/json\r\nContent-Length: "
+      <> show (ByteString.length responseBody)
+      <> "\r\nConnection: close\r\n\r\n"
+      <> ByteStringChar8.unpack responseBody
 
 readLoopbackHttpResponse :: Int -> Text -> IO Text
 readLoopbackHttpResponse port path = do
@@ -5337,6 +5454,75 @@ spec = do
             ]
         )
       HarchWeb.reportApplicationLog runtimeApplication "runtime failure detail"
+
+    it "exports runtime request observability to the configured OTLP tracing endpoint" $
+      withOtlpCaptureServer Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = [("x-runtime-trace", "enabled")]
+                              }
+                      }
+                }
+            runtimeApplication =
+              buildRuntimeAppWithDatabaseBuilder
+                runtimeAppConfig
+                (const defaultDatabaseEffect)
+                defaultAppEnvironmentConfig
+        HarchWeb.reportRequestObservability
+          runtimeApplication
+          (Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind [])
+        CapturedOtlpRequest
+          { capturedOtlpMethod = requestMethod,
+            capturedOtlpPath = requestPath,
+            capturedOtlpHeaders = requestHeaders,
+            capturedOtlpBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 requestBody
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+        lookup "content-type" requestHeaders `shouldBe` Just "application/json"
+        lookup "x-runtime-trace" requestHeaders `shouldBe` Just "enabled"
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"service.name\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"web-api\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /api/status\""
+        requestBodyText `shouldSatisfy` (not . Text.isInfixOf "\"STATUS_CODE_ERROR\"")
+
+    it "keeps runtime request reporting alive when the OTLP collector rejects the export" $
+      withOtlpCaptureServer Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = []
+                              }
+                      }
+                }
+            runtimeApplication =
+              buildRuntimeAppWithDatabaseBuilder
+                runtimeAppConfig
+                (const defaultDatabaseEffect)
+                defaultAppEnvironmentConfig
+        HarchWeb.reportRequestObservability
+          runtimeApplication
+          (Observability.buildRequestObservability "GET" "http" "/api/second" "/api/second" 500 Observability.BodyResponseKind [])
+        CapturedOtlpRequest
+          { capturedOtlpMethod = requestMethod,
+            capturedOtlpPath = requestPath
+          } <-
+          readMVar capturedRequestReference
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
 
   describe "run" $ do
     it "starts the runtime server from an explicit environment and app config" $

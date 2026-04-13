@@ -70,6 +70,7 @@ module HarchWeb
     createAcmeOrder,
     decodeAcmeJsonResponse,
     escapeJsonCharacter,
+    exportRequestObservabilityToOtlp,
     fetchAcmeCertificate,
     fetchAcmeDirectory,
     fetchAcmeNonce,
@@ -138,19 +139,25 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, modifyMVar_, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, evaluate, onException, throwIO, try)
 import Control.Monad (forever, replicateM, unless, void, when)
+import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (digitToInt, isDigit)
 import Data.Either (lefts)
 import Data.Functor (($>))
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find, intercalate, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
+import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
@@ -164,6 +171,7 @@ import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
 import System.IO (Handle, hFlush, hPutStrLn)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process (proc, readCreateProcessWithExitCode)
 import Text.ParserCombinators.ReadP (ReadP, char, choice, eof, get, manyTill, pfail, readP_to_S, sepBy, skipSpaces, string, (<++))
 import Text.Read (readMaybe)
@@ -2565,6 +2573,214 @@ planObservabilityStartup observabilityConfig =
           startupEndpoint = otlpEndpoint exporter,
           startupHeaders = otlpHeaders exporter
         }
+
+exportRequestObservabilityToOtlp ::
+  Text ->
+  OtlpExporter ->
+  Observability.RequestObservability ->
+  IO ()
+exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
+  (traceId, spanId) <- nextOtlpSpanIdentifiers
+  endTimeUnixNano <- getMonotonicTimeNSec
+  let requestBody =
+        otlpTraceRequestBody
+          serviceName
+          traceId
+          spanId
+          endTimeUnixNano
+          endTimeUnixNano
+          requestObservability
+  baseRequest <- HttpClient.parseRequest (Text.unpack (otlpEndpoint exporter))
+  response <-
+    HttpClient.httpLbs
+      baseRequest
+        { HttpClient.method = "POST",
+          HttpClient.requestHeaders =
+            (Http.hContentType, "application/json")
+              : map otlpHeader (otlpHeaders exporter),
+          HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody
+        }
+      otlpHttpManager
+  let statusCode = Http.statusCode (HttpClient.responseStatus response)
+  unless (statusCode >= 200 && statusCode < 300) $
+    ioError . userError $
+      "OTLP trace export failed with status "
+        <> show statusCode
+        <> ".\nbody:\n"
+        <> renderAcmeResponseBody response
+
+otlpTraceRequestBody ::
+  Text ->
+  Text ->
+  Text ->
+  Word64 ->
+  Word64 ->
+  Observability.RequestObservability ->
+  LazyByteString.ByteString
+otlpTraceRequestBody serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestObservability =
+  jsonObjectBytes
+    [ ( "resourceSpans",
+        jsonArrayBytes
+          [ jsonObjectBytes
+              [ ("resource", otlpResourceObject serviceName),
+                ( "scopeSpans",
+                  jsonArrayBytes
+                    [ jsonObjectBytes
+                        [ ( "scope",
+                            jsonObjectBytes
+                              [("name", jsonStringBytes "harch-web")]
+                          ),
+                          ( "spans",
+                            jsonArrayBytes
+                              [ otlpSpanObject
+                                  traceId
+                                  spanId
+                                  startTimeUnixNano
+                                  endTimeUnixNano
+                                  requestObservability
+                              ]
+                          )
+                        ]
+                    ]
+                )
+              ]
+          ]
+      )
+    ]
+
+otlpResourceObject :: Text -> LazyByteString.ByteString
+otlpResourceObject serviceName =
+  jsonObjectBytes
+    [ ( "attributes",
+        jsonArrayBytes
+          [ otlpAttribute
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "service.name",
+                  Observability.attributeValue = Observability.TextAttribute serviceName
+                },
+            otlpAttribute
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "telemetry.sdk.language",
+                  Observability.attributeValue = Observability.TextAttribute "haskell"
+                },
+            otlpAttribute
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "telemetry.sdk.name",
+                  Observability.attributeValue = Observability.TextAttribute "harch-web"
+                }
+          ]
+      )
+    ]
+
+otlpSpanObject ::
+  Text ->
+  Text ->
+  Word64 ->
+  Word64 ->
+  Observability.RequestObservability ->
+  LazyByteString.ByteString
+otlpSpanObject traceId spanId startTimeUnixNano endTimeUnixNano requestObservability =
+  jsonObjectBytes
+    ( [ ("traceId", jsonStringBytes traceId),
+        ("spanId", jsonStringBytes spanId),
+        ("name", jsonStringBytes (requestSpanDisplayName requestObservability)),
+        ("kind", jsonStringBytes "SPAN_KIND_SERVER"),
+        ("startTimeUnixNano", jsonStringBytes (Text.pack (show startTimeUnixNano))),
+        ("endTimeUnixNano", jsonStringBytes (Text.pack (show endTimeUnixNano))),
+        ( "attributes",
+          jsonArrayBytes
+            ( map otlpAttribute $
+                Observability.requestSpanAttributes
+                  (Observability.observabilityRequestSpan requestObservability)
+            )
+        )
+      ]
+        ++ otlpSpanStatusFields requestObservability
+    )
+
+requestSpanDisplayName :: Observability.RequestObservability -> Text
+requestSpanDisplayName =
+  Observability.requestSpanDisplayName . Observability.observabilityRequestSpan
+
+otlpSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
+otlpSpanStatusFields requestObservability =
+  case requestObservabilityStatusCode requestObservability of
+    Just statusCode
+      | statusCode >= 500 ->
+          [ ( "status",
+              jsonObjectBytes
+                [("code", jsonStringBytes "STATUS_CODE_ERROR")]
+            )
+          ]
+    _ -> []
+
+requestObservabilityStatusCode :: Observability.RequestObservability -> Maybe Int
+requestObservabilityStatusCode requestObservability =
+  listToMaybe
+    [ statusCode
+    | Observability.ObservabilityAttribute
+        { Observability.attributeName = "http.response.status_code",
+          Observability.attributeValue = Observability.IntAttribute statusCode
+        } <-
+        Observability.requestSpanAttributes
+          (Observability.observabilityRequestSpan requestObservability)
+    ]
+
+otlpAttribute :: Observability.ObservabilityAttribute -> LazyByteString.ByteString
+otlpAttribute attribute =
+  jsonObjectBytes
+    [ ("key", jsonStringBytes (Observability.attributeName attribute)),
+      ("value", otlpAttributeValue (Observability.attributeValue attribute))
+    ]
+
+otlpAttributeValue :: Observability.ObservabilityAttributeValue -> LazyByteString.ByteString
+otlpAttributeValue attributeValue =
+  jsonObjectBytes
+    [ case attributeValue of
+        Observability.TextAttribute textValue ->
+          ("stringValue", jsonStringBytes textValue)
+        Observability.IntAttribute intValue ->
+          ("intValue", jsonStringBytes (Text.pack (show intValue)))
+    ]
+
+otlpHeader :: (Text, Text) -> Http.Header
+otlpHeader (headerName, headerValue) =
+  (fromString (Text.unpack headerName), TextEncoding.encodeUtf8 headerValue)
+
+nextOtlpSpanIdentifiers :: IO (Text, Text)
+nextOtlpSpanIdentifiers = do
+  requestSeed <- atomicModifyIORef' otlpSpanSeed (\seed -> let nextSeed = seed + 1 in (nextSeed, nextSeed))
+  monotonicTime <- getMonotonicTimeNSec
+  let traceIdBytes = word64Bytes monotonicTime <> word64Bytes requestSeed
+      spanIdBytes = word64Bytes (monotonicTime `xor` (requestSeed + 0x9e3779b97f4a7c15))
+  pure (base64Text traceIdBytes, base64Text spanIdBytes)
+
+base64Text :: ByteString.ByteString -> Text
+base64Text =
+  TextEncoding.decodeUtf8 . Base64.encode
+
+word64Bytes :: Word64 -> ByteString.ByteString
+word64Bytes word =
+  ByteString.pack
+    [ fromIntegral (word `shiftR` 56),
+      fromIntegral (word `shiftR` 48),
+      fromIntegral (word `shiftR` 40),
+      fromIntegral (word `shiftR` 32),
+      fromIntegral (word `shiftR` 24),
+      fromIntegral (word `shiftR` 16),
+      fromIntegral (word `shiftR` 8),
+      fromIntegral word
+    ]
+
+otlpHttpManager :: HttpClient.Manager
+{-# NOINLINE otlpHttpManager #-}
+otlpHttpManager =
+  unsafePerformIO (HttpClient.newManager HttpClientTls.tlsManagerSettings)
+
+otlpSpanSeed :: IORef Word64
+{-# NOINLINE otlpSpanSeed #-}
+otlpSpanSeed =
+  unsafePerformIO (newIORef 0)
 
 data PlannedListener
   = PlannedHttp ListenerEndpoint
