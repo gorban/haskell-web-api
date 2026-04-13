@@ -720,6 +720,13 @@ runtime app container rootfully on the host network.
      localhost/haskell-web-api:dev
    ```
 
+   SELinux note: if your host enforces SELinux and these bind-mounted files live under your home
+   directory, rootful Podman may otherwise fail with `Permission denied` for `/app/.env` or
+   `/app/.env.local`. In that case relabel each bind mount with `:Z` (or `:z` if multiple containers
+   need to share the same content), for example
+   `-v "$PWD/podman.env:/app/.env:ro,Z"` and
+   `-v "$PWD/podman.env.port80:/app/.env.local:ro,Z"`.
+
    Because this container is sharing the host network namespace directly, `127.0.0.1:5432` still
    reaches the PostgreSQL container from the earlier pod and `127.0.0.1:4318` still reaches Jaeger.
 
@@ -786,6 +793,9 @@ one manual-TLS HTTPS listener.
      -v "$PWD/examples/reverse-proxy/tls:/app/tls:ro" \
      localhost/haskell-web-api:dev
    ```
+
+   On SELinux hosts, apply the same `:Z` / `:z` relabeling to the TLS directory mount too, for
+   example `-v "$PWD/examples/reverse-proxy/tls:/app/tls:ro,Z"`.
 
 5. From another terminal, verify both low ports are bound and that plain HTTP now redirects to HTTPS by
    default:
@@ -973,7 +983,9 @@ declared `http-01` port, it should now start both listeners instead of stopping 
 To exercise the native backend directly, switch `LISTENER_1_ACME_CHALLENGE_BACKEND` to
 `in-process-http01`, remove the certbot-specific variables, and keep `openssl` installed on the machine or
 in the container image. For real `http-01` testing on port `80`, reuse the same listener block together
-with the privileged-port guidance above.
+with the privileged-port guidance above. If the rootful Podman container logs `Permission denied` for
+`/app/.env.local` or mounted certificate paths on an SELinux host, relabel those bind mounts with `:Z`
+(or `:z` when the same content must be shared across multiple containers).
 
 ## Request Context In Logs And Traces
 
