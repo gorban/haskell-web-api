@@ -1001,6 +1001,9 @@ runtime HTTPS listener startup is the active deployment path.
 For direct app-managed dual listeners, you can now omit `REDIRECT_HTTP_TO_HTTPS` and let the runtime
 default it on whenever both HTTP and HTTPS listeners are configured together. Set
 `REDIRECT_HTTP_TO_HTTPS=false` only when you intentionally want both listeners to serve real traffic.
+If more than one distinct HTTPS listener port is configured, the runtime keeps redirects on but omits
+an explicit port in the redirect target, which means browsers fall back to the default HTTPS authority
+on port `443`.
 
 ## External Port 80 Reachability for ACME / http-01
 

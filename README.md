@@ -252,6 +252,7 @@ When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default fro
 
 - HTTP-only listener sets keep redirects off.
 - Dual HTTP+HTTPS listener sets default redirects on and target the unique configured HTTPS port.
+- If more than one distinct HTTPS listener port exists, redirects stay on but omit an explicit port, so the redirect target falls back to the standard HTTPS authority on port `443`.
 - `REDIRECT_HTTP_TO_HTTPS=false` overrides that default and leaves both listeners serving real traffic.
 - `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
 

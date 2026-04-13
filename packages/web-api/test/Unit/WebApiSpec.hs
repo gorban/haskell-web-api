@@ -1012,6 +1012,74 @@ spec = do
                   }
             }
 
+    it "keeps redirects on but leaves the redirect port implicit when multiple HTTPS ports exist" $
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5001"),
+          ("LISTENER_0_SCHEME", "http"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "443"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "manual"),
+          ("LISTENER_1_TLS_CERTIFICATE_FILE", "https-443-cert.pem"),
+          ("LISTENER_1_TLS_PRIVATE_KEY_FILE", "https-443-key.pem"),
+          ("LISTENER_2_HOST", "127.0.0.1"),
+          ("LISTENER_2_PORT", "5443"),
+          ("LISTENER_2_SCHEME", "https"),
+          ("LISTENER_2_TLS_SOURCE", "manual"),
+          ("LISTENER_2_TLS_CERTIFICATE_FILE", "https-5443-cert.pem"),
+          ("LISTENER_2_TLS_PRIVATE_KEY_FILE", "https-5443-key.pem")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5001,
+                      listenerScheme = Http,
+                      listenerTls = Nothing
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "https-443-cert.pem",
+                                    privateKeyFile = "https-443-key.pem"
+                                  }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                ManualCertificateFiles
+                                  { certificateFile = "https-5443-cert.pem",
+                                    privateKeyFile = "https-5443-key.pem"
+                                  }
+                            }
+                    }
+                ],
+              requestPolicy =
+                RequestPolicyConfig
+                  { redirectHttpToHttps = True,
+                    httpsRedirectPort = Nothing,
+                    strictTransportSecurity = Nothing
+                  }
+            }
+
     it "parses tracing and metrics exporters independently while preserving header order" $ do
       parseRuntimeAppConfig
         committedRuntimeDefaults
