@@ -1074,6 +1074,23 @@ spec = do
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
+        [("OTLP_TRACING_ENABLED", "true")]
+        `shouldBe` Right
+          defaultAppConfig
+            { observability =
+                ObservabilityConfig
+                  { tracingExporter =
+                      Just
+                        OtlpExporter
+                          { otlpEndpoint = "http://127.0.0.1:4318/v1/traces",
+                            otlpHeaders = []
+                          },
+                    metricsExporter = Nothing
+                  }
+            }
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
         [ ("OTLP_TRACING_ENABLED", "false"),
           ("OTLP_TRACING_ENDPOINT", "http://collector:4318/v1/traces"),
           ("OTLP_TRACING_HEADERS", "authorization=Bearer token")
