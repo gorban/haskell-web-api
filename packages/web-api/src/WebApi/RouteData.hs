@@ -1,9 +1,11 @@
 module WebApi.RouteData
   ( HomeRouteData (..),
     RouteDataResult (..),
+    RouteDataSelection (..),
     SecondRouteData (..),
     StatusApiData (..),
     selectRouteData,
+    selectRouteDataSelectionWithDatabase,
     selectRouteDataWithDatabase,
   )
 where
@@ -13,10 +15,13 @@ import HarchWeb qualified
 import WebApi.Database
   ( DatabaseEffect,
     DatabaseError,
+    DatabaseOperation,
+    databaseResultOperations,
+    databaseResultValue,
     defaultDatabaseEffect,
     homePageDataSummary,
-    loadHomePageData,
-    loadSecondPageData,
+    loadHomePageDataWithObservability,
+    loadSecondPageDataWithObservability,
     secondPageDataHighlights,
     secondPageDataSummary,
   )
@@ -50,41 +55,65 @@ data RouteDataResult
   | NotFoundRouteDataResult
   deriving (Eq, Show)
 
+data RouteDataSelection = RouteDataSelection
+  { routeDataResult :: RouteDataResult,
+    routeDataDatabaseOperations :: [DatabaseOperation]
+  }
+  deriving (Eq, Show)
+
 selectRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteData =
   selectRouteDataWithDatabase defaultDatabaseEffect
 
-selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
-selectRouteDataWithDatabase databaseEffect routeRequest =
+selectRouteDataSelectionWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataSelection
+selectRouteDataSelectionWithDatabase databaseEffect routeRequest =
   case HarchWeb.requestRoute routeRequest of
-    HomeRoute ->
-      fmap
-        ( HomeRouteDataResult
-            . fmap
-              ( \homePageData ->
-                  HomeRouteData
-                    { homeRouteSummary = homePageDataSummary homePageData
-                    }
-              )
-        )
-        (loadHomePageData databaseEffect (HarchWeb.requestContext routeRequest))
-    SecondRoute ->
-      fmap
-        ( SecondRouteDataResult
-            . fmap
-              ( \secondPageData ->
-                  SecondRouteData
-                    { secondRouteSummary = secondPageDataSummary secondPageData,
-                      secondRouteHighlights = secondPageDataHighlights secondPageData
-                    }
-              )
-        )
-        (loadSecondPageData databaseEffect (HarchWeb.requestContext routeRequest))
+    HomeRoute -> do
+      homePageDataResult <- loadHomePageDataWithObservability databaseEffect (HarchWeb.requestContext routeRequest)
+      pure
+        RouteDataSelection
+          { routeDataResult =
+              HomeRouteDataResult
+                ( fmap
+                    ( \homePageData ->
+                        HomeRouteData
+                          { homeRouteSummary = homePageDataSummary homePageData
+                          }
+                    )
+                    (databaseResultValue homePageDataResult)
+                ),
+            routeDataDatabaseOperations = databaseResultOperations homePageDataResult
+          }
+    SecondRoute -> do
+      secondPageDataResult <- loadSecondPageDataWithObservability databaseEffect (HarchWeb.requestContext routeRequest)
+      pure
+        RouteDataSelection
+          { routeDataResult =
+              SecondRouteDataResult
+                ( fmap
+                    ( \secondPageData ->
+                        SecondRouteData
+                          { secondRouteSummary = secondPageDataSummary secondPageData,
+                            secondRouteHighlights = secondPageDataHighlights secondPageData
+                          }
+                    )
+                    (databaseResultValue secondPageDataResult)
+                ),
+            routeDataDatabaseOperations = databaseResultOperations secondPageDataResult
+          }
     StatusApiRoute ->
       pure $
-        StatusApiDataResult
-          StatusApiData
-            { statusApiLocale = requestLocale (HarchWeb.requestContext routeRequest)
-            }
+        RouteDataSelection
+          { routeDataResult =
+              StatusApiDataResult
+                StatusApiData
+                  { statusApiLocale = requestLocale (HarchWeb.requestContext routeRequest)
+                  },
+            routeDataDatabaseOperations = []
+          }
     NotFoundRoute ->
-      pure NotFoundRouteDataResult
+      pure RouteDataSelection {routeDataResult = NotFoundRouteDataResult, routeDataDatabaseOperations = []}
+
+selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
+selectRouteDataWithDatabase databaseEffect routeRequest =
+  fmap routeDataResult (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)

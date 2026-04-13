@@ -40,7 +40,7 @@ import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, run
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
 import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
-import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
+import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
@@ -48,7 +48,7 @@ import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), Postgr
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
-import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataWithDatabase)
+import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites, toSetupPrerequisiteConfig)
 
@@ -1681,6 +1681,16 @@ spec = do
               }
           homeError = HomePageDataError "home unavailable"
           secondError = SecondPageDataError "second unavailable"
+          databaseOperation =
+            DatabaseOperation
+              { databaseOperationName = "load-second-page-summary",
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+              }
+          databaseResult =
+            DatabaseResult
+              { databaseResultValue = Right homePageData,
+                databaseResultOperations = [databaseOperation]
+              }
           seededDatabase =
             DatabaseSeed
               { englishHomePageData = Right homePageData,
@@ -1694,6 +1704,13 @@ spec = do
       secondPageData `shouldNotBe` otherSecondPageData
       homeError `shouldBe` homeError
       homeError `shouldNotBe` secondError
+      databaseOperation `shouldBe` databaseOperation
+      databaseOperation `shouldNotBe` databaseOperation {databaseOperationName = "load-home-page-summary"}
+      databaseResult `shouldBe` databaseResult
+      databaseResult
+        `shouldNotBe` databaseResult
+          { databaseResultOperations = []
+          }
       seededDatabase `shouldBe` seededDatabase
       seededDatabase
         `shouldNotBe` seededDatabase
@@ -1707,12 +1724,20 @@ spec = do
         `shouldBe` "HomePageDataError \"home unavailable\""
       show (SecondPageDataError "second unavailable")
         `shouldBe` "SecondPageDataError \"second unavailable\""
+      show databaseOperation
+        `shouldBe` "DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}"
+      show databaseResult
+        `shouldBe` "DatabaseResult {databaseResultValue = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}"
       show seededDatabase
         `shouldBe` "DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}"
       show [HomePageData {homePageDataSummary = "Seeded home"}]
         `shouldBe` "[HomePageData {homePageDataSummary = \"Seeded home\"}]"
       show [homeError, secondError]
         `shouldBe` "[HomePageDataError \"home unavailable\",SecondPageDataError \"second unavailable\"]"
+      show [databaseOperation]
+        `shouldBe` "[DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]"
+      show [databaseResult]
+        `shouldBe` "[DatabaseResult {databaseResultValue = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}]"
       show
         [ SecondPageData
             { secondPageDataSummary = "Seeded second",
@@ -1726,6 +1751,15 @@ spec = do
   describe "buildSeededDatabaseEffect" $ do
     it "loads page-oriented seeded data for both English and French requests" $ do
       let englishEffect = buildSeededDatabaseEffect defaultDatabaseSeed
+      loadHomePageDataWithObservability englishEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                HomePageData
+                  { homePageDataSummary = "Server-rendered home page with stubbed content."
+                  },
+            databaseResultOperations = []
+          }
       loadHomePageData englishEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
@@ -1748,6 +1782,16 @@ spec = do
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
+      loadSecondPageDataWithObservability englishEffect frenchRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                    secondPageDataHighlights = []
+                  },
+            databaseResultOperations = []
+          }
 
     it "returns explicit seeded errors without collapsing page-specific failures" $ do
       let seededEffect =
@@ -1771,6 +1815,11 @@ spec = do
         `shouldReturn` Left (HomePageDataError "home seed unavailable")
       loadSecondPageData seededEffect frenchRequestContext
         `shouldReturn` Left (SecondPageDataError "second seed unavailable")
+      loadSecondPageDataWithObservability seededEffect frenchRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "second seed unavailable"),
+            databaseResultOperations = []
+          }
 
     it "keeps the default seeded interpreter deterministic for repeated requests" $ do
       firstHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
@@ -1805,6 +1854,39 @@ spec = do
                 }
           )
       selectRouteDataWithDatabase seededDatabaseEffect apiSecondRequest `shouldReturn` selectedRouteData
+
+    it "keeps route-data selections deterministic while exposing database operations separately" $ do
+      let databaseOperation =
+            DatabaseOperation
+              { databaseOperationName = "load-second-page-summary",
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+              }
+          routeDataSelection =
+            RouteDataSelection
+              { routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Shared domain summary", secondRouteHighlights = []})),
+                routeDataDatabaseOperations = [databaseOperation]
+              }
+      routeDataSelection `shouldBe` routeDataSelection
+      routeDataSelection
+        `shouldNotBe` routeDataSelection
+          { routeDataDatabaseOperations = []
+          }
+      show routeDataSelection
+        `shouldBe` "RouteDataSelection {routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = []})), routeDataDatabaseOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}"
+      show [routeDataSelection]
+        `shouldBe` "[RouteDataSelection {routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = []})), routeDataDatabaseOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}]"
+      selectRouteDataSelectionWithDatabase (buildSeededDatabaseEffect defaultDatabaseSeed) secondRequest
+        `shouldReturn` RouteDataSelection
+          { routeDataResult =
+              SecondRouteDataResult
+                ( Right
+                    SecondRouteData
+                      { secondRouteSummary = "Second page content with stubbed data ready for future loaders.",
+                        secondRouteHighlights = []
+                      }
+                ),
+            routeDataDatabaseOperations = []
+          }
 
     it "loads home-route data from the database effect and preserves explicit failures" $ do
       let seededDatabaseEffect =
@@ -1925,6 +2007,20 @@ spec = do
                   | otherwise ->
                       failingPostgresResult "unexpected query"
           postgresEffect = buildPostgresDatabaseEffectWithRunner runner postgresTestConfig
+      loadHomePageDataWithObservability postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                HomePageData
+                  { homePageDataSummary = "Server-rendered home page with stubbed content."
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-home-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  }
+              ]
+          }
       loadHomePageData postgresEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
@@ -1947,141 +2043,62 @@ spec = do
             { secondPageDataSummary = "Charge depuis PostgreSQL.",
               secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
             }
+      loadSecondPageDataWithObservability postgresEffect frenchRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = "Charge depuis PostgreSQL.",
+                    secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                  }
+              ]
+          }
       recordedCommands <- readIORef recordedCommandsReference
+      let expectedQueryCommand sql =
+            PostgresCommand
+              { postgresExecutable = "psql",
+                postgresArguments =
+                  [ "--host",
+                    "db.internal",
+                    "--port",
+                    "6543",
+                    "--dbname",
+                    "web_api_prod",
+                    "--username",
+                    "web_api_app",
+                    "--no-password",
+                    "--set",
+                    "ON_ERROR_STOP=1",
+                    "--tuples-only",
+                    "--no-align",
+                    "--quiet",
+                    "--command",
+                    Text.unpack sql
+                  ],
+                postgresEnvironment = [("PGPASSWORD", "super-secret")]
+              }
       recordedCommands
-        `shouldBe` [ PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       },
-                     PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       },
-                     PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       },
-                     PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       },
-                     PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       },
-                     PostgresCommand
-                       { postgresExecutable = "psql",
-                         postgresArguments =
-                           [ "--host",
-                             "db.internal",
-                             "--port",
-                             "6543",
-                             "--dbname",
-                             "web_api_prod",
-                             "--username",
-                             "web_api_app",
-                             "--no-password",
-                             "--set",
-                             "ON_ERROR_STOP=1",
-                             "--tuples-only",
-                             "--no-align",
-                             "--quiet",
-                             "--command",
-                             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
-                           ],
-                         postgresEnvironment = [("PGPASSWORD", "super-secret")]
-                       }
-                   ]
+        `shouldBe` map
+          expectedQueryCommand
+          [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+          ]
 
     it "maps missing rows and command failures into database errors" $ do
       let missingRunner command =
@@ -2097,6 +2114,16 @@ spec = do
         `shouldReturn` Left (HomePageDataError "expected exactly one row: ")
       loadSecondPageData postgresEffect defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "relation does not exist")
+      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "relation does not exist"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  }
+              ]
+          }
 
     it "maps scalar query failures, malformed rows, and highlight query failures into explicit errors" $ do
       let homeFailureRunner command =
@@ -2130,6 +2157,20 @@ spec = do
         `shouldReturn` Left (HomePageDataError "expected exactly one row: first, second")
       loadSecondPageData (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "highlights unavailable")
+      loadSecondPageDataWithObservability (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                  }
+              ]
+          }
 
     it "runs migrations and seed statements in order through the provided runner" $ do
       recordedCommandsReference <- newIORef []
@@ -2260,7 +2301,39 @@ spec = do
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
         HarchWeb.renderResponse application secondRequest
-          `shouldReturn` HarchWeb.PageResponse
+          `shouldReturn` HarchWeb.PageResponseWithMetadata
+            HarchWeb.ResponseBody
+              { HarchWeb.responseStatus = 200,
+                HarchWeb.responseContentType = "text/html; charset=utf-8",
+                HarchWeb.responseBody = "",
+                HarchWeb.responseObservabilityAttributes =
+                  [ Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.system",
+                        Observability.attributeValue = Observability.TextAttribute "postgresql"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.name",
+                        Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.query.template",
+                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.system",
+                        Observability.attributeValue = Observability.TextAttribute "postgresql"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.name",
+                        Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.query.template",
+                        Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                      }
+                  ],
+                HarchWeb.responseLogEntries = []
+              }
             ( HarchWeb.Page
                 { HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
@@ -4741,6 +4814,102 @@ spec = do
               HarchWeb.responseLogEntries = []
             }
 
+    it "attaches safe database operation observability to postgres-backed page and API responses" $ do
+      let postgresRunner command =
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'home'" sql ->
+                      successfulPostgresResult "Loaded home summary."
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
+                      successfulPostgresResult "Loaded second summary."
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
+                      successfulPostgresResult "Fast SSR\nShared route data"
+                  | otherwise ->
+                      failingPostgresResult "unexpected query"
+          postgresEffect = buildPostgresDatabaseEffectWithRunner postgresRunner postgresTestConfig
+      let renderedSecondPage =
+            renderPageFromRouteData
+              defaultAppConfig
+              secondRequest
+              ( SecondRouteDataResult
+                  ( Right
+                      SecondRouteData
+                        { secondRouteSummary = "Loaded second summary.",
+                          secondRouteHighlights = ["Fast SSR", "Shared route data"]
+                        }
+                  )
+              )
+      selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest
+        `shouldReturn` HarchWeb.PageResponseWithMetadata
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = "text/html; charset=utf-8",
+              HarchWeb.responseBody = "",
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    }
+                ],
+              HarchWeb.responseLogEntries = []
+            }
+          renderedSecondPage
+      selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 200,
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"summary\":\"Loaded second summary.\",\"highlights\":[\"Fast SSR\",\"Shared route data\"]}",
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    }
+                ],
+              HarchWeb.responseLogEntries = []
+            }
+
     it "keeps not-found handling consistent across page and non-page responses" $ do
       renderedPage <- renderPage defaultAppConfig notFoundRequest
       selectResponse defaultAppConfig notFoundRequest `shouldReturn` HarchWeb.PageResponse renderedPage
@@ -4791,6 +4960,71 @@ spec = do
                 ],
               HarchWeb.responseLogEntries =
                 ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
+            }
+
+    it "adds safe database operation details to postgres-backed failure diagnostics" $ do
+      let failingRunner command =
+            pure $
+              case commandSql command of
+                sql
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
+                      successfulPostgresResult "Loaded second summary."
+                  | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
+                      failingPostgresResult "highlights unavailable"
+                  | otherwise ->
+                      failingPostgresResult "unexpected query"
+          postgresEffect = buildPostgresDatabaseEffectWithRunner failingRunner postgresTestConfig
+      selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest
+        `shouldReturn` HarchWeb.BodyResponse
+          HarchWeb.ResponseBody
+            { HarchWeb.responseStatus = 503,
+              HarchWeb.responseContentType = "application/json",
+              HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
+              HarchWeb.responseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.type",
+                      Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "exception.message",
+                      Observability.attributeValue = Observability.TextAttribute "highlights unavailable"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.route",
+                      Observability.attributeValue = Observability.TextAttribute "/second"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.surface",
+                      Observability.attributeValue = Observability.TextAttribute "api"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.system",
+                      Observability.attributeValue = Observability.TextAttribute "postgresql"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.operation.name",
+                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "db.query.template",
+                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    }
+                ],
+              HarchWeb.responseLogEntries =
+                [ "Database failure while rendering required second-page api response after database operations [load-second-page-summary (SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;), load-second-page-highlights (SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;)]: SecondPageDataError \"highlights unavailable\""
+                ]
             }
 
     it "preserves unexpected database error constructors in API diagnostics" $
@@ -5405,6 +5639,7 @@ spec = do
       case renderedResponse of
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
+        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
 
   describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
@@ -5438,6 +5673,7 @@ spec = do
           HarchWeb.responseBody body
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
+        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability

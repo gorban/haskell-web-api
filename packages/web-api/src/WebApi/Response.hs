@@ -12,7 +12,7 @@ import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import WebApi.Config (AppConfig)
-import WebApi.Database (DatabaseEffect, DatabaseError (..), defaultDatabaseEffect)
+import WebApi.Database (DatabaseEffect, DatabaseError (..), DatabaseOperation (..), defaultDatabaseEffect)
 import WebApi.Page (renderPageFromRouteData)
 import WebApi.Route
   ( AppLocale (..),
@@ -22,9 +22,10 @@ import WebApi.Route
   )
 import WebApi.RouteData
   ( RouteDataResult (..),
+    RouteDataSelection (..),
     SecondRouteData (..),
     StatusApiData (..),
-    selectRouteDataWithDatabase,
+    selectRouteDataSelectionWithDatabase,
   )
 
 selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
@@ -34,46 +35,62 @@ selectResponse config =
 selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponseWithDatabase config databaseEffect routeRequest =
   fmap
-    ( \routeData ->
+    ( \routeDataSelection ->
         case requestSurface (HarchWeb.requestContext routeRequest) of
           ApiSurface ->
-            HarchWeb.BodyResponse (renderApiResponseFromRouteData routeData)
+            HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
           PageSurface ->
-            renderPageResponseFromRouteData config routeRequest routeData
+            renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
     )
-    (selectRouteDataWithDatabase databaseEffect routeRequest)
+    (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
 
-renderPageResponseFromRouteData ::
+renderPageResponseFromRouteDataSelection ::
   AppConfig ->
   HarchWeb.RouteRequest AppRoute AppRequestContext ->
-  RouteDataResult ->
+  RouteDataSelection ->
   HarchWeb.Response AppRoute AppRequestContext
-renderPageResponseFromRouteData config routeRequest routeData =
+renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection =
   case routeData of
     HomeRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/" "home-page" databaseError))
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/" "home-page" routeDataDatabaseOperationsValue databaseError))
             renderedPage
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/second" "second-page" databaseError))
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
             renderedPage
     _ ->
-      HarchWeb.PageResponse (renderPageFromRouteData config routeRequest routeData)
+      let renderedPage = renderPageFromRouteData config routeRequest routeData
+       in if null routeDataDatabaseOperationsValue
+            then HarchWeb.PageResponse renderedPage
+            else HarchWeb.PageResponseWithMetadata (pageSuccessResponseMetadata routeDataDatabaseOperationsValue) renderedPage
+  where
+    routeData = routeDataResult routeDataSelection
+    routeDataDatabaseOperationsValue = routeDataDatabaseOperations routeDataSelection
 
 renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
-renderApiResponseFromRouteData routeData =
+renderApiResponseFromRouteData =
+  renderApiResponseFromRouteDataWithOperations []
+
+renderApiResponseFromRouteDataSelection :: RouteDataSelection -> HarchWeb.ResponseBody
+renderApiResponseFromRouteDataSelection routeDataSelection =
+  renderApiResponseFromRouteDataWithOperations
+    (routeDataDatabaseOperations routeDataSelection)
+    (routeDataResult routeDataSelection)
+
+renderApiResponseFromRouteDataWithOperations :: [DatabaseOperation] -> RouteDataResult -> HarchWeb.ResponseBody
+renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
   case routeData of
     StatusApiDataResult statusApiData ->
-      jsonResponseBody 200 (statusApiBody statusApiData)
+      jsonResponseBodyWithOperations 200 (statusApiBody statusApiData) databaseOperations
     SecondRouteDataResult (Right secondRouteData) ->
-      jsonResponseBody 200 (secondRouteApiBody secondRouteData)
+      jsonResponseBodyWithOperations 200 (secondRouteApiBody secondRouteData) databaseOperations
     SecondRouteDataResult (Left databaseError) ->
-      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseError)
+      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseOperations databaseError)
     _ ->
-      jsonResponseBody 404 "{\"error\":\"not-found\"}"
+      jsonResponseBodyWithOperations 404 "{\"error\":\"not-found\"}" databaseOperations
 
 statusApiBody :: StatusApiData -> Text
 statusApiBody statusApiData =
@@ -111,21 +128,34 @@ renderLocale locale =
     English -> "en"
     French -> "fr"
 
-jsonResponseBody :: Int -> Text -> HarchWeb.ResponseBody
-jsonResponseBody statusCode bodyText =
+jsonResponseBodyWithOperations :: Int -> Text -> [DatabaseOperation] -> HarchWeb.ResponseBody
+jsonResponseBodyWithOperations statusCode bodyText databaseOperations =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = statusCode,
       HarchWeb.responseContentType = "application/json",
       HarchWeb.responseBody = bodyText,
-      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
       HarchWeb.responseLogEntries = []
     }
 
 jsonErrorResponseBody :: Int -> Text -> FailureDiagnostics -> HarchWeb.ResponseBody
 jsonErrorResponseBody statusCode bodyText diagnostics =
-  (jsonResponseBody statusCode bodyText)
-    { HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
+  HarchWeb.ResponseBody
+    { HarchWeb.responseStatus = statusCode,
+      HarchWeb.responseContentType = "application/json",
+      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
       HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+    }
+
+pageSuccessResponseMetadata :: [DatabaseOperation] -> HarchWeb.ResponseBody
+pageSuccessResponseMetadata databaseOperations =
+  HarchWeb.ResponseBody
+    { HarchWeb.responseStatus = 200,
+      HarchWeb.responseContentType = "text/html; charset=utf-8",
+      HarchWeb.responseBody = "",
+      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
+      HarchWeb.responseLogEntries = []
     }
 
 pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
@@ -143,8 +173,8 @@ data FailureDiagnostics = FailureDiagnostics
     diagnosticsLogEntries :: [Text]
   }
 
-pageFailureDiagnostics :: RequestSurface -> Text -> Text -> DatabaseError -> FailureDiagnostics
-pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseError =
+pageFailureDiagnostics :: RequestSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
+pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperations databaseError =
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
@@ -163,18 +193,57 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseError =
             { Observability.attributeName = "app.surface",
               Observability.attributeValue = Observability.TextAttribute (renderRequestSurface requestSurfaceValue)
             }
-        ],
+        ]
+          <> databaseOperationObservabilityAttributes databaseOperations,
       diagnosticsLogEntries =
         [ Text.concat
             [ "Database failure while rendering required ",
               routeLabel,
               " ",
               renderRequestSurface requestSurfaceValue,
-              " response: ",
+              " response",
+              renderDatabaseOperationsSuffix databaseOperations,
+              ": ",
               Text.pack (show databaseError)
             ]
         ]
     }
+
+databaseOperationObservabilityAttributes :: [DatabaseOperation] -> [Observability.ObservabilityAttribute]
+databaseOperationObservabilityAttributes =
+  concatMap databaseOperationObservabilityEntries
+
+databaseOperationObservabilityEntries :: DatabaseOperation -> [Observability.ObservabilityAttribute]
+databaseOperationObservabilityEntries databaseOperation =
+  [ Observability.ObservabilityAttribute
+      { Observability.attributeName = "db.system",
+        Observability.attributeValue = Observability.TextAttribute "postgresql"
+      },
+    Observability.ObservabilityAttribute
+      { Observability.attributeName = "db.operation.name",
+        Observability.attributeValue = Observability.TextAttribute (databaseOperationName databaseOperation)
+      },
+    Observability.ObservabilityAttribute
+      { Observability.attributeName = "db.query.template",
+        Observability.attributeValue = Observability.TextAttribute (databaseQueryTemplate databaseOperation)
+      }
+  ]
+
+renderDatabaseOperationsSuffix :: [DatabaseOperation] -> Text
+renderDatabaseOperationsSuffix databaseOperations =
+  case databaseOperations of
+    [] -> ""
+    _ ->
+      " after database operations ["
+        <> Text.intercalate
+          ", "
+          [ databaseOperationName databaseOperation
+              <> " ("
+              <> databaseQueryTemplate databaseOperation
+              <> ")"
+          | databaseOperation <- databaseOperations
+          ]
+        <> "]"
 
 databaseErrorType :: DatabaseError -> Text
 databaseErrorType databaseError =

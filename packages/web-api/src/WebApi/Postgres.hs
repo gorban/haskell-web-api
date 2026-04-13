@@ -26,6 +26,8 @@ import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database
   ( DatabaseEffect (..),
     DatabaseError (..),
+    DatabaseOperation (..),
+    DatabaseResult (..),
     HomePageData (..),
     SecondPageData (..),
   )
@@ -60,20 +62,51 @@ buildPostgresDatabaseEffect =
 buildPostgresDatabaseEffectWithRunner :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> DatabaseEffect
 buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
   DatabaseEffect
-    { loadHomePageData =
-        \requestContext ->
-          fmap
-            (fmap HomePageData)
-            (runRequiredScalarQuery runCommand databaseConfig (homeSummaryQuery (requestLocale requestContext)) HomePageDataError),
-      loadSecondPageData =
-        \requestContext -> do
-          summaryResult <- runRequiredScalarQuery runCommand databaseConfig (secondSummaryQuery (requestLocale requestContext)) SecondPageDataError
-          highlightsResult <- runOptionalRowsQuery runCommand databaseConfig (secondHighlightsQuery (requestLocale requestContext)) SecondPageDataError
-          pure $
-            SecondPageData
-              <$> summaryResult
-              <*> highlightsResult
+    { loadHomePageData = fmap databaseResultValue . loadPostgresHomePageData,
+      loadHomePageDataWithObservability =
+        loadPostgresHomePageData,
+      loadSecondPageData = fmap databaseResultValue . loadPostgresSecondPageData,
+      loadSecondPageDataWithObservability =
+        loadPostgresSecondPageData
     }
+  where
+    loadPostgresHomePageData requestContext = do
+      let operation = homeSummaryOperation
+      summaryResult <-
+        fmap
+          (fmap HomePageData)
+          (runRequiredScalarQuery runCommand databaseConfig (homeSummaryQuery (requestLocale requestContext)) HomePageDataError)
+      pure
+        DatabaseResult
+          { databaseResultValue = summaryResult,
+            databaseResultOperations = [operation]
+          }
+    loadPostgresSecondPageData requestContext = do
+      let summaryOperation = secondSummaryOperation
+          highlightsOperation = secondHighlightsOperation
+      summaryResult <- runRequiredScalarQuery runCommand databaseConfig (secondSummaryQuery (requestLocale requestContext)) SecondPageDataError
+      case summaryResult of
+        Left databaseError ->
+          pure
+            DatabaseResult
+              { databaseResultValue = Left databaseError,
+                databaseResultOperations = [summaryOperation]
+              }
+        Right secondSummary -> do
+          highlightsResult <- runOptionalRowsQuery runCommand databaseConfig (secondHighlightsQuery (requestLocale requestContext)) SecondPageDataError
+          pure
+            DatabaseResult
+              { databaseResultValue =
+                  fmap
+                    ( \highlights ->
+                        SecondPageData
+                          { secondPageDataSummary = secondSummary,
+                            secondPageDataHighlights = highlights
+                          }
+                    )
+                    highlightsResult,
+                databaseResultOperations = [summaryOperation, highlightsOperation]
+              }
 
 runPostgresMigrations :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrations =
@@ -267,6 +300,27 @@ secondHighlightsQuery locale =
       renderLocaleCode locale,
       "' ORDER BY position ASC;"
     ]
+
+homeSummaryOperation :: DatabaseOperation
+homeSummaryOperation =
+  DatabaseOperation
+    { databaseOperationName = "load-home-page-summary",
+      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+    }
+
+secondSummaryOperation :: DatabaseOperation
+secondSummaryOperation =
+  DatabaseOperation
+    { databaseOperationName = "load-second-page-summary",
+      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+    }
+
+secondHighlightsOperation :: DatabaseOperation
+secondHighlightsOperation =
+  DatabaseOperation
+    { databaseOperationName = "load-second-page-highlights",
+      databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+    }
 
 qualifiedTableName :: Text -> Text
 qualifiedTableName tableName =
