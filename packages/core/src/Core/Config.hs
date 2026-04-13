@@ -46,7 +46,7 @@ loadConfigOverridesFile overridesPath = do
       overridesReadResult <-
         ( try $ do
             fileContents <- TextIO.readFile overridesPath
-            evaluate (Text.length fileContents)
+            _ <- evaluate (Text.length fileContents)
             pure fileContents
         ) ::
           IO (Either IOException Text)
