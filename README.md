@@ -295,5 +295,7 @@ cabal run exe:haskell-web-api
 By default the app binds an HTTP listener on `127.0.0.1:5001` and serves the example SSR/API behavior in
 place, so external dependencies only become necessary when you override the defaults for your own
 environment. The tracked runtime `Dockerfile` keeps running as the non-root `app` user while granting the
-binary `cap_net_bind_service`, but some container runtimes still require explicit runtime capability or
-host-network allowances before privileged listener ports such as `80` or `443` will actually bind.
+binary `cap_net_bind_service`, but some container runtimes still require an explicit
+`--cap-add=NET_BIND_SERVICE` grant or host-network allowances before privileged listener ports such as `80`
+or `443` will actually bind. Prefer adding that runtime capability over switching the container to
+`--user root`.

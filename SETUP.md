@@ -683,8 +683,9 @@ For that case you need one of these approaches:
 - Run the relevant Podman container or pod rootfully on the host, for example
   `distrobox-host-exec sudo podman ...` from inside a Distrobox shell.
 - Use a runtime path that actually grants low-port bind privileges end-to-end. The tracked image already
-  sets `cap_net_bind_service` on `/app/haskell-web-api`, but rootless Podman may still need a rootful run
-  or explicit runtime capability/host-network allowances before port `80` binding succeeds.
+  sets `cap_net_bind_service` on `/app/haskell-web-api`, but Podman low-port runs may still need an
+  explicit `--cap-add=NET_BIND_SERVICE` grant or host-network allowances before port `80` binding
+  succeeds.
 
 If you do not actually need ACME `http-01`, keep the rootless pod on port `5001` and avoid privileged
 port binding entirely.
@@ -715,10 +716,15 @@ runtime app container rootfully on the host network.
    ```bash
    distrobox-host-exec sudo podman run --rm --name web-api-host80 \
      --network=host \
+     --cap-add=NET_BIND_SERVICE \
      -v "$PWD/podman.env:/app/.env:ro" \
      -v "$PWD/podman.env.port80:/app/.env.local:ro" \
      localhost/haskell-web-api:dev
    ```
+
+   Leave the image on its default non-root `app` user here; do not add `--user root`. The explicit
+   runtime capability grant is the low-port piece that some Podman host-network runs still need even
+   though the image already carries `cap_net_bind_service`.
 
    SELinux note: if your host enforces SELinux and these bind-mounted files live under your home
    directory, rootful Podman may otherwise fail with `Permission denied` for `/app/.env` or
@@ -788,6 +794,7 @@ one manual-TLS HTTPS listener.
    ```bash
    distrobox-host-exec sudo podman run --rm --name web-api-host443 \
      --network=host \
+     --cap-add=NET_BIND_SERVICE \
      -v "$PWD/podman.env:/app/.env:ro" \
      -v "$PWD/podman.env.ports80-443:/app/.env.local:ro" \
      -v "$PWD/examples/reverse-proxy/tls:/app/tls:ro" \
@@ -824,6 +831,7 @@ one manual-TLS HTTPS listener.
    distrobox-host-exec sudo podman stop web-api-host443
    distrobox-host-exec sudo podman run --rm --name web-api-host443 \
      --network=host \
+     --cap-add=NET_BIND_SERVICE \
      -v "$PWD/podman.env:/app/.env:ro" \
      -v "$PWD/podman.env.ports80-443:/app/.env.local:ro" \
      -v "$PWD/examples/reverse-proxy/tls:/app/tls:ro" \
