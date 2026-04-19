@@ -453,6 +453,9 @@ explicitly configure them.
 podman build -t localhost/haskell-web-api:dev .
 ```
 
+The tracked runtime image now includes both `certbot` and `openssl`, so later ACME walkthroughs can use
+either backend without rebuilding the image.
+
 2. Create a pod that exposes all three services on localhost:
 
 ```bash
@@ -928,7 +931,9 @@ If you do not want the rootful host-network path above, the remaining low-port o
 Both ACME backends now run through the real runtime path: `web-api` parses the environment into an
 ACME-backed listener config, `harch-web` translates that into an ACME startup plan, and `HarchWeb.runServer`
 can either invoke certbot or complete the `in-process-http01` flow before starting the HTTPS listener.
-The native backend needs `openssl` on `PATH` for RSA key generation, CSR generation, and RS256 signing.
+The tracked runtime container image includes both `certbot` and `openssl`; for local source runs outside
+that container, install `certbot` only when you select `certbot-http01`, and keep `openssl` available
+for the native backend's RSA key generation, CSR generation, and RS256 signing.
 
 When a config includes both the plain HTTP challenge listener and an HTTPS listener, leaving
 `REDIRECT_HTTP_TO_HTTPS` unset now defaults non-ACME traffic to HTTPS redirects while keeping
@@ -953,7 +958,6 @@ LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_1_ACME_DOMAINS=example.com,www.example.com
 LISTENER_1_ACME_CERTIFICATE_DIRECTORY=/app/acme/example.com
 LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_1_ACME_CERTBOT_EXECUTABLE=certbot
 LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
 
 # Listener 2: Optional HTTPS listener that reuses the ACME certificate directory
@@ -963,6 +967,9 @@ LISTENER_2_SCHEME=https
 LISTENER_2_TLS_SOURCE=shared
 LISTENER_2_TLS_CERTIFICATE_DIRECTORY=/app/acme/example.com
 ```
+
+`LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` remains available as an override when certbot lives somewhere
+other than the default `certbot` on `PATH`.
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /

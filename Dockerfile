@@ -125,7 +125,8 @@ COPY --from=coverage-prep /app/_coverage/ /
 # =============================================================================
 FROM alpine:3.20 AS runtime
 
-# Install runtime dependencies and create non-root user
+# Install runtime dependencies, including certbot for the certbot ACME backend,
+# and create the non-root runtime user.
 RUN <<EOF
 set -e
   apk add --no-cache \
@@ -133,7 +134,8 @@ set -e
     libffi \
     gcompat \
     ca-certificates \
-    openssl
+    openssl \
+    certbot
 addgroup -g 1000 app
 adduser -D -u 1000 -G app app
 EOF

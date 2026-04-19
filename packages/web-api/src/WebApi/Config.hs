@@ -153,6 +153,9 @@ committedRuntimeDefaults =
 defaultLocalTracingEndpoint :: Text
 defaultLocalTracingEndpoint = "http://127.0.0.1:4318/v1/traces"
 
+defaultCertbotExecutable :: FilePath
+defaultCertbotExecutable = "certbot"
+
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
   AppEnvironmentConfig
@@ -403,16 +406,20 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         else
           if backendValue == "certbot-http01"
             then
-              CertbotHttp01
-                <$> ( CertbotConfig
-                        <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"
-                        <*> pure
-                          ( maybe
-                              []
-                              (parseDelimitedTextsUnsafe ",")
-                              (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
-                          )
-                    )
+              pure $
+                CertbotHttp01
+                  CertbotConfig
+                    { certbotExecutable =
+                        maybe
+                          defaultCertbotExecutable
+                          Text.unpack
+                          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"),
+                      certbotArguments =
+                        maybe
+                          []
+                          (parseDelimitedTextsUnsafe ",")
+                          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
+                    }
             else
               Left
                 ( InvalidConfigValue

@@ -119,7 +119,7 @@ understands the following values:
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. | (`unset`) |
 | `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
-| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Executable path for the `certbot-http01` backend. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override for the `certbot-http01` backend. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
 | `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` / `--http-01-port` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
@@ -224,7 +224,6 @@ LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
 LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_2_ACME_CERTBOT_EXECUTABLE=/usr/bin/certbot
 LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com
 
 # Listener 3: HTTPS that reuses ACME-published certificate files
@@ -270,8 +269,12 @@ When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default fro
 - `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
 
 The native `in-process-http01` ACME backend now starts through the same runtime path as the certbot backend.
-It requires a plain HTTP listener on the real `http-01` port (`80`) and needs `openssl` available on
-`PATH` for key, CSR, and RS256 operations.
+The tracked runtime container image now ships both `certbot` and `openssl`, so containerized
+`certbot-http01` and `in-process-http01` flows work without extra image customization. Ordinary source
+builds such as `cabal build all` or the default HTTP-only `cabal run exe:haskell-web-api` still do not
+require certbot to be preinstalled; install it locally only when you actually plan to run the
+`certbot-http01` backend outside the container. The native backend requires a plain HTTP listener on the
+real `http-01` port (`80`) and `openssl` available on `PATH` for key, CSR, and RS256 operations.
 
 ### MacOS / Linux
 

@@ -933,7 +933,6 @@ spec = do
               ("LISTENER_2_ACME_CONTACT_EMAILS", "ops@example.com"),
               ("LISTENER_2_ACME_DOMAINS", "example.com"),
               ("LISTENER_2_ACME_CHALLENGE_BACKEND", "certbot-http01"),
-              ("LISTENER_2_ACME_CERTBOT_EXECUTABLE", "certbot"),
               ("LISTENER_2_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--agree-tos")
             ]
       parseRuntimeAppConfig committedDefaults [] []
@@ -1540,8 +1539,7 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
-          ("LISTENER_0_ACME_CERTBOT_EXECUTABLE", "certbot")
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01")
         ]
         []
         []
