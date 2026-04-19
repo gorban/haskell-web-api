@@ -260,6 +260,18 @@ SETUP_AUTOSTART_DATABASE=true
 SETUP_AUTOSTART_JAEGER=false
 ```
 
+For smaller starting points, the repository also includes scenario-oriented override templates under
+`examples/runtime-config/`. Each file is intended to be copied to `./.env.local` and layered on top of
+the committed defaults, for example:
+
+```bash
+cp examples/runtime-config/manual-tls.env ./.env.local
+```
+
+Those templates cover local HTTP-only, OTLP tracing with the default local Jaeger endpoint, OTLP
+endpoint-only implicit enablement, OTLP endpoint plus explicit disablement, manual TLS, ACME plus shared
+80/443/5443 listeners, and reverse-proxy / TLS-offload setups.
+
 When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default from the listener plan:
 
 - HTTP-only listener sets keep redirects off.

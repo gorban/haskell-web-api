@@ -317,6 +317,29 @@ Practical steps:
 For the exhaustive list of supported keys and example file bodies, see the `Configuration` section in
 `README.md`.
 
+The repository also includes scenario-oriented `./.env.local` starting points under
+`examples/runtime-config/`. Those files are designed to be copied into `./.env.local` and then adjusted
+for local paths, domains, headers, or secrets as needed:
+
+| File | Scenario |
+| --- | --- |
+| `examples/runtime-config/local-http-only.env` | Minimal loopback HTTP-only runtime overrides |
+| `examples/runtime-config/otlp-default-local-jaeger.env` | Enable tracing with the default local Jaeger OTLP HTTP endpoint |
+| `examples/runtime-config/otlp-endpoint-implicit-enable.env` | Show that setting `OTLP_TRACING_ENDPOINT` implicitly enables tracing |
+| `examples/runtime-config/otlp-endpoint-explicit-disable.env` | Keep OTLP collector coordinates while explicitly disabling tracing |
+| `examples/runtime-config/manual-tls.env` | Manual TLS listener using the local loopback cert files from `examples/reverse-proxy/tls/` |
+| `examples/runtime-config/acme-shared-80-443-5443.env` | ACME `http-01` on 80, ACME-managed HTTPS on 443, plus a shared-certificate HTTPS listener on 5443 |
+| `examples/runtime-config/reverse-proxy-tls-offload.env` | Backend HTTP listener plus redirect/HSTS policy for a TLS-terminating proxy |
+
+For example:
+
+```bash
+cp examples/runtime-config/reverse-proxy-tls-offload.env ./.env.local
+```
+
+The existing `examples/reverse-proxy/app.env` and `examples/reverse-proxy/app.env.local` files remain the
+more concrete compose-oriented variant of the reverse-proxy / TLS-offload scenario.
+
 ## Local PostgreSQL Startup Example
 
 If you want a local PostgreSQL instance that matches the current committed development defaults:
