@@ -853,6 +853,135 @@ spec = do
               requestPolicy = requestPolicy defaultAppConfig
             }
 
+    it "defaults ACME publish directories and shared TLS reuse directories to .tls paths" $ do
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "shared"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5444"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "acme"),
+          ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
+          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                SharedCertificateFiles
+                                  { certificateDirectory = ".tls/example.com",
+                                    sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                                  }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5444,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
+                                      acmeDomains = ["example.com", "www.example.com"],
+                                      acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
+                                      acmeChallengeBackend = InProcessHttp01
+                                    }
+                            }
+                    }
+                ],
+              requestPolicy = requestPolicy defaultAppConfig
+            }
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "acme"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
+          ("LISTENER_0_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--cert-name,prod/example")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                AcmeCertificateSource
+                                  AcmeConfig
+                                    { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                                      acmeContactEmails = ["ops@example.com"],
+                                      acmeDomains = [],
+                                      acmeHttp01Port = 80,
+                                      acmeCertificateDirectory = Just ".tls/prod/example",
+                                      acmeChallengeBackend =
+                                        CertbotHttp01
+                                          CertbotConfig
+                                            { certbotExecutable = "certbot",
+                                              certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
+                                            }
+                                    }
+                            }
+                    }
+                ],
+              requestPolicy = requestPolicy defaultAppConfig
+            }
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "acme"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_0_ACME_DOMAINS", "one.example.com"),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5444"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "acme"),
+          ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_1_ACME_DOMAINS", "two.example.com"),
+          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01"),
+          ("LISTENER_2_HOST", "127.0.0.1"),
+          ("LISTENER_2_PORT", "5445"),
+          ("LISTENER_2_SCHEME", "https"),
+          ("LISTENER_2_TLS_SOURCE", "shared")
+        ]
+        []
+        []
+        `shouldBe` Left (MissingConfigValue "LISTENER_2_TLS_CERTIFICATE_DIRECTORY")
+
     it "parses explicit shared TLS wait and fail-fast startup modes" $ do
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
@@ -971,7 +1100,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -1046,7 +1175,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com", "alerts@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -1065,7 +1194,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -1537,7 +1666,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig
@@ -1591,7 +1720,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
                             }
@@ -1639,7 +1768,7 @@ spec = do
                                       acmeContactEmails = ["ops@example.com"],
                                       acmeDomains = [],
                                       acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Nothing,
+                                      acmeCertificateDirectory = Just ".tls/listener-0",
                                       acmeChallengeBackend =
                                         CertbotHttp01
                                           CertbotConfig

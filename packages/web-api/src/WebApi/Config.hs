@@ -40,6 +40,7 @@ module WebApi.Config
   )
 where
 
+import Control.Applicative ((<|>))
 import Core.Config
   ( ConfigOverridesFileError (..),
     ConfigParseError (..),
@@ -56,7 +57,7 @@ import Core.Config
   )
 import Data.Bifunctor (bimap)
 import Data.List (nub)
-import Data.Maybe (isJust)
+import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
@@ -76,6 +77,8 @@ import HarchWeb
     TlsCertificateSource (..),
     TlsConfig (..),
     TlsStartupMode (..),
+    certbotOptionValues,
+    firstCertbotDomain,
   )
 import System.Environment (getEnvironment)
 
@@ -157,6 +160,9 @@ defaultLocalTracingEndpoint = "http://127.0.0.1:4318/v1/traces"
 
 defaultCertbotExecutable :: FilePath
 defaultCertbotExecutable = "certbot"
+
+defaultCertificateDirectoryRoot :: FilePath
+defaultCertificateDirectoryRoot = ".tls"
 
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
@@ -388,7 +394,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     parseSharedCertificateSource listenerIndex parseStartupMode =
       SharedCertificateFiles
-        <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"
+        <$> resolveSharedCertificateDirectory listenerIndex
         <*> parseStartupMode
 
     parseSharedTlsWaitTimeout listenerIndex =
@@ -407,22 +413,80 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
             )
 
     parseAcmeCertificateSource listenerIndex =
-      AcmeCertificateSource
-        <$> ( AcmeConfig
-                <$> requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
-                <*> ( parseDelimitedTexts
-                        (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
-                        =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
-                    )
-                <*> maybe
-                  (Right [])
-                  (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
-                  (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
-                <*> pure 80
-                <*> pure
-                  (Text.unpack <$> optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY")
-                <*> parseAcmeChallengeBackend listenerIndex
-            )
+      do
+        parsedDirectoryUrl <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
+        parsedContactEmails <-
+          parseDelimitedTexts
+            (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
+            =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
+        parsedDomains <- parseConfiguredAcmeDomains listenerIndex
+        parsedChallengeBackend <- parseAcmeChallengeBackend listenerIndex
+        resolvedCertificateDirectory <-
+          resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend
+        pure
+          ( AcmeCertificateSource
+              AcmeConfig
+                { acmeDirectoryUrl = parsedDirectoryUrl,
+                  acmeContactEmails = parsedContactEmails,
+                  acmeDomains = parsedDomains,
+                  acmeHttp01Port = 80,
+                  acmeCertificateDirectory = Just resolvedCertificateDirectory,
+                  acmeChallengeBackend = parsedChallengeBackend
+                }
+          )
+
+    parseConfiguredAcmeDomains listenerIndex =
+      maybe
+        (Right [])
+        (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
+        (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
+
+    resolveSharedCertificateDirectory listenerIndex =
+      case optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY" of
+        Just directory ->
+          Right (Text.unpack directory)
+        Nothing -> do
+          resolvedAcmeDirectories <- traverse resolveConfiguredAcmeCertificateDirectory acmeListenerIndices
+          case nub resolvedAcmeDirectories of
+            [sharedDirectory] ->
+              Right sharedDirectory
+            _ ->
+              Left
+                (MissingConfigValue (indexedConfigKey "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"))
+
+    resolveConfiguredAcmeCertificateDirectory listenerIndex = do
+      parsedDomains <- parseConfiguredAcmeDomains listenerIndex
+      parsedChallengeBackend <- parseAcmeChallengeBackend listenerIndex
+      resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend
+
+    resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend =
+      pure $
+        maybe
+          ( defaultCertificateDirectoryPath
+              (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedChallengeBackend)
+          )
+          Text.unpack
+          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY")
+
+    defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedChallengeBackend =
+      fromMaybe
+        (Text.pack ("listener-" <> show listenerIndex))
+        ( case parsedChallengeBackend of
+            InProcessHttp01 ->
+              listToMaybe parsedDomains
+            CertbotHttp01 certbotConfig ->
+              listToMaybe (certbotOptionValues "--cert-name" (certbotArguments certbotConfig))
+                <|> firstCertbotDomain (certbotArguments certbotConfig)
+                <|> listToMaybe parsedDomains
+        )
+
+    defaultCertificateDirectoryPath certificateIdentifier =
+      defaultCertificateDirectoryRoot <> "/" <> Text.unpack certificateIdentifier
+
+    acmeListenerIndices =
+      filter
+        (\listenerIndex -> optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE" == Just "acme")
+        (declaredIndices "LISTENER_" allConfigEntries)
 
     parseAcmeChallengeBackend listenerIndex = do
       backendValue <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"

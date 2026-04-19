@@ -980,7 +980,6 @@ LISTENER_1_TLS_SOURCE=acme
 LISTENER_1_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_1_ACME_DOMAINS=example.com,www.example.com
-LISTENER_1_ACME_CERTIFICATE_DIRECTORY=/app/acme/example.com
 LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
 LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
 
@@ -989,7 +988,6 @@ LISTENER_2_HOST=0.0.0.0
 LISTENER_2_PORT=5443
 LISTENER_2_SCHEME=https
 LISTENER_2_TLS_SOURCE=shared-wait
-LISTENER_2_TLS_CERTIFICATE_DIRECTORY=/app/acme/example.com
 LISTENER_2_TLS_SHARED_WAIT_SECONDS=120
 ```
 
@@ -1001,7 +999,10 @@ certbot runtime path reuses that list when its arguments do not already declare 
 `--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
 When `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` is set, the runtime copies the issued `fullchain.pem` and
 `privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared-wait` HTTPS listener can reuse
-the same certificate material.
+the same certificate material. When it is unset, runtime config now defaults ACME publication to
+`./.tls/<cert-name>` for source runs; the tracked container image keeps the same relative default under
+`/app/.tls/<cert-name>`. A lone shared listener can reuse that same path without its own
+`LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` override.
 Use `shared-wait` (or the existing `shared` alias) when another runtime path such as ACME will publish the
 certificate files after the process starts. `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` can bound that wait; when
 unset, startup keeps waiting indefinitely. Use `shared-fail-fast` when the directory should already contain

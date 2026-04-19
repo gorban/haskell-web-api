@@ -113,12 +113,12 @@ understands the following values:
 | `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners: `manual`, `shared`, `shared-wait`, `shared-fail-fast`, or `acme`. `shared` remains the legacy alias for the waiting mode. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
-| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. | (`unset`) |
+| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. When unset and exactly one ACME listener is configured, shared listeners reuse that ACME listener's effective certificate directory. | (`listener-aware`) |
 | `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
-| `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
 | `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override for the `certbot-http01` backend. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
 | `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` / `--http-01-port` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
@@ -240,6 +240,11 @@ LISTENER_3_TLS_SHARED_WAIT_SECONDS=120
 # directories that must already contain fullchain.pem and privkey.pem at startup.
 # Later HTTPS handshakes still reload updated certificate files so renewals do not
 # require a restart.
+
+# If LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY is omitted, ACME publishes into
+# ./.tls/<cert-name> for source runs. The runtime image keeps the same relative
+# default under /app/.tls/<cert-name>, and a lone shared listener can reuse that
+# path without its own LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY override.
 
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
