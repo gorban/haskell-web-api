@@ -110,10 +110,11 @@ understands the following values:
 | `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
 | `LISTENER_<n>_PORT` | Port to bind for listener `n`. | (`LISTENER_0_PORT=5001`) |
 | `LISTENER_<n>_SCHEME` | Listener scheme, either `http` or `https`. | (`LISTENER_0_SCHEME=http`) |
-| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners, either `manual`, `shared`, or `acme`. | (`unset`) |
+| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners: `manual`, `shared`, `shared-wait`, `shared-fail-fast`, or `acme`. `shared` remains the legacy alias for the waiting mode. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
-| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. | (`unset`) |
+| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. | (`unset`) |
+| `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
@@ -230,11 +231,15 @@ LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email
 LISTENER_3_HOST=0.0.0.0
 LISTENER_3_PORT=9443
 LISTENER_3_SCHEME=https
-LISTENER_3_TLS_SOURCE=shared
+LISTENER_3_TLS_SOURCE=shared-wait
 LISTENER_3_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
+LISTENER_3_TLS_SHARED_WAIT_SECONDS=120
 
-# Shared listeners wait for fullchain.pem / privkey.pem to appear, then later HTTPS
-# handshakes reload updated certificate files so ACME renewals do not require a restart.
+# Use shared-wait (or the legacy shared alias) when another listener/process will
+# publish certificate files later. shared-fail-fast is for pre-provisioned cert
+# directories that must already contain fullchain.pem and privkey.pem at startup.
+# Later HTTPS handshakes still reload updated certificate files so renewals do not
+# require a restart.
 
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
@@ -269,8 +274,9 @@ cp examples/runtime-config/manual-tls.env ./.env.local
 ```
 
 Those templates cover local HTTP-only, OTLP tracing with the default local Jaeger endpoint, OTLP
-endpoint-only implicit enablement, OTLP endpoint plus explicit disablement, manual TLS, ACME plus shared
-80/443/5443 listeners, and reverse-proxy / TLS-offload setups.
+endpoint-only implicit enablement, OTLP endpoint plus explicit disablement, manual TLS,
+shared-certificate fail-fast startup, ACME plus shared 80/443/5443 listeners, and reverse-proxy /
+TLS-offload setups.
 
 When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default from the listener plan:
 

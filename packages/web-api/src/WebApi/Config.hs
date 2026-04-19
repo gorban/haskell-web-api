@@ -23,6 +23,7 @@ module WebApi.Config
     StaticAssetRoot (..),
     StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
+    TlsStartupMode (..),
     TlsConfig (..),
     committedEnvDefaults,
     committedRuntimeDefaults,
@@ -74,6 +75,7 @@ import HarchWeb
     StrictTransportSecurityConfig (..),
     TlsCertificateSource (..),
     TlsConfig (..),
+    TlsStartupMode (..),
   )
 import System.Environment (getEnvironment)
 
@@ -371,14 +373,37 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
             <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE"
             <*> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
         "shared" ->
-          SharedCertificateFiles
-            <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"
+          parseSharedCertificateSource listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeout listenerIndex)
+        "shared-wait" ->
+          parseSharedCertificateSource listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeout listenerIndex)
+        "shared-fail-fast" ->
+          parseSharedCertificateSource listenerIndex (parseSharedTlsFailFastMode listenerIndex)
         "acme" -> parseAcmeCertificateSource listenerIndex
         _ ->
           Left
             ( InvalidConfigValue
                 (indexedConfigKey "LISTENER" listenerIndex "TLS_SOURCE")
                 tlsSource
+            )
+
+    parseSharedCertificateSource listenerIndex parseStartupMode =
+      SharedCertificateFiles
+        <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"
+        <*> parseStartupMode
+
+    parseSharedTlsWaitTimeout listenerIndex =
+      traverse
+        (parseNonNegativeInt (indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS"))
+        (optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS")
+
+    parseSharedTlsFailFastMode listenerIndex =
+      case optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS" of
+        Nothing -> Right RequireCertificateFiles
+        Just value ->
+          Left
+            ( InvalidConfigValue
+                (indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS")
+                value
             )
 
     parseAcmeCertificateSource listenerIndex =

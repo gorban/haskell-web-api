@@ -283,6 +283,10 @@ acmeHttpsListenerWithDomainsAndChallengePort challengePort host port contactEmai
 
 sharedHttpsListener :: Text -> Int -> FilePath -> ListenerConfig
 sharedHttpsListener host port certificateDirectory =
+  sharedHttpsListenerWithStartupMode host port certificateDirectory (AwaitCertificateFiles Nothing)
+
+sharedHttpsListenerWithStartupMode :: Text -> Int -> FilePath -> TlsStartupMode -> ListenerConfig
+sharedHttpsListenerWithStartupMode host port certificateDirectory startupMode =
   ListenerConfig
     { listenerHost = host,
       listenerPort = port,
@@ -292,7 +296,8 @@ sharedHttpsListener host port certificateDirectory =
           TlsConfig
             { certificateSource =
                 SharedCertificateFiles
-                  { certificateDirectory = certificateDirectory
+                  { certificateDirectory = certificateDirectory,
+                    sharedCertificateStartupMode = startupMode
                   }
             }
     }
@@ -531,7 +536,11 @@ spec = do
                 acmeCertificateDirectory = Nothing,
                 acmeChallengeBackend = challengeBackend
               }
-          sharedCertificateSource = SharedCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs"}
+          sharedCertificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+              }
           tlsSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = tlsSource}
           staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
@@ -597,8 +606,9 @@ spec = do
       acmeCertificateDirectory acmeConfig `shouldBe` Nothing
       acmeChallengeBackend acmeConfig `shouldBe` challengeBackend
       case sharedCertificateSource of
-        SharedCertificateFiles {certificateDirectory = sharedDirectory} ->
+        SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
           sharedDirectory `shouldBe` "/var/lib/harch-web/shared-certs"
+          startupMode `shouldBe` AwaitCertificateFiles Nothing
         _ ->
           expectationFailure "expected shared certificate files"
       certificateSource tlsConfig `shouldBe` tlsSource
@@ -681,7 +691,11 @@ spec = do
                 acmeChallengeBackend = InProcessHttp01
               }
           manualCertificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
-          sharedCertificateSource = SharedCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs"}
+          sharedCertificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+              }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
@@ -757,6 +771,10 @@ spec = do
       tracingConfig `shouldNotBe` otherTracingConfig
       observabilityConfig `shouldBe` observabilityConfig
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+      ManualTlsCredentials `shouldBe` ManualTlsCredentials
+      ManualTlsCredentials `shouldNotBe` SharedTlsCredentials
+      AwaitCertificateFiles Nothing `shouldBe` AwaitCertificateFiles Nothing
+      AwaitCertificateFiles Nothing `shouldNotBe` RequireCertificateFiles
       TracingSignal `shouldBe` TracingSignal
       TracingSignal `shouldNotBe` MetricsSignal
       exporterStartup `shouldBe` exporterStartup
@@ -773,7 +791,7 @@ spec = do
       show (CertbotHttp01 certbotConfig) `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
       show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show manualCertificateSource `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
-      show sharedCertificateSource `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\"}"
+      show sharedCertificateSource `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
       show acmeCertificateSource `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show (TlsConfig {certificateSource = manualCertificateSource}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
       show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}"
@@ -781,6 +799,8 @@ spec = do
       show staticAssetsConfig `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
+      show ManualTlsCredentials `shouldBe` "ManualTlsCredentials"
+      show (AwaitCertificateFiles (Just 15)) `shouldBe` "AwaitCertificateFiles {certificateWaitTimeoutSeconds = Just 15}"
       show TracingSignal `shouldBe` "TracingSignal"
       show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
@@ -803,12 +823,14 @@ spec = do
       shouldBeParenthesized (showsPrec 11 observabilityPlan "")
       shouldBeParenthesized (showsPrec 11 serverConfig "")
       show [Http, Https] `shouldBe` "[Http,Https]"
+      show [ManualTlsCredentials, SharedTlsCredentials] `shouldBe` "[ManualTlsCredentials,SharedTlsCredentials]"
+      show [RequireCertificateFiles, AwaitCertificateFiles Nothing] `shouldBe` "[RequireCertificateFiles,AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [requestPolicyConfig] `shouldBe` "[RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}]"
       show [InProcessHttp01, CertbotHttp01 certbotConfig] `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
-      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
+      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
       show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
       show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
@@ -1842,7 +1864,8 @@ spec = do
               { tlsEndpoint = endpoint,
                 tlsCertificateFile = "cert.pem",
                 tlsPrivateKeyFile = "key.pem",
-                tlsWaitForCertificateFiles = False
+                tlsCredentialSourceKind = ManualTlsCredentials,
+                tlsStartupMode = RequireCertificateFiles
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -1853,12 +1876,16 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsCertificateFile = "other.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsWaitForCertificateFiles = False}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsWaitForCertificateFiles = False}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5443}, tlsCertificateFile = \"cert.pem\", tlsPrivateKeyFile = \"key.pem\", tlsCredentialSourceKind = ManualTlsCredentials, tlsStartupMode = RequireCertificateFiles}]"
 
     it "translates shared certificate directories into TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5444}
-          certificateSource = SharedCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs"}
+          certificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+              }
           listener =
             ListenerConfig
               { listenerHost = endpointHost endpoint,
@@ -1871,7 +1898,8 @@ spec = do
               { tlsEndpoint = endpoint,
                 tlsCertificateFile = "/var/lib/harch-web/shared-certs/fullchain.pem",
                 tlsPrivateKeyFile = "/var/lib/harch-web/shared-certs/privkey.pem",
-                tlsWaitForCertificateFiles = True
+                tlsCredentialSourceKind = SharedTlsCredentials,
+                tlsStartupMode = AwaitCertificateFiles Nothing
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -1882,8 +1910,38 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsPrivateKeyFile = "other-privkey.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsWaitForCertificateFiles = True}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsWaitForCertificateFiles = True}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}]"
+
+    it "translates fail-fast shared certificate directories into immediate TLS startup parameters" $ do
+      let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5445}
+          certificateSource =
+            SharedCertificateFiles
+              { certificateDirectory = "/var/lib/harch-web/preprovisioned-certs",
+                sharedCertificateStartupMode = RequireCertificateFiles
+              }
+          listener =
+            ListenerConfig
+              { listenerHost = endpointHost endpoint,
+                listenerPort = endpointPort endpoint,
+                listenerScheme = Https,
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource})
+              }
+      planServerStartup (serverConfigWithListeners [listener])
+        `shouldBe` Right
+          ServerStartupPlan
+            { httpBindPlan = HttpBindPlan {httpEndpoints = []},
+              manualTlsBindPlans =
+                [ ManualTlsBindPlan
+                    { tlsEndpoint = endpoint,
+                      tlsCertificateFile = "/var/lib/harch-web/preprovisioned-certs/fullchain.pem",
+                      tlsPrivateKeyFile = "/var/lib/harch-web/preprovisioned-certs/privkey.pem",
+                      tlsCredentialSourceKind = SharedTlsCredentials,
+                      tlsStartupMode = RequireCertificateFiles
+                    }
+                ],
+              acmeBindPlans = []
+            }
 
     it "translates ACME-backed HTTPS listeners into certificate-management plans" $ do
       let httpEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
@@ -2034,6 +2092,7 @@ spec = do
         startupResult <-
           try
             ( loadTlsCredentialSnapshotOrThrowWithLoader
+                "Manual TLS"
                 certificatePath
                 privateKeyPath
                 (pure Nothing)
@@ -2052,6 +2111,7 @@ spec = do
         startupResult <-
           try
             ( loadTlsCredentialSnapshotOrThrowWithLoader
+                "Manual TLS"
                 certificatePath
                 privateKeyPath
                 (pure (Just (Left "synthetic TLS credential error")))
@@ -2064,6 +2124,23 @@ spec = do
               `shouldBe` ("user error (Failed to load manual TLS credentials from " <> certificatePath <> " and " <> privateKeyPath <> ": synthetic TLS credential error)")
           Right _ ->
             expectationFailure "Expected startup TLS credential errors to surface explicitly"
+
+    it "handles an empty TLS label when surfacing startup credential errors" $
+      withManualTlsFiles $ \certificatePath privateKeyPath -> do
+        startupResult <-
+          try
+            ( loadTlsCredentialSnapshotOrThrowWithLoader
+                ""
+                certificatePath
+                privateKeyPath
+                (pure (Just (Left "synthetic TLS credential error")))
+            )
+        case startupResult of
+          Left exception ->
+            show (exception :: IOError)
+              `shouldBe` ("user error (Failed to load  credentials from " <> certificatePath <> " and " <> privateKeyPath <> ": synthetic TLS credential error)")
+          Right _ ->
+            expectationFailure "Expected empty-label startup TLS credential errors to surface explicitly"
 
   describe "startWarpRuntimeServerOnSocket" $ do
     it "surfaces startup exceptions that happen before the runtime server becomes ready" $
@@ -2079,7 +2156,8 @@ spec = do
                   { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
-                    tlsWaitForCertificateFiles = False
+                    tlsCredentialSourceKind = ManualTlsCredentials,
+                    tlsStartupMode = RequireCertificateFiles
                   }
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ -> ioError (userError "synthetic tls startup failure"))
@@ -2089,6 +2167,122 @@ spec = do
           reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
           Socket.bind reboundSocket (Socket.SockAddrInet (fromIntegral httpsPort) (Socket.tupleToHostAddress (127, 0, 0, 1)))
           Socket.close reboundSocket
+
+    it "fails explicitly when shared TLS is configured to fail fast and the certificate files are missing" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-fail-fast" $ \sharedDirectory -> do
+          let (certificatePath, privateKeyPath) = (sharedDirectory </> "fullchain.pem", sharedDirectory </> "privkey.pem")
+              manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = RequireCertificateFiles
+                  }
+          startManualTlsRuntimeServerWithStarter
+            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            manualTlsPlan
+            (toWaiApplication sampleApplication)
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Shared TLS certificate file does not exist: " <> certificatePath <> ")")
+
+    it "fails explicitly when shared TLS wait mode reaches its configured timeout" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-timeout" $ \sharedDirectory -> do
+          let (certificatePath, privateKeyPath) = (sharedDirectory </> "fullchain.pem", sharedDirectory </> "privkey.pem")
+              manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = AwaitCertificateFiles (Just 0)
+                  }
+          startManualTlsRuntimeServerWithStarter
+            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            manualTlsPlan
+            (toWaiApplication sampleApplication)
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Timed out waiting for shared TLS certificate files at " <> certificatePath <> " and " <> privateKeyPath <> " after 0 seconds)")
+
+    it "includes shared TLS loader errors when wait mode times out on invalid certificate files" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-invalid-timeout" $ \sharedDirectory -> do
+          let (certificatePath, privateKeyPath) = (sharedDirectory </> "fullchain.pem", sharedDirectory </> "privkey.pem")
+              manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = AwaitCertificateFiles (Just 0)
+                  }
+          writeFile certificatePath "not a certificate"
+          writeFile privateKeyPath "not a private key"
+          startManualTlsRuntimeServerWithStarter
+            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            manualTlsPlan
+            (toWaiApplication sampleApplication)
+            `shouldThrow` ( \exception ->
+                              let renderedException = show (exception :: IOError)
+                               in length renderedException `seq`
+                                    ( "user error (Timed out waiting for shared TLS credentials at " `isPrefixOf` renderedException
+                                        && certificatePath `isInfixOf` renderedException
+                                        && privateKeyPath `isInfixOf` renderedException
+                                        && " after 0 seconds: " `isInfixOf` renderedException
+                                    )
+                          )
+
+    it "keeps retrying shared TLS wait mode until a nonzero timeout expires" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-retrying-timeout" $ \sharedDirectory -> do
+          let (certificatePath, privateKeyPath) = (sharedDirectory </> "fullchain.pem", sharedDirectory </> "privkey.pem")
+              manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = AwaitCertificateFiles (Just 1)
+                  }
+          writeFile certificatePath "not a certificate"
+          writeFile privateKeyPath "not a private key"
+          startManualTlsRuntimeServerWithStarter
+            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            manualTlsPlan
+            (toWaiApplication sampleApplication)
+            `shouldThrow` ( \exception ->
+                              let renderedException = show (exception :: IOError)
+                               in length renderedException `seq`
+                                    ( "user error (Timed out waiting for shared TLS credentials at " `isPrefixOf` renderedException
+                                        && certificatePath `isInfixOf` renderedException
+                                        && privateKeyPath `isInfixOf` renderedException
+                                        && " after 1 seconds: " `isInfixOf` renderedException
+                                    )
+                          )
+
+    it "waits for shared TLS certificate files before invoking the TLS starter" $
+      withUnusedLoopbackPort $ \httpsPort ->
+        withSystemTempDirectory "harch-web-shared-wait-starter" $ \sharedDirectory -> do
+          starterInvoked <- newIORef False
+          let (certificatePath, privateKeyPath) = (sharedDirectory </> "fullchain.pem", sharedDirectory </> "privkey.pem")
+              manualTlsPlan =
+                ManualTlsBindPlan
+                  { tlsEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpsPort},
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = AwaitCertificateFiles Nothing
+                  }
+          _ <- forkIO $ do
+            threadDelay 100000
+            writeFile certificatePath manualTlsCertificatePem
+            writeFile privateKeyPath manualTlsPrivateKeyPem
+          _ <-
+            startManualTlsRuntimeServerWithStarter
+              (\_ _ socket _ -> writeIORef starterInvoked True >> Socket.close socket >> forkIO (pure ()))
+              manualTlsPlan
+              (toWaiApplication sampleApplication)
+          readIORef starterInvoked `shouldReturn` True
 
   describe "planObservabilityStartup" $ do
     it "produces no exporter startup actions when tracing and metrics are disabled" $

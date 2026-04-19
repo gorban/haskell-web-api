@@ -39,7 +39,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -825,7 +825,8 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = "/var/lib/web-api/shared-certs"
+                                  { certificateDirectory = "/var/lib/web-api/shared-certs",
+                                    sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                                   }
                             }
                     },
@@ -851,6 +852,83 @@ spec = do
                 ],
               requestPolicy = requestPolicy defaultAppConfig
             }
+
+    it "parses explicit shared TLS wait and fail-fast startup modes" $ do
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "shared-wait"),
+          ("LISTENER_0_TLS_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
+          ("LISTENER_0_TLS_SHARED_WAIT_SECONDS", "15"),
+          ("LISTENER_1_HOST", "127.0.0.1"),
+          ("LISTENER_1_PORT", "5444"),
+          ("LISTENER_1_SCHEME", "https"),
+          ("LISTENER_1_TLS_SOURCE", "shared-fail-fast"),
+          ("LISTENER_1_TLS_CERTIFICATE_DIRECTORY", "/var/lib/web-api/preprovisioned-certs")
+        ]
+        []
+        []
+        `shouldBe` Right
+          defaultAppConfig
+            { appTitlePrefix = "runtime-test",
+              listenerConfigs =
+                [ ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5443,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                SharedCertificateFiles
+                                  { certificateDirectory = "/var/lib/web-api/shared-certs",
+                                    sharedCertificateStartupMode = AwaitCertificateFiles (Just 15)
+                                  }
+                            }
+                    },
+                  ListenerConfig
+                    { listenerHost = "127.0.0.1",
+                      listenerPort = 5444,
+                      listenerScheme = Https,
+                      listenerTls =
+                        Just
+                          TlsConfig
+                            { certificateSource =
+                                SharedCertificateFiles
+                                  { certificateDirectory = "/var/lib/web-api/preprovisioned-certs",
+                                    sharedCertificateStartupMode = RequireCertificateFiles
+                                  }
+                            }
+                    }
+                ],
+              requestPolicy = requestPolicy defaultAppConfig
+            }
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "shared-fail-fast"),
+          ("LISTENER_0_TLS_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
+          ("LISTENER_0_TLS_SHARED_WAIT_SECONDS", "15")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_SHARED_WAIT_SECONDS" "15")
+      parseRuntimeAppConfig
+        [ ("APP_TITLE_PREFIX", "runtime-test"),
+          ("LISTENER_0_HOST", "127.0.0.1"),
+          ("LISTENER_0_PORT", "5443"),
+          ("LISTENER_0_SCHEME", "https"),
+          ("LISTENER_0_TLS_SOURCE", "shared-wait"),
+          ("LISTENER_0_TLS_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
+          ("LISTENER_0_TLS_SHARED_WAIT_SECONDS", "-1")
+        ]
+        []
+        []
+        `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_SHARED_WAIT_SECONDS" "-1")
 
     it "defaults redirects on for HTTP plus ACME-backed HTTPS listener plans" $
       parseRuntimeAppConfig
@@ -3912,7 +3990,8 @@ spec = do
               }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs"
+              { certificateDirectory = "/var/lib/web-api/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
               }
           tlsSource =
             AcmeCertificateSource
@@ -3932,7 +4011,7 @@ spec = do
       TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
         `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
       show sharedCertificateSource
-        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\"}"
+        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
       show tlsSource
         `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show exporter
@@ -3955,7 +4034,8 @@ spec = do
               }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs"
+              { certificateDirectory = "/var/lib/web-api/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
               }
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
@@ -4045,8 +4125,9 @@ spec = do
       acmeCertificateDirectory inProcessAcmeConfig `shouldBe` Nothing
       acmeChallengeBackend inProcessAcmeConfig `shouldBe` InProcessHttp01
       case sharedCertificateSource of
-        SharedCertificateFiles {certificateDirectory = sharedDirectory} ->
+        SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
           sharedDirectory `shouldBe` "/var/lib/web-api/shared-certs"
+          startupMode `shouldBe` AwaitCertificateFiles Nothing
         _ ->
           expectationFailure "expected shared certificate files"
       certificateSource tlsConfig `shouldBe` manualCertificateSource
@@ -4110,7 +4191,8 @@ spec = do
                 }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs"
+              { certificateDirectory = "/var/lib/web-api/shared-certs",
+                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
               }
           staticRoot =
             StaticAssetRoot
@@ -4196,7 +4278,7 @@ spec = do
       show (TlsConfig {certificateSource = manualCertificateSource})
         `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
       show sharedCertificateSource
-        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\"}"
+        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
       show manualCertificateSource
         `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
       show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})

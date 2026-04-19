@@ -21,7 +21,7 @@ import qualified Network.HTTP.Types as Http
 import qualified Network.Socket as Socket
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
@@ -211,6 +211,72 @@ spec = do
               }
         )
         `shouldSatisfy` isLeftWith "requires ACME domains or certbot arguments"
+
+    it "prepares ACME runtime plans as manual TLS listeners after certificate acquisition" $ do
+      withSystemTempDirectory "harch-web-certbot-shared" $ \sharedDirectory ->
+        withFakeCertbotScript
+          [ "#!/bin/sh",
+            "set -eu",
+            "config_dir=''",
+            "while [ \"$#\" -gt 0 ]; do",
+            "  case \"$1\" in",
+            "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "mkdir -p \"$config_dir/live/test-cert\"",
+            "printf '%s\\n' 'FAKE CERT' > \"$config_dir/live/test-cert/fullchain.pem\"",
+            "printf '%s\\n' 'FAKE KEY' > \"$config_dir/live/test-cert/privkey.pem\""
+          ]
+          $ \scriptPath -> do
+            let certbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = scriptPath,
+                      certbotArguments = ["certonly", "--cert-name", "test-cert"]
+                    }
+                certbotPlan =
+                  runtimeAcmePlanWith
+                    certbotConfigValue
+                      { acmeCertificateDirectory = Just sharedDirectory,
+                        acmeChallengeBackend = CertbotHttp01 certbotConfig
+                      }
+            (certbotManualPlan, certbotCleanupDirectory) <-
+              prepareCertbotManualTlsBindPlan certbotPlan certbotConfig
+            ( do
+                tlsEndpoint certbotManualPlan `shouldBe` sampleEndpoint
+                tlsCredentialSourceKind certbotManualPlan `shouldBe` ManualTlsCredentials
+                tlsStartupMode certbotManualPlan `shouldBe` RequireCertificateFiles
+                tlsCertificateFile certbotManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                tlsPrivateKeyFile certbotManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "FAKE CERT\n"
+                readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
+              )
+              `finally` removePathForcibly certbotCleanupDirectory
+      withHttpAcmeServer $ \server ->
+        withSystemTempDirectory "harch-web-in-process-shared" $ \sharedDirectory ->
+          withSystemTempDirectory "harch-web-in-process-account" $ \tempDirectory -> do
+            challengeStore <- AcmeChallengeStore <$> newMVar []
+            let accountKeyPath = tempDirectory </> "account-key.pem"
+                inProcessPlan =
+                  runtimeAcmePlanWith
+                    inProcessConfig
+                      { acmeDirectoryUrl = serverBaseUrl server <> "/directory-immediately-valid",
+                        acmeCertificateDirectory = Just sharedDirectory
+                      }
+            withFakeOpenSslExecutable accountKeyPath $ \_ -> do
+              writeFile accountKeyPath "fake-account-key"
+              (inProcessManualPlan, inProcessCleanupDirectory) <-
+                prepareInProcessManualTlsBindPlan inProcessPlan challengeStore
+              ( do
+                  tlsEndpoint inProcessManualPlan `shouldBe` sampleEndpoint
+                  tlsCredentialSourceKind inProcessManualPlan `shouldBe` ManualTlsCredentials
+                  tlsStartupMode inProcessManualPlan `shouldBe` RequireCertificateFiles
+                  tlsCertificateFile inProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                  tlsPrivateKeyFile inProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                  readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "PEM CERT"
+                  readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "fake-account-key"
+                )
+                `finally` removePathForcibly inProcessCleanupDirectory
 
     it "covers challenge matching and store update helpers" $ do
       challengeStore <- AcmeChallengeStore <$> newMVar []
@@ -1075,6 +1141,14 @@ withFakeOpenSslScript :: [String] -> (FilePath -> IO a) -> IO a
 withFakeOpenSslScript scriptLines action =
   withSystemTempDirectory "fake-openssl-script" $ \tempDirectory -> do
     let scriptPath = tempDirectory </> "openssl"
+    writeFile scriptPath (unlines scriptLines)
+    callProcess "chmod" ["+x", scriptPath]
+    action scriptPath
+
+withFakeCertbotScript :: [String] -> (FilePath -> IO a) -> IO a
+withFakeCertbotScript scriptLines action =
+  withSystemTempDirectory "fake-certbot-script" $ \tempDirectory -> do
+    let scriptPath = tempDirectory </> "certbot"
     writeFile scriptPath (unlines scriptLines)
     callProcess "chmod" ["+x", scriptPath]
     action scriptPath

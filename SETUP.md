@@ -328,6 +328,7 @@ for local paths, domains, headers, or secrets as needed:
 | `examples/runtime-config/otlp-endpoint-implicit-enable.env` | Show that setting `OTLP_TRACING_ENDPOINT` implicitly enables tracing |
 | `examples/runtime-config/otlp-endpoint-explicit-disable.env` | Keep OTLP collector coordinates while explicitly disabling tracing |
 | `examples/runtime-config/manual-tls.env` | Manual TLS listener using the local loopback cert files from `examples/reverse-proxy/tls/` |
+| `examples/runtime-config/shared-fail-fast.env` | HTTPS listener that expects a pre-provisioned shared certificate directory to already exist at startup |
 | `examples/runtime-config/acme-shared-80-443-5443.env` | ACME `http-01` on 80, ACME-managed HTTPS on 443, plus a shared-certificate HTTPS listener on 5443 |
 | `examples/runtime-config/reverse-proxy-tls-offload.env` | Backend HTTP listener plus redirect/HSTS policy for a TLS-terminating proxy |
 
@@ -987,8 +988,9 @@ LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email
 LISTENER_2_HOST=0.0.0.0
 LISTENER_2_PORT=5443
 LISTENER_2_SCHEME=https
-LISTENER_2_TLS_SOURCE=shared
+LISTENER_2_TLS_SOURCE=shared-wait
 LISTENER_2_TLS_CERTIFICATE_DIRECTORY=/app/acme/example.com
+LISTENER_2_TLS_SHARED_WAIT_SECONDS=120
 ```
 
 `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` remains available as an override when certbot lives somewhere
@@ -998,10 +1000,13 @@ Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME ord
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
 `--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
 When `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` is set, the runtime copies the issued `fullchain.pem` and
-`privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared` HTTPS listener can reuse
+`privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared-wait` HTTPS listener can reuse
 the same certificate material.
-Shared HTTPS listeners wait for those files to appear before finishing startup, and later HTTPS
-handshakes reload updated certificate/key files so renewals do not require a full app restart.
+Use `shared-wait` (or the existing `shared` alias) when another runtime path such as ACME will publish the
+certificate files after the process starts. `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` can bound that wait; when
+unset, startup keeps waiting indefinitely. Use `shared-fail-fast` when the directory should already contain
+`fullchain.pem` and `privkey.pem`, such as mkcert output or mounted secrets. Later HTTPS handshakes still
+reload updated certificate/key files so renewals do not require a full app restart.
 
 Then exercise the ACME path in four layers:
 
