@@ -150,7 +150,6 @@ import Control.Exception (IOException, SomeException, bracket, bracketOnError, b
 import Control.Monad (forever, replicateM, unless, void, when)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
-import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -1699,7 +1698,8 @@ pollAcmeOrderWithRetries !maxAttempts !retryDelayMicros !runtimeAcmePlan manager
             ioError . userError $
               "ACME order for listener on "
                 <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-                <> " became invalid."
+                <> " became invalid. Ensure the configured domains resolve publicly to this host and that TCP port 80 is reachable from the public internet for http-01 validation.\nbody:\n"
+                <> renderAcmeResponseBody response
           statusText ->
             if remainingAttempts > 0
               then threadDelay retryDelayMicros >> go (remainingAttempts - 1)
@@ -3073,11 +3073,20 @@ nextOtlpSpanIdentifiers = do
   monotonicTime <- getMonotonicTimeNSec
   let traceIdBytes = word64Bytes monotonicTime <> word64Bytes requestSeed
       spanIdBytes = word64Bytes (monotonicTime `xor` (requestSeed + 0x9e3779b97f4a7c15))
-  pure (base64Text traceIdBytes, base64Text spanIdBytes)
+  pure (otlpIdHexText traceIdBytes, otlpIdHexText spanIdBytes)
 
-base64Text :: ByteString.ByteString -> Text
-base64Text =
-  TextEncoding.decodeUtf8 . Base64.encode
+otlpIdHexText :: ByteString.ByteString -> Text
+otlpIdHexText =
+  Text.concatMap renderHexByte . TextEncoding.decodeLatin1
+  where
+    renderHexByte byte =
+      let byteValue = fromEnum byte
+          highNibble = byteValue `div` 16
+          lowNibble = byteValue `mod` 16
+       in Text.pack [hexDigit highNibble, hexDigit lowNibble]
+
+    hexDigit nibble =
+      "0123456789abcdef" !! nibble
 
 word64Bytes :: Word64 -> ByteString.ByteString
 word64Bytes word =

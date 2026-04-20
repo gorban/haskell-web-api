@@ -8,6 +8,7 @@ import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
+import Data.Char (isHexDigit)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing)
@@ -2411,8 +2412,10 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
-        extractQuotedJsonField "traceId" requestBodyText `shouldSatisfy` maybe False (not . Text.null)
-        extractQuotedJsonField "spanId" requestBodyText `shouldSatisfy` maybe False (not . Text.null)
+        extractQuotedJsonField "traceId" requestBodyText
+          `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
+        extractQuotedJsonField "spanId" requestBodyText
+          `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
 
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do

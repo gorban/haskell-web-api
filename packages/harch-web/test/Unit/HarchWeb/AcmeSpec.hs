@@ -832,7 +832,16 @@ spec = do
               "kid-1"
               (serverBaseUrl server <> "/order-invalid")
               ["ready"]
-              `shouldThrow` errorContaining "became invalid"
+              `shouldThrow` errorContaining "TCP port 80 is reachable from the public internet for http-01 validation"
+            pollAcmeOrder
+              plan
+              manager
+              directory
+              accountKeyPath
+              "kid-1"
+              (serverBaseUrl server <> "/order-invalid")
+              ["ready"]
+              `shouldThrow` errorContaining "Timeout during connect"
             pollAcmeOrderWithRetries
               0
               0
@@ -1371,7 +1380,12 @@ withHttpAcmeServer action =
             ("POST", "/order-valid-no-certificate") ->
               respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"))
             ("POST", "/order-invalid") ->
-              respond (jsonResponse Http.ok200 nonceHeaders "{\"status\":\"invalid\"}")
+              respond
+                ( jsonResponse
+                    Http.ok200
+                    nonceHeaders
+                    "{\"status\":\"invalid\",\"error\":{\"type\":\"urn:ietf:params:acme:error:connection\",\"detail\":\"Fetching http://bruckdev.com/.well-known/acme-challenge/token: Timeout during connect\"}}"
+                )
             ("POST", "/finalize/1") ->
               respond (jsonResponse Http.ok200 nonceHeaders "{}")
             ("POST", "/cert/1") ->
