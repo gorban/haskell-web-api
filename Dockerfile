@@ -32,6 +32,7 @@ apt-get install -y --no-install-recommends \
     libncurses-dev \
     make \
     nodejs \
+    postgresql-client \
     xz-utils \
     zlib1g-dev \
     ca-certificates
