@@ -245,14 +245,17 @@ spec = do
               prepareCertbotManualTlsBindPlan certbotPlan certbotConfig
             ( do
                 certbotManualPlan `shouldSatisfy` (/= Nothing)
-                let Just resolvedCertbotManualPlan = certbotManualPlan
-                tlsEndpoint resolvedCertbotManualPlan `shouldBe` sampleEndpoint
-                tlsCredentialSourceKind resolvedCertbotManualPlan `shouldBe` ManualTlsCredentials
-                tlsStartupMode resolvedCertbotManualPlan `shouldBe` RequireCertificateFiles
-                tlsCertificateFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
-                tlsPrivateKeyFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
-                readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "FAKE CERT\n"
-                readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
+                case certbotManualPlan of
+                  Nothing ->
+                    expectationFailure "Expected certbot-backed ACME plan to produce a manual TLS bind plan"
+                  Just resolvedCertbotManualPlan -> do
+                    tlsEndpoint resolvedCertbotManualPlan `shouldBe` sampleEndpoint
+                    tlsCredentialSourceKind resolvedCertbotManualPlan `shouldBe` ManualTlsCredentials
+                    tlsStartupMode resolvedCertbotManualPlan `shouldBe` RequireCertificateFiles
+                    tlsCertificateFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                    tlsPrivateKeyFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                    readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "FAKE CERT\n"
+                    readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
               )
               `finally` removePathForcibly certbotCleanupDirectory
       withHttpAcmeServer $ \server ->
@@ -272,14 +275,17 @@ spec = do
                 prepareInProcessManualTlsBindPlan inProcessPlan challengeStore
               ( do
                   inProcessManualPlan `shouldSatisfy` (/= Nothing)
-                  let Just resolvedInProcessManualPlan = inProcessManualPlan
-                  tlsEndpoint resolvedInProcessManualPlan `shouldBe` sampleEndpoint
-                  tlsCredentialSourceKind resolvedInProcessManualPlan `shouldBe` ManualTlsCredentials
-                  tlsStartupMode resolvedInProcessManualPlan `shouldBe` RequireCertificateFiles
-                  tlsCertificateFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
-                  tlsPrivateKeyFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
-                  readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "PEM CERT"
-                  readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "fake-account-key"
+                  case inProcessManualPlan of
+                    Nothing ->
+                      expectationFailure "Expected in-process ACME plan to produce a manual TLS bind plan"
+                    Just resolvedInProcessManualPlan -> do
+                      tlsEndpoint resolvedInProcessManualPlan `shouldBe` sampleEndpoint
+                      tlsCredentialSourceKind resolvedInProcessManualPlan `shouldBe` ManualTlsCredentials
+                      tlsStartupMode resolvedInProcessManualPlan `shouldBe` RequireCertificateFiles
+                      tlsCertificateFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                      tlsPrivateKeyFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                      readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "PEM CERT"
+                      readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "fake-account-key"
                 )
                 `finally` removePathForcibly inProcessCleanupDirectory
 
