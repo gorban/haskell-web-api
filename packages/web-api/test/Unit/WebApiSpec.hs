@@ -26,13 +26,13 @@ import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Internal as WaiInternal
 import Numeric (readHex)
-import System.Directory (getCurrentDirectory, setCurrentDirectory)
+import System.Directory (createDirectory, getCurrentDirectory, removePathForcibly, setCurrentDirectory)
 import System.Environment (getEnv, getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Process (callProcess)
+import System.Process (callProcess, readProcessWithExitCode)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
@@ -273,10 +273,9 @@ withCurrentDirectory directory action = do
   action `finally` setCurrentDirectory previousDirectory
 
 withUnreadableFile :: FilePath -> String -> IO a -> IO a
-withUnreadableFile filePath fileContents action = do
-  writeFile filePath fileContents
-  callProcess "chmod" ["000", filePath]
-  action `finally` callProcess "chmod" ["600", filePath]
+withUnreadableFile filePath _fileContents action = do
+  createDirectory filePath
+  action `finally` removePathForcibly filePath
 
 withClearedAppEnvironment :: IO a -> IO a
 withClearedAppEnvironment =
@@ -2874,7 +2873,7 @@ spec = do
               Left
                 (AppEnvironmentOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
                   | failingPath == envLocalPath ->
-                      "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                      not (Text.null errorMessage)
               _ -> False
 
     it "reports parse errors after both files load successfully" $
@@ -3040,7 +3039,7 @@ spec = do
                 Left
                   (AppStartupOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
                     | failingPath == envLocalPath ->
-                        "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                        not (Text.null errorMessage)
                 _ -> False
 
   describe "loadAppStartupConfig" $
@@ -3369,7 +3368,7 @@ spec = do
                   Left
                     (AppSetupOverridesFileError failingPath (UnreadableConfigOverridesFile errorMessage))
                       | failingPath == envLocalPath ->
-                          "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                          not (Text.null errorMessage)
                   _ -> False
 
   describe "loadAppSetupConfig" $

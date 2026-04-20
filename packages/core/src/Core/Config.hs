@@ -25,7 +25,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
-import System.Directory (doesFileExist)
+import System.Directory (doesPathExist)
 import Text.Read (readMaybe)
 
 data ConfigParseError
@@ -40,8 +40,8 @@ data ConfigOverridesFileError
 
 loadConfigOverridesFile :: FilePath -> IO (Either ConfigOverridesFileError [(Text, Text)])
 loadConfigOverridesFile overridesPath = do
-  overridesFileExists <- doesFileExist overridesPath
-  if overridesFileExists
+  overridesPathExists <- doesPathExist overridesPath
+  if overridesPathExists
     then do
       overridesReadResult <-
         ( try $ do

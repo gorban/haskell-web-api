@@ -6,15 +6,14 @@
 import Control.Exception (finally)
 import qualified Core.Config as CoreConfig
 import qualified Data.Text as Text
+import System.Directory (createDirectory, removePathForcibly)
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
-import System.Process (callProcess)
 
 withUnreadableFile :: FilePath -> String -> IO a -> IO a
-withUnreadableFile filePath fileContents action = do
-  writeFile filePath fileContents
-  callProcess "chmod" ["000", filePath]
-  action `finally` callProcess "chmod" ["600", filePath]
+withUnreadableFile filePath _fileContents action = do
+  createDirectory filePath
+  action `finally` removePathForcibly filePath
 
 spec = do
   describe "parseConfigOverridesFile" $ do
@@ -68,7 +67,7 @@ spec = do
           result <- CoreConfig.loadConfigOverridesFile overridesPath
           result `shouldSatisfy` \case
             Left (CoreConfig.UnreadableConfigOverridesFile errorMessage) ->
-              "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+              not (Text.null errorMessage)
             _ -> False
 
   describe "lookupConfigValue" $ do

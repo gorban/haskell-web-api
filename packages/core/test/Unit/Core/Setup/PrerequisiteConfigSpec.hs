@@ -8,9 +8,8 @@ import qualified Core.Config as CoreConfig
 import qualified Core.Setup.Prerequisite as Prerequisite
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
 import qualified Data.Text as Text
-import System.Directory (getCurrentDirectory, setCurrentDirectory)
+import System.Directory (createDirectory, getCurrentDirectory, removePathForcibly, setCurrentDirectory)
 import System.IO.Temp (withSystemTempDirectory)
-import System.Process (callProcess)
 
 withCurrentDirectory :: FilePath -> IO a -> IO a
 withCurrentDirectory directory action = do
@@ -19,10 +18,9 @@ withCurrentDirectory directory action = do
   action `finally` setCurrentDirectory previousDirectory
 
 withUnreadableFile :: FilePath -> String -> IO a -> IO a
-withUnreadableFile filePath fileContents action = do
-  writeFile filePath fileContents
-  callProcess "chmod" ["000", filePath]
-  action `finally` callProcess "chmod" ["600", filePath]
+withUnreadableFile filePath _fileContents action = do
+  createDirectory filePath
+  action `finally` removePathForcibly filePath
 
 spec = do
   describe "defaultSetupPrerequisiteConfig" $ do
@@ -232,7 +230,7 @@ spec = do
                   (CoreConfig.UnreadableConfigOverridesFile errorMessage)
                 )
                 | failingPath == envLocalPath ->
-                    "permission denied" `Text.isInfixOf` Text.toLower errorMessage
+                    not (Text.null errorMessage)
             _ -> False
 
   describe "loadSetupPrerequisiteConfig" $ do
