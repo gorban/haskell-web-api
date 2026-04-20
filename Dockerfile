@@ -31,6 +31,7 @@ apt-get install -y --no-install-recommends \
     libnuma-dev \
     libncurses-dev \
     make \
+    nodejs \
     xz-utils \
     zlib1g-dev \
     ca-certificates
