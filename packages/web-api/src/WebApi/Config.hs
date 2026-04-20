@@ -187,7 +187,8 @@ defaultAppConfig =
             { listenerHost = "127.0.0.1",
               listenerPort = 5001,
               listenerScheme = Http,
-              listenerTls = Nothing
+              listenerTls = Nothing,
+              listenerAcme = Nothing
             }
         ],
       staticAssets =
@@ -357,14 +358,23 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         parseListenerScheme
           (indexedConfigKey "LISTENER" listenerIndex "SCHEME")
           =<< requiredIndexedConfigValue "LISTENER" listenerIndex "SCHEME"
+      parsedAcme <- parseListenerAcmeConfig listenerIndex parsedScheme parsedPort
       parsedTls <- parseListenerTlsConfig listenerIndex parsedScheme
       pure
         ListenerConfig
           { listenerHost = parsedHost,
             listenerPort = parsedPort,
             listenerScheme = parsedScheme,
-            listenerTls = parsedTls
+            listenerTls = parsedTls,
+            listenerAcme = parsedAcme
           }
+
+    parseListenerAcmeConfig listenerIndex Http parsedPort =
+      if listenerHasAcmeConfig listenerIndex
+        then Just <$> parseAcmeConfig listenerIndex parsedPort
+        else Right Nothing
+    parseListenerAcmeConfig _ Https _ =
+      Right Nothing
 
     parseListenerTlsConfig _ Http = Right Nothing
     parseListenerTlsConfig listenerIndex Https = do
@@ -413,6 +423,9 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
             )
 
     parseAcmeCertificateSource listenerIndex =
+      AcmeCertificateSource <$> parseAcmeConfig listenerIndex 80
+
+    parseAcmeConfig listenerIndex parsedPort =
       do
         parsedDirectoryUrl <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
         parsedContactEmails <-
@@ -424,16 +437,14 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         resolvedCertificateDirectory <-
           resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend
         pure
-          ( AcmeCertificateSource
-              AcmeConfig
-                { acmeDirectoryUrl = parsedDirectoryUrl,
-                  acmeContactEmails = parsedContactEmails,
-                  acmeDomains = parsedDomains,
-                  acmeHttp01Port = 80,
-                  acmeCertificateDirectory = Just resolvedCertificateDirectory,
-                  acmeChallengeBackend = parsedChallengeBackend
-                }
-          )
+          AcmeConfig
+            { acmeDirectoryUrl = parsedDirectoryUrl,
+              acmeContactEmails = parsedContactEmails,
+              acmeDomains = parsedDomains,
+              acmeHttp01Port = parsedPort,
+              acmeCertificateDirectory = Just resolvedCertificateDirectory,
+              acmeChallengeBackend = parsedChallengeBackend
+            }
 
     parseConfiguredAcmeDomains listenerIndex =
       maybe
@@ -485,8 +496,17 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     acmeListenerIndices =
       filter
-        (\listenerIndex -> optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE" == Just "acme")
+        listenerHasAcmeRuntime
         (declaredIndices "LISTENER_" allConfigEntries)
+
+    listenerHasAcmeRuntime listenerIndex =
+      optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE" == Just "acme"
+        || listenerHasAcmeConfig listenerIndex
+
+    listenerHasAcmeConfig listenerIndex =
+      any
+        (Text.isPrefixOf (Text.pack ("LISTENER_" <> show listenerIndex <> "_ACME_")) . fst)
+        allConfigEntries
 
     parseAcmeChallengeBackend listenerIndex = do
       backendValue <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"

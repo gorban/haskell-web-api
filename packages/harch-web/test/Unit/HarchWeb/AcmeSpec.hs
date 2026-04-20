@@ -77,6 +77,7 @@ runtimeAcmePlanWith :: AcmeConfig -> RuntimeAcmeBindPlan
 runtimeAcmePlanWith acmeConfig =
   RuntimeAcmeBindPlan
     { runtimeAcmeEndpoint = sampleEndpoint,
+      runtimeAcmeTlsEndpoint = Just sampleEndpoint,
       runtimeAcmeListenerConfig = acmeConfig
     }
 
@@ -243,11 +244,13 @@ spec = do
             (certbotManualPlan, certbotCleanupDirectory) <-
               prepareCertbotManualTlsBindPlan certbotPlan certbotConfig
             ( do
-                tlsEndpoint certbotManualPlan `shouldBe` sampleEndpoint
-                tlsCredentialSourceKind certbotManualPlan `shouldBe` ManualTlsCredentials
-                tlsStartupMode certbotManualPlan `shouldBe` RequireCertificateFiles
-                tlsCertificateFile certbotManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
-                tlsPrivateKeyFile certbotManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                certbotManualPlan `shouldSatisfy` (/= Nothing)
+                let Just resolvedCertbotManualPlan = certbotManualPlan
+                tlsEndpoint resolvedCertbotManualPlan `shouldBe` sampleEndpoint
+                tlsCredentialSourceKind resolvedCertbotManualPlan `shouldBe` ManualTlsCredentials
+                tlsStartupMode resolvedCertbotManualPlan `shouldBe` RequireCertificateFiles
+                tlsCertificateFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                tlsPrivateKeyFile resolvedCertbotManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
                 readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "FAKE CERT\n"
                 readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
               )
@@ -268,11 +271,13 @@ spec = do
               (inProcessManualPlan, inProcessCleanupDirectory) <-
                 prepareInProcessManualTlsBindPlan inProcessPlan challengeStore
               ( do
-                  tlsEndpoint inProcessManualPlan `shouldBe` sampleEndpoint
-                  tlsCredentialSourceKind inProcessManualPlan `shouldBe` ManualTlsCredentials
-                  tlsStartupMode inProcessManualPlan `shouldBe` RequireCertificateFiles
-                  tlsCertificateFile inProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
-                  tlsPrivateKeyFile inProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
+                  inProcessManualPlan `shouldSatisfy` (/= Nothing)
+                  let Just resolvedInProcessManualPlan = inProcessManualPlan
+                  tlsEndpoint resolvedInProcessManualPlan `shouldBe` sampleEndpoint
+                  tlsCredentialSourceKind resolvedInProcessManualPlan `shouldBe` ManualTlsCredentials
+                  tlsStartupMode resolvedInProcessManualPlan `shouldBe` RequireCertificateFiles
+                  tlsCertificateFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
+                  tlsPrivateKeyFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
                   readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "PEM CERT"
                   readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "fake-account-key"
                 )

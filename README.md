@@ -110,12 +110,12 @@ understands the following values:
 | `LISTENER_<n>_HOST` | Host/interface to bind for listener `n`. | (`LISTENER_0_HOST=127.0.0.1`) |
 | `LISTENER_<n>_PORT` | Port to bind for listener `n`. | (`LISTENER_0_PORT=5001`) |
 | `LISTENER_<n>_SCHEME` | Listener scheme, either `http` or `https`. | (`LISTENER_0_SCHEME=http`) |
-| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners: `manual`, `shared`, `shared-wait`, `shared-fail-fast`, or `acme`. `shared` remains the legacy alias for the waiting mode. | (`unset`) |
+| `LISTENER_<n>_TLS_SOURCE` | TLS source for HTTPS listeners: `manual`, `shared`, `shared-wait`, or `shared-fail-fast`. `shared` remains the legacy alias for the waiting mode. The older HTTPS `acme` shape is still accepted, but the preferred model is ACME on the HTTP listener plus `shared-wait` HTTPS consumers. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. When unset and exactly one ACME listener is configured, shared listeners reuse that ACME listener's effective certificate directory. | (`listener-aware`) |
 | `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
-| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for ACME-backed TLS. | (`unset`) |
+| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for listeners that publish ACME-managed certificate files. Prefer setting this on the HTTP listener that serves `http-01` challenges. | (`unset`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
@@ -215,21 +215,20 @@ LISTENER_1_TLS_SOURCE=manual
 LISTENER_1_TLS_CERTIFICATE_FILE=/etc/web-api/tls/fullchain.pem
 LISTENER_1_TLS_PRIVATE_KEY_FILE=/etc/web-api/tls/privkey.pem
 
-# Listener 2: HTTPS with ACME and certbot
+# Listener 2: HTTP listener that publishes ACME certificates
 LISTENER_2_HOST=0.0.0.0
-LISTENER_2_PORT=8443
-LISTENER_2_SCHEME=https
-LISTENER_2_TLS_SOURCE=acme
+LISTENER_2_PORT=80
+LISTENER_2_SCHEME=http
 LISTENER_2_ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
 LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
 LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com
+LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--http-01-port,80
 
 # Listener 3: HTTPS that reuses ACME-published certificate files
 LISTENER_3_HOST=0.0.0.0
-LISTENER_3_PORT=9443
+LISTENER_3_PORT=8443
 LISTENER_3_SCHEME=https
 LISTENER_3_TLS_SOURCE=shared-wait
 LISTENER_3_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com

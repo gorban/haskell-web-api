@@ -654,7 +654,8 @@ spec = do
                   { listenerHost = "127.0.0.1",
                     listenerPort = 5001,
                     listenerScheme = Http,
-                    listenerTls = Nothing
+                    listenerTls = Nothing,
+                    listenerAcme = Nothing
                   }
               ],
             staticAssets =
@@ -711,13 +712,15 @@ spec = do
                     { listenerHost = "127.0.0.2",
                       listenerPort = 5002,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.3",
                       listenerPort = 5003,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -767,7 +770,8 @@ spec = do
                     { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -781,7 +785,8 @@ spec = do
                                   { certificateFile = "cert.pem",
                                     privateKeyFile = "key.pem"
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy =
@@ -828,7 +833,8 @@ spec = do
                                   { certificateDirectory = "/var/lib/web-api/shared-certs",
                                     sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -847,7 +853,8 @@ spec = do
                                       acmeCertificateDirectory = Just "/var/lib/web-api/shared-certs",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy = requestPolicy defaultAppConfig
@@ -887,7 +894,8 @@ spec = do
                                   { certificateDirectory = ".tls/example.com",
                                     sharedCertificateStartupMode = AwaitCertificateFiles Nothing
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -906,7 +914,8 @@ spec = do
                                       acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy = requestPolicy defaultAppConfig
@@ -950,7 +959,8 @@ spec = do
                                               certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
                                             }
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy = requestPolicy defaultAppConfig
@@ -1015,7 +1025,8 @@ spec = do
                                   { certificateDirectory = "/var/lib/web-api/shared-certs",
                                     sharedCertificateStartupMode = AwaitCertificateFiles (Just 15)
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -1029,7 +1040,8 @@ spec = do
                                   { certificateDirectory = "/var/lib/web-api/preprovisioned-certs",
                                     sharedCertificateStartupMode = RequireCertificateFiles
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy = requestPolicy defaultAppConfig
@@ -1059,20 +1071,21 @@ spec = do
         []
         `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_SHARED_WAIT_SECONDS" "-1")
 
-    it "defaults redirects on for HTTP plus ACME-backed HTTPS listener plans" $
+    it "defaults redirects on for HTTP ACME producers plus shared HTTPS listener plans" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
           ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "80"),
+          ("LISTENER_0_PORT", "8080"),
           ("LISTENER_0_SCHEME", "http"),
+          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
+          ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
+          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01"),
           ("LISTENER_1_HOST", "127.0.0.1"),
-          ("LISTENER_1_PORT", "443"),
+          ("LISTENER_1_PORT", "5443"),
           ("LISTENER_1_SCHEME", "https"),
-          ("LISTENER_1_TLS_SOURCE", "acme"),
-          ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
-          ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+          ("LISTENER_1_TLS_SOURCE", "shared-wait"),
+          ("LISTENER_1_TLS_SHARED_WAIT_SECONDS", "120")
         ]
         []
         []
@@ -1082,34 +1095,40 @@ spec = do
               listenerConfigs =
                 [ ListenerConfig
                     { listenerHost = "127.0.0.1",
-                      listenerPort = 80,
+                      listenerPort = 8080,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme =
+                        Just
+                          AcmeConfig
+                            { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                              acmeContactEmails = ["ops@example.com"],
+                              acmeDomains = ["example.com", "www.example.com"],
+                              acmeHttp01Port = 8080,
+                              acmeCertificateDirectory = Just ".tls/example.com",
+                              acmeChallengeBackend = InProcessHttp01
+                            }
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
-                      listenerPort = 443,
+                      listenerPort = 5443,
                       listenerScheme = Https,
                       listenerTls =
                         Just
                           TlsConfig
                             { certificateSource =
-                                AcmeCertificateSource
-                                  AcmeConfig
-                                    { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
-                                      acmeContactEmails = ["ops@example.com"],
-                                      acmeDomains = ["example.com", "www.example.com"],
-                                      acmeHttp01Port = 80,
-                                      acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend = InProcessHttp01
-                                    }
-                            }
+                                SharedCertificateFiles
+                                  { certificateDirectory = ".tls/example.com",
+                                    sharedCertificateStartupMode = AwaitCertificateFiles (Just 120)
+                                  }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy =
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
-                    httpsRedirectPort = Just 443,
+                    httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing
                   }
             }
@@ -1159,7 +1178,8 @@ spec = do
                                   { certificateFile = "cert.pem",
                                     privateKeyFile = "key.pem"
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "0.0.0.0",
@@ -1178,7 +1198,8 @@ spec = do
                                       acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "0.0.0.0",
@@ -1202,7 +1223,8 @@ spec = do
                                               certbotArguments = ["certonly", "--webroot", "--agree-tos"]
                                             }
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -1260,7 +1282,8 @@ spec = do
                     { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -1379,7 +1402,8 @@ spec = do
                     { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -1393,7 +1417,8 @@ spec = do
                                   { certificateFile = "cert.pem",
                                     privateKeyFile = "key.pem"
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy =
@@ -1433,7 +1458,8 @@ spec = do
                     { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Http,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -1447,7 +1473,8 @@ spec = do
                                   { certificateFile = "https-443-cert.pem",
                                     privateKeyFile = "https-443-key.pem"
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     },
                   ListenerConfig
                     { listenerHost = "127.0.0.1",
@@ -1461,7 +1488,8 @@ spec = do
                                   { certificateFile = "https-5443-cert.pem",
                                     privateKeyFile = "https-5443-key.pem"
                                   }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               requestPolicy =
@@ -1674,7 +1702,8 @@ spec = do
                                               certbotArguments = []
                                             }
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -1723,7 +1752,8 @@ spec = do
                                       acmeCertificateDirectory = Just ".tls/example.com",
                                       acmeChallengeBackend = InProcessHttp01
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -1776,7 +1806,8 @@ spec = do
                                               certbotArguments = []
                                             }
                                     }
-                            }
+                            },
+                      listenerAcme = Nothing
                     }
                 ],
               staticAssets =
@@ -2932,7 +2963,8 @@ spec = do
                                 { listenerHost = "127.0.0.1",
                                   listenerPort = 7443,
                                   listenerScheme = Http,
-                                  listenerTls = Nothing
+                                  listenerTls = Nothing,
+                                  listenerAcme = Nothing
                                 }
                             ]
                         }
@@ -2972,7 +3004,8 @@ spec = do
                                       { listenerHost = "0.0.0.0",
                                         listenerPort = 80,
                                         listenerScheme = Http,
-                                        listenerTls = Nothing
+                                        listenerTls = Nothing,
+                                        listenerAcme = Nothing
                                       }
                                   ]
                               }
@@ -3033,7 +3066,8 @@ spec = do
                                   { listenerHost = "127.0.0.1",
                                     listenerPort = 6001,
                                     listenerScheme = Http,
-                                    listenerTls = Nothing
+                                    listenerTls = Nothing,
+                                    listenerAcme = Nothing
                                   }
                               ]
                           }
@@ -4172,7 +4206,8 @@ spec = do
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just tlsConfig
+                listenerTls = Just tlsConfig,
+                listenerAcme = Nothing
               }
           staticRoot =
             StaticAssetRoot
@@ -4410,7 +4445,7 @@ spec = do
         `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
       show manualCertificateSource
         `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
-      show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing})
+      show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing})
         `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
       show
@@ -4470,7 +4505,7 @@ spec = do
       show
         ( AppConfig
             { appTitlePrefix = "test-app",
-              listenerConfigs = [ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}],
+              listenerConfigs = [ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing}],
               staticAssets = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600},
               requestPolicy = requestPolicy defaultAppConfig,
               observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
@@ -4519,14 +4554,16 @@ spec = do
               { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
-                listenerTls = Nothing
+                listenerTls = Nothing,
+                listenerAcme = Nothing
               }
           secureListenerConfig =
             ListenerConfig
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just tlsConfig
+                listenerTls = Just tlsConfig,
+                listenerAcme = Nothing
               }
           staticRoot =
             StaticAssetRoot
@@ -4666,7 +4703,8 @@ spec = do
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just tlsConfig
+                listenerTls = Just tlsConfig,
+                listenerAcme = Nothing
               }
           staticRoot =
             StaticAssetRoot
@@ -4786,7 +4824,8 @@ spec = do
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just tlsConfig
+                listenerTls = Just tlsConfig,
+                listenerAcme = Nothing
               }
           staticRoot =
             StaticAssetRoot
@@ -6079,7 +6118,8 @@ spec = do
                           { listenerHost = tcpEndpointHost unusedEndpoint,
                             listenerPort = tcpEndpointPort unusedEndpoint,
                             listenerScheme = Http,
-                            listenerTls = Nothing
+                            listenerTls = Nothing,
+                            listenerAcme = Nothing
                           }
                       ]
                   }
@@ -6120,7 +6160,8 @@ spec = do
                             { listenerHost = tcpEndpointHost unusedEndpoint,
                               listenerPort = tcpEndpointPort unusedEndpoint,
                               listenerScheme = Http,
-                              listenerTls = Nothing
+                              listenerTls = Nothing,
+                              listenerAcme = Nothing
                             }
                         ]
                     }
@@ -6157,7 +6198,8 @@ spec = do
                                         { certificateFile = "/tmp/missing-cert.pem",
                                           privateKeyFile = "/tmp/missing-key.pem"
                                         }
-                                  }
+                                  },
+                            listenerAcme = Nothing
                           }
                       ]
                   }

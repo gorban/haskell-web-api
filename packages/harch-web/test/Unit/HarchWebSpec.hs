@@ -224,7 +224,8 @@ sampleServerConfig =
             { listenerHost = "127.0.0.1",
               listenerPort = 5001,
               listenerScheme = Http,
-              listenerTls = Nothing
+              listenerTls = Nothing,
+              listenerAcme = Nothing
             }
         ],
       staticAssets =
@@ -252,7 +253,8 @@ httpRuntimeListener host port =
     { listenerHost = host,
       listenerPort = port,
       listenerScheme = Http,
-      listenerTls = Nothing
+      listenerTls = Nothing,
+      listenerAcme = Nothing
     }
 
 acmeHttpsListenerWithDomains :: Text -> Int -> [Text] -> [Text] -> AcmeChallengeBackend -> ListenerConfig
@@ -278,7 +280,8 @@ acmeHttpsListenerWithDomainsAndChallengePort challengePort host port contactEmai
                       acmeCertificateDirectory = Nothing,
                       acmeChallengeBackend = challengeBackend
                     }
-            }
+            },
+      listenerAcme = Nothing
     }
 
 sharedHttpsListener :: Text -> Int -> FilePath -> ListenerConfig
@@ -299,7 +302,8 @@ sharedHttpsListenerWithStartupMode host port certificateDirectory startupMode =
                   { certificateDirectory = certificateDirectory,
                     sharedCertificateStartupMode = startupMode
                   }
-            }
+            },
+      listenerAcme = Nothing
     }
 
 acmeHttpsListenerWithContacts :: Text -> Int -> [Text] -> AcmeChallengeBackend -> ListenerConfig
@@ -583,7 +587,8 @@ spec = do
                       { listenerHost = "127.0.0.1",
                         listenerPort = 5001,
                         listenerScheme = Https,
-                        listenerTls = Just tlsConfig
+                        listenerTls = Just tlsConfig,
+                        listenerAcme = Nothing
                       }
                   ],
                 staticAssets =
@@ -703,14 +708,24 @@ spec = do
               { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Https,
-                listenerTls = Just tlsConfig
+                listenerTls = Just tlsConfig,
+                listenerAcme = Nothing
               }
           otherListenerConfig =
             ListenerConfig
               { listenerHost = "0.0.0.0",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = manualCertificateSource})
+                listenerTls = Just (TlsConfig {certificateSource = manualCertificateSource}),
+                listenerAcme = Nothing
+              }
+          httpAcmeListenerConfig =
+            ListenerConfig
+              { listenerHost = "0.0.0.0",
+                listenerPort = 80,
+                listenerScheme = Http,
+                listenerTls = Nothing,
+                listenerAcme = Just otherAcmeConfig
               }
           staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
           staticAssetsConfig = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600}
@@ -763,6 +778,7 @@ spec = do
       tlsConfig `shouldNotBe` TlsConfig {certificateSource = sharedCertificateSource}
       listenerConfig `shouldBe` listenerConfig
       listenerConfig `shouldNotBe` otherListenerConfig
+      httpAcmeListenerConfig `shouldNotBe` listenerConfig
       staticRoot `shouldBe` staticRoot
       staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
       staticAssetsConfig `shouldBe` staticAssetsConfig
@@ -795,6 +811,7 @@ spec = do
       show acmeCertificateSource `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
       show (TlsConfig {certificateSource = manualCertificateSource}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
       show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}"
+      show httpAcmeListenerConfig `shouldBe` "ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeChallengeBackend = InProcessHttp01}}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
       show staticAssetsConfig `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
@@ -815,6 +832,7 @@ spec = do
       shouldBeParenthesized (showsPrec 11 acmeCertificateSource "")
       shouldBeParenthesized (showsPrec 11 tlsConfig "")
       shouldBeParenthesized (showsPrec 11 listenerConfig "")
+      shouldBeParenthesized (showsPrec 11 httpAcmeListenerConfig "")
       shouldBeParenthesized (showsPrec 11 staticRoot "")
       shouldBeParenthesized (showsPrec 11 staticAssetsConfig "")
       shouldBeParenthesized (showsPrec 11 tracingConfig "")
@@ -833,6 +851,7 @@ spec = do
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
       show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
       show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
+      show [httpAcmeListenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeChallengeBackend = InProcessHttp01}}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig] `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
       show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
@@ -1826,8 +1845,8 @@ spec = do
     it "groups HTTP listeners into the expected bind plan" $ do
       let firstEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5001}
           secondEndpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5002}
-          firstListener = ListenerConfig {listenerHost = endpointHost firstEndpoint, listenerPort = endpointPort firstEndpoint, listenerScheme = Http, listenerTls = Nothing}
-          secondListener = ListenerConfig {listenerHost = endpointHost secondEndpoint, listenerPort = endpointPort secondEndpoint, listenerScheme = Http, listenerTls = Nothing}
+          firstListener = ListenerConfig {listenerHost = endpointHost firstEndpoint, listenerPort = endpointPort firstEndpoint, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing}
+          secondListener = ListenerConfig {listenerHost = endpointHost secondEndpoint, listenerPort = endpointPort secondEndpoint, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing}
           httpBindPlan = HttpBindPlan {httpEndpoints = [firstEndpoint, secondEndpoint]}
           startupPlan =
             ServerStartupPlan
@@ -1857,7 +1876,8 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource})
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerAcme = Nothing
               }
           manualPlan =
             ManualTlsBindPlan
@@ -1891,7 +1911,8 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource})
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerAcme = Nothing
               }
           manualPlan =
             ManualTlsBindPlan
@@ -1925,7 +1946,8 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = certificateSource})
+                listenerTls = Just (TlsConfig {certificateSource = certificateSource}),
+                listenerAcme = Nothing
               }
       planServerStartup (serverConfigWithListeners [listener])
         `shouldBe` Right
@@ -1951,7 +1973,8 @@ spec = do
               { listenerHost = endpointHost httpEndpoint,
                 listenerPort = endpointPort httpEndpoint,
                 listenerScheme = Http,
-                listenerTls = Nothing
+                listenerTls = Nothing,
+                listenerAcme = Nothing
               }
           acmeConfig =
             AcmeConfig
@@ -1972,11 +1995,13 @@ spec = do
               { listenerHost = endpointHost endpoint,
                 listenerPort = endpointPort endpoint,
                 listenerScheme = Https,
-                listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource acmeConfig})
+                listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}),
+                listenerAcme = Nothing
               }
           acmePlan =
             AcmeBindPlan
               { acmeEndpoint = endpoint,
+                acmeTlsEndpoint = Just endpoint,
                 acmeListenerConfig = acmeConfig
               }
       planServerStartup (serverConfigWithListeners [httpListener, listener])
@@ -1988,8 +2013,8 @@ spec = do
             }
       acmePlan `shouldBe` acmePlan
       acmePlan `shouldNotBe` acmePlan {acmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5444}}
-      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}"
-      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}]"
+      show acmePlan `shouldBe` "AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}"
+      show [acmePlan] `shouldBe` "[AcmeBindPlan {acmeEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, acmeTlsEndpoint = Just (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}), acmeListenerConfig = AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}}]"
 
     it "rejects listeners whose TLS mode does not match their scheme" $ do
       let httpTlsListener =
@@ -1997,14 +2022,16 @@ spec = do
               { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
-                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}})
+                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}),
+                listenerAcme = Nothing
               }
           httpsWithoutTls =
             ListenerConfig
               { listenerHost = "127.0.0.1",
                 listenerPort = 5443,
                 listenerScheme = Https,
-                listenerTls = Nothing
+                listenerTls = Nothing,
+                listenerAcme = Nothing
               }
       planServerStartup (serverConfigWithListeners [httpTlsListener])
         `shouldBe` Left (InvalidListenerTlsConfiguration httpTlsListener)
@@ -2016,13 +2043,35 @@ spec = do
       show [InvalidListenerTlsConfiguration httpsWithoutTls]
         `shouldBe` "[InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5443, listenerScheme = Https, listenerTls = Nothing})]"
 
+    it "rejects ACME producer config attached to HTTPS listeners" $ do
+      let httpsAcmeProducerListener =
+            ListenerConfig
+              { listenerHost = "127.0.0.1",
+                listenerPort = 5443,
+                listenerScheme = Https,
+                listenerTls = Nothing,
+                listenerAcme =
+                  Just
+                    AcmeConfig
+                      { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                        acmeContactEmails = ["ops@example.com"],
+                        acmeDomains = ["example.com"],
+                        acmeHttp01Port = 80,
+                        acmeCertificateDirectory = Just ".tls/example.com",
+                        acmeChallengeBackend = InProcessHttp01
+                      }
+              }
+      planServerStartup (serverConfigWithListeners [httpsAcmeProducerListener])
+        `shouldBe` Left (InvalidListenerAcmeConfiguration httpsAcmeProducerListener)
+
     it "rejects invalid mixed listener configurations before startup" $ do
       let httpListener =
             ListenerConfig
               { listenerHost = "0.0.0.0",
                 listenerPort = 5001,
                 listenerScheme = Http,
-                listenerTls = Nothing
+                listenerTls = Nothing,
+                listenerAcme = Nothing
               }
           httpsListener =
             ListenerConfig
@@ -2033,7 +2082,8 @@ spec = do
                   Just
                     TlsConfig
                       { certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
-                      }
+                      },
+                listenerAcme = Nothing
               }
           duplicateEndpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5001}
       planServerStartup (serverConfigWithListeners [httpListener, httpsListener])
@@ -2396,7 +2446,8 @@ spec = do
                       { listenerHost = "127.0.0.1",
                         listenerPort = unusedPort,
                         listenerScheme = Http,
-                        listenerTls = Nothing
+                        listenerTls = Nothing,
+                        listenerAcme = Nothing
                       }
                   ]
           serverThreadId <- forkIO $ do
@@ -2422,7 +2473,8 @@ spec = do
                     { listenerHost = "127.0.0.1",
                       listenerPort = 5001,
                       listenerScheme = Https,
-                      listenerTls = Nothing
+                      listenerTls = Nothing,
+                      listenerAcme = Nothing
                     }
                 ]
         runServer outputHandle invalidConfig sampleApplication
@@ -2447,7 +2499,8 @@ spec = do
                                       { certificateFile = certificatePath,
                                         privateKeyFile = privateKeyPath
                                       }
-                                }
+                                },
+                          listenerAcme = Nothing
                         }
                     ]
             serverThreadId <- forkIO $ do
@@ -2482,7 +2535,8 @@ spec = do
                                     { certificateFile = "missing-cert.pem",
                                       privateKeyFile = privateKeyPath
                                     }
-                              }
+                              },
+                        listenerAcme = Nothing
                       }
                   ]
           runServer outputHandle manualTlsConfig sampleApplication
@@ -2505,7 +2559,8 @@ spec = do
                                     { certificateFile = certificatePath,
                                       privateKeyFile = "missing-key.pem"
                                     }
-                              }
+                              },
+                        listenerAcme = Nothing
                       }
                   ]
           runServer outputHandle manualTlsConfig sampleApplication
@@ -2530,7 +2585,8 @@ spec = do
                                     { certificateFile = certificatePath,
                                       privateKeyFile = privateKeyPath
                                     }
-                              }
+                              },
+                        listenerAcme = Nothing
                       }
                   ]
           writeFile certificatePath "not a certificate"
@@ -2608,7 +2664,8 @@ spec = do
                                         Just
                                           TlsConfig
                                             { certificateSource = AcmeCertificateSource acmeConfig
-                                            }
+                                            },
+                                      listenerAcme = Nothing
                                     }
                                 ]
                         serverThreadId <- forkIO $ do
@@ -2633,51 +2690,82 @@ spec = do
     it "lets shared HTTPS listeners reuse certificates issued by the in-process ACME backend" $
       withUnusedLoopbackPort $ \challengePort ->
         withUnusedLoopbackPort $ \acmePort ->
-          withUnusedLoopbackPort $ \acmeHttpsPort ->
-            withUnusedLoopbackPort $ \sharedHttpsPort ->
-              withManualTlsFiles $ \certificatePath privateKeyPath ->
-                withFakeOpenSslExecutable certificatePath privateKeyPath $
-                  \_ ->
-                    withFakeAcmeServer acmePort challengePort certificatePath $
-                      \directoryUrl ->
-                        withSystemTempDirectory "harch-web-shared-certs" $ \sharedDirectory ->
-                          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
-                            completionReference <- newIORef Nothing
-                            let acmeConfig =
-                                  AcmeConfig
-                                    { acmeDirectoryUrl = directoryUrl,
-                                      acmeContactEmails = ["ops@example.com"],
-                                      acmeDomains = ["loopback.example"],
-                                      acmeHttp01Port = challengePort,
-                                      acmeCertificateDirectory = Just sharedDirectory,
-                                      acmeChallengeBackend = InProcessHttp01
+          withUnusedLoopbackPort $ \sharedHttpsPort ->
+            withManualTlsFiles $ \certificatePath privateKeyPath ->
+              withFakeOpenSslExecutable certificatePath privateKeyPath $
+                \_ ->
+                  withFakeAcmeServer acmePort challengePort certificatePath $
+                    \directoryUrl ->
+                      withSystemTempDirectory "harch-web-shared-certs" $ \sharedDirectory ->
+                        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                          completionReference <- newIORef Nothing
+                          let acmeConfig =
+                                AcmeConfig
+                                  { acmeDirectoryUrl = directoryUrl,
+                                    acmeContactEmails = ["ops@example.com"],
+                                    acmeDomains = ["loopback.example"],
+                                    acmeHttp01Port = challengePort,
+                                    acmeCertificateDirectory = Just sharedDirectory,
+                                    acmeChallengeBackend = InProcessHttp01
+                                  }
+                              runtimeConfig =
+                                serverConfigWithListeners
+                                  [ ListenerConfig
+                                      { listenerHost = "127.0.0.1",
+                                        listenerPort = challengePort,
+                                        listenerScheme = Http,
+                                        listenerTls = Nothing,
+                                        listenerAcme = Just acmeConfig
+                                      },
+                                    sharedHttpsListener "127.0.0.1" sharedHttpsPort sharedDirectory
+                                  ]
+                          serverThreadId <- forkIO $ do
+                            result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+                            writeIORef completionReference (Just result)
+                          sharedResponseText <- waitForHttpsServerResponse completionReference sharedHttpsPort "/known"
+                          Text.isInfixOf "<h1>Known</h1>" sharedResponseText `shouldBe` True
+                          readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` manualTlsCertificatePem
+                          readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
+                          killThread serverThreadId
+                          waitForServerExit completionReference
+
+    it "shuts down HTTP ACME producers that only publish certificates without starting HTTPS" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withUnusedLoopbackPort $ \acmePort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withFakeOpenSslExecutable certificatePath privateKeyPath $
+              \_ ->
+                withFakeAcmeServer acmePort challengePort certificatePath $
+                  \directoryUrl ->
+                    withSystemTempDirectory "harch-web-published-certs" $ \sharedDirectory ->
+                      withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                        completionReference <- newIORef Nothing
+                        let acmeConfig =
+                              AcmeConfig
+                                { acmeDirectoryUrl = directoryUrl,
+                                  acmeContactEmails = ["ops@example.com"],
+                                  acmeDomains = ["loopback.example"],
+                                  acmeHttp01Port = challengePort,
+                                  acmeCertificateDirectory = Just sharedDirectory,
+                                  acmeChallengeBackend = InProcessHttp01
+                                }
+                            runtimeConfig =
+                              serverConfigWithListeners
+                                [ ListenerConfig
+                                    { listenerHost = "127.0.0.1",
+                                      listenerPort = challengePort,
+                                      listenerScheme = Http,
+                                      listenerTls = Nothing,
+                                      listenerAcme = Just acmeConfig
                                     }
-                                runtimeConfig =
-                                  serverConfigWithListeners
-                                    [ httpRuntimeListener "127.0.0.1" challengePort,
-                                      ListenerConfig
-                                        { listenerHost = "127.0.0.1",
-                                          listenerPort = acmeHttpsPort,
-                                          listenerScheme = Https,
-                                          listenerTls =
-                                            Just
-                                              TlsConfig
-                                                { certificateSource = AcmeCertificateSource acmeConfig
-                                                }
-                                        },
-                                      sharedHttpsListener "127.0.0.1" sharedHttpsPort sharedDirectory
-                                    ]
-                            serverThreadId <- forkIO $ do
-                              result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
-                              writeIORef completionReference (Just result)
-                            acmeResponseText <- waitForHttpsServerResponse completionReference acmeHttpsPort "/known"
-                            Text.isInfixOf "<h1>Known</h1>" acmeResponseText `shouldBe` True
-                            sharedResponseText <- waitForHttpsServerResponse completionReference sharedHttpsPort "/known"
-                            Text.isInfixOf "<h1>Known</h1>" sharedResponseText `shouldBe` True
-                            readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` manualTlsCertificatePem
-                            readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
-                            killThread serverThreadId
-                            waitForServerExit completionReference
+                                ]
+                        serverThreadId <- forkIO $ do
+                          result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+                          writeIORef completionReference (Just result)
+                        responseText <- waitForServerResponse completionReference challengePort "/known"
+                        Text.isInfixOf "<h1>Known</h1>" responseText `shouldBe` True
+                        killThread serverThreadId
+                        waitForServerExit completionReference
 
     it "fails explicitly when in-process ACME listeners cannot launch openssl" $
       withUnusedLoopbackPort $ \challengePort ->
@@ -2703,7 +2791,8 @@ spec = do
                             Just
                               TlsConfig
                                 { certificateSource = AcmeCertificateSource acmeConfig
-                                }
+                                },
+                          listenerAcme = Nothing
                         }
                     ]
             runServer outputHandle acmeTlsConfig sampleApplication
@@ -2724,6 +2813,56 @@ spec = do
                     ]
             runServer outputHandle acmeTlsConfig sampleApplication
               `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:5443 requires an HTTP listener on port " <> show declaredPort <> " for http-01 challenges.)")
+
+    it "fails explicitly when HTTP ACME producers declare a mismatched http-01 port" $
+      withUnusedLoopbackPort $ \httpPort ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+          let acmeConfig =
+                AcmeConfig
+                  { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                    acmeContactEmails = ["ops@example.com"],
+                    acmeDomains = ["example.com"],
+                    acmeHttp01Port = httpPort + 1,
+                    acmeCertificateDirectory = Just ".tls/example.com",
+                    acmeChallengeBackend = InProcessHttp01
+                  }
+              runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = httpPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing,
+                        listenerAcme = Just acmeConfig
+                      }
+                  ]
+          runServer outputHandle runtimeConfig sampleApplication
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:" <> show httpPort <> " requires the configured http-01 port to match its HTTP listener port " <> show httpPort <> ".)")
+
+    it "fails explicitly when HTTP ACME producers do not publish a certificate directory" $
+      withUnusedLoopbackPort $ \httpPort ->
+        withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+          let acmeConfig =
+                AcmeConfig
+                  { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                    acmeContactEmails = ["ops@example.com"],
+                    acmeDomains = ["example.com"],
+                    acmeHttp01Port = httpPort,
+                    acmeCertificateDirectory = Nothing,
+                    acmeChallengeBackend = InProcessHttp01
+                  }
+              runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = httpPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing,
+                        listenerAcme = Just acmeConfig
+                      }
+                  ]
+          runServer outputHandle runtimeConfig sampleApplication
+            `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:" <> show httpPort <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates.)")
 
     it "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \challengePort ->
@@ -2793,7 +2932,8 @@ spec = do
                                   Just
                                     TlsConfig
                                       { certificateSource = AcmeCertificateSource acmeConfig
-                                      }
+                                      },
+                                listenerAcme = Nothing
                               }
                           runtimeConfig =
                             serverConfigWithListeners
@@ -3020,7 +3160,8 @@ spec = do
                       { listenerHost = "127.0.0.1",
                         listenerPort = occupiedPort,
                         listenerScheme = Http,
-                        listenerTls = Nothing
+                        listenerTls = Nothing,
+                        listenerAcme = Nothing
                       }
                   ]
            in runServer outputHandle runtimeConfig sampleApplication
@@ -3036,13 +3177,15 @@ spec = do
                         { listenerHost = "127.0.0.1",
                           listenerPort = firstPort,
                           listenerScheme = Http,
-                          listenerTls = Nothing
+                          listenerTls = Nothing,
+                          listenerAcme = Nothing
                         },
                       ListenerConfig
                         { listenerHost = "127.0.0.1",
                           listenerPort = occupiedPort,
                           listenerScheme = Http,
-                          listenerTls = Nothing
+                          listenerTls = Nothing,
+                          listenerAcme = Nothing
                         }
                     ]
             runServer outputHandle multiListenerConfig sampleApplication
@@ -3060,7 +3203,8 @@ spec = do
                           { listenerHost = "127.0.0.1",
                             listenerPort = firstPort,
                             listenerScheme = Http,
-                            listenerTls = Nothing
+                            listenerTls = Nothing,
+                            listenerAcme = Nothing
                           },
                         ListenerConfig
                           { listenerHost = "127.0.0.1",
@@ -3074,7 +3218,8 @@ spec = do
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
                                         }
-                                  }
+                                  },
+                            listenerAcme = Nothing
                           }
                       ]
               runServer outputHandle multiListenerConfig sampleApplication
@@ -3100,7 +3245,8 @@ spec = do
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
                                         }
-                                  }
+                                  },
+                            listenerAcme = Nothing
                           },
                         ListenerConfig
                           { listenerHost = "127.0.0.1",
@@ -3114,7 +3260,8 @@ spec = do
                                         { certificateFile = certificatePath,
                                           privateKeyFile = privateKeyPath
                                         }
-                                  }
+                                  },
+                            listenerAcme = Nothing
                           }
                       ]
               runServer outputHandle multiListenerConfig sampleApplication

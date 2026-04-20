@@ -156,11 +156,12 @@ import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (digitToInt, isDigit, toLower)
 import Data.Either (lefts)
+import Data.Foldable (for_)
 import Data.Functor (($>))
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find, intercalate, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -246,9 +247,27 @@ data ListenerConfig = ListenerConfig
   { listenerHost :: Text,
     listenerPort :: Int,
     listenerScheme :: ListenerScheme,
-    listenerTls :: Maybe TlsConfig
+    listenerTls :: Maybe TlsConfig,
+    listenerAcme :: Maybe AcmeConfig
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show ListenerConfig where
+  showsPrec precedence listenerConfig =
+    showParen (precedence > 10) $
+      showString "ListenerConfig {listenerHost = "
+        . shows (listenerHost listenerConfig)
+        . showString ", listenerPort = "
+        . shows (listenerPort listenerConfig)
+        . showString ", listenerScheme = "
+        . shows (listenerScheme listenerConfig)
+        . showString ", listenerTls = "
+        . shows (listenerTls listenerConfig)
+        . maybe
+          id
+          (\acmeConfig -> showString ", listenerAcme = " . shows acmeConfig)
+          (listenerAcme listenerConfig)
+        . showString "}"
 
 data StaticAssetRoot = StaticAssetRoot
   { staticUrlPrefix :: Text,
@@ -341,6 +360,7 @@ data ManualTlsBindPlan = ManualTlsBindPlan
 
 data AcmeBindPlan = AcmeBindPlan
   { acmeEndpoint :: ListenerEndpoint,
+    acmeTlsEndpoint :: Maybe ListenerEndpoint,
     acmeListenerConfig :: AcmeConfig
   }
   deriving (Eq, Show)
@@ -355,6 +375,7 @@ data ServerStartupPlan = ServerStartupPlan
 data ListenerStartupError
   = DuplicateListenerEndpoint ListenerEndpoint
   | InvalidListenerTlsConfiguration ListenerConfig
+  | InvalidListenerAcmeConfiguration ListenerConfig
   deriving (Eq, Show)
 
 data RouteRequest route context = RouteRequest
@@ -694,7 +715,7 @@ data RunningRuntimeServer = RunningRuntimeServer
   }
 
 data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
-  { runningAcmeRuntimeServer :: RunningRuntimeServer,
+  { runningAcmeRuntimeServer :: Maybe RunningRuntimeServer,
     runningAcmeCleanupDirectory :: FilePath
   }
 
@@ -711,6 +732,7 @@ data ReloadingTlsCredentials = ReloadingTlsCredentials
 
 data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
   { runtimeAcmeEndpoint :: ListenerEndpoint,
+    runtimeAcmeTlsEndpoint :: Maybe ListenerEndpoint,
     runtimeAcmeListenerConfig :: AcmeConfig
   }
 
@@ -718,6 +740,7 @@ runtimeAcmeBindPlans :: ServerStartupPlan -> [RuntimeAcmeBindPlan]
 runtimeAcmeBindPlans startupPlan =
   [ RuntimeAcmeBindPlan
       { runtimeAcmeEndpoint = acmeEndpoint acmePlan,
+        runtimeAcmeTlsEndpoint = acmeTlsEndpoint acmePlan,
         runtimeAcmeListenerConfig = acmeListenerConfig acmePlan
       }
   | acmePlan <- acmeBindPlans startupPlan
@@ -837,22 +860,36 @@ startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplicati
 
 startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
 startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
-  (manualTlsPlan, cleanupDirectory) <-
+  (maybeManualTlsPlan, cleanupDirectory) <-
     case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
       CertbotHttp01 certbotConfig ->
         prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
       InProcessHttp01 ->
         prepareInProcessManualTlsBindPlan runtimeAcmePlan challengeStore
-  runningServer <-
-    startManualTlsRuntimeServer manualTlsPlan waiApplication
+  maybeRunningServer <-
+    traverse (`startManualTlsRuntimeServer` waiApplication) maybeManualTlsPlan
       `onException` removePathForcibly cleanupDirectory
   pure
     RunningAcmeRuntimeServer
-      { runningAcmeRuntimeServer = runningServer,
+      { runningAcmeRuntimeServer = maybeRunningServer,
         runningAcmeCleanupDirectory = cleanupDirectory
       }
 
-prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (ManualTlsBindPlan, FilePath)
+runtimeAcmeManualTlsBindPlan :: RuntimeAcmeBindPlan -> FilePath -> FilePath -> Maybe ManualTlsBindPlan
+runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath =
+  fmap
+    ( \tlsListenerEndpoint ->
+        ManualTlsBindPlan
+          { tlsEndpoint = tlsListenerEndpoint,
+            tlsCertificateFile = resolvedCertificatePath,
+            tlsPrivateKeyFile = resolvedPrivateKeyPath,
+            tlsCredentialSourceKind = ManualTlsCredentials,
+            tlsStartupMode = RequireCertificateFiles
+          }
+    )
+    (runtimeAcmeTlsEndpoint runtimeAcmePlan)
+
+prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
 prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
   tempDirectory <- getCanonicalTemporaryDirectory
   bracketOnError
@@ -881,13 +918,7 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
           Just sharedDirectory ->
             publishCertificateFiles sharedDirectory certificatePath privateKeyPath
       pure
-        ( ManualTlsBindPlan
-            { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
-              tlsCertificateFile = resolvedCertificatePath,
-              tlsPrivateKeyFile = resolvedPrivateKeyPath,
-              tlsCredentialSourceKind = ManualTlsCredentials,
-              tlsStartupMode = RequireCertificateFiles
-            },
+        ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
           stateDirectory
         )
 
@@ -922,9 +953,16 @@ certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> F
 certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory =
   map Text.unpack (certbotArguments certbotConfig)
     <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
+    <> certbotHttp01PortArguments runtimeAcmePlan
     <> certbotDirectoryUrlArguments runtimeAcmePlan
     <> certbotContactEmailArguments runtimeAcmePlan certbotConfig
     <> certbotDomainArguments runtimeAcmePlan certbotConfig
+
+certbotHttp01PortArguments :: RuntimeAcmeBindPlan -> [String]
+certbotHttp01PortArguments runtimeAcmePlan =
+  if certbotHasOption "--http-01-port" (runtimeCertbotArguments runtimeAcmePlan)
+    then []
+    else ["--http-01-port", show (acmeHttp01Port (runtimeAcmeListenerConfig runtimeAcmePlan))]
 
 certbotDirectoryUrlArguments :: RuntimeAcmeBindPlan -> [String]
 certbotDirectoryUrlArguments runtimeAcmePlan =
@@ -1308,7 +1346,7 @@ jsonObjectBytes fields =
       ]
     <> "}"
 
-prepareInProcessManualTlsBindPlan :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> IO (ManualTlsBindPlan, FilePath)
+prepareInProcessManualTlsBindPlan :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> IO (Maybe ManualTlsBindPlan, FilePath)
 prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
   tempDirectory <- getCanonicalTemporaryDirectory
   bracketOnError
@@ -1325,13 +1363,7 @@ prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
           Just sharedDirectory ->
             publishCertificateFiles sharedDirectory certificatePath privateKeyPath
       pure
-        ( ManualTlsBindPlan
-            { tlsEndpoint = runtimeAcmeEndpoint runtimeAcmePlan,
-              tlsCertificateFile = resolvedCertificatePath,
-              tlsPrivateKeyFile = resolvedPrivateKeyPath,
-              tlsCredentialSourceKind = ManualTlsCredentials,
-              tlsStartupMode = RequireCertificateFiles
-            },
+        ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
           stateDirectory
         )
 
@@ -1973,7 +2005,7 @@ stopAcmeRuntimeServers =
 
 stopAcmeRuntimeServer :: RunningAcmeRuntimeServer -> IO ()
 stopAcmeRuntimeServer runningServer = do
-  stopRuntimeServer (runningAcmeRuntimeServer runningServer)
+  for_ (runningAcmeRuntimeServer runningServer) stopRuntimeServer
   removePathForcibly (runningAcmeCleanupDirectory runningServer)
 
 openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
@@ -2050,7 +2082,7 @@ runtimeStartupListeners :: ServerStartupPlan -> [(ListenerScheme, ListenerEndpoi
 runtimeStartupListeners startupPlan =
   map (Http,) (httpEndpoints (httpBindPlan startupPlan))
     <> map ((Https,) . tlsEndpoint) (manualTlsBindPlans startupPlan)
-    <> map ((Https,) . acmeEndpoint) (acmeBindPlans startupPlan)
+    <> mapMaybe (fmap (Https,) . acmeTlsEndpoint) (acmeBindPlans startupPlan)
 
 listenerStartupMessage :: ListenerScheme -> ListenerEndpoint -> String
 listenerStartupMessage listenerScheme endpoint =
@@ -2092,19 +2124,38 @@ validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
     Left runtimeError ->
       Just runtimeError
     Right challengePort ->
-      if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
-        then validateAcmeRuntimeConfiguration acmePlan
-        else
-          Just $
-            "Unsupported runtime listener startup plan: ACME listener on "
-              <> renderListenerEndpoint (acmeEndpoint acmePlan)
-              <> " requires an HTTP listener on port "
-              <> show challengePort
-              <> " for http-01 challenges."
+      case acmeTlsEndpoint acmePlan of
+        Nothing ->
+          if endpointPort (acmeEndpoint acmePlan) == challengePort
+            then validateAcmeRuntimeConfiguration acmePlan
+            else
+              Just $
+                "Unsupported runtime listener startup plan: ACME listener on "
+                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
+                  <> " requires the configured http-01 port to match its HTTP listener port "
+                  <> show (endpointPort (acmeEndpoint acmePlan))
+                  <> "."
+        Just _ ->
+          if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
+            then validateAcmeRuntimeConfiguration acmePlan
+            else
+              Just $
+                "Unsupported runtime listener startup plan: ACME listener on "
+                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
+                  <> " requires an HTTP listener on port "
+                  <> show challengePort
+                  <> " for http-01 challenges."
 
 validateAcmeRuntimeConfiguration :: AcmeBindPlan -> Maybe String
 validateAcmeRuntimeConfiguration acmePlan =
   case acmeChallengeBackend (acmeListenerConfig acmePlan) of
+    _
+      | isNothing (acmeTlsEndpoint acmePlan)
+          && isNothing (acmeCertificateDirectory (acmeListenerConfig acmePlan)) ->
+          Just $
+            "Unsupported runtime listener startup plan: ACME listener on "
+              <> renderListenerEndpoint (acmeEndpoint acmePlan)
+              <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates."
     InProcessHttp01
       | null (acmeDomains (acmeListenerConfig acmePlan)) ->
           Just $
@@ -2128,7 +2179,7 @@ acmeHttp01ChallengePort acmePlan =
     CertbotHttp01 certbotConfig ->
       case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
         Nothing ->
-          Right 80
+          Right (acmeHttp01Port (acmeListenerConfig acmePlan))
         Just portText ->
           maybe
             ( Left $
@@ -2594,8 +2645,8 @@ trimLeadingSlash assetPath =
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do
-  plannedListeners <- traverse classifyListener (listenerConfigs (toServerConfig config))
-  case firstDuplicate (map plannedEndpoint plannedListeners) of
+  plannedListeners <- concat <$> traverse classifyListener (listenerConfigs (toServerConfig config))
+  case firstDuplicate (concatMap plannedBindEndpoints plannedListeners) of
     Just duplicateEndpoint -> Left (DuplicateListenerEndpoint duplicateEndpoint)
     Nothing ->
       Right
@@ -2618,16 +2669,28 @@ planServerStartup config = do
           }
   where
     classifyListener listenerConfig =
-      case (listenerScheme listenerConfig, listenerTls listenerConfig) of
-        (Http, Nothing) ->
-          Right (PlannedHttp (listenerEndpoint listenerConfig))
-        (Http, Just _) ->
-          Left (InvalidListenerTlsConfiguration listenerConfig)
-        (Https, Nothing) ->
-          Left (InvalidListenerTlsConfiguration listenerConfig)
-        (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}) ->
+      case (listenerScheme listenerConfig, listenerTls listenerConfig, listenerAcme listenerConfig) of
+        (Http, Nothing, Nothing) ->
+          Right [PlannedHttp (listenerEndpoint listenerConfig)]
+        (Http, Nothing, Just acmeConfig) ->
           Right
-            ( PlannedManualTls
+            [ PlannedHttp (listenerEndpoint listenerConfig),
+              PlannedAcme
+                AcmeBindPlan
+                  { acmeEndpoint = listenerEndpoint listenerConfig,
+                    acmeTlsEndpoint = Nothing,
+                    acmeListenerConfig = acmeConfig
+                  }
+            ]
+        (Http, Just _, _) ->
+          Left (InvalidListenerTlsConfiguration listenerConfig)
+        (Https, _, Just _) ->
+          Left (InvalidListenerAcmeConfiguration listenerConfig)
+        (Https, Nothing, Nothing) ->
+          Left (InvalidListenerTlsConfiguration listenerConfig)
+        (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
+          Right
+            [ PlannedManualTls
                 ManualTlsBindPlan
                   { tlsEndpoint = listenerEndpoint listenerConfig,
                     tlsCertificateFile = certificatePath,
@@ -2635,11 +2698,11 @@ planServerStartup config = do
                     tlsCredentialSourceKind = ManualTlsCredentials,
                     tlsStartupMode = RequireCertificateFiles
                   }
-            )
-        (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}) ->
+            ]
+        (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
           let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
            in Right
-                ( PlannedManualTls
+                [ PlannedManualTls
                     ManualTlsBindPlan
                       { tlsEndpoint = listenerEndpoint listenerConfig,
                         tlsCertificateFile = certificatePath,
@@ -2647,15 +2710,16 @@ planServerStartup config = do
                         tlsCredentialSourceKind = SharedTlsCredentials,
                         tlsStartupMode = startupMode
                       }
-                )
-        (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}) ->
+                ]
+        (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}, Nothing) ->
           Right
-            ( PlannedAcme
+            [ PlannedAcme
                 AcmeBindPlan
                   { acmeEndpoint = listenerEndpoint listenerConfig,
+                    acmeTlsEndpoint = Just (listenerEndpoint listenerConfig),
                     acmeListenerConfig = acmeConfig
                   }
-            )
+            ]
 
 sharedCertificatePaths :: FilePath -> (FilePath, FilePath)
 sharedCertificatePaths certificateDirectory =
@@ -3043,12 +3107,12 @@ data PlannedListener
   | PlannedManualTls ManualTlsBindPlan
   | PlannedAcme AcmeBindPlan
 
-plannedEndpoint :: PlannedListener -> ListenerEndpoint
-plannedEndpoint plannedListener =
+plannedBindEndpoints :: PlannedListener -> [ListenerEndpoint]
+plannedBindEndpoints plannedListener =
   case plannedListener of
-    PlannedHttp endpoint -> endpoint
-    PlannedManualTls manualTlsBindPlan -> tlsEndpoint manualTlsBindPlan
-    PlannedAcme acmeBindPlan -> acmeEndpoint acmeBindPlan
+    PlannedHttp endpoint -> [endpoint]
+    PlannedManualTls manualTlsBindPlan -> [tlsEndpoint manualTlsBindPlan]
+    PlannedAcme acmeBindPlan -> maybeToList (acmeTlsEndpoint acmeBindPlan)
 
 listenerEndpoint :: ListenerConfig -> ListenerEndpoint
 listenerEndpoint listenerConfig =

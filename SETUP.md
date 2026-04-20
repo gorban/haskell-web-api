@@ -329,7 +329,7 @@ for local paths, domains, headers, or secrets as needed:
 | `examples/runtime-config/otlp-endpoint-explicit-disable.env` | Keep OTLP collector coordinates while explicitly disabling tracing |
 | `examples/runtime-config/manual-tls.env` | Manual TLS listener using the local loopback cert files from `examples/reverse-proxy/tls/` |
 | `examples/runtime-config/shared-fail-fast.env` | HTTPS listener that expects a pre-provisioned shared certificate directory to already exist at startup |
-| `examples/runtime-config/acme-shared-80-443-5443.env` | ACME `http-01` on 80, ACME-managed HTTPS on 443, plus a shared-certificate HTTPS listener on 5443 |
+| `examples/runtime-config/acme-shared-80-443-5443.env` | ACME `http-01` producer on 80 plus shared-certificate HTTPS listeners on 443 and 5443 |
 | `examples/runtime-config/reverse-proxy-tls-offload.env` | Backend HTTP listener plus redirect/HSTS policy for a TLS-terminating proxy |
 
 For example:
@@ -972,18 +972,21 @@ LISTENER_0_HOST=0.0.0.0
 LISTENER_0_PORT=80
 LISTENER_0_SCHEME=http
 
-# Listener 1: HTTPS with ACME + certbot
+# Listener 0 also publishes ACME certificates for shared HTTPS listeners
+LISTENER_0_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
+LISTENER_0_ACME_CONTACT_EMAILS=ops@example.com
+LISTENER_0_ACME_DOMAINS=example.com,www.example.com
+LISTENER_0_ACME_CHALLENGE_BACKEND=certbot-http01
+LISTENER_0_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
+
+# Listener 1: Shared HTTPS listener that waits for the ACME directory
 LISTENER_1_HOST=0.0.0.0
 LISTENER_1_PORT=443
 LISTENER_1_SCHEME=https
-LISTENER_1_TLS_SOURCE=acme
-LISTENER_1_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
-LISTENER_1_ACME_CONTACT_EMAILS=ops@example.com
-LISTENER_1_ACME_DOMAINS=example.com,www.example.com
-LISTENER_1_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_1_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
+LISTENER_1_TLS_SOURCE=shared-wait
+LISTENER_1_TLS_SHARED_WAIT_SECONDS=120
 
-# Listener 2: Optional HTTPS listener that reuses the ACME certificate directory
+# Listener 2: Optional second HTTPS listener that reuses the same shared directory
 LISTENER_2_HOST=0.0.0.0
 LISTENER_2_PORT=5443
 LISTENER_2_SCHEME=https
@@ -991,8 +994,13 @@ LISTENER_2_TLS_SOURCE=shared-wait
 LISTENER_2_TLS_SHARED_WAIT_SECONDS=120
 ```
 
-`LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` remains available as an override when certbot lives somewhere
-other than the default `certbot` on `PATH`.
+The preferred runtime shape is now "HTTP listener publishes ACME certificates, HTTPS listeners consume them
+via `shared-wait`." The older HTTPS `LISTENER_<n>_TLS_SOURCE=acme` shape still works as a compatibility alias,
+but the HTTP-listener ACME model more closely matches the real `http-01` flow and the default shared-directory
+behavior.
+
+`LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` remains available as an override when certbot lives somewhere other
+than the default `certbot` on `PATH`.
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
