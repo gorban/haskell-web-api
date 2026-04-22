@@ -10,7 +10,7 @@ import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (isHexDigit)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (isInfixOf, isPrefixOf)
+import Data.List (find, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -210,6 +210,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       renderResponse = pure . renderSampleResponse,
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
+      reportConnectionObservability = const (pure ()),
       reportApplicationLog = const (pure ())
     }
 
@@ -452,6 +453,7 @@ rootPathApplication =
       renderResponse = pure . PageResponse . samplePage,
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),
+      reportConnectionObservability = const (pure ()),
       reportApplicationLog = const (pure ())
     }
 
@@ -2211,9 +2213,10 @@ spec = do
                     tlsStartupMode = RequireCertificateFiles
                   }
           startManualTlsRuntimeServerWithStarter
-            (\_ _ _ _ -> ioError (userError "synthetic tls startup failure"))
+            (\_ _ _ _ _ -> ioError (userError "synthetic tls startup failure"))
             manualTlsPlan
             (toWaiApplication sampleApplication)
+            (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic tls startup failure)")
           reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
           Socket.bind reboundSocket (Socket.SockAddrInet (fromIntegral httpsPort) (Socket.tupleToHostAddress (127, 0, 0, 1)))
@@ -2232,9 +2235,10 @@ spec = do
                     tlsStartupMode = RequireCertificateFiles
                   }
           startManualTlsRuntimeServerWithStarter
-            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
             (toWaiApplication sampleApplication)
+            (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Shared TLS certificate file does not exist: " <> certificatePath <> ")")
 
     it "fails explicitly when shared TLS wait mode reaches its configured timeout" $
@@ -2250,9 +2254,10 @@ spec = do
                     tlsStartupMode = AwaitCertificateFiles (Just 0)
                   }
           startManualTlsRuntimeServerWithStarter
-            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
             (toWaiApplication sampleApplication)
+            (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Timed out waiting for shared TLS certificate files at " <> certificatePath <> " and " <> privateKeyPath <> " after 0 seconds)")
 
     it "includes shared TLS loader errors when wait mode times out on invalid certificate files" $
@@ -2270,9 +2275,10 @@ spec = do
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
           startManualTlsRuntimeServerWithStarter
-            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
             (toWaiApplication sampleApplication)
+            (const (pure ()))
             `shouldThrow` ( \exception ->
                               let renderedException = show (exception :: IOError)
                                in length renderedException `seq`
@@ -2298,9 +2304,10 @@ spec = do
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
           startManualTlsRuntimeServerWithStarter
-            (\_ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
+            (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
             (toWaiApplication sampleApplication)
+            (const (pure ()))
             `shouldThrow` ( \exception ->
                               let renderedException = show (exception :: IOError)
                                in length renderedException `seq`
@@ -2330,9 +2337,10 @@ spec = do
             writeFile privateKeyPath manualTlsPrivateKeyPem
           _ <-
             startManualTlsRuntimeServerWithStarter
-              (\_ _ socket _ -> writeIORef starterInvoked True >> Socket.close socket >> forkIO (pure ()))
+              (\_ _ socket _ _ -> writeIORef starterInvoked True >> Socket.close socket >> forkIO (pure ()))
               manualTlsPlan
               (toWaiApplication sampleApplication)
+              (const (pure ()))
           readIORef starterInvoked `shouldReturn` True
 
   describe "planObservabilityStartup" $ do
@@ -2438,6 +2446,44 @@ spec = do
           Right () ->
             expectationFailure "expected OTLP export to fail when the collector returns a non-2xx status"
 
+  describe "exportConnectionObservabilityToOtlp" $ do
+    it "posts OTLP trace payloads for connection-level observability" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportConnectionObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = [("authorization", "Bearer sample-token")]
+            }
+          ( Observability.buildConnectionObservability
+              "CONNECTION insecure-connection-denied"
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "network.peer.address",
+                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.type",
+                    Observability.attributeValue = Observability.TextAttribute "InsecureConnectionDenied"
+                  }
+              ]
+          )
+        CapturedCollectorRequest
+          { capturedCollectorMethod = requestMethod,
+            capturedCollectorPath = requestPath,
+            capturedCollectorHeaders = requestHeaders,
+            capturedCollectorBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
+        lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token"
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -2520,6 +2566,108 @@ spec = do
             waitForServerExit completionReference
             hClose outputHandle
             readFile outputPath `shouldReturn` ("HTTPS Server listening at https://127.0.0.1:" <> show unusedPort <> "\n")
+
+    it "reports plaintext connections to an HTTPS listener as connection observability with peer addresses" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            connectionObservabilityReference <- newIORef []
+            let observingApplication =
+                  sampleApplication
+                    { reportConnectionObservability = \connectionObservabilityValue ->
+                        modifyIORef' connectionObservabilityReference (connectionObservabilityValue :)
+                    }
+                manualTlsConfig =
+                  serverConfigWithListeners
+                    [ ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = unusedPort,
+                          listenerScheme = Https,
+                          listenerTls =
+                            Just
+                              TlsConfig
+                                { certificateSource =
+                                    ManualCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = privateKeyPath
+                                      }
+                                },
+                          listenerAcme = Nothing
+                        }
+                    ]
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle manualTlsConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            _ <- waitForHttpsServerResponse completionReference unusedPort "/known"
+            _ <- readLoopbackHttpResponseBytesWithHostResult unusedPort "127.0.0.1" "/known"
+            connectionObservability <-
+              waitForConnectionObservability connectionObservabilityReference "insecure-connection-denied"
+            let connectionSpan = Observability.observabilityConnectionSpan connectionObservability
+            Observability.requestSpanDisplayName connectionSpan `shouldBe` "CONNECTION insecure-connection-denied"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "client.address" "127.0.0.1"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "network.peer.address" "127.0.0.1"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "url.scheme" "https"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "harch.connection.event" "insecure-connection-denied"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "exception.type" "InsecureConnectionDenied"
+            killThread serverThreadId
+            waitForServerExit completionReference
+
+    it "reports prematurely closed HTTPS listener connections as connection observability with peer addresses" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withManualTlsFiles $ \certificatePath privateKeyPath ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            completionReference <- newIORef Nothing
+            connectionObservabilityReference <- newIORef []
+            let observingApplication =
+                  sampleApplication
+                    { reportConnectionObservability = \connectionObservabilityValue ->
+                        modifyIORef' connectionObservabilityReference (connectionObservabilityValue :)
+                    }
+                manualTlsConfig =
+                  serverConfigWithListeners
+                    [ ListenerConfig
+                        { listenerHost = "127.0.0.1",
+                          listenerPort = unusedPort,
+                          listenerScheme = Https,
+                          listenerTls =
+                            Just
+                              TlsConfig
+                                { certificateSource =
+                                    ManualCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = privateKeyPath
+                                      }
+                                },
+                          listenerAcme = Nothing
+                        }
+                    ]
+            serverThreadId <- forkIO $ do
+              result <- try (runServer outputHandle manualTlsConfig observingApplication) :: IO (Either SomeException ())
+              writeIORef completionReference (Just result)
+            _ <- waitForHttpsServerResponse completionReference unusedPort "/known"
+            connectAndCloseLoopbackSocket unusedPort
+            connectionObservability <-
+              waitForConnectionObservability connectionObservabilityReference "client-closed-connection-prematurely"
+            let connectionSpan = Observability.observabilityConnectionSpan connectionObservability
+            Observability.requestSpanDisplayName connectionSpan `shouldBe` "CONNECTION client-closed-connection-prematurely"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "client.address" "127.0.0.1"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "network.peer.address" "127.0.0.1"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "url.scheme" "https"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "harch.connection.event" "client-closed-connection-prematurely"
+            Observability.requestSpanAttributes connectionSpan
+              `shouldSatisfy` hasTextAttribute "exception.type" "ClientClosedConnectionPrematurely"
+            killThread serverThreadId
+            waitForServerExit completionReference
 
     it "fails explicitly when a manual TLS certificate file is missing" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
@@ -3365,6 +3513,47 @@ readLoopbackHttpsResponseResult port path = do
     case exitCode of
       ExitSuccess -> Right (Text.pack stdoutText)
       ExitFailure _ -> Left stderrText
+
+connectAndCloseLoopbackSocket :: Int -> IO ()
+connectAndCloseLoopbackSocket port =
+  Socket.withSocketsDo $ do
+    clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+    Socket.close clientSocket
+
+hasTextAttribute :: Text -> Text -> [Observability.ObservabilityAttribute] -> Bool
+hasTextAttribute attributeName expectedValue =
+  any
+    ( \attribute ->
+        Observability.attributeName attribute == attributeName
+          && Observability.attributeValue attribute == Observability.TextAttribute expectedValue
+    )
+
+waitForConnectionObservability :: IORef [Observability.ConnectionObservability] -> Text -> IO Observability.ConnectionObservability
+waitForConnectionObservability connectionObservabilityReference expectedEventName =
+  waitForObservabilityAttempts (500 :: Int)
+  where
+    waitForObservabilityAttempts remainingAttempts = do
+      connectionObservabilityValues <- readIORef connectionObservabilityReference
+      case find matchesExpectedEvent connectionObservabilityValues of
+        Just connectionObservabilityValue -> pure connectionObservabilityValue
+        Nothing
+          | remainingAttempts > 0 -> do
+              threadDelay 10000
+              waitForObservabilityAttempts (remainingAttempts - 1)
+          | otherwise ->
+              expectationFailure ("expected connection observability for " <> Text.unpack expectedEventName)
+                >> pure
+                  ( Observability.buildConnectionObservability
+                      "missing"
+                      []
+                  )
+
+    matchesExpectedEvent connectionObservabilityValue =
+      hasTextAttribute
+        "harch.connection.event"
+        expectedEventName
+        (Observability.requestSpanAttributes (Observability.observabilityConnectionSpan connectionObservabilityValue))
 
 waitForServerResponse :: IORef (Maybe (Either SomeException ())) -> Int -> Text -> IO Text
 waitForServerResponse completionReference port path =

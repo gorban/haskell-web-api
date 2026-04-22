@@ -5860,6 +5860,16 @@ spec = do
             Observability.PageResponseKind
             []
         )
+      HarchWeb.reportConnectionObservability
+        pureApplication
+        ( Observability.buildConnectionObservability
+            "CONNECTION insecure-connection-denied"
+            [ Observability.ObservabilityAttribute
+                { Observability.attributeName = "network.peer.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            ]
+        )
       HarchWeb.reportApplicationLog pureApplication "ignored"
 
     it "stores the same route codec behavior used by direct route tests" $ do
@@ -6034,6 +6044,16 @@ spec = do
                 }
             ]
         )
+      HarchWeb.reportConnectionObservability
+        runtimeApplication
+        ( Observability.buildConnectionObservability
+            "CONNECTION insecure-connection-denied"
+            [ Observability.ObservabilityAttribute
+                { Observability.attributeName = "network.peer.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            ]
+        )
       HarchWeb.reportApplicationLog runtimeApplication "runtime failure detail"
 
     it "exports runtime request observability to the configured OTLP tracing endpoint" $
@@ -6097,6 +6117,93 @@ spec = do
         HarchWeb.reportRequestObservability
           runtimeApplication
           (Observability.buildRequestObservability "GET" "http" "/api/second" "/api/second" 500 Observability.BodyResponseKind [])
+        CapturedOtlpRequest
+          { capturedOtlpMethod = requestMethod,
+            capturedOtlpPath = requestPath
+          } <-
+          readMVar capturedRequestReference
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+
+    it "exports runtime connection observability to the configured OTLP tracing endpoint" $
+      withOtlpCaptureServer Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = [("x-runtime-trace", "enabled")]
+                              }
+                      }
+                }
+            runtimeApplication =
+              buildRuntimeAppWithDatabaseBuilder
+                runtimeAppConfig
+                (const defaultDatabaseEffect)
+                defaultAppEnvironmentConfig
+        HarchWeb.reportConnectionObservability
+          runtimeApplication
+          ( Observability.buildConnectionObservability
+              "CONNECTION insecure-connection-denied"
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "network.peer.address",
+                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.type",
+                    Observability.attributeValue = Observability.TextAttribute "InsecureConnectionDenied"
+                  }
+              ]
+          )
+        CapturedOtlpRequest
+          { capturedOtlpMethod = requestMethod,
+            capturedOtlpPath = requestPath,
+            capturedOtlpHeaders = requestHeaders,
+            capturedOtlpBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 requestBody
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+        lookup "content-type" requestHeaders `shouldBe` Just "application/json"
+        lookup "x-runtime-trace" requestHeaders `shouldBe` Just "enabled"
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+
+    it "keeps runtime connection reporting alive when the OTLP collector rejects the export" $
+      withOtlpCaptureServer Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = []
+                              }
+                      }
+                }
+            runtimeApplication =
+              buildRuntimeAppWithDatabaseBuilder
+                runtimeAppConfig
+                (const defaultDatabaseEffect)
+                defaultAppEnvironmentConfig
+        HarchWeb.reportConnectionObservability
+          runtimeApplication
+          ( Observability.buildConnectionObservability
+              "CONNECTION client-closed-connection-prematurely"
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "network.peer.address",
+                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                  }
+              ]
+          )
         CapturedOtlpRequest
           { capturedOtlpMethod = requestMethod,
             capturedOtlpPath = requestPath

@@ -40,6 +40,10 @@ spec = do
               { Observability.observabilityRequestSpan = requestSpan,
                 Observability.observabilityHttpServerMetrics = httpServerMetrics
               }
+          connectionObservability =
+            Observability.ConnectionObservability
+              { Observability.observabilityConnectionSpan = requestSpan
+              }
       Observability.attributeName pageKindAttribute `shouldBe` "harch.response.kind"
       Observability.attributeValue pageKindAttribute `shouldBe` Observability.TextAttribute "page"
       Observability.attributeName localeAttribute `shouldBe` "app.locale"
@@ -53,6 +57,7 @@ spec = do
       Observability.httpServerMetricAttributes httpServerMetrics `shouldBe` [statusAttribute]
       Observability.observabilityRequestSpan requestObservability `shouldBe` requestSpan
       Observability.observabilityHttpServerMetrics requestObservability `shouldBe` httpServerMetrics
+      Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan
 
     it "covers derived Eq and Show instances for the observability helper types" $ do
       let pageKindAttribute =
@@ -81,6 +86,10 @@ spec = do
               { Observability.observabilityRequestSpan = requestSpan,
                 Observability.observabilityHttpServerMetrics = httpServerMetrics
               }
+          connectionObservability =
+            Observability.ConnectionObservability
+              { Observability.observabilityConnectionSpan = requestSpan
+              }
       Observability.TextAttribute "page" `shouldBe` Observability.TextAttribute "page"
       Observability.TextAttribute "page" `shouldNotBe` Observability.TextAttribute "body"
       Observability.IntAttribute 200 `shouldBe` Observability.IntAttribute 200
@@ -95,6 +104,8 @@ spec = do
       httpServerMetrics `shouldNotBe` httpServerMetrics {Observability.activeRequestsMetricName = "other.metric"}
       requestObservability `shouldBe` requestObservability
       requestObservability `shouldNotBe` requestObservability {Observability.observabilityRequestSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}}
+      connectionObservability `shouldBe` connectionObservability
+      connectionObservability `shouldNotBe` connectionObservability {Observability.observabilityConnectionSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}}
       show (Observability.TextAttribute "page") `shouldBe` "TextAttribute \"page\""
       show [Observability.IntAttribute 200] `shouldBe` "[IntAttribute 200]"
       show Observability.PageResponseKind `shouldBe` "PageResponseKind"
@@ -106,6 +117,8 @@ spec = do
       show [httpServerMetrics] `shouldBe` "[HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}]"
       show requestObservability `shouldBe` "RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}}"
       show [requestObservability] `shouldBe` "[RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}}]"
+      show connectionObservability `shouldBe` "ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}"
+      show [connectionObservability] `shouldBe` "[ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}]"
 
   describe "requestSpanName" $
     it "uses the request method with the canonical route path" $
@@ -234,6 +247,28 @@ spec = do
                       Observability.ObservabilityAttribute
                         { Observability.attributeName = "app.surface",
                           Observability.attributeValue = Observability.TextAttribute "api"
+                        }
+                    ]
+                }
+          }
+
+  describe "buildConnectionObservability" $
+    it "keeps the supplied display name and attributes without synthesizing request metrics" $
+      Observability.buildConnectionObservability
+        "CONNECTION insecure-connection-denied"
+        [ Observability.ObservabilityAttribute
+            { Observability.attributeName = "network.peer.address",
+              Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+            }
+        ]
+        `shouldBe` Observability.ConnectionObservability
+          { Observability.observabilityConnectionSpan =
+              Observability.RequestSpan
+                { Observability.requestSpanDisplayName = "CONNECTION insecure-connection-denied",
+                  Observability.requestSpanAttributes =
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "network.peer.address",
+                          Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
                         }
                     ]
                 }

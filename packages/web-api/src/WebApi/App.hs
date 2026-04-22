@@ -42,15 +42,16 @@ import WebApi.Route
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabase config databaseEffect =
-  buildAppWithDatabaseAndReporters config databaseEffect ignoreRequestObservability ignoreApplicationLog
+  buildAppWithDatabaseAndReporters config databaseEffect ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
 
 buildAppWithDatabaseAndReporters ::
   AppConfig ->
   DatabaseEffect ->
   (Observability.RequestObservability -> IO ()) ->
+  (Observability.ConnectionObservability -> IO ()) ->
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityReporter applicationLogReporter =
+buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     HarchWeb.application
       HarchWeb.Application
@@ -63,6 +64,7 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
           HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
           HarchWeb.pageShell = buildAppPageShell config,
           HarchWeb.reportRequestObservability = requestObservabilityReporter,
+          HarchWeb.reportConnectionObservability = connectionObservabilityReporter,
           HarchWeb.reportApplicationLog = applicationLogReporter
         }
 
@@ -86,6 +88,7 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
           config
           databaseEffect
           (runtimeRequestObservabilityReporter config)
+          (runtimeConnectionObservabilityReporter config)
           runtimeApplicationLogReporter
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
@@ -154,6 +157,21 @@ runtimeRequestObservabilityReporter config requestObservability = do
       Right () ->
         hFlush stderr
 
+runtimeConnectionObservabilityReporter :: AppConfig -> Observability.ConnectionObservability -> IO ()
+runtimeConnectionObservabilityReporter config connectionObservability = do
+  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show connectionObservability))
+  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
+    exportResult <-
+      try
+        (HarchWeb.exportConnectionObservabilityToOtlp "web-api" exporter connectionObservability) ::
+        IO (Either SomeException ())
+    case exportResult of
+      Left exportError ->
+        runtimeApplicationLogReporter
+          ("Failed to export connection observability to OTLP: " <> Text.pack (displayException exportError))
+      Right () ->
+        hFlush stderr
+
 runtimeApplicationLogReporter :: Text.Text -> IO ()
 runtimeApplicationLogReporter =
   TextIO.hPutStrLn stderr . ("ERROR " <>)
@@ -162,6 +180,11 @@ ignoreRequestObservability :: Observability.RequestObservability -> IO ()
 ignoreRequestObservability requestObservability =
   let ignored = mempty :: ()
    in Observability.forceRequestObservability requestObservability `seq` ignored `seq` evaluate ignored
+
+ignoreConnectionObservability :: Observability.ConnectionObservability -> IO ()
+ignoreConnectionObservability connectionObservability =
+  let ignored = mempty :: ()
+   in Observability.forceConnectionObservability connectionObservability `seq` ignored `seq` evaluate ignored
 
 ignoreApplicationLog :: Text.Text -> IO ()
 ignoreApplicationLog logEntry =

@@ -1,13 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Observability
-  ( HttpServerMetrics (..),
+  ( ConnectionObservability (..),
+    HttpServerMetrics (..),
     ObservabilityAttribute (..),
     ObservabilityAttributeValue (..),
     RequestObservability (..),
     RequestSpan (..),
     ResponseKind (..),
+    buildConnectionObservability,
     buildRequestObservability,
+    forceConnectionObservability,
     forceRequestObservability,
     requestObservabilityAttributes,
     requestSpanName,
@@ -49,6 +52,11 @@ data HttpServerMetrics = HttpServerMetrics
 data RequestObservability = RequestObservability
   { observabilityRequestSpan :: RequestSpan,
     observabilityHttpServerMetrics :: HttpServerMetrics
+  }
+  deriving (Eq, Show)
+
+newtype ConnectionObservability = ConnectionObservability
+  { observabilityConnectionSpan :: RequestSpan
   }
   deriving (Eq, Show)
 
@@ -121,6 +129,16 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
               }
         }
 
+buildConnectionObservability :: Text -> [ObservabilityAttribute] -> ConnectionObservability
+buildConnectionObservability displayName attributes =
+  ConnectionObservability
+    { observabilityConnectionSpan =
+        RequestSpan
+          { requestSpanDisplayName = displayName,
+            requestSpanAttributes = attributes
+          }
+    }
+
 requestSpanPath :: Text -> Text -> Int -> Text
 requestSpanPath requestPath routePath statusCode =
   if statusCode == 404 && requestPath /= routePath && Text.isSuffixOf "/404" routePath
@@ -131,6 +149,10 @@ forceRequestObservability :: RequestObservability -> ()
 forceRequestObservability requestObservability =
   forceRequestSpan (observabilityRequestSpan requestObservability) `seq`
     forceHttpServerMetrics (observabilityHttpServerMetrics requestObservability)
+
+forceConnectionObservability :: ConnectionObservability -> ()
+forceConnectionObservability =
+  forceRequestSpan . observabilityConnectionSpan
 
 forceRequestSpan :: RequestSpan -> ()
 forceRequestSpan requestSpan =

@@ -73,6 +73,7 @@ module HarchWeb
     createAcmeOrder,
     decodeAcmeJsonResponse,
     escapeJsonCharacter,
+    exportConnectionObservabilityToOtlp,
     exportRequestObservabilityToOtlp,
     fetchAcmeCertificate,
     fetchAcmeDirectory,
@@ -144,9 +145,9 @@ module HarchWeb
   )
 where
 
-import Control.Applicative ((<|>))
-import Control.Concurrent (MVar, ThreadId, forkFinally, killThread, modifyMVar_, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, evaluate, onException, throwIO, try)
+import Control.Applicative (liftA2, (<|>))
+import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
+import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (forever, replicateM, unless, void, when)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
@@ -160,7 +161,7 @@ import Data.Functor (($>))
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find, intercalate, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -466,6 +467,7 @@ data Application route context = Application
     renderResponse :: RouteRequest route context -> IO (Response route context),
     pageShell :: Page route context -> Text,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
+    reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
     reportApplicationLog :: Text -> IO ()
   }
 
@@ -649,38 +651,44 @@ runServer outputHandle config webApplication =
       let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
       challengeStore <- AcmeChallengeStore <$> newMVar []
       let runtimeApplication = toRuntimeWaiApplication challengeStore webApplication
+          connectionReporter = reportConnectionObservability webApplication
       case runtimeStartupValidationError startupPlan of
         Just runtimeError ->
           ioError (userError runtimeError)
         Nothing ->
-          observabilityPlan `seq`
-            bracket
-              (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
-              stopRuntimeServers
-              ( \httpServers ->
-                  bracket
-                    (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication challengeStore)
-                    stopAcmeRuntimeServers
-                    ( \acmeServers ->
-                        bracket
-                          (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication)
-                          stopRuntimeServers
-                          ( \manualTlsServers ->
-                              httpServers `seq`
-                                acmeServers `seq`
-                                  manualTlsServers `seq`
-                                    announceRuntimeStartup outputHandle startupPlan
-                                      >> waitForShutdownSignal
-                          )
-                    )
-              )
+          connectionReporter `seq`
+            observabilityPlan `seq`
+              bracket
+                (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
+                stopRuntimeServers
+                ( \httpServers ->
+                    bracket
+                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter challengeStore)
+                      stopAcmeRuntimeServers
+                      ( \acmeServers ->
+                          bracket
+                            (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
+                            stopRuntimeServers
+                            ( \manualTlsServers ->
+                                httpServers `seq`
+                                  acmeServers `seq`
+                                    manualTlsServers `seq`
+                                      announceRuntimeStartup outputHandle startupPlan
+                                        >> waitForShutdownSignal
+                            )
+                      )
+                )
 
 startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
 startLocalTestServer webApplication = do
   listeningSocket <- openLoopbackSocket
   localPort <- socketPort listeningSocket
+  let listenerScheme = Http
+      endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
   serverThreadId <-
-    startWarpServerOnSocket localPort listeningSocket (toWaiApplication webApplication)
+    listenerSchemeText listenerScheme `seq`
+      endpointHost endpoint `seq`
+        startWarpServerOnSocket endpoint listeningSocket (toWaiApplication webApplication)
   localPort `seq`
     pure
       RunningLocalTestServer
@@ -711,6 +719,11 @@ socketPort listeningSocket = do
 data RunningRuntimeServer = RunningRuntimeServer
   { runningRuntimeSocket :: Socket.Socket,
     runningRuntimeThreadId :: ThreadId
+  }
+
+data ActiveConnectionAddresses = ActiveConnectionAddresses
+  { pendingConnectionAddresses :: MVar [Socket.SockAddr],
+    activeConnectionAddresses :: IORef [(ThreadId, Socket.SockAddr)]
   }
 
 data RunningAcmeRuntimeServer = RunningAcmeRuntimeServer
@@ -768,31 +781,31 @@ startHttpRuntimeServers endpoints waiApplication =
           )
             `onException` stopRuntimeServers runningServers
 
-startManualTlsRuntimeServers :: [ManualTlsBindPlan] -> Wai.Application -> IO [RunningRuntimeServer]
-startManualTlsRuntimeServers manualTlsPlans waiApplication =
-  go [] manualTlsPlans
+startManualTlsRuntimeServers :: [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
+startManualTlsRuntimeServers manualTlsPlans waiApplication connectionReporter =
+  connectionReporter `seq` go [] manualTlsPlans
   where
     go runningServers remainingPlans =
       case remainingPlans of
         [] -> pure (reverse runningServers)
         manualTlsPlan : remaining ->
           ( do
-              runningServer <- startManualTlsRuntimeServer manualTlsPlan waiApplication
+              runningServer <- startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter
               go (runningServer : runningServers) remaining
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
 
-startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> AcmeChallengeStore -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServers acmePlans waiApplication challengeStore =
-  go [] acmePlans
+startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> AcmeChallengeStore -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServers acmePlans waiApplication connectionReporter challengeStore =
+  connectionReporter `seq` go [] acmePlans
   where
     go runningServers remainingPlans =
       case remainingPlans of
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer acmePlan waiApplication challengeStore
+              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter challengeStore
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
@@ -802,7 +815,7 @@ startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningRunti
 startHttpRuntimeServer endpoint waiApplication = do
   listeningSocket <- openListenerSocket endpoint
   serverThreadId <-
-    startWarpServerOnSocket (endpointPort endpoint) listeningSocket waiApplication
+    startWarpServerOnSocket endpoint listeningSocket waiApplication
   endpoint `seq`
     pure
       RunningRuntimeServer
@@ -810,12 +823,12 @@ startHttpRuntimeServer endpoint waiApplication = do
           runningRuntimeThreadId = serverThreadId
         }
 
-startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> IO RunningRuntimeServer
+startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
 startManualTlsRuntimeServer =
   startManualTlsRuntimeServerWithStarter startWarpTlsServerOnSocket
 
-startManualTlsRuntimeServerWithStarter :: (Int -> WarpTLS.TLSSettings -> Socket.Socket -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplication = do
+startManualTlsRuntimeServerWithStarter :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
+startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplication connectionReporter = do
   let tlsLabel =
         case tlsCredentialSourceKind manualTlsPlan of
           ManualTlsCredentials -> "Manual TLS"
@@ -848,8 +861,9 @@ startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplicati
           }
   listeningSocket <- openListenerSocket endpoint
   serverThreadId <-
-    startTlsServer (endpointPort endpoint) tlsSettings listeningSocket waiApplication
-      `onException` Socket.close listeningSocket
+    connectionReporter `seq`
+      startTlsServer endpoint tlsSettings listeningSocket connectionReporter waiApplication
+        `onException` Socket.close listeningSocket
   manualTlsPlan `seq`
     pure
       RunningRuntimeServer
@@ -857,8 +871,8 @@ startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplicati
           runningRuntimeThreadId = serverThreadId
         }
 
-startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
+startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter challengeStore = do
   (maybeManualTlsPlan, cleanupDirectory) <-
     case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
       CertbotHttp01 certbotConfig ->
@@ -866,8 +880,9 @@ startAcmeRuntimeServer runtimeAcmePlan waiApplication challengeStore = do
       InProcessHttp01 ->
         prepareInProcessManualTlsBindPlan runtimeAcmePlan challengeStore
   maybeRunningServer <-
-    traverse (`startManualTlsRuntimeServer` waiApplication) maybeManualTlsPlan
-      `onException` removePathForcibly cleanupDirectory
+    connectionReporter `seq`
+      traverse (\manualTlsPlan -> startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
+        `onException` removePathForcibly cleanupDirectory
   pure
     RunningAcmeRuntimeServer
       { runningAcmeRuntimeServer = maybeRunningServer,
@@ -2025,22 +2040,22 @@ openListenerSocket endpoint = do
 
 data RuntimeServerReady = RuntimeServerReady
 
-startWarpServerOnSocket :: Int -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocket portNumber listeningSocket waiApplication =
+startWarpServerOnSocket :: ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
+startWarpServerOnSocket endpoint listeningSocket waiApplication =
   startWarpRuntimeServerOnSocket $ \startupSignal ->
-    Warp.runSettingsSocket
-      (runtimeServerSettings portNumber startupSignal)
-      listeningSocket
-      waiApplication
+    let settings = runtimeHttpServerSettings endpoint startupSignal
+     in settings `seq` Warp.runSettingsSocket settings listeningSocket waiApplication
 
-startWarpTlsServerOnSocket :: Int -> WarpTLS.TLSSettings -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpTlsServerOnSocket portNumber tlsSettings listeningSocket waiApplication =
-  startWarpRuntimeServerOnSocket $ \startupSignal ->
-    WarpTLS.runTLSSocket
-      tlsSettings
-      (runtimeServerSettings portNumber startupSignal)
-      listeningSocket
-      waiApplication
+startWarpTlsServerOnSocket :: ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId
+startWarpTlsServerOnSocket endpoint tlsSettings listeningSocket connectionReporter waiApplication = do
+  activeConnectionAddresses <- newActiveConnectionAddresses
+  let listenerScheme = Https
+  listenerScheme `seq`
+    connectionReporter `seq`
+      startWarpRuntimeServerOnSocket $ \startupSignal ->
+        let settings =
+              runtimeServerSettings listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter
+         in settings `seq` WarpTLS.runTLSSocket tlsSettings settings listeningSocket waiApplication
 
 startWarpRuntimeServerOnSocket :: (MVar (Either SomeException RuntimeServerReady) -> IO ()) -> IO ThreadId
 startWarpRuntimeServerOnSocket runServerOnSocket = do
@@ -2052,10 +2067,143 @@ startWarpRuntimeServerOnSocket runServerOnSocket = do
   _ <- waitForRuntimeServerStartup startupSignal
   pure threadId
 
-runtimeServerSettings :: Int -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
-runtimeServerSettings portNumber startupSignal =
-  Warp.setPort portNumber $
+runtimeServerSettings ::
+  ListenerScheme ->
+  ListenerEndpoint ->
+  MVar (Either SomeException RuntimeServerReady) ->
+  ActiveConnectionAddresses ->
+  (Observability.ConnectionObservability -> IO ()) ->
+  Warp.Settings
+runtimeServerSettings listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter =
+  Warp.setPort (endpointPort endpoint)
+    . Warp.setOnException (runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter (Warp.getOnException Warp.defaultSettings))
+    . Warp.setFork (forkTrackedConnection activeConnectionAddresses)
+    . Warp.setOnOpen (registerActiveConnection activeConnectionAddresses)
+    . Warp.setOnClose (\_ -> unregisterActiveConnection activeConnectionAddresses)
+    $ Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings
+
+runtimeHttpServerSettings ::
+  ListenerEndpoint ->
+  MVar (Either SomeException RuntimeServerReady) ->
+  Warp.Settings
+runtimeHttpServerSettings endpoint startupSignal =
+  Warp.setPort (endpointPort endpoint) $
     Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings
+
+newActiveConnectionAddresses :: IO ActiveConnectionAddresses
+newActiveConnectionAddresses =
+  ActiveConnectionAddresses
+    <$> newMVar []
+    <*> newIORef []
+
+registerActiveConnection :: ActiveConnectionAddresses -> Socket.SockAddr -> IO Bool
+registerActiveConnection tracker socketAddress = do
+  modifyMVar_ (pendingConnectionAddresses tracker) (\entries -> pure (entries ++ [socketAddress]))
+  pure True
+
+unregisterActiveConnection :: ActiveConnectionAddresses -> IO ()
+unregisterActiveConnection tracker = do
+  currentThreadId <- myThreadId
+  untrackActiveConnection tracker currentThreadId
+
+lookupActiveConnectionAddress :: ActiveConnectionAddresses -> IO (Maybe Socket.SockAddr)
+lookupActiveConnectionAddress tracker = do
+  currentThreadId <- myThreadId
+  atomicModifyIORef' (activeConnectionAddresses tracker) (\entries -> (entries, lookup currentThreadId entries))
+
+forkTrackedConnection :: ActiveConnectionAddresses -> (((forall a. IO a -> IO a) -> IO ()) -> IO ())
+forkTrackedConnection tracker action = do
+  maybeSocketAddress <- claimPendingConnectionAddress tracker
+  void $
+    forkIOWithUnmask $ \unmask -> do
+      currentThreadId <- myThreadId
+      for_ maybeSocketAddress (trackActiveConnection tracker currentThreadId)
+      action unmask `finally` untrackActiveConnection tracker currentThreadId
+
+claimPendingConnectionAddress :: ActiveConnectionAddresses -> IO (Maybe Socket.SockAddr)
+claimPendingConnectionAddress tracker =
+  modifyMVar
+    (pendingConnectionAddresses tracker)
+    ( \entries ->
+        case entries of
+          [] -> pure ([], Nothing)
+          firstAddress : _ -> do
+            liftA2 (,) (evaluate (drop 1 entries)) (pure (Just firstAddress))
+    )
+
+trackActiveConnection :: ActiveConnectionAddresses -> ThreadId -> Socket.SockAddr -> IO ()
+trackActiveConnection tracker currentThreadId socketAddress =
+  atomicModifyIORef'
+    (activeConnectionAddresses tracker)
+    (\entries -> ((currentThreadId, socketAddress) : entries, ()))
+
+untrackActiveConnection :: ActiveConnectionAddresses -> ThreadId -> IO ()
+untrackActiveConnection tracker currentThreadId =
+  atomicModifyIORef'
+    (activeConnectionAddresses tracker)
+    (\entries -> (filter ((/= currentThreadId) . fst) entries, ()))
+
+runtimeConnectionExceptionReporter ::
+  ListenerScheme ->
+  ListenerEndpoint ->
+  ActiveConnectionAddresses ->
+  (Observability.ConnectionObservability -> IO ()) ->
+  (Maybe Wai.Request -> SomeException -> IO ()) ->
+  Maybe Wai.Request ->
+  SomeException ->
+  IO ()
+runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter defaultReporter maybeRequest exception = do
+  maybeConnectionObservability <-
+    buildConnectionExceptionObservability
+      listenerScheme
+      endpoint
+      activeConnectionAddresses
+      exception
+  case maybeConnectionObservability of
+    Just connectionObservability ->
+      Observability.forceConnectionObservability connectionObservability `seq`
+        connectionReporter connectionObservability
+    Nothing ->
+      defaultReporter maybeRequest exception
+
+buildConnectionExceptionObservability ::
+  ListenerScheme ->
+  ListenerEndpoint ->
+  ActiveConnectionAddresses ->
+  SomeException ->
+  IO (Maybe Observability.ConnectionObservability)
+buildConnectionExceptionObservability listenerScheme endpoint activeConnectionAddresses exception =
+  case fromException exception of
+    Just warpTlsException ->
+      case warpTlsException of
+        WarpTLS.InsecureConnectionDenied ->
+          buildConnectionObservabilityValue "insecure-connection-denied" "InsecureConnectionDenied"
+        WarpTLS.ClientClosedConnectionPrematurely ->
+          buildConnectionObservabilityValue "client-closed-connection-prematurely" "ClientClosedConnectionPrematurely"
+    Nothing -> pure Nothing
+  where
+    buildConnectionObservabilityValue eventName exceptionType = do
+      maybePeerAddress <-
+        fmap (fmap socketAddressText) (lookupActiveConnectionAddress activeConnectionAddresses)
+      let maybeClientAddress = maybePeerAddress
+      pure . Just $
+        Observability.buildConnectionObservability
+          ("CONNECTION " <> eventName)
+          ( catMaybes
+              [ textObservabilityAttribute "client.address" <$> maybeClientAddress,
+                textObservabilityAttribute "network.peer.address" <$> maybePeerAddress
+              ]
+              ++ [ textObservabilityAttribute "url.scheme" (listenerSchemeText listenerScheme),
+                   textObservabilityAttribute "server.address" (endpointHost endpoint),
+                   Observability.ObservabilityAttribute
+                     { Observability.attributeName = "server.port",
+                       Observability.attributeValue = Observability.IntAttribute (endpointPort endpoint)
+                     },
+                   textObservabilityAttribute "harch.connection.event" eventName,
+                   textObservabilityAttribute "exception.type" exceptionType,
+                   textObservabilityAttribute "exception.message" (Text.pack (displayException exception))
+                 ]
+          )
 
 reportRuntimeServerExit :: MVar (Either SomeException RuntimeServerReady) -> Either SomeException () -> IO ()
 reportRuntimeServerExit startupSignal exitResult =
@@ -2428,6 +2576,12 @@ requestScheme request =
       if Wai.isSecure request
         then "https"
         else "http"
+
+listenerSchemeText :: ListenerScheme -> Text
+listenerSchemeText listenerScheme =
+  case listenerScheme of
+    Http -> "http"
+    Https -> "https"
 
 effectiveClientAddress :: Wai.Request -> Text
 effectiveClientAddress request =
@@ -2903,13 +3057,37 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
   endTimeUnixNano <- getMonotonicTimeNSec
   let requestBody =
-        otlpTraceRequestBody
+        otlpTraceBodyFromSpan
           serviceName
           traceId
           spanId
           endTimeUnixNano
           endTimeUnixNano
-          requestObservability
+          (Observability.observabilityRequestSpan requestObservability)
+          (otlpRequestSpanStatusFields requestObservability)
+  sendOtlpTraceRequest exporter requestBody
+
+exportConnectionObservabilityToOtlp ::
+  Text ->
+  OtlpExporter ->
+  Observability.ConnectionObservability ->
+  IO ()
+exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
+  (traceId, spanId) <- nextOtlpSpanIdentifiers
+  endTimeUnixNano <- getMonotonicTimeNSec
+  let requestBody =
+        otlpTraceBodyFromSpan
+          serviceName
+          traceId
+          spanId
+          endTimeUnixNano
+          endTimeUnixNano
+          (Observability.observabilityConnectionSpan connectionObservability)
+          otlpErrorStatusFields
+  sendOtlpTraceRequest exporter requestBody
+
+sendOtlpTraceRequest :: OtlpExporter -> LazyByteString.ByteString -> IO ()
+sendOtlpTraceRequest exporter requestBody = do
   baseRequest <- HttpClient.parseRequest (Text.unpack (otlpEndpoint exporter))
   response <-
     HttpClient.httpLbs
@@ -2929,15 +3107,16 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
         <> ".\nbody:\n"
         <> renderAcmeResponseBody response
 
-otlpTraceRequestBody ::
+otlpTraceBodyFromSpan ::
   Text ->
   Text ->
   Text ->
   Word64 ->
   Word64 ->
-  Observability.RequestObservability ->
+  Observability.RequestSpan ->
+  [(Text, LazyByteString.ByteString)] ->
   LazyByteString.ByteString
-otlpTraceRequestBody serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestObservability =
+otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields =
   jsonObjectBytes
     [ ( "resourceSpans",
         jsonArrayBytes
@@ -2957,7 +3136,8 @@ otlpTraceRequestBody serviceName traceId spanId startTimeUnixNano endTimeUnixNan
                                   spanId
                                   startTimeUnixNano
                                   endTimeUnixNano
-                                  requestObservability
+                                  requestSpan
+                                  statusFields
                               ]
                           )
                         ]
@@ -2997,42 +3177,42 @@ otlpSpanObject ::
   Text ->
   Word64 ->
   Word64 ->
-  Observability.RequestObservability ->
+  Observability.RequestSpan ->
+  [(Text, LazyByteString.ByteString)] ->
   LazyByteString.ByteString
-otlpSpanObject traceId spanId startTimeUnixNano endTimeUnixNano requestObservability =
+otlpSpanObject traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields =
   jsonObjectBytes
     ( [ ("traceId", jsonStringBytes traceId),
         ("spanId", jsonStringBytes spanId),
-        ("name", jsonStringBytes (requestSpanDisplayName requestObservability)),
+        ("name", jsonStringBytes (Observability.requestSpanDisplayName requestSpan)),
         ("kind", jsonStringBytes "SPAN_KIND_SERVER"),
         ("startTimeUnixNano", jsonStringBytes (Text.pack (show startTimeUnixNano))),
         ("endTimeUnixNano", jsonStringBytes (Text.pack (show endTimeUnixNano))),
         ( "attributes",
           jsonArrayBytes
             ( map otlpAttribute $
-                Observability.requestSpanAttributes
-                  (Observability.observabilityRequestSpan requestObservability)
+                Observability.requestSpanAttributes requestSpan
             )
         )
       ]
-        ++ otlpSpanStatusFields requestObservability
+        ++ statusFields
     )
 
-requestSpanDisplayName :: Observability.RequestObservability -> Text
-requestSpanDisplayName =
-  Observability.requestSpanDisplayName . Observability.observabilityRequestSpan
-
-otlpSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
-otlpSpanStatusFields requestObservability =
+otlpRequestSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
+otlpRequestSpanStatusFields requestObservability =
   case requestObservabilityStatusCode requestObservability of
     Just statusCode
       | statusCode >= 500 ->
-          [ ( "status",
-              jsonObjectBytes
-                [("code", jsonStringBytes "STATUS_CODE_ERROR")]
-            )
-          ]
+          otlpErrorStatusFields
     _ -> []
+
+otlpErrorStatusFields :: [(Text, LazyByteString.ByteString)]
+otlpErrorStatusFields =
+  [ ( "status",
+      jsonObjectBytes
+        [("code", jsonStringBytes "STATUS_CODE_ERROR")]
+    )
+  ]
 
 requestObservabilityStatusCode :: Observability.RequestObservability -> Maybe Int
 requestObservabilityStatusCode requestObservability =
