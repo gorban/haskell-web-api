@@ -145,7 +145,7 @@ module HarchWeb
   )
 where
 
-import Control.Applicative (liftA2, (<|>))
+import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (forever, replicateM, unless, void, when)
