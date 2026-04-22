@@ -17,7 +17,7 @@ Commands to install prerequisites in Ubuntu. Also tested in WSL2 on Windows:
 ```bash
 sudo apt update
 sudo apt upgrade -y
-sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev pkg-config zlib1g-dev git dos2unix
+sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libpq-dev pkg-config zlib1g-dev git dos2unix
 ```
 
 These Ubuntu packages already include the development libraries needed by the optional Haskell Debugger:
@@ -256,8 +256,10 @@ commands are also available on your `PATH`:
   No Playwright install is required yet; the current e2e path only needs a basic Node.js runtime. When a
   Playwright-backed runner is introduced, the intended handoff is `TEST_CORE_BROWSER_RUNNER=node` plus
   `TEST_CORE_BROWSER_RUNNER_ARGUMENTS=path/to/playwright-runner.js[,extra,args]`.
-- `psql` plus a local PostgreSQL server if you want to exercise the PostgreSQL adapter, migrations, or seed
-  data locally.
+- PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or `postgresql-devel` on Fedora) so local
+  source builds can compile the in-process runtime PostgreSQL adapter.
+- `psql` plus a local PostgreSQL server if you want to exercise migrations, seed data, or direct manual SQL
+  checks locally.
 
 For real PostgreSQL coverage, the repository currently claims support for PostgreSQL `17.x`. The local
 autostart path, documented container examples, and live integration tests all target that major version.
@@ -267,13 +269,13 @@ Example package-manager installs:
 ### Ubuntu
 
 ```bash
-sudo apt install -y nodejs postgresql postgresql-client
+sudo apt install -y nodejs postgresql postgresql-client libpq-dev
 ```
 
 ### Fedora
 
 ```bash
-sudo dnf install -y nodejs postgresql-server postgresql
+sudo dnf install -y nodejs postgresql-server postgresql postgresql-devel
 ```
 
 ### MacOS
@@ -282,9 +284,11 @@ sudo dnf install -y nodejs postgresql-server postgresql
 brew install node postgresql@17
 ```
 
-If you only want to boot the example app with its current committed stub data, PostgreSQL is optional
+If you only want to boot the example app with its current committed stub data, PostgreSQL itself is optional
 today. `cabal run exe:haskell-web-api` loads code defaults, then `./.env`, then `./.env.local`, and uses
-the in-process default database effect unless you explicitly point it at PostgreSQL.
+the in-process default database effect unless you explicitly point it at PostgreSQL, but local source builds
+still need the PostgreSQL client development libraries because the runtime adapter now links against `libpq`
+instead of shelling out to `psql`.
 
 ## Repository Configuration Layers
 
@@ -477,8 +481,9 @@ explicitly configure them.
 podman build -t localhost/haskell-web-api:dev .
 ```
 
-The tracked runtime image now includes both `certbot` and `openssl`, so later ACME walkthroughs can use
-either backend without rebuilding the image.
+The tracked runtime image now includes `libpq` for in-process PostgreSQL queries plus `certbot` and
+`openssl`, so normal runtime traffic does not need the `psql` CLI and later ACME walkthroughs can use either
+backend without rebuilding the image.
 
 2. Create a pod that exposes all three services on localhost:
 

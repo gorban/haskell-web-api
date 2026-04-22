@@ -28,10 +28,12 @@ apt-get install -y --no-install-recommends \
     libc6-dev \
     libffi-dev \
     libgmp-dev \
+    libpq-dev \
     libnuma-dev \
     libncurses-dev \
     make \
     nodejs \
+    pkg-config \
     postgresql-client \
     xz-utils \
     zlib1g-dev \
@@ -127,13 +129,14 @@ COPY --from=coverage-prep /app/_coverage/ /
 # =============================================================================
 FROM alpine:3.20 AS runtime
 
-# Install runtime dependencies, including certbot for the certbot ACME backend,
-# and create the non-root runtime user.
+# Install runtime dependencies, including libpq for in-process PostgreSQL access
+# and certbot for the certbot ACME backend, then create the non-root runtime user.
 RUN <<EOF
 set -e
   apk add --no-cache \
     gmp \
     libffi \
+    libpq \
     gcompat \
     ca-certificates \
     openssl \

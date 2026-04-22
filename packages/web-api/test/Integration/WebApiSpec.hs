@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
@@ -12,7 +13,7 @@ import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (St
 import qualified Network.Socket as NetworkSocket
 import qualified Network.Socket.ByteString as SocketByteString
 import Numeric (readHex)
-import System.Environment (getEnvironment)
+import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))
 import System.FilePath ((</>))
 import System.IO (hClose)
@@ -20,8 +21,9 @@ import System.IO.Error (tryIOError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
-import WebApi.Database (DatabaseEffect (..), HomePageData (..), SecondPageData (..))
-import WebApi.Postgres (buildPostgresDatabaseEffect)
+import WebApi.Config (DatabaseConfig (..))
+import WebApi.Database (DatabaseEffect (..), DatabaseError (..), HomePageData (..), SecondPageData (..))
+import WebApi.Postgres (buildPostgresDatabaseEffect, buildRuntimePostgresDatabaseEffect)
 import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
 
 spec = do
@@ -165,101 +167,135 @@ spec = do
                       "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
                     ]
 
-  describe "database integration" $
-    it "runs migrate-and-seed, verifies the supported PostgreSQL major version, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL" $
-      withContainerizedPsqlOnPath $ do
-        ensureDefaultPostgresAvailable
-        inheritedEnvironment <- getEnvironment
-        exitCode <-
-          withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
-            withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
-              (_, _, _, processHandle) <-
-                createProcess
-                  ( (proc "haskell-web-api-db" ["migrate-and-seed"])
-                      { cwd = Just workingDirectory,
-                        env = Just (databaseSetupEnvironment inheritedEnvironment),
-                        std_out = UseHandle outputHandle
-                      }
-                  )
-              result <- waitForProcess processHandle
-              hClose outputHandle
-              readFile outputPath `shouldReturn` "Applied database migrations and seed data.\n"
-              pure result
-        exitCode `shouldBe` ExitSuccess
+  describe "database integration" $ do
+    it
+      "runs migrate-and-seed, verifies the supported PostgreSQL major version, loads seeded page data, and enforces runtime-role privileges against real PostgreSQL"
+      ( withContainerizedPsqlOnPath $ do
+          ensureDefaultPostgresAvailable
+          inheritedEnvironment <- getEnvironment
+          exitCode <-
+            withSystemTempDirectory "haskell-web-api-db" $ \workingDirectory ->
+              withSystemTempFile "haskell-web-api-db-stdout.txt" $ \outputPath outputHandle -> do
+                (_, _, _, processHandle) <-
+                  createProcess
+                    ( (proc "haskell-web-api-db" ["migrate-and-seed"])
+                        { cwd = Just workingDirectory,
+                          env = Just (databaseSetupEnvironment inheritedEnvironment),
+                          std_out = UseHandle outputHandle
+                        }
+                    )
+                result <- waitForProcess processHandle
+                hClose outputHandle
+                readFile outputPath `shouldReturn` "Applied database migrations and seed data.\n"
+                pure result
+          exitCode `shouldBe` ExitSuccess
 
-        supportedVersionResult <-
-          readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_owner", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT current_setting('server_version_num')::integer / 10000;"])
-                { env = Just (("PGPASSWORD", "web_api_owner") : inheritedEnvironment)
+          supportedVersionResult <-
+            readCreateProcessWithExitCode
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_owner", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT current_setting('server_version_num')::integer / 10000;"])
+                  { env = Just (("PGPASSWORD", "web_api_owner") : inheritedEnvironment)
+                  }
+              )
+              ""
+          supportedVersionResult
+            `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
+
+          let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
+              frenchRequestContext = defaultRequestContext {requestLocale = French}
+          loadHomePageData postgresEffect defaultRequestContext
+            `shouldReturn` Right
+              HomePageData
+                { homePageDataSummary = "Server-rendered home page with stubbed content."
                 }
-            )
-            ""
-        supportedVersionResult
-          `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
-
-        let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
-            frenchRequestContext = defaultRequestContext {requestLocale = French}
-        loadHomePageData postgresEffect defaultRequestContext
-          `shouldReturn` Right
-            HomePageData
-              { homePageDataSummary = "Server-rendered home page with stubbed content."
-              }
-        loadSecondPageData postgresEffect defaultRequestContext
-          `shouldReturn` Right
-            SecondPageData
-              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
-                secondPageDataHighlights = []
-              }
-        loadHomePageData postgresEffect frenchRequestContext
-          `shouldReturn` Right
-            HomePageData
-              { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
-              }
-        loadSecondPageData postgresEffect frenchRequestContext
-          `shouldReturn` Right
-            SecondPageData
-              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
-                secondPageDataHighlights = []
-              }
-
-        allowedSelect <-
-          readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
-                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+          loadSecondPageData postgresEffect defaultRequestContext
+            `shouldReturn` Right
+              SecondPageData
+                { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                  secondPageDataHighlights = []
                 }
-            )
-            ""
-        allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
-
-        forbiddenInsert <-
-          readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('forbidden', 'en', 'nope');"])
-                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+          loadHomePageData postgresEffect frenchRequestContext
+            `shouldReturn` Right
+              HomePageData
+                { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
                 }
-            )
-            ""
-        fst3 forbiddenInsert `shouldNotBe` ExitSuccess
-        thd3 forbiddenInsert `shouldContain` "permission denied"
-
-        forbiddenSchemaChange <-
-          readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "DO $$ BEGIN EXECUTE format('CREATE TABLE web_api.forbidden_runtime_table_%s (id INTEGER);', pg_backend_pid()); END $$;"])
-                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+          loadSecondPageData postgresEffect frenchRequestContext
+            `shouldReturn` Right
+              SecondPageData
+                { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                  secondPageDataHighlights = []
                 }
-            )
-            ""
-        fst3 forbiddenSchemaChange `shouldNotBe` ExitSuccess
-        thd3 forbiddenSchemaChange `shouldContain` "permission denied"
 
-        forbiddenRoleCreate <-
-          readCreateProcessWithExitCode
-            ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "CREATE ROLE forbidden_runtime_role LOGIN PASSWORD 'forbidden_runtime_role';"])
-                { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
-                }
-            )
-            ""
-        fst3 forbiddenRoleCreate `shouldNotBe` ExitSuccess
-        thd3 forbiddenRoleCreate `shouldContain` "permission denied"
+          withTemporaryEnvironment "PATH" (Just "") $ do
+            let runtimePostgresEffect = buildRuntimePostgresDatabaseEffect defaultRealPostgresConfig
+            loadHomePageData runtimePostgresEffect defaultRequestContext
+              `shouldReturn` Right
+                HomePageData
+                  { homePageDataSummary = "Server-rendered home page with stubbed content."
+                  }
+            loadSecondPageData runtimePostgresEffect frenchRequestContext
+              `shouldReturn` Right
+                SecondPageData
+                  { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+                    secondPageDataHighlights = []
+                  }
+
+          allowedSelect <-
+            readCreateProcessWithExitCode
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
+                  { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                  }
+              )
+              ""
+          allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
+
+          forbiddenInsert <-
+            readCreateProcessWithExitCode
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "INSERT INTO web_api.page_content (route_slug, locale, summary) VALUES ('forbidden', 'en', 'nope');"])
+                  { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                  }
+              )
+              ""
+          fst3 forbiddenInsert `shouldNotBe` ExitSuccess
+          thd3 forbiddenInsert `shouldContain` "permission denied"
+
+          forbiddenSchemaChange <-
+            readCreateProcessWithExitCode
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "DO $$ BEGIN EXECUTE format('CREATE TABLE web_api.forbidden_runtime_table_%s (id INTEGER);', pg_backend_pid()); END $$;"])
+                  { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                  }
+              )
+              ""
+          fst3 forbiddenSchemaChange `shouldNotBe` ExitSuccess
+          thd3 forbiddenSchemaChange `shouldContain` "permission denied"
+
+          forbiddenRoleCreate <-
+            readCreateProcessWithExitCode
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "CREATE ROLE forbidden_runtime_role LOGIN PASSWORD 'forbidden_runtime_role';"])
+                  { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
+                  }
+              )
+              ""
+          fst3 forbiddenRoleCreate `shouldNotBe` ExitSuccess
+          thd3 forbiddenRoleCreate `shouldContain` "permission denied"
+      )
+
+    it "maps runtime PostgreSQL connection failures into database errors without shelling out to psql" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withTemporaryEnvironment "PATH" (Just "") $ do
+          let runtimePostgresEffect =
+                buildRuntimePostgresDatabaseEffect
+                  defaultRealPostgresConfig
+                    { databasePort = unusedPort
+                    }
+          loadHomePageData runtimePostgresEffect defaultRequestContext
+            >>= \case
+              Left (HomePageDataError errorMessage) -> do
+                errorMessage `shouldSatisfy` (not . Text.null)
+                errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")
+              Left otherError ->
+                expectationFailure ("expected HomePageDataError, got " <> show otherError)
+              Right homePageData ->
+                expectationFailure ("expected runtime connection failure, got " <> show homePageData)
   where
     fst3 (firstValue, _, _) = firstValue
     thd3 (_, _, thirdValue) = thirdValue
@@ -319,6 +355,20 @@ waitForProcessReadiness processHandle failureMessage readResponse =
               | otherwise ->
                   expectationFailure failureMessage
                     >> readResponse
+
+withTemporaryEnvironment :: String -> Maybe String -> IO a -> IO a
+withTemporaryEnvironment key maybeValue action = do
+  originalValue <- lookupEnv key
+  let restoreEnvironment =
+        case originalValue of
+          Just value -> setEnv key value
+          Nothing -> unsetEnv key
+      setTemporaryEnvironment =
+        case maybeValue of
+          Just value -> setEnv key value
+          Nothing -> unsetEnv key
+  setTemporaryEnvironment
+  action `finally` restoreEnvironment
 
 readLoopbackHttpResponse :: Int -> Text.Text -> IO Text.Text
 readLoopbackHttpResponse port path = do

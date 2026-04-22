@@ -6,7 +6,14 @@ module WebApi.Postgres
     PostgresRunnerError (..),
     buildPostgresDatabaseEffect,
     buildPostgresDatabaseEffectWithRunner,
+    buildRuntimePostgresDatabaseEffect,
+    buildRuntimePostgresDatabaseEffectWithRunner,
+    decodeRuntimeQueryValue,
+    renderRuntimeConnectionErrorMessage,
+    renderRuntimeResultErrorMessage,
     migrationStatementsFor,
+    runRuntimeRowsQuery,
+    runRuntimeScalarQuery,
     runPostgresMigrations,
     runPostgresMigrationsForRuntime,
     runPostgresMigrationsWithRunner,
@@ -17,8 +24,14 @@ module WebApi.Postgres
   )
 where
 
+import Control.Exception (bracket)
+import Data.Bifunctor (first)
+import Data.ByteString qualified as ByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Encoding.Error (lenientDecode)
+import Database.PostgreSQL.LibPQ qualified as LibPQ
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
@@ -105,6 +118,61 @@ buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
                           }
                     )
                     highlightsResult,
+                databaseResultOperations = [summaryOperation, highlightsOperation]
+              }
+
+buildRuntimePostgresDatabaseEffect :: DatabaseConfig -> DatabaseEffect
+buildRuntimePostgresDatabaseEffect =
+  buildRuntimePostgresDatabaseEffectWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
+
+buildRuntimePostgresDatabaseEffectWithRunner ::
+  (DatabaseConfig -> Text -> IO (Either Text Text)) ->
+  (DatabaseConfig -> Text -> IO (Either Text [Text])) ->
+  DatabaseConfig ->
+  DatabaseEffect
+buildRuntimePostgresDatabaseEffectWithRunner runScalarQuery runRowsQuery databaseConfig =
+  DatabaseEffect
+    { loadHomePageData = fmap databaseResultValue . loadRuntimeHomePageData,
+      loadHomePageDataWithObservability = loadRuntimeHomePageData,
+      loadSecondPageData = fmap databaseResultValue . loadRuntimeSecondPageData,
+      loadSecondPageDataWithObservability = loadRuntimeSecondPageData
+    }
+  where
+    loadRuntimeHomePageData requestContext = do
+      let operation = homeSummaryOperation
+      summaryResult <-
+        fmap
+          (fmap HomePageData)
+          (runScalarQuery databaseConfig (homeSummaryQuery (requestLocale requestContext)))
+      pure
+        DatabaseResult
+          { databaseResultValue = first HomePageDataError summaryResult,
+            databaseResultOperations = [operation]
+          }
+    loadRuntimeSecondPageData requestContext = do
+      let summaryOperation = secondSummaryOperation
+          highlightsOperation = secondHighlightsOperation
+      summaryResult <- runScalarQuery databaseConfig (secondSummaryQuery (requestLocale requestContext))
+      case first SecondPageDataError summaryResult of
+        Left databaseError ->
+          pure
+            DatabaseResult
+              { databaseResultValue = Left databaseError,
+                databaseResultOperations = [summaryOperation]
+              }
+        Right secondSummary -> do
+          highlightsResult <- runRowsQuery databaseConfig (secondHighlightsQuery (requestLocale requestContext))
+          pure
+            DatabaseResult
+              { databaseResultValue =
+                  fmap
+                    ( \highlights ->
+                        SecondPageData
+                          { secondPageDataSummary = secondSummary,
+                            secondPageDataHighlights = highlights
+                          }
+                    )
+                    (first SecondPageDataError highlightsResult),
                 databaseResultOperations = [summaryOperation, highlightsOperation]
               }
 
@@ -224,6 +292,96 @@ runPostgresCommand command = do
         postgresStdout = Text.pack stdoutText,
         postgresStderr = Text.pack stderrText
       }
+
+runRuntimeScalarQuery :: DatabaseConfig -> Text -> IO (Either Text Text)
+runRuntimeScalarQuery databaseConfig sql =
+  fmap runtimeScalarRowsResult (runRuntimeRowsQuery databaseConfig sql)
+
+runtimeScalarRowsResult :: Either Text [Text] -> Either Text Text
+runtimeScalarRowsResult rowsResult =
+  case rowsResult of
+    Left runtimeError -> Left runtimeError
+    Right rows ->
+      case parseRequiredScalarRows rows of
+        Left runnerError -> Left (renderRunnerError runnerError)
+        Right value -> Right value
+
+runRuntimeRowsQuery :: DatabaseConfig -> Text -> IO (Either Text [Text])
+runRuntimeRowsQuery databaseConfig sql =
+  bracket
+    (LibPQ.connectdb (runtimeConnectionString databaseConfig))
+    LibPQ.finish
+    (runRuntimeQueryRows sql)
+
+runRuntimeQueryRows :: Text -> LibPQ.Connection -> IO (Either Text [Text])
+runRuntimeQueryRows sql connection = do
+  maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
+  case maybeResult of
+    Nothing ->
+      fmap Left (renderRuntimeConnectionError connection)
+    Just result -> do
+      resultStatus <- LibPQ.resultStatus result
+      case resultStatus of
+        LibPQ.TuplesOk ->
+          readRuntimeQueryRows result
+        _ ->
+          fmap Left (renderRuntimeResultError result)
+
+readRuntimeQueryRows :: LibPQ.Result -> IO (Either Text [Text])
+readRuntimeQueryRows result = do
+  rowCount <- LibPQ.ntuples result
+  values <-
+    traverse
+      (readRuntimeQueryValue result)
+      [0 .. rowCount - 1]
+  pure (sequence values)
+
+readRuntimeQueryValue :: LibPQ.Result -> LibPQ.Row -> IO (Either Text Text)
+readRuntimeQueryValue result rowIndex =
+  fmap decodeRuntimeQueryValue (LibPQ.getvalue result rowIndex 0)
+
+decodeRuntimeQueryValue :: Maybe ByteString.ByteString -> Either Text Text
+decodeRuntimeQueryValue maybeValue =
+  case maybeValue of
+    Nothing -> Left "unexpected NULL column value"
+    Just value -> Right (TextEncoding.decodeUtf8With lenientDecode value)
+
+runtimeConnectionString :: DatabaseConfig -> ByteString.ByteString
+runtimeConnectionString databaseConfig =
+  TextEncoding.encodeUtf8 $
+    Text.unwords
+      [ "host=" <> libpqConnectionValue (databaseHost databaseConfig),
+        "port=" <> Text.pack (show (databasePort databaseConfig)),
+        "dbname=" <> libpqConnectionValue (databaseName databaseConfig),
+        "user=" <> libpqConnectionValue (databaseUser databaseConfig),
+        "password=" <> libpqConnectionValue (databasePassword databaseConfig)
+      ]
+
+libpqConnectionValue :: Text -> Text
+libpqConnectionValue value =
+  "'" <> Text.replace "\\" "\\\\" (Text.replace "'" "\\'" value) <> "'"
+
+renderRuntimeConnectionError :: LibPQ.Connection -> IO Text
+renderRuntimeConnectionError connection = do
+  maybeMessage <- LibPQ.errorMessage connection
+  pure (renderRuntimeConnectionErrorMessage maybeMessage)
+
+renderRuntimeResultError :: LibPQ.Result -> IO Text
+renderRuntimeResultError result = do
+  maybeMessage <- LibPQ.resultErrorMessage result
+  pure (renderRuntimeResultErrorMessage maybeMessage)
+
+renderRuntimeConnectionErrorMessage :: Maybe ByteString.ByteString -> Text
+renderRuntimeConnectionErrorMessage maybeMessage =
+  case maybeMessage of
+    Nothing -> "libpq connection failed"
+    Just message -> Text.strip (TextEncoding.decodeUtf8With lenientDecode message)
+
+renderRuntimeResultErrorMessage :: Maybe ByteString.ByteString -> Text
+renderRuntimeResultErrorMessage maybeMessage =
+  case maybeMessage of
+    Nothing -> "libpq query failed"
+    Just message -> Text.strip (TextEncoding.decodeUtf8With lenientDecode message)
 
 queryCommand :: DatabaseConfig -> Text -> PostgresCommand
 queryCommand databaseConfig sql =

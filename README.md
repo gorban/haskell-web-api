@@ -244,6 +244,9 @@ LISTENER_3_TLS_SHARED_WAIT_SECONDS=120
 # ./.tls/<cert-name> for source runs. The runtime image keeps the same relative
 # default under /app/.tls/<cert-name>, and a lone shared listener can reuse that
 # path without its own LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY override.
+#
+# Normal runtime PostgreSQL reads now use the bundled libpq-backed Haskell client
+# path instead of invoking the psql CLI inside the runtime image.
 
 # Static assets
 STATIC_ASSET_ROOT_0_URL_PREFIX=/assets

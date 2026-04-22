@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -44,7 +45,7 @@ import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperati
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
-import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, migrationStatementsFor, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, seedStatements)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
@@ -2472,6 +2473,201 @@ spec = do
                   }
               ]
           }
+
+    it "translates database config into runtime SQL queries for page queries" $ do
+      recordedScalarQueriesReference <- newIORef []
+      recordedRowsQueriesReference <- newIORef []
+      let scalarRunner databaseConfig sql = do
+            databaseConfig `shouldBe` postgresTestConfig
+            modifyIORef' recordedScalarQueriesReference (<> [sql])
+            pure $
+              case sql of
+                queryText
+                  | Text.isInfixOf "route_slug = 'home'" queryText ->
+                      Right $
+                        if Text.isInfixOf "locale = 'fr'" queryText
+                          then "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                          else "Server-rendered home page with stubbed content."
+                  | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" queryText ->
+                      Right $
+                        if Text.isInfixOf "locale = 'fr'" queryText
+                          then "Charge depuis PostgreSQL."
+                          else "Loaded from PostgreSQL."
+                  | otherwise ->
+                      Left "unexpected query"
+          rowsRunner databaseConfig sql = do
+            databaseConfig `shouldBe` postgresTestConfig
+            modifyIORef' recordedRowsQueriesReference (<> [sql])
+            pure $
+              if Text.isInfixOf "locale = 'fr'" sql
+                then Right ["SSR rapide", "Donnees partagees"]
+                else Right ["Fast SSR", "Shared route data"]
+          postgresEffect =
+            buildRuntimePostgresDatabaseEffectWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadHomePageDataWithObservability postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                HomePageData
+                  { homePageDataSummary = "Server-rendered home page with stubbed content."
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-home-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  }
+              ]
+          }
+      loadSecondPageData postgresEffect defaultRequestContext
+        `shouldReturn` Right
+          SecondPageData
+            { secondPageDataSummary = "Loaded from PostgreSQL.",
+              secondPageDataHighlights = ["Fast SSR", "Shared route data"]
+            }
+      loadHomePageData postgresEffect frenchRequestContext
+        `shouldReturn` Right
+          HomePageData
+            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            }
+      loadSecondPageDataWithObservability postgresEffect frenchRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue =
+              Right
+                SecondPageData
+                  { secondPageDataSummary = "Charge depuis PostgreSQL.",
+                    secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
+                  },
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                  }
+              ]
+          }
+      readIORef recordedScalarQueriesReference
+        `shouldReturn` [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';",
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';"
+                       ]
+      readIORef recordedRowsQueriesReference
+        `shouldReturn` [ "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
+                         "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+                       ]
+
+    it "maps runtime query failures into explicit database errors" $ do
+      let scalarRunner _ sql =
+            pure $
+              if Text.isInfixOf "route_slug = 'home'" sql
+                then Left "connection refused"
+                else Right "Loaded from PostgreSQL."
+          rowsRunner _ _ =
+            pure (Left "highlights unavailable")
+          postgresEffect =
+            buildRuntimePostgresDatabaseEffectWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadHomePageData postgresEffect defaultRequestContext
+        `shouldReturn` Left (HomePageDataError "connection refused")
+      loadSecondPageData postgresEffect defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "highlights unavailable")
+      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                DatabaseOperation
+                  { databaseOperationName = "load-second-page-highlights",
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                  }
+              ]
+          }
+
+    it "maps runtime second-page summary failures without attempting highlight queries" $ do
+      let scalarRunner _ sql =
+            pure $
+              if Text.isInfixOf "route_slug = 'second'" sql
+                then Left "summary unavailable"
+                else Right "Server-rendered home page with stubbed content."
+          rowsRunner _ _ =
+            error "expected runtime highlight query to be skipped when the second-page summary fails"
+          postgresEffect =
+            buildRuntimePostgresDatabaseEffectWithRunner
+              scalarRunner
+              rowsRunner
+              postgresTestConfig
+      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+        `shouldReturn` DatabaseResult
+          { databaseResultValue = Left (SecondPageDataError "summary unavailable"),
+            databaseResultOperations =
+              [ DatabaseOperation
+                  { databaseOperationName = "load-second-page-summary",
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  }
+              ]
+          }
+
+    it "covers runtime libpq helper decoding branches" $ do
+      decodeRuntimeQueryValue Nothing
+        `shouldBe` Left "unexpected NULL column value"
+      decodeRuntimeQueryValue (Just (ByteString.pack [115, 115, 114, 255]))
+        `shouldBe` Right (Text.pack ['s', 's', 'r', '\xfffd'])
+      renderRuntimeConnectionErrorMessage Nothing
+        `shouldBe` "libpq connection failed"
+      renderRuntimeConnectionErrorMessage (Just (ByteString.pack [32, 114, 117, 110, 255, 10]))
+        `shouldBe` Text.pack ['r', 'u', 'n', '\xfffd']
+      renderRuntimeResultErrorMessage Nothing
+        `shouldBe` "libpq query failed"
+      renderRuntimeResultErrorMessage (Just (ByteString.pack [32, 113, 117, 101, 114, 121, 255, 10]))
+        `shouldBe` Text.pack ['q', 'u', 'e', 'r', 'y', '\xfffd']
+
+    it "runs direct runtime libpq queries and surfaces malformed-row, syntax, and connection failures explicitly" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
+        `shouldReturn` Right ()
+
+      runRuntimeScalarQuery defaultRealPostgresConfig "SELECT 'Loaded from PostgreSQL.'::text;"
+        `shouldReturn` Right "Loaded from PostgreSQL."
+      runRuntimeRowsQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('Fast SSR'::text), ('Shared route data'::text)) AS runtime_rows(value);"
+        `shouldReturn` Right ["Fast SSR", "Shared route data"]
+      runRuntimeScalarQuery defaultRealPostgresConfig "SELECT value FROM (VALUES ('first'::text), ('second'::text)) AS runtime_rows(value);"
+        `shouldReturn` Left "expected exactly one row: first, second"
+      runRuntimeRowsQuery defaultRealPostgresConfig "SELECT NULL::text;"
+        `shouldReturn` Left "unexpected NULL column value"
+
+      syntaxResult <- runRuntimeRowsQuery defaultRealPostgresConfig "SELECT FROM"
+      syntaxResult
+        `shouldSatisfy` \case
+          Left runtimeError ->
+            Text.isInfixOf "syntax error" runtimeError
+          Right rows ->
+            error ("expected syntax failure, got rows: " <> show rows)
+
+      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+        refusedResult <-
+          runRuntimeScalarQuery
+            defaultRealPostgresConfig
+              { databasePort = tcpEndpointPort unusedEndpoint
+              }
+            "SELECT 1::text;"
+        refusedResult
+          `shouldSatisfy` \case
+            Left runtimeError ->
+              not (Text.null runtimeError)
+                && not (Text.isInfixOf "posix_spawnp" runtimeError)
+            Right value ->
+              error ("expected connection failure, got value: " <> show value)
 
     it "runs migrations and seed statements in order through the provided runner" $ do
       recordedCommandsReference <- newIORef []

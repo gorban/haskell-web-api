@@ -30,7 +30,7 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
-import WebApi.Postgres (buildPostgresDatabaseEffect)
+import WebApi.Postgres (buildRuntimePostgresDatabaseEffect)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext,
@@ -74,7 +74,7 @@ buildApp config =
 
 buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildRuntimeApp config =
-  buildRuntimeAppWithDatabaseBuilder config buildPostgresDatabaseEffect
+  buildRuntimeAppWithDatabaseBuilder config buildRuntimePostgresDatabaseEffect
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
