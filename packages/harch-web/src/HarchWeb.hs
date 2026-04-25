@@ -168,6 +168,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock (UTCTime)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
@@ -3193,7 +3194,7 @@ exportRequestObservabilityToOtlp ::
   IO ()
 exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
-  endTimeUnixNano <- getMonotonicTimeNSec
+  endTimeUnixNano <- currentUnixTimeNSec
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
@@ -3212,7 +3213,7 @@ exportConnectionObservabilityToOtlp ::
   IO ()
 exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
-  endTimeUnixNano <- getMonotonicTimeNSec
+  endTimeUnixNano <- currentUnixTimeNSec
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
@@ -3244,6 +3245,10 @@ sendOtlpTraceRequest exporter requestBody = do
         <> show statusCode
         <> ".\nbody:\n"
         <> renderAcmeResponseBody response
+
+currentUnixTimeNSec :: IO Word64
+currentUnixTimeNSec =
+  floor . (* 1000000000) <$> getPOSIXTime
 
 otlpTraceBodyFromSpan ::
   Text ->

@@ -32,6 +32,7 @@ import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec
+import Text.Read (readMaybe)
 
 data TestContext = TestContext
   { requestLanguage :: Text,
@@ -2440,6 +2441,7 @@ spec = do
           `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
         extractQuotedJsonField "spanId" requestBodyText
           `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
+        expectPlausibleEpochNanoTimestamps requestBodyText
 
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
@@ -2499,6 +2501,7 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+        expectPlausibleEpochNanoTimestamps requestBodyText
 
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
@@ -4229,6 +4232,22 @@ extractQuotedJsonField fieldName bodyText =
   where
     fieldPrefix = "\"" <> fieldName <> "\":\""
     (_, withField) = Text.breakOn fieldPrefix bodyText
+
+extractQuotedJsonIntegerField :: Text -> Text -> Maybe Integer
+extractQuotedJsonIntegerField fieldName bodyText =
+  extractQuotedJsonField fieldName bodyText >>= readMaybe . Text.unpack
+
+expectPlausibleEpochNanoTimestamps :: Text -> Expectation
+expectPlausibleEpochNanoTimestamps bodyText = do
+  let earliestPlausibleEpochNano = 1577836800000000000
+      latestPlausibleEpochNano = 4102444800000000000
+  case (extractQuotedJsonIntegerField "startTimeUnixNano" bodyText, extractQuotedJsonIntegerField "endTimeUnixNano" bodyText) of
+    (Just startTimeUnixNano, Just endTimeUnixNano) -> do
+      startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano)
+      endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano)
+      startTimeUnixNano `shouldSatisfy` (<= endTimeUnixNano)
+    _ ->
+      expectationFailure "expected OTLP startTimeUnixNano and endTimeUnixNano string fields with integer values"
 
 expectLoopbackPortReusable :: Int -> IO ()
 expectLoopbackPortReusable port = do
