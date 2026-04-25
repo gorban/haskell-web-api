@@ -2,7 +2,7 @@
 
 module Unit.HarchWebSpec (spec) where
 
-import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
+import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (SomeException, displayException, evaluate, finally, try)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
@@ -23,7 +23,7 @@ import qualified Network.Socket.ByteString as SocketByteString
 import qualified Network.Wai as Wai
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai.Internal as WaiInternal
-import System.Directory (createDirectoryIfMissing, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -3042,6 +3042,8 @@ spec = do
             "command=''",
             "has_non_interactive=0",
             "has_agree_tos=0",
+            "has_webroot=0",
+            "webroot_path=''",
             "http_port=''",
             "server_url=''",
             "email=''",
@@ -3050,6 +3052,8 @@ spec = do
             "    certonly) command='certonly'; shift ;;",
             "    --non-interactive|-n) has_non_interactive=1; shift ;;",
             "    --agree-tos) has_agree_tos=1; shift ;;",
+            "    --webroot) has_webroot=1; shift ;;",
+            "    -w|--webroot-path) webroot_path=\"$2\"; shift 2 ;;",
             "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
             "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
             "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
@@ -3064,6 +3068,8 @@ spec = do
             "test \"$command\" = certonly",
             "test \"$has_non_interactive\" = 1",
             "test \"$has_agree_tos\" = 1",
+            "test \"$has_webroot\" = 1",
+            "test -n \"$webroot_path\"",
             "test \"$http_port\" = 80",
             "test \"$server_url\" = https://acme-v02.api.letsencrypt.org/directory",
             "test \"$email\" = ops@example.com",
@@ -3071,6 +3077,7 @@ spec = do
             "if [ -z \"$cert_name\" ]; then",
             "  cert_name=\"${domain%%,*}\"",
             "fi",
+            "mkdir -p \"$webroot_path/.well-known/acme-challenge\"",
             "mkdir -p \"$config_dir/live/$cert_name\"",
             "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
             "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
@@ -3095,6 +3102,8 @@ spec = do
             "certonly_count=0",
             "non_interactive_count=0",
             "agree_tos_count=0",
+            "webroot_count=0",
+            "webroot_path=''",
             "http_port=''",
             "server_url=''",
             "email=''",
@@ -3103,6 +3112,8 @@ spec = do
             "    certonly) certonly_count=$((certonly_count + 1)); shift ;;",
             "    --non-interactive|-n) non_interactive_count=$((non_interactive_count + 1)); shift ;;",
             "    --agree-tos) agree_tos_count=$((agree_tos_count + 1)); shift ;;",
+            "    --webroot) webroot_count=$((webroot_count + 1)); shift ;;",
+            "    -w|--webroot-path) webroot_path=\"$2\"; shift 2 ;;",
             "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
             "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
             "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
@@ -3117,6 +3128,8 @@ spec = do
             "test \"$certonly_count\" = 1",
             "test \"$non_interactive_count\" = 1",
             "test \"$agree_tos_count\" = 1",
+            "test \"$webroot_count\" = 1",
+            "test -n \"$webroot_path\"",
             "test \"$http_port\" = 8080",
             "test \"$server_url\" = https://acme-staging.example/directory",
             "test \"$email\" = already-set@example.com",
@@ -3124,6 +3137,7 @@ spec = do
             "if [ -z \"$cert_name\" ]; then",
             "  cert_name=\"${domain%%,*}\"",
             "fi",
+            "mkdir -p \"$webroot_path/.well-known/acme-challenge\"",
             "mkdir -p \"$config_dir/live/$cert_name\"",
             "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
             "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
@@ -3136,6 +3150,7 @@ spec = do
                         [ "certonly",
                           "--non-interactive",
                           "--agree-tos",
+                          "--webroot",
                           "--http-01-port",
                           "8080",
                           "--server",
@@ -3152,6 +3167,273 @@ spec = do
                 certbotConfig
             removePathForcibly stateDirectory
             manualTlsBindPlan `shouldSatisfy` (/= Nothing)
+
+    it "derives the webroot authenticator when only a certbot webroot path is preconfigured" $
+      withManualTlsFiles $ \certificatePath privateKeyPath ->
+        withSystemTempDirectory "harch-web-configured-webroot" $ \configuredWebrootPath ->
+          withCustomFakeCertbotExecutable
+            [ "#!/bin/sh",
+              "set -eu",
+              "config_dir=''",
+              "cert_name=''",
+              "domain=''",
+              "webroot_count=0",
+              "webroot_path=''",
+              "while [ \"$#\" -gt 0 ]; do",
+              "  case \"$1\" in",
+              "    --webroot) webroot_count=$((webroot_count + 1)); shift ;;",
+              "    -w|--webroot-path) webroot_path=\"$2\"; shift 2 ;;",
+              "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+              "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+              "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+              "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+              "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+              "    *) shift ;;",
+              "  esac",
+              "done",
+              "test \"$webroot_count\" = 1",
+              "test \"$webroot_path\" = " <> show configuredWebrootPath,
+              "if [ -z \"$cert_name\" ]; then",
+              "  cert_name=\"${domain%%,*}\"",
+              "fi",
+              "mkdir -p \"$config_dir/live/$cert_name\"",
+              "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+              "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+            ]
+            $ \certbotExecutable -> do
+              let certbotConfig =
+                    CertbotConfig
+                      { certbotExecutable = certbotExecutable,
+                        certbotArguments =
+                          [ "--webroot-path",
+                            Text.pack configuredWebrootPath,
+                            "--cert-name",
+                            "configured-webroot-cert"
+                          ]
+                      }
+              (_, stateDirectory) <-
+                prepareCertbotManualTlsBindPlan
+                  (runtimeAcmePlanWithCertbotConfig certbotConfig)
+                  certbotConfig
+              removePathForcibly stateDirectory
+
+    it "keeps explicit non-webroot certbot authenticators from deriving webroot flags" $
+      withManualTlsFiles $ \certificatePath privateKeyPath ->
+        withCustomFakeCertbotExecutable
+          [ "#!/bin/sh",
+            "set -eu",
+            "config_dir=''",
+            "cert_name=''",
+            "domain=''",
+            "webroot_count=0",
+            "webroot_path_count=0",
+            "while [ \"$#\" -gt 0 ]; do",
+            "  case \"$1\" in",
+            "    --webroot) webroot_count=$((webroot_count + 1)); shift ;;",
+            "    -w|--webroot-path) webroot_path_count=$((webroot_path_count + 1)); shift 2 ;;",
+            "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+            "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+            "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+            "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+            "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "test \"$webroot_count\" = 0",
+            "test \"$webroot_path_count\" = 0",
+            "if [ -z \"$cert_name\" ]; then",
+            "  cert_name=\"${domain%%,*}\"",
+            "fi",
+            "mkdir -p \"$config_dir/live/$cert_name\"",
+            "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+            "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+          ]
+          $ \certbotExecutable -> do
+            let standaloneConfig =
+                  CertbotConfig
+                    { certbotExecutable = certbotExecutable,
+                      certbotArguments =
+                        [ "--authenticator",
+                          "standalone",
+                          "--cert-name",
+                          "standalone-cert"
+                        ]
+                    }
+                dnsConfig =
+                  CertbotConfig
+                    { certbotExecutable = certbotExecutable,
+                      certbotArguments =
+                        [ "--authenticator",
+                          "dns-route53",
+                          "--cert-name",
+                          "dns-cert"
+                        ]
+                    }
+            (_, standaloneStateDirectory) <-
+              prepareCertbotManualTlsBindPlan
+                (runtimeAcmePlanWithCertbotConfig standaloneConfig)
+                standaloneConfig
+            removePathForcibly standaloneStateDirectory
+            (_, dnsStateDirectory) <-
+              prepareCertbotManualTlsBindPlan
+                (runtimeAcmePlanWithCertbotConfig dnsConfig)
+                dnsConfig
+            removePathForcibly dnsStateDirectory
+
+    it "rejects empty and path-traversal certbot challenge tokens" $ do
+      validAcmeHttp01ChallengeToken "" `shouldBe` Nothing
+      validAcmeHttp01ChallengeToken "nested/token" `shouldBe` Nothing
+      validAcmeHttp01ChallengeToken ".." `shouldBe` Nothing
+      validAcmeHttp01ChallengeToken "token..suffix" `shouldBe` Nothing
+      validAcmeHttp01ChallengeToken "loopback-token" `shouldBe` Just "loopback-token"
+
+    it "checks registered certbot webroots for challenge files before they exist" $
+      withManualTlsFiles $ \certificatePath privateKeyPath ->
+        withSystemTempDirectory "harch-web-certbot-marker" $ \markerDirectory ->
+          withCustomFakeCertbotExecutable
+            [ "#!/bin/sh",
+              "set -eu",
+              "config_dir=''",
+              "cert_name=''",
+              "domain=''",
+              "while [ \"$#\" -gt 0 ]; do",
+              "  case \"$1\" in",
+              "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+              "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+              "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+              "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+              "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+              "    *) shift ;;",
+              "  esac",
+              "done",
+              "printf '%s' 'started' > " <> show (markerDirectory </> "started"),
+              "sleep 1",
+              "if [ -z \"$cert_name\" ]; then",
+              "  cert_name=\"${domain%%,*}\"",
+              "fi",
+              "mkdir -p \"$config_dir/live/$cert_name\"",
+              "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+              "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+            ]
+            $ \certbotExecutable -> do
+              prepareResultReference <- newEmptyMVar
+              let certbotConfig = CertbotConfig {certbotExecutable = certbotExecutable, certbotArguments = []}
+                  markerPath = markerDirectory </> "started"
+                  challengeStore = AcmeChallengeStore <$> newMVar []
+                  challengeRequest =
+                    Wai.defaultRequest
+                      { Wai.rawPathInfo = "/.well-known/acme-challenge/loopback-token",
+                        Wai.requestHeaders = [("Host", "loopback.example")]
+                      }
+                  waitForMarker remainingAttempts = do
+                    markerExists <- doesFileExist markerPath
+                    if markerExists
+                      then pure ()
+                      else
+                        if remainingAttempts > 0
+                          then threadDelay 10000 >> waitForMarker (remainingAttempts - 1)
+                          else expectationFailure "expected fake certbot to start before checking the registered webroot"
+              _ <- forkIO $ do
+                result <-
+                  try
+                    ( prepareCertbotManualTlsBindPlan
+                        (runtimeAcmePlanWithCertbotConfig certbotConfig)
+                        certbotConfig
+                    ) ::
+                    IO (Either SomeException (Maybe ManualTlsBindPlan, FilePath))
+                putMVar prepareResultReference result
+              waitForMarker (500 :: Int)
+              challengeStoreValue <- challengeStore
+              challengeResponse <- acmeChallengeResponseForRequest challengeStoreValue challengeRequest
+              isNothing challengeResponse `shouldBe` True
+              prepareResult <- readMVar prepareResultReference
+              case prepareResult of
+                Right (_, cleanupDirectory) -> removePathForcibly cleanupDirectory
+                Left exception -> expectationFailure ("expected fake certbot prepare to succeed: " <> displayException exception)
+
+    it "serves certbot webroot challenge files from the running HTTP listener while certificate acquisition is in progress" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withUnusedLoopbackPort $ \httpsPort ->
+          withManualTlsFiles $ \certificatePath privateKeyPath ->
+            withCustomFakeCertbotExecutable
+              [ "#!/bin/sh",
+                "set -eu",
+                "config_dir=''",
+                "cert_name=''",
+                "domain=''",
+                "webroot_path=''",
+                "while [ \"$#\" -gt 0 ]; do",
+                "  case \"$1\" in",
+                "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+                "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+                "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+                "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+                "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+                "    -w|--webroot-path) webroot_path=\"$2\"; shift 2 ;;",
+                "    *) shift ;;",
+                "  esac",
+                "done",
+                "if [ -z \"$cert_name\" ]; then",
+                "  cert_name=\"${domain%%,*}\"",
+                "fi",
+                "mkdir -p \"$webroot_path/.well-known/acme-challenge\"",
+                "printf '%s' 'loopback-token-response' > \"$webroot_path/.well-known/acme-challenge/loopback-token\"",
+                "sleep 1",
+                "mkdir -p \"$config_dir/live/$cert_name\"",
+                "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+                "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+              ]
+              $ \certbotExecutable ->
+                withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+                  completionReference <- newIORef Nothing
+                  let certbotBackend =
+                        certbotHttp01BackendWithExecutable
+                          certbotExecutable
+                          []
+                      acmeTlsConfig =
+                        serverConfigWithListeners
+                          [ httpRuntimeListener "127.0.0.1" challengePort,
+                            acmeHttpsListenerWithDomainsAndChallengePort challengePort "127.0.0.1" httpsPort ["ops@example.com"] ["loopback.example", "alt.example"] certbotBackend
+                          ]
+                      waitForChallengeResponse remainingAttempts = do
+                        completionResult <- readIORef completionReference
+                        case completionResult of
+                          Just (Left exception) ->
+                            expectationFailure ("expected runServer to remain running, but it failed early: " <> displayException exception)
+                              >> pure ByteString.empty
+                          Just (Right ()) ->
+                            expectationFailure "expected runServer to remain running, but it exited early"
+                              >> pure ByteString.empty
+                          Nothing -> do
+                            responseResult <-
+                              readLoopbackHttpResponseBytesWithHostResult
+                                challengePort
+                                "loopback.example"
+                                "/.well-known/acme-challenge/loopback-token"
+                            case responseResult of
+                              Right responseBytes
+                                | "loopback-token-response" `ByteString.isInfixOf` responseBytes ->
+                                    pure responseBytes
+                              Right _
+                                | remainingAttempts > 0 -> do
+                                    threadDelay 10000
+                                    waitForChallengeResponse (remainingAttempts - 1)
+                              Left _
+                                | remainingAttempts > 0 -> do
+                                    threadDelay 10000
+                                    waitForChallengeResponse (remainingAttempts - 1)
+                              _ ->
+                                expectationFailure "expected runServer to serve certbot webroot challenge files on the HTTP listener"
+                                  >> pure ByteString.empty
+                  serverThreadId <- forkIO $ do
+                    result <- try (runServer outputHandle acmeTlsConfig sampleApplication) :: IO (Either SomeException ())
+                    writeIORef completionReference (Just result)
+                  challengeResponseBytes <- waitForChallengeResponse (500 :: Int)
+                  challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
+                  firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
+                  Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
+                  killThread serverThreadId
+                  waitForServerExit completionReference
 
     it "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \challengePort ->

@@ -58,6 +58,7 @@ module HarchWeb
     acmeCertificateRequestConfig,
     acmeChallengeResponseForRequest,
     acmeHttp01ChallengeToken,
+    validAcmeHttp01ChallengeToken,
     acmeJwkThumbprintBytes,
     application,
     base64urlText,
@@ -913,13 +914,19 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
       let configDirectory = stateDirectory </> "config"
           workDirectory = stateDirectory </> "work"
           logsDirectory = stateDirectory </> "logs"
-      mapM_ (createDirectoryIfMissing True) [configDirectory, workDirectory, logsDirectory]
+          webrootDirectory = stateDirectory </> "webroot"
+      mapM_
+        (createDirectoryIfMissing True)
+        [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
       certificateName <-
         either
           (ioError . userError)
           pure
           (certbotCertificateName runtimeAcmePlan)
-      runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory
+      bracket_
+        (registerCertbotAcmeChallengeWebroot webrootDirectory)
+        (unregisterCertbotAcmeChallengeWebroot webrootDirectory)
+        (runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory)
       let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
           certificatePath = certificateDirectory </> "fullchain.pem"
           privateKeyPath = certificateDirectory </> "privkey.pem"
@@ -936,10 +943,10 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
           stateDirectory
         )
 
-runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> IO ()
-runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory = do
+runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory = do
   let commandArguments =
-        certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory
+        certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory
   processResult <-
     try (readCreateProcessWithExitCode (proc (certbotExecutable certbotConfig) commandArguments) "") ::
       IO (Either IOException (ExitCode, String, String))
@@ -963,12 +970,14 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirect
           <> "\nstderr:\n"
           <> stderrText
 
-certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> [String]
-certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory =
+certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> [String]
+certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory =
   map Text.unpack (certbotCommandArguments certbotConfig)
     <> map Text.unpack (certbotArguments certbotConfig)
     <> certbotNonInteractiveArguments certbotConfig
     <> certbotAgreeTosArguments certbotConfig
+    <> certbotAuthenticatorArguments certbotConfig
+    <> certbotWebrootPathArguments certbotConfig webrootDirectory
     <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
     <> certbotHttp01PortArguments runtimeAcmePlan
     <> certbotDirectoryUrlArguments runtimeAcmePlan
@@ -990,6 +999,17 @@ certbotNonInteractiveArguments certbotConfig =
 certbotAgreeTosArguments :: CertbotConfig -> [String]
 certbotAgreeTosArguments certbotConfig =
   ["--agree-tos" | not (certbotHasFlag "--agree-tos" (certbotArguments certbotConfig))]
+
+certbotAuthenticatorArguments :: CertbotConfig -> [String]
+certbotAuthenticatorArguments certbotConfig =
+  ["--webroot" | certbotNeedsDerivedWebrootAuthenticator (certbotArguments certbotConfig)]
+
+certbotWebrootPathArguments :: CertbotConfig -> FilePath -> [String]
+certbotWebrootPathArguments certbotConfig webrootDirectory =
+  if certbotShouldUseWebroot (certbotArguments certbotConfig)
+    && not (certbotHasOption "-w" (certbotArguments certbotConfig) || certbotHasOption "--webroot-path" (certbotArguments certbotConfig))
+    then ["--webroot-path", webrootDirectory]
+    else []
 
 certbotHttp01PortArguments :: RuntimeAcmeBindPlan -> [String]
 certbotHttp01PortArguments runtimeAcmePlan =
@@ -1038,16 +1058,19 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
 acmeChallengeResponseForRequest :: AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
 acmeChallengeResponseForRequest (AcmeChallengeStore challengeStore) request = do
   challenges <- readMVar challengeStore
-  pure $
-    fmap
-      ( Wai.responseLBS
-          Http.ok200
-          [("Content-Type", "text/plain; charset=utf-8")]
-          . LazyByteString.fromStrict
-          . TextEncoding.encodeUtf8
-          . activeAcmeChallengeResponse
-      )
-      (find (matchesRuntimeAcmeChallenge request) challenges)
+  case fmap
+    ( Wai.responseLBS
+        Http.ok200
+        [("Content-Type", "text/plain; charset=utf-8")]
+        . LazyByteString.fromStrict
+        . TextEncoding.encodeUtf8
+        . activeAcmeChallengeResponse
+    )
+    (find (matchesRuntimeAcmeChallenge request) challenges) of
+    Just challengeResponse ->
+      pure (Just challengeResponse)
+    Nothing ->
+      certbotAcmeChallengeResponseForRequest request
 
 matchesRuntimeAcmeChallenge :: Wai.Request -> ActiveAcmeChallenge -> Bool
 matchesRuntimeAcmeChallenge request challenge =
@@ -1072,6 +1095,56 @@ registerAcmeChallenges (AcmeChallengeStore challengeStore) newChallenges =
 unregisterAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
 unregisterAcmeChallenges (AcmeChallengeStore challengeStore) completedChallenges =
   modifyMVar_ challengeStore (pure . filter (not . (`sameActiveAcmeChallengeAny` completedChallenges)))
+
+{-# NOINLINE certbotAcmeChallengeWebrootDirectories #-}
+certbotAcmeChallengeWebrootDirectories :: MVar [FilePath]
+certbotAcmeChallengeWebrootDirectories =
+  unsafePerformIO (newMVar [])
+
+registerCertbotAcmeChallengeWebroot :: FilePath -> IO ()
+registerCertbotAcmeChallengeWebroot webrootDirectory =
+  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . (webrootDirectory :))
+
+unregisterCertbotAcmeChallengeWebroot :: FilePath -> IO ()
+unregisterCertbotAcmeChallengeWebroot webrootDirectory =
+  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . filter (/= webrootDirectory))
+
+certbotAcmeChallengeResponseForRequest :: Wai.Request -> IO (Maybe Wai.Response)
+certbotAcmeChallengeResponseForRequest request =
+  case acmeHttp01ChallengeToken request >>= validAcmeHttp01ChallengeToken of
+    Nothing ->
+      pure Nothing
+    Just challengeToken -> do
+      webrootDirectories <- readMVar certbotAcmeChallengeWebrootDirectories
+      maybeChallengeFile <-
+        firstExistingFile
+          [ webrootDirectory </> ".well-known" </> "acme-challenge" </> Text.unpack challengeToken
+          | webrootDirectory <- webrootDirectories
+          ]
+      pure
+        ( fmap
+            (\challengeFile -> Wai.responseFile Http.ok200 [("Content-Type", "text/plain; charset=utf-8")] challengeFile Nothing)
+            maybeChallengeFile
+        )
+
+validAcmeHttp01ChallengeToken :: Text -> Maybe Text
+validAcmeHttp01ChallengeToken challengeToken
+  | Text.null challengeToken = Nothing
+  | Text.any (\character -> character == '/' || character == '\\') challengeToken = Nothing
+  | challengeToken == "." || challengeToken == ".." = Nothing
+  | Text.isInfixOf ".." challengeToken = Nothing
+validAcmeHttp01ChallengeToken challengeToken = Just challengeToken
+
+firstExistingFile :: [FilePath] -> IO (Maybe FilePath)
+firstExistingFile candidatePaths =
+  case candidatePaths of
+    [] ->
+      pure Nothing
+    candidatePath : remainingPaths -> do
+      candidateExists <- doesFileExist candidatePath
+      if candidateExists
+        then pure (Just candidatePath)
+        else firstExistingFile remainingPaths
 
 sameActiveAcmeChallengeAny :: ActiveAcmeChallenge -> [ActiveAcmeChallenge] -> Bool
 sameActiveAcmeChallengeAny candidate =
@@ -1129,6 +1202,48 @@ certbotHasOption optionName =
 certbotHasFlag :: Text -> [Text] -> Bool
 certbotHasFlag =
   elem
+
+certbotNeedsDerivedWebrootAuthenticator :: [Text] -> Bool
+certbotNeedsDerivedWebrootAuthenticator configuredArguments =
+  not (certbotHasExplicitAuthenticator configuredArguments)
+    || (certbotHasWebrootPathOption configuredArguments && not (certbotUsesWebrootFlagOrAuthenticator configuredArguments))
+
+certbotShouldUseWebroot :: [Text] -> Bool
+certbotShouldUseWebroot configuredArguments =
+  certbotNeedsDerivedWebrootAuthenticator configuredArguments
+    || certbotUsesWebroot configuredArguments
+
+certbotHasExplicitAuthenticator :: [Text] -> Bool
+certbotHasExplicitAuthenticator configuredArguments =
+  certbotUsesWebroot configuredArguments
+    || certbotHasFlag "--standalone" configuredArguments
+    || certbotHasFlag "--manual" configuredArguments
+    || certbotHasFlag "--apache" configuredArguments
+    || certbotHasFlag "--nginx" configuredArguments
+    || any ("--dns-" `Text.isPrefixOf`) configuredArguments
+    || any
+      (`elem` ["standalone", "manual", "apache", "nginx"])
+      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
+    || any
+      ("dns-" `Text.isPrefixOf`)
+      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
+
+certbotUsesWebroot :: [Text] -> Bool
+certbotUsesWebroot configuredArguments =
+  certbotUsesWebrootFlagOrAuthenticator configuredArguments
+    || certbotHasWebrootPathOption configuredArguments
+
+certbotUsesWebrootFlagOrAuthenticator :: [Text] -> Bool
+certbotUsesWebrootFlagOrAuthenticator configuredArguments =
+  certbotHasFlag "--webroot" configuredArguments
+    || elem
+      "webroot"
+      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
+
+certbotHasWebrootPathOption :: [Text] -> Bool
+certbotHasWebrootPathOption configuredArguments =
+  certbotHasOption "-w" configuredArguments
+    || certbotHasOption "--webroot-path" configuredArguments
 
 data AcmeDirectoryResponse = AcmeDirectoryResponse
   { acmeNewNonceUrl :: Text,
