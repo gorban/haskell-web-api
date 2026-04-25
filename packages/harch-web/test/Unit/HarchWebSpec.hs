@@ -328,6 +328,22 @@ certbotHttp01BackendWithExecutable executablePath certbotArguments =
         certbotArguments = certbotArguments
       }
 
+runtimeAcmePlanWithCertbotConfig :: CertbotConfig -> RuntimeAcmeBindPlan
+runtimeAcmePlanWithCertbotConfig certbotConfig =
+  RuntimeAcmeBindPlan
+    { runtimeAcmeEndpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5443},
+      runtimeAcmeTlsEndpoint = Just ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 5443},
+      runtimeAcmeListenerConfig =
+        AcmeConfig
+          { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+            acmeContactEmails = ["ops@example.com"],
+            acmeDomains = ["example.com", "www.example.com"],
+            acmeHttp01Port = 80,
+            acmeCertificateDirectory = Just ".tls/example.com",
+            acmeChallengeBackend = CertbotHttp01 certbotConfig
+          }
+    }
+
 withCustomFakeCertbotExecutable :: [String] -> (FilePath -> IO a) -> IO a
 withCustomFakeCertbotExecutable scriptLines action =
   withSystemTempDirectory "fake-certbot" $ \tempDirectory -> do
@@ -3014,6 +3030,128 @@ spec = do
                   ]
           runServer outputHandle runtimeConfig sampleApplication
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Unsupported runtime listener startup plan: ACME listener on 127.0.0.1:" <> show httpPort <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates.)")
+
+    it "derives certonly plus non-interactive certbot defaults when certbot args are omitted" $
+      withManualTlsFiles $ \certificatePath privateKeyPath ->
+        withCustomFakeCertbotExecutable
+          [ "#!/bin/sh",
+            "set -eu",
+            "config_dir=''",
+            "cert_name=''",
+            "domain=''",
+            "command=''",
+            "has_non_interactive=0",
+            "has_agree_tos=0",
+            "http_port=''",
+            "server_url=''",
+            "email=''",
+            "while [ \"$#\" -gt 0 ]; do",
+            "  case \"$1\" in",
+            "    certonly) command='certonly'; shift ;;",
+            "    --non-interactive|-n) has_non_interactive=1; shift ;;",
+            "    --agree-tos) has_agree_tos=1; shift ;;",
+            "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+            "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+            "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+            "    --http-01-port) http_port=\"$2\"; shift 2 ;;",
+            "    --server) server_url=\"$2\"; shift 2 ;;",
+            "    --email|-m) email=\"$2\"; shift 2 ;;",
+            "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+            "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "test \"$command\" = certonly",
+            "test \"$has_non_interactive\" = 1",
+            "test \"$has_agree_tos\" = 1",
+            "test \"$http_port\" = 80",
+            "test \"$server_url\" = https://acme-v02.api.letsencrypt.org/directory",
+            "test \"$email\" = ops@example.com",
+            "test \"$domain\" = example.com,www.example.com",
+            "if [ -z \"$cert_name\" ]; then",
+            "  cert_name=\"${domain%%,*}\"",
+            "fi",
+            "mkdir -p \"$config_dir/live/$cert_name\"",
+            "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+            "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+          ]
+          $ \certbotExecutable -> do
+            let certbotConfig = CertbotConfig {certbotExecutable = certbotExecutable, certbotArguments = []}
+            (manualTlsBindPlan, stateDirectory) <-
+              prepareCertbotManualTlsBindPlan
+                (runtimeAcmePlanWithCertbotConfig certbotConfig)
+                certbotConfig
+            removePathForcibly stateDirectory
+            manualTlsBindPlan `shouldSatisfy` (/= Nothing)
+
+    it "does not duplicate explicit certbot command and agreement flags when already configured" $
+      withManualTlsFiles $ \certificatePath privateKeyPath ->
+        withCustomFakeCertbotExecutable
+          [ "#!/bin/sh",
+            "set -eu",
+            "config_dir=''",
+            "cert_name=''",
+            "domain=''",
+            "certonly_count=0",
+            "non_interactive_count=0",
+            "agree_tos_count=0",
+            "http_port=''",
+            "server_url=''",
+            "email=''",
+            "while [ \"$#\" -gt 0 ]; do",
+            "  case \"$1\" in",
+            "    certonly) certonly_count=$((certonly_count + 1)); shift ;;",
+            "    --non-interactive|-n) non_interactive_count=$((non_interactive_count + 1)); shift ;;",
+            "    --agree-tos) agree_tos_count=$((agree_tos_count + 1)); shift ;;",
+            "    --config-dir) config_dir=\"$2\"; shift 2 ;;",
+            "    --cert-name) cert_name=\"$2\"; shift 2 ;;",
+            "    --cert-name=*) cert_name=\"${1#--cert-name=}\"; shift ;;",
+            "    --http-01-port) http_port=\"$2\"; shift 2 ;;",
+            "    --server) server_url=\"$2\"; shift 2 ;;",
+            "    --email|-m) email=\"$2\"; shift 2 ;;",
+            "    -d|--domain|--domains) domain=\"$2\"; shift 2 ;;",
+            "    --domains=*) domain=\"${1#--domains=}\"; shift ;;",
+            "    *) shift ;;",
+            "  esac",
+            "done",
+            "test \"$certonly_count\" = 1",
+            "test \"$non_interactive_count\" = 1",
+            "test \"$agree_tos_count\" = 1",
+            "test \"$http_port\" = 8080",
+            "test \"$server_url\" = https://acme-staging.example/directory",
+            "test \"$email\" = already-set@example.com",
+            "test \"$domain\" = configured.example",
+            "if [ -z \"$cert_name\" ]; then",
+            "  cert_name=\"${domain%%,*}\"",
+            "fi",
+            "mkdir -p \"$config_dir/live/$cert_name\"",
+            "cp " <> show certificatePath <> " \"$config_dir/live/$cert_name/fullchain.pem\"",
+            "cp " <> show privateKeyPath <> " \"$config_dir/live/$cert_name/privkey.pem\""
+          ]
+          $ \certbotExecutable -> do
+            let certbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = certbotExecutable,
+                      certbotArguments =
+                        [ "certonly",
+                          "--non-interactive",
+                          "--agree-tos",
+                          "--http-01-port",
+                          "8080",
+                          "--server",
+                          "https://acme-staging.example/directory",
+                          "--email",
+                          "already-set@example.com",
+                          "--domains",
+                          "configured.example"
+                        ]
+                    }
+            (manualTlsBindPlan, stateDirectory) <-
+              prepareCertbotManualTlsBindPlan
+                (runtimeAcmePlanWithCertbotConfig certbotConfig)
+                certbotConfig
+            removePathForcibly stateDirectory
+            manualTlsBindPlan `shouldSatisfy` (/= Nothing)
 
     it "starts certbot-backed ACME listeners on the declared http-01 port and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \challengePort ->

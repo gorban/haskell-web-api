@@ -121,7 +121,7 @@ understands the following values:
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
 | `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override for the `certbot-http01` backend. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
-| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. Runtime certbot startup still honors explicit `--cert-name` / `-d` / `--domains` / `--http-01-port` values here, but it can also derive domains from `LISTENER_<n>_ACME_DOMAINS`. | (`unset`) |
+| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. When unset, runtime startup derives a working `certonly --non-interactive --agree-tos` invocation plus `--server` / `--email` / `--domains` / `--http-01-port` from the ACME config. Explicit values here still win for `--cert-name` / `-d` / `--domains` / `--http-01-port` and other certbot flags. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
 | `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
@@ -225,7 +225,6 @@ LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
 LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
 LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_2_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--http-01-port,80
 
 # Listener 3: HTTPS that reuses ACME-published certificate files
 LISTENER_3_HOST=0.0.0.0

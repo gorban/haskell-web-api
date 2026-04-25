@@ -965,12 +965,31 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirect
 
 certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> [String]
 certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory =
-  map Text.unpack (certbotArguments certbotConfig)
+  map Text.unpack (certbotCommandArguments certbotConfig)
+    <> map Text.unpack (certbotArguments certbotConfig)
+    <> certbotNonInteractiveArguments certbotConfig
+    <> certbotAgreeTosArguments certbotConfig
     <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
     <> certbotHttp01PortArguments runtimeAcmePlan
     <> certbotDirectoryUrlArguments runtimeAcmePlan
     <> certbotContactEmailArguments runtimeAcmePlan certbotConfig
     <> certbotDomainArguments runtimeAcmePlan certbotConfig
+
+certbotCommandArguments :: CertbotConfig -> [Text]
+certbotCommandArguments certbotConfig =
+  [ "certonly"
+  | "certonly" `notElem` certbotArguments certbotConfig
+  ]
+
+certbotNonInteractiveArguments :: CertbotConfig -> [String]
+certbotNonInteractiveArguments certbotConfig =
+  [ "--non-interactive"
+  | not (any (`certbotHasFlag` certbotArguments certbotConfig) ["--non-interactive", "-n"])
+  ]
+
+certbotAgreeTosArguments :: CertbotConfig -> [String]
+certbotAgreeTosArguments certbotConfig =
+  ["--agree-tos" | not (certbotHasFlag "--agree-tos" (certbotArguments certbotConfig))]
 
 certbotHttp01PortArguments :: RuntimeAcmeBindPlan -> [String]
 certbotHttp01PortArguments runtimeAcmePlan =
@@ -1106,6 +1125,10 @@ certbotOptionValues optionName arguments =
 certbotHasOption :: Text -> [Text] -> Bool
 certbotHasOption optionName =
   not . null . certbotOptionValues optionName
+
+certbotHasFlag :: Text -> [Text] -> Bool
+certbotHasFlag =
+  elem
 
 data AcmeDirectoryResponse = AcmeDirectoryResponse
   { acmeNewNonceUrl :: Text,

@@ -984,7 +984,6 @@ LISTENER_0_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/direc
 LISTENER_0_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_0_ACME_DOMAINS=example.com,www.example.com
 LISTENER_0_ACME_CHALLENGE_BACKEND=certbot-http01
-LISTENER_0_ACME_CERTBOT_ARGUMENTS=certonly,--non-interactive,--agree-tos,--email,ops@example.com,--staging,--http-01-port,80
 
 # Listener 1: Shared HTTPS listener that waits for the ACME directory
 LISTENER_1_HOST=0.0.0.0
@@ -1011,7 +1010,10 @@ than the default `certbot` on `PATH`.
 
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
-`--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
+`--domains`, and when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` is unset it also derives a working
+`certonly --non-interactive --agree-tos` invocation plus `--server`, `--email`, and `--http-01-port`
+from the ACME listener config. The native in-process backend uses the same domain list for its ACME
+order identifiers and CSR.
 When `LISTENER_<n>_ACME_DIRECTORY_URL` is omitted, runtime config defaults it to the production Let's
 Encrypt directory (`https://acme-v02.api.letsencrypt.org/directory`), so you only need to set it
 explicitly for staging or another ACME server.
