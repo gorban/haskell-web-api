@@ -978,6 +978,8 @@ LISTENER_0_PORT=80
 LISTENER_0_SCHEME=http
 
 # Listener 0 also publishes ACME certificates for shared HTTPS listeners
+# Omit LISTENER_0_ACME_DIRECTORY_URL to use the production Let's Encrypt directory.
+# Keep it explicit here because this example intentionally uses staging.
 LISTENER_0_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 LISTENER_0_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_0_ACME_DOMAINS=example.com,www.example.com
@@ -1010,6 +1012,9 @@ than the default `certbot` on `PATH`.
 Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME order to cover. The
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
 `--domains`, and the native in-process backend uses the same list for its ACME order identifiers and CSR.
+When `LISTENER_<n>_ACME_DIRECTORY_URL` is omitted, runtime config defaults it to the production Let's
+Encrypt directory (`https://acme-v02.api.letsencrypt.org/directory`), so you only need to set it
+explicitly for staging or another ACME server.
 When `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` is set, the runtime copies the issued `fullchain.pem` and
 `privkey.pem` into that directory so a separate `LISTENER_<m>_TLS_SOURCE=shared-wait` HTTPS listener can reuse
 the same certificate material. When it is unset, runtime config now defaults ACME publication to

@@ -158,6 +158,9 @@ committedRuntimeDefaults =
 defaultLocalTracingEndpoint :: Text
 defaultLocalTracingEndpoint = "http://127.0.0.1:4318/v1/traces"
 
+defaultAcmeDirectoryUrl :: Text
+defaultAcmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory"
+
 defaultCertbotExecutable :: FilePath
 defaultCertbotExecutable = "certbot"
 
@@ -427,7 +430,10 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     parseAcmeConfig listenerIndex parsedPort =
       do
-        parsedDirectoryUrl <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
+        let parsedDirectoryUrl =
+              fromMaybe
+                defaultAcmeDirectoryUrl
+                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL")
         parsedContactEmails <-
           parseDelimitedTexts
             (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")

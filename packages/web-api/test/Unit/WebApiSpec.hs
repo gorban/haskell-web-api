@@ -1071,13 +1071,12 @@ spec = do
         []
         `shouldBe` Left (InvalidConfigValue "LISTENER_0_TLS_SHARED_WAIT_SECONDS" "-1")
 
-    it "defaults redirects on for HTTP ACME producers plus shared HTTPS listener plans" $
+    it "defaults production ACME directory URLs and redirects on for HTTP ACME producers plus shared HTTPS listener plans" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
           ("LISTENER_0_HOST", "127.0.0.1"),
           ("LISTENER_0_PORT", "8080"),
           ("LISTENER_0_SCHEME", "http"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
           ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01"),
@@ -1101,7 +1100,7 @@ spec = do
                       listenerAcme =
                         Just
                           AcmeConfig
-                            { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
+                            { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
                               acmeContactEmails = ["ops@example.com"],
                               acmeDomains = ["example.com", "www.example.com"],
                               acmeHttp01Port = 8080,
@@ -1668,7 +1667,6 @@ spec = do
           ("LISTENER_0_PORT", "5001"),
           ("LISTENER_0_SCHEME", "https"),
           ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
           ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
@@ -1724,7 +1722,6 @@ spec = do
           ("LISTENER_0_PORT", "5001"),
           ("LISTENER_0_SCHEME", "https"),
           ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
           ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01")
@@ -1774,7 +1771,6 @@ spec = do
           ("LISTENER_0_PORT", "5001"),
           ("LISTENER_0_SCHEME", "https"),
           ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01")
         ]

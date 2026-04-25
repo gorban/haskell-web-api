@@ -115,7 +115,7 @@ understands the following values:
 | `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private key file path for manual TLS. | (`unset`) |
 | `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Certificate directory for `shared`, `shared-wait`, and `shared-fail-fast` TLS. Runtime HTTPS listeners load `<dir>/fullchain.pem` and `<dir>/privkey.pem`. When unset and exactly one ACME listener is configured, shared listeners reuse that ACME listener's effective certificate directory. | (`listener-aware`) |
 | `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
-| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for listeners that publish ACME-managed certificate files. Prefer setting this on the HTTP listener that serves `http-01` challenges. | (`unset`) |
+| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for listeners that publish ACME-managed certificate files. When unset, runtime config defaults it to the production Let's Encrypt directory. Set it explicitly to use staging or another ACME server. Prefer this on the HTTP listener that serves `http-01` challenges. | (`https://acme-v02.api.letsencrypt.org/directory`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
 | `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
@@ -219,7 +219,8 @@ LISTENER_1_TLS_PRIVATE_KEY_FILE=/etc/web-api/tls/privkey.pem
 LISTENER_2_HOST=0.0.0.0
 LISTENER_2_PORT=80
 LISTENER_2_SCHEME=http
-LISTENER_2_ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
+# Omit LISTENER_2_ACME_DIRECTORY_URL to use the production Let's Encrypt directory.
+# Set it explicitly only for staging or another ACME server.
 LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
 LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
