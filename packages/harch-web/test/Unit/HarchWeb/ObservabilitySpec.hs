@@ -275,7 +275,7 @@ spec = do
           }
 
   describe "buildRequestObservability" $
-    it "keeps unmatched request paths in the span display name while retaining the synthetic not-found route attribute" $
+    it "groups unmatched request spans by the synthetic not-found route while retaining the concrete URL path attribute" $
       Observability.buildRequestObservability
         "GET"
         "http"
@@ -287,7 +287,7 @@ spec = do
         `shouldBe` Observability.RequestObservability
           { Observability.observabilityRequestSpan =
               Observability.RequestSpan
-                { Observability.requestSpanDisplayName = "GET /favicon.ico",
+                { Observability.requestSpanDisplayName = "GET /404",
                   Observability.requestSpanAttributes =
                     [ Observability.ObservabilityAttribute
                         { Observability.attributeName = "http.request.method",

@@ -1222,10 +1222,14 @@ machine.
 4. Confirm the request reached the runtime:
 
    - the app or proxy logs now show the incoming request,
-   - Jaeger has a new request span for `/api/status`,
+   - Jaeger has a new request span named `GET /api/status`,
    - `client.address` matches the external client IP (or the first `X-Forwarded-For` value when a proxy is
      in front),
    - `network.peer.address` still shows the immediate peer on the last hop into `haskell-web-api`.
+
+Jaeger operations use the stable `http.route` value for span names, so unmatched requests group under
+synthetic not-found routes such as `GET /404` or `GET /api/404`; inspect the `url.path` span attribute
+when you need the concrete unmatched path.
 
 If the request does not appear, re-check the firewall and router steps above first, then confirm the test
 device is really off the LAN (for example, disable Wi-Fi on the phone before retrying).
