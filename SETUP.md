@@ -957,12 +957,10 @@ If you do not want the rootful host-network path above, the remaining low-port o
 
 ## Local ACME runtime exercise
 
-Both ACME backends now run through the real runtime path: `web-api` parses the environment into an
-ACME-backed listener config, `harch-web` translates that into an ACME startup plan, and `HarchWeb.runServer`
-can either invoke certbot or complete the `in-process-http01` flow before starting the HTTPS listener.
-The tracked runtime container image includes both `certbot` and `openssl`; for local source runs outside
-that container, install `certbot` only when you select `certbot-http01`, and keep `openssl` available
-for the native backend's RSA key generation, CSR generation, and RS256 signing.
+ACME runtime startup is certbot-backed: `web-api` parses the environment into an ACME-backed listener
+config, `harch-web` translates that into an ACME startup plan, and `HarchWeb.runServer` invokes certbot
+before starting the HTTPS listener. The tracked runtime container image includes `certbot`; for local
+source runs outside that container, install `certbot` only when you actually plan to run ACME issuance.
 
 When a config includes both the plain HTTP challenge listener and an HTTPS listener, leaving
 `REDIRECT_HTTP_TO_HTTPS` unset now defaults non-ACME traffic to HTTPS redirects while keeping
@@ -983,7 +981,6 @@ LISTENER_0_SCHEME=http
 LISTENER_0_ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
 LISTENER_0_ACME_CONTACT_EMAILS=ops@example.com
 LISTENER_0_ACME_DOMAINS=example.com,www.example.com
-LISTENER_0_ACME_CHALLENGE_BACKEND=certbot-http01
 
 # Listener 1: Shared HTTPS listener that waits for the ACME directory
 LISTENER_1_HOST=0.0.0.0
@@ -1064,12 +1061,10 @@ Then exercise the ACME path in four layers:
 
 If you also run the executable with that `./.env.local` and the challenge listener is reachable on the
 declared `http-01` port, it should now start both listeners instead of stopping at the runtime boundary.
-To exercise the native backend directly, switch `LISTENER_1_ACME_CHALLENGE_BACKEND` to
-`in-process-http01`, remove the certbot-specific variables, and keep `openssl` installed on the machine or
-in the container image. For real `http-01` testing on port `80`, reuse the same listener block together
-with the privileged-port guidance above. If the rootful Podman container logs `Permission denied` for
-`/app/.env.local` or mounted certificate paths on an SELinux host, relabel those bind mounts with `:Z`
-(or `:z` when the same content must be shared across multiple containers).
+For real `http-01` testing on port `80`, reuse the same listener block together with the privileged-port
+guidance above. If the rootful Podman container logs `Permission denied` for `/app/.env.local` or mounted
+certificate paths on an SELinux host, relabel those bind mounts with `:Z` (or `:z` when the same content
+must be shared across multiple containers).
 
 ## Request Context In Logs And Traces
 

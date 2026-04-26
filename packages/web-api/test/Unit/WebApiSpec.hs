@@ -40,7 +40,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -827,8 +827,7 @@ spec = do
           ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
           ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_1_ACME_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs"),
-          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+          ("LISTENER_1_ACME_CERTIFICATE_DIRECTORY", "/var/lib/web-api/shared-certs")
         ]
         []
         []
@@ -866,7 +865,11 @@ spec = do
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just "/var/lib/web-api/shared-certs",
-                                      acmeChallengeBackend = InProcessHttp01
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -888,8 +891,7 @@ spec = do
           ("LISTENER_1_TLS_SOURCE", "acme"),
           ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
           ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01")
+          ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com")
         ]
         []
         []
@@ -927,7 +929,11 @@ spec = do
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend = InProcessHttp01
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -943,7 +949,6 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
           ("LISTENER_0_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--cert-name,prod/example")
         ]
         []
@@ -967,12 +972,11 @@ spec = do
                                       acmeDomains = [],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/prod/example",
-                                      acmeChallengeBackend =
-                                        CertbotHttp01
-                                          CertbotConfig
-                                            { certbotExecutable = "certbot",
-                                              certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
-                                            }
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = ["certonly", "--webroot", "--cert-name", "prod/example"]
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -989,7 +993,6 @@ spec = do
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "one.example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01"),
           ("LISTENER_1_HOST", "127.0.0.1"),
           ("LISTENER_1_PORT", "5444"),
           ("LISTENER_1_SCHEME", "https"),
@@ -997,7 +1000,6 @@ spec = do
           ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_1_ACME_DOMAINS", "two.example.com"),
-          ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01"),
           ("LISTENER_2_HOST", "127.0.0.1"),
           ("LISTENER_2_PORT", "5445"),
           ("LISTENER_2_SCHEME", "https"),
@@ -1094,7 +1096,6 @@ spec = do
           ("LISTENER_0_SCHEME", "http"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01"),
           ("LISTENER_1_HOST", "127.0.0.1"),
           ("LISTENER_1_PORT", "5443"),
           ("LISTENER_1_SCHEME", "https"),
@@ -1120,7 +1121,11 @@ spec = do
                               acmeDomains = ["example.com", "www.example.com"],
                               acmeHttp01Port = 8080,
                               acmeCertificateDirectory = Just ".tls/example.com",
-                              acmeChallengeBackend = InProcessHttp01
+                              acmeCertbotConfig =
+                                CertbotConfig
+                                  { certbotExecutable = "certbot",
+                                    certbotArguments = []
+                                  }
                             }
                     },
                   ListenerConfig
@@ -1166,7 +1171,6 @@ spec = do
               ("LISTENER_1_ACME_DIRECTORY_URL", "https://acme-staging-v02.api.letsencrypt.org/directory"),
               ("LISTENER_1_ACME_CONTACT_EMAILS", "ops@example.com,alerts@example.com"),
               ("LISTENER_1_ACME_DOMAINS", "example.com,www.example.com"),
-              ("LISTENER_1_ACME_CHALLENGE_BACKEND", "in-process-http01"),
               ("LISTENER_2_HOST", "0.0.0.0"),
               ("LISTENER_2_PORT", "5445"),
               ("LISTENER_2_SCHEME", "https"),
@@ -1174,7 +1178,6 @@ spec = do
               ("LISTENER_2_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
               ("LISTENER_2_ACME_CONTACT_EMAILS", "ops@example.com"),
               ("LISTENER_2_ACME_DOMAINS", "example.com"),
-              ("LISTENER_2_ACME_CHALLENGE_BACKEND", "certbot-http01"),
               ("LISTENER_2_ACME_CERTBOT_ARGUMENTS", "certonly,--webroot,--agree-tos")
             ]
       parseRuntimeAppConfig committedDefaults [] []
@@ -1212,7 +1215,11 @@ spec = do
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend = InProcessHttp01
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -1232,12 +1239,11 @@ spec = do
                                       acmeDomains = ["example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend =
-                                        CertbotHttp01
-                                          CertbotConfig
-                                            { certbotExecutable = "certbot",
-                                              certbotArguments = ["certonly", "--webroot", "--agree-tos"]
-                                            }
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = ["certonly", "--webroot", "--agree-tos"]
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -1713,8 +1719,7 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", ""),
-          ("LISTENER_0_ACME_DOMAINS", ""),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")
+          ("LISTENER_0_ACME_DOMAINS", "")
         ]
         []
         []
@@ -1727,8 +1732,7 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_DOMAINS", ""),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")
+          ("LISTENER_0_ACME_DOMAINS", "")
         ]
         []
         []
@@ -1754,7 +1758,6 @@ spec = do
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
           ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01"),
           ("LISTENER_0_ACME_CERTBOT_EXECUTABLE", "certbot")
         ]
         []
@@ -1778,12 +1781,11 @@ spec = do
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend =
-                                        CertbotHttp01
-                                          CertbotConfig
-                                            { certbotExecutable = "certbot",
-                                              certbotArguments = []
-                                            }
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -1809,8 +1811,7 @@ spec = do
           ("LISTENER_0_SCHEME", "https"),
           ("LISTENER_0_TLS_SOURCE", "acme"),
           ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "in-process-http01")
+          ("LISTENER_0_ACME_DOMAINS", "example.com,www.example.com")
         ]
         []
         []
@@ -1833,7 +1834,11 @@ spec = do
                                       acmeDomains = ["example.com", "www.example.com"],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/example.com",
-                                      acmeChallengeBackend = InProcessHttp01
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -1858,8 +1863,7 @@ spec = do
           ("LISTENER_0_PORT", "5001"),
           ("LISTENER_0_SCHEME", "https"),
           ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "certbot-http01")
+          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com")
         ]
         []
         []
@@ -1882,12 +1886,11 @@ spec = do
                                       acmeDomains = [],
                                       acmeHttp01Port = 80,
                                       acmeCertificateDirectory = Just ".tls/listener-0",
-                                      acmeChallengeBackend =
-                                        CertbotHttp01
-                                          CertbotConfig
-                                            { certbotExecutable = "certbot",
-                                              certbotArguments = []
-                                            }
+                                      acmeCertbotConfig =
+                                        CertbotConfig
+                                          { certbotExecutable = "certbot",
+                                            certbotArguments = []
+                                          }
                                     }
                             },
                       listenerAcme = Nothing
@@ -4477,7 +4480,7 @@ spec = do
                   acmeDomains = ["example.com", "www.example.com"],
                   acmeHttp01Port = 80,
                   acmeCertificateDirectory = Nothing,
-                  acmeChallengeBackend = CertbotHttp01 certbotConfig
+                  acmeCertbotConfig = certbotConfig
                 }
           exporter =
             OtlpExporter
@@ -4489,7 +4492,7 @@ spec = do
       show sharedCertificateSource
         `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
       show tlsSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
+        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
       show exporter
         `shouldBe` "OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}"
 
@@ -4506,7 +4509,11 @@ spec = do
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
                 acmeCertificateDirectory = Nothing,
-                acmeChallengeBackend = InProcessHttp01
+                acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = []
+                    }
               }
           sharedCertificateSource =
             SharedCertificateFiles
@@ -4601,7 +4608,11 @@ spec = do
       acmeDomains inProcessAcmeConfig `shouldBe` ["example.com", "www.example.com"]
       acmeHttp01Port inProcessAcmeConfig `shouldBe` 80
       acmeCertificateDirectory inProcessAcmeConfig `shouldBe` Nothing
-      acmeChallengeBackend inProcessAcmeConfig `shouldBe` InProcessHttp01
+      acmeCertbotConfig inProcessAcmeConfig
+        `shouldBe` CertbotConfig
+          { certbotExecutable = "certbot",
+            certbotArguments = []
+          }
       case sharedCertificateSource of
         SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
           sharedDirectory `shouldBe` "/var/lib/web-api/shared-certs"
@@ -4665,7 +4676,7 @@ spec = do
                   acmeDomains = ["example.com", "www.example.com"],
                   acmeHttp01Port = 80,
                   acmeCertificateDirectory = Nothing,
-                  acmeChallengeBackend = CertbotHttp01 certbotConfig
+                  acmeCertbotConfig = certbotConfig
                 }
           sharedCertificateSource =
             SharedCertificateFiles
@@ -4716,8 +4727,7 @@ spec = do
       Http `shouldBe` Http
       Https `shouldBe` Https
       certbotConfig `shouldBe` certbotConfig
-      InProcessHttp01 `shouldBe` InProcessHttp01
-      CertbotHttp01 certbotConfig `shouldBe` CertbotHttp01 certbotConfig
+      certbotConfig `shouldBe` certbotConfig
       TlsConfig {certificateSource = manualCertificateSource}
         `shouldBe` TlsConfig {certificateSource = manualCertificateSource}
       sharedCertificateSource `shouldBe` sharedCertificateSource
@@ -4738,9 +4748,8 @@ spec = do
       NotFoundPage notFoundPageModel `shouldBe` NotFoundPage notFoundPageModel
       show certbotConfig
         `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
-      show InProcessHttp01 `shouldBe` "InProcessHttp01"
-      show (CertbotHttp01 certbotConfig)
-        `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
+      show certbotConfig
+        `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
       show
         AcmeConfig
           { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
@@ -4748,11 +4757,11 @@ spec = do
             acmeDomains = ["example.com", "www.example.com"],
             acmeHttp01Port = 80,
             acmeCertificateDirectory = Nothing,
-            acmeChallengeBackend = CertbotHttp01 certbotConfig
+            acmeCertbotConfig = certbotConfig
           }
-        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
+        `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}"
       show acmeCertificateSource
-        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})"
+        `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
       show (TlsConfig {certificateSource = manualCertificateSource})
         `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
       show sharedCertificateSource
@@ -4854,7 +4863,7 @@ spec = do
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
                 acmeCertificateDirectory = Nothing,
-                acmeChallengeBackend = CertbotHttp01 certbotConfig
+                acmeCertbotConfig = certbotConfig
               }
           otherAcmeConfig =
             AcmeConfig
@@ -4863,7 +4872,7 @@ spec = do
                 acmeDomains = ["staging.example.com"],
                 acmeHttp01Port = 80,
                 acmeCertificateDirectory = Just "/var/lib/web-api/staging-certs",
-                acmeChallengeBackend = InProcessHttp01
+                acmeCertbotConfig = otherCertbotConfig
               }
           manualCertificateSource =
             ManualCertificateFiles
@@ -5018,7 +5027,7 @@ spec = do
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
                 acmeCertificateDirectory = Nothing,
-                acmeChallengeBackend = CertbotHttp01 certbotConfig
+                acmeCertbotConfig = certbotConfig
               }
           manualCertificateSource =
             ManualCertificateFiles
@@ -5105,7 +5114,7 @@ spec = do
       show StatusApiRoute `shouldBe` "StatusApiRoute"
       show NotFoundRoute `shouldBe` "NotFoundRoute"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
-      shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
+      shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
       shouldBeParenthesized (showsPrec 11 manualCertificateSource "")
       shouldBeParenthesized (showsPrec 11 acmeCertificateSource "")
@@ -5140,7 +5149,7 @@ spec = do
                 acmeDomains = ["example.com", "www.example.com"],
                 acmeHttp01Port = 80,
                 acmeCertificateDirectory = Nothing,
-                acmeChallengeBackend = CertbotHttp01 certbotConfig
+                acmeCertbotConfig = certbotConfig
               }
           manualCertificateSource =
             ManualCertificateFiles
@@ -5221,19 +5230,18 @@ spec = do
                 notFoundPrimaryAction = callToAction
               }
       Http `shouldNotBe` Https
-      InProcessHttp01 `shouldNotBe` CertbotHttp01 certbotConfig
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
-      show [InProcessHttp01, CertbotHttp01 certbotConfig]
-        `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
+      show [certbotConfig]
+        `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig]
-        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
+        `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, acmeCertificateSource]
-        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
+        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
       show [tlsConfig]
-        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})}]"
+        `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})}]"
       show [listenerConfig]
-        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
+        `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
         `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "

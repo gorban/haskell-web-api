@@ -117,10 +117,9 @@ understands the following values:
 | `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional startup timeout for `shared` / `shared-wait` TLS. When unset, startup waits indefinitely for valid `fullchain.pem` and `privkey.pem`; `shared-fail-fast` rejects this setting and requires the files immediately. | (`unset`) |
 | `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory URL for listeners that publish ACME-managed certificate files. When unset, runtime config defaults it to the production Let's Encrypt directory. Set it explicitly to use staging or another ACME server. Prefer this on the HTTP listener that serves `http-01` challenges. | (`https://acme-v02.api.letsencrypt.org/directory`) |
 | `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact email list. | (`unset`) |
-| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Required for `in-process-http01`; `certbot-http01` also reuses it when certbot args do not already declare domains. | (`unset`) |
+| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains for the ACME order. Certbot reuses it when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` do not already declare domains. | (`unset`) |
 | `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Optional certificate directory where ACME publishes `fullchain.pem` and `privkey.pem` for reuse by `shared` HTTPS listeners. When unset, runtime config defaults it to `./.tls/<cert-name>`; inside the runtime image the same relative default resolves under `/app/.tls/<cert-name>`. | (`./.tls/<cert-name>`) |
-| `LISTENER_<n>_ACME_CHALLENGE_BACKEND` | ACME challenge backend, either `in-process-http01` or `certbot-http01`. | (`unset`) |
-| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override for the `certbot-http01` backend. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
+| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Optional executable path override. When unset, runtime startup uses `certbot` from `PATH`. | (`certbot`) |
 | `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. When unset, runtime startup derives a working `certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path` / `--server` / `--email` / `--domains` from the ACME config. Explicit values here still win for `--cert-name` / `-d` / `--domains` / `--http-01-port` and other certbot flags. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
@@ -249,7 +248,6 @@ LISTENER_2_SCHEME=http
 LISTENER_2_ACME_CONTACT_EMAILS=ops@example.com,security@example.com
 LISTENER_2_ACME_DOMAINS=example.com,www.example.com
 LISTENER_2_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
-LISTENER_2_ACME_CHALLENGE_BACKEND=certbot-http01
 
 # Listener 3: HTTPS that reuses ACME-published certificate files
 LISTENER_3_HOST=0.0.0.0
@@ -318,13 +316,10 @@ When `REDIRECT_HTTP_TO_HTTPS` is left unset, `web-api` now derives a default fro
 - `REDIRECT_HTTP_TO_HTTPS=false` overrides that default and leaves both listeners serving real traffic.
 - `/.well-known/acme-challenge/*` stays exempt from redirects so ACME `http-01` requests can remain on HTTP.
 
-The native `in-process-http01` ACME backend now starts through the same runtime path as the certbot backend.
-The tracked runtime container image now ships both `certbot` and `openssl`, so containerized
-`certbot-http01` and `in-process-http01` flows work without extra image customization. Ordinary source
-builds such as `cabal build all` or the default HTTP-only `cabal run exe:haskell-web-api` still do not
-require certbot to be preinstalled; install it locally only when you actually plan to run the
-`certbot-http01` backend outside the container. The native backend requires a plain HTTP listener on the
-real `http-01` port (`80`) and `openssl` available on `PATH` for key, CSR, and RS256 operations.
+ACME runtime startup is certbot-backed. The tracked runtime container image ships `certbot`, so the
+containerized `http-01` flow works without extra image customization. Ordinary source builds such as
+`cabal build all` or the default HTTP-only `cabal run exe:haskell-web-api` still do not require certbot to
+be preinstalled; install it locally only when you actually plan to run ACME issuance outside the container.
 
 ### MacOS / Linux
 

@@ -6,7 +6,6 @@
 module HarchWeb
   ( AcmeBindPlan (..),
     AcmeAuthorizationResponse (..),
-    AcmeChallengeBackend (..),
     AcmeChallengeResponse (..),
     AcmeChallengeStore (..),
     AcmeConfig (..),
@@ -123,7 +122,6 @@ module HarchWeb
     pollAcmeOrderWithRetries,
     prepareAcmeAuthorization,
     prepareCertbotManualTlsBindPlan,
-    prepareInProcessManualTlsBindPlan,
     reloadTlsCredentialsIfChanged,
     registerAcmeChallenges,
     renderAcmeResponseBody,
@@ -134,7 +132,6 @@ module HarchWeb
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     startManualTlsRuntimeServerWithStarter,
-    runInProcessAcmeChallenge,
     runOpenSslCommand,
     runOpenSslTextCommand,
     runServer,
@@ -154,8 +151,8 @@ where
 
 import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (IOException, SomeException, bracket, bracketOnError, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
-import Control.Monad (forever, replicateM, unless, void, when)
+import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
+import Control.Monad (forever, replicateM, unless, void)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
@@ -207,18 +204,13 @@ data CertbotConfig = CertbotConfig
   }
   deriving (Eq, Show)
 
-data AcmeChallengeBackend
-  = InProcessHttp01
-  | CertbotHttp01 CertbotConfig
-  deriving (Eq, Show)
-
 data AcmeConfig = AcmeConfig
   { acmeDirectoryUrl :: Text,
     acmeContactEmails :: [Text],
     acmeDomains :: [Text],
     acmeHttp01Port :: Int,
     acmeCertificateDirectory :: Maybe FilePath,
-    acmeChallengeBackend :: AcmeChallengeBackend
+    acmeCertbotConfig :: CertbotConfig
   }
   deriving (Eq, Show)
 
@@ -744,7 +736,7 @@ runServer outputHandle config webApplication =
                 stopRuntimeServers
                 ( \httpServers ->
                     bracket
-                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter challengeStore)
+                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter)
                       stopAcmeRuntimeServers
                       ( \acmeServers ->
                           bracket
@@ -877,8 +869,8 @@ startManualTlsRuntimeServers manualTlsPlans waiApplication connectionReporter =
           )
             `onException` stopRuntimeServers runningServers
 
-startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> AcmeChallengeStore -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServers acmePlans waiApplication connectionReporter challengeStore =
+startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServers acmePlans waiApplication connectionReporter =
   connectionReporter `seq` go [] acmePlans
   where
     go runningServers remainingPlans =
@@ -886,7 +878,7 @@ startAcmeRuntimeServers acmePlans waiApplication connectionReporter challengeSto
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter challengeStore
+              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
@@ -952,14 +944,11 @@ startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplicati
           runningRuntimeThreadId = serverThreadId
         }
 
-startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> AcmeChallengeStore -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter challengeStore = do
+startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter = do
+  let certbotConfig = acmeCertbotConfig (runtimeAcmeListenerConfig runtimeAcmePlan)
   (maybeManualTlsPlan, cleanupDirectory) <-
-    case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
-      CertbotHttp01 certbotConfig ->
-        prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
-      InProcessHttp01 ->
-        prepareInProcessManualTlsBindPlan runtimeAcmePlan challengeStore
+    prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
   maybeRunningServer <-
     connectionReporter `seq`
       traverse (\manualTlsPlan -> startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
@@ -1151,9 +1140,8 @@ certbotDomainArguments runtimeAcmePlan certbotConfig =
 
 runtimeCertbotArguments :: RuntimeAcmeBindPlan -> [Text]
 runtimeCertbotArguments runtimeAcmePlan =
-  case acmeChallengeBackend (runtimeAcmeListenerConfig runtimeAcmePlan) of
-    CertbotHttp01 certbotConfig -> certbotArguments certbotConfig
-    InProcessHttp01 -> []
+  let certbotConfig = acmeCertbotConfig (runtimeAcmeListenerConfig runtimeAcmePlan)
+   in certbotArguments certbotConfig
 
 toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do
@@ -1604,121 +1592,6 @@ jsonObjectBytes fields =
       | (fieldName, fieldValue) <- fields
       ]
     <> "}"
-
-prepareInProcessManualTlsBindPlan :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> IO (Maybe ManualTlsBindPlan, FilePath)
-prepareInProcessManualTlsBindPlan !runtimeAcmePlan challengeStore = do
-  tempDirectory <- getCanonicalTemporaryDirectory
-  bracketOnError
-    (createTempDirectory tempDirectory "harch-web-acme")
-    removePathForcibly
-    $ \stateDirectory -> do
-      let privateKeyPath = stateDirectory </> "privkey.pem"
-          certificatePath = stateDirectory </> "fullchain.pem"
-      runInProcessAcmeChallenge runtimeAcmePlan challengeStore stateDirectory certificatePath privateKeyPath
-      (resolvedCertificatePath, resolvedPrivateKeyPath) <-
-        case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
-          Nothing ->
-            pure (certificatePath, privateKeyPath)
-          Just sharedDirectory ->
-            publishCertificateFiles sharedDirectory certificatePath privateKeyPath
-      pure
-        ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
-          stateDirectory
-        )
-
-runInProcessAcmeChallenge :: RuntimeAcmeBindPlan -> AcmeChallengeStore -> FilePath -> FilePath -> FilePath -> IO ()
-runInProcessAcmeChallenge !runtimeAcmePlan challengeStore stateDirectory certificatePath privateKeyPath = do
-  let domains = acmeDomains (runtimeAcmeListenerConfig runtimeAcmePlan)
-  when
-    (null domains)
-    ( ioError . userError $
-        "Unsupported runtime listener startup plan: ACME listener on "
-          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-          <> " requires ACME domains for in-process http-01 runtime startup."
-    )
-  let accountKeyPath = stateDirectory </> "account-key.pem"
-      csrConfigPath = stateDirectory </> "csr.cnf"
-      csrPemPath = stateDirectory </> "request.csr"
-      csrDerPath = stateDirectory </> "request.der"
-  generateAcmeAccountKey runtimeAcmePlan accountKeyPath
-  accountJwk <- loadAcmeJwk runtimeAcmePlan accountKeyPath
-  generateAcmeCertificateRequest runtimeAcmePlan domains privateKeyPath csrConfigPath csrPemPath csrDerPath
-  ensureRuntimeFileExists "In-process ACME private key file does not exist: " privateKeyPath
-  csrDerBytes <- ByteString.readFile csrDerPath
-  manager <- HttpClient.newManager HttpClientTls.tlsManagerSettings
-  directory <- fetchAcmeDirectory runtimeAcmePlan manager
-  accountKid <-
-    createAcmeAccount
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
-      accountJwk
-      (map mailtoAcmeContact (acmeContactEmails (runtimeAcmeListenerConfig runtimeAcmePlan)))
-  (orderUrl, createdOrder) <-
-    createAcmeOrder
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
-      accountKid
-      domains
-  authorizationUrls <-
-    maybe
-      ( ioError . userError $
-          "In-process ACME new-order response for listener on "
-            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-            <> " did not include authorization URLs."
-      )
-      pure
-      (acmeOrderAuthorizations createdOrder)
-  preparedChallenges <-
-    mapM
-      (prepareAcmeAuthorization runtimeAcmePlan manager directory accountKeyPath accountKid accountJwk)
-      authorizationUrls
-  let activeChallenges = map preparedAcmeChallengeRegistration preparedChallenges
-  bracket_
-    (registerAcmeChallenges challengeStore activeChallenges)
-    (unregisterAcmeChallenges challengeStore activeChallenges)
-    $ do
-      mapM_
-        (triggerAcmeChallenge runtimeAcmePlan manager directory accountKeyPath accountKid . preparedAcmeChallengeUrl)
-        preparedChallenges
-      readyOrder <-
-        pollAcmeOrder
-          runtimeAcmePlan
-          manager
-          directory
-          accountKeyPath
-          accountKid
-          orderUrl
-          ["ready", "valid"]
-      finalizedOrder <-
-        if acmeOrderStatus readyOrder == "valid"
-          then pure readyOrder
-          else do
-            finalizeUrl <-
-              maybe
-                ( ioError . userError $
-                    "In-process ACME ready order for listener on "
-                      <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-                      <> " did not include a finalize URL."
-                )
-                pure
-                (acmeOrderFinalizeUrl readyOrder)
-            finalizeAcmeOrder runtimeAcmePlan manager directory accountKeyPath accountKid finalizeUrl csrDerBytes
-            pollAcmeOrder runtimeAcmePlan manager directory accountKeyPath accountKid orderUrl ["valid"]
-      certificateUrl <-
-        maybe
-          ( ioError . userError $
-              "In-process ACME valid order for listener on "
-                <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-                <> " did not include a certificate URL."
-          )
-          pure
-          (acmeOrderCertificateUrl finalizedOrder)
-      certificatePem <- fetchAcmeCertificate runtimeAcmePlan manager directory accountKeyPath accountKid certificateUrl
-      LazyByteString.writeFile certificatePath certificatePem
 
 generateAcmeAccountKey :: RuntimeAcmeBindPlan -> FilePath -> IO ()
 generateAcmeAccountKey !runtimeAcmePlan accountKeyPath =
@@ -2541,22 +2414,14 @@ validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
 
 validateAcmeRuntimeConfiguration :: AcmeBindPlan -> Maybe String
 validateAcmeRuntimeConfiguration acmePlan =
-  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
-    _
-      | isNothing (acmeTlsEndpoint acmePlan)
-          && isNothing (acmeCertificateDirectory (acmeListenerConfig acmePlan)) ->
-          Just $
-            "Unsupported runtime listener startup plan: ACME listener on "
-              <> renderListenerEndpoint (acmeEndpoint acmePlan)
-              <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates."
-    InProcessHttp01
-      | null (acmeDomains (acmeListenerConfig acmePlan)) ->
-          Just $
-            "Unsupported runtime listener startup plan: ACME listener on "
-              <> renderListenerEndpoint (acmeEndpoint acmePlan)
-              <> " requires ACME domains for in-process http-01 runtime startup."
-    _ ->
-      Nothing
+  if isNothing (acmeTlsEndpoint acmePlan)
+    && isNothing (acmeCertificateDirectory (acmeListenerConfig acmePlan))
+    then
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires an ACME certificate directory so HTTPS listeners can consume published certificates."
+    else Nothing
 
 hasMatchingAcmeHttp01ChallengeEndpoint :: Int -> [ListenerEndpoint] -> AcmeBindPlan -> Bool
 hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan =
@@ -2566,11 +2431,8 @@ hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmeP
 
 acmeHttp01ChallengePort :: AcmeBindPlan -> Either String Int
 acmeHttp01ChallengePort acmePlan =
-  case acmeChallengeBackend (acmeListenerConfig acmePlan) of
-    InProcessHttp01 ->
-      Right (acmeHttp01Port (acmeListenerConfig acmePlan))
-    CertbotHttp01 certbotConfig ->
-      case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
+  let certbotConfig = acmeCertbotConfig (acmeListenerConfig acmePlan)
+   in case certbotOptionValue "--http-01-port" (certbotArguments certbotConfig) of
         Nothing ->
           Right (acmeHttp01Port (acmeListenerConfig acmePlan))
         Just portText ->

@@ -2,8 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.Config
-  ( AcmeChallengeBackend (..),
-    AcmeConfig (..),
+  ( AcmeConfig (..),
     AppConfig (..),
     AppEnvironmentConfig (..),
     AppEnvironmentConfigLoadError (..),
@@ -67,8 +66,7 @@ import Data.Maybe (fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
-  ( AcmeChallengeBackend (..),
-    AcmeConfig (..),
+  ( AcmeConfig (..),
     CertbotConfig (..),
     CorsPolicyConfig (..),
     HasServerConfig (..),
@@ -445,6 +443,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     parseAcmeConfig listenerIndex parsedPort =
       do
+        () <- rejectRemovedCertbotConfig listenerIndex
         let parsedDirectoryUrl =
               fromMaybe
                 defaultAcmeDirectoryUrl
@@ -454,9 +453,9 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
             (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
             =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
         parsedDomains <- parseConfiguredAcmeDomains listenerIndex
-        parsedChallengeBackend <- parseAcmeChallengeBackend listenerIndex
+        parsedCertbotConfig <- parseAcmeCertbotConfig listenerIndex
         resolvedCertificateDirectory <-
-          resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend
+          resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig
         pure
           AcmeConfig
             { acmeDirectoryUrl = parsedDirectoryUrl,
@@ -464,7 +463,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
               acmeDomains = parsedDomains,
               acmeHttp01Port = parsedPort,
               acmeCertificateDirectory = Just resolvedCertificateDirectory,
-              acmeChallengeBackend = parsedChallengeBackend
+              acmeCertbotConfig = parsedCertbotConfig
             }
 
     parseConfiguredAcmeDomains listenerIndex =
@@ -488,28 +487,24 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
 
     resolveConfiguredAcmeCertificateDirectory listenerIndex = do
       parsedDomains <- parseConfiguredAcmeDomains listenerIndex
-      parsedChallengeBackend <- parseAcmeChallengeBackend listenerIndex
-      resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend
+      parsedCertbotConfig <- parseAcmeCertbotConfig listenerIndex
+      resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig
 
-    resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedChallengeBackend =
+    resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig =
       pure $
         maybe
           ( defaultCertificateDirectoryPath
-              (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedChallengeBackend)
+              (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig)
           )
           Text.unpack
           (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY")
 
-    defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedChallengeBackend =
+    defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig =
       fromMaybe
         (Text.pack ("listener-" <> show listenerIndex))
-        ( case parsedChallengeBackend of
-            InProcessHttp01 ->
-              listToMaybe parsedDomains
-            CertbotHttp01 certbotConfig ->
-              listToMaybe (certbotOptionValues "--cert-name" (certbotArguments certbotConfig))
-                <|> firstCertbotDomain (certbotArguments certbotConfig)
-                <|> listToMaybe parsedDomains
+        ( listToMaybe (certbotOptionValues "--cert-name" (certbotArguments parsedCertbotConfig))
+            <|> firstCertbotDomain (certbotArguments parsedCertbotConfig)
+            <|> listToMaybe parsedDomains
         )
 
     defaultCertificateDirectoryPath certificateIdentifier =
@@ -529,33 +524,30 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         (Text.isPrefixOf (Text.pack ("LISTENER_" <> show listenerIndex <> "_ACME_")) . fst)
         allConfigEntries
 
-    parseAcmeChallengeBackend listenerIndex = do
-      backendValue <- requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"
-      if backendValue == "in-process-http01"
-        then Right InProcessHttp01
-        else
-          if backendValue == "certbot-http01"
-            then
-              pure $
-                CertbotHttp01
-                  CertbotConfig
-                    { certbotExecutable =
-                        maybe
-                          defaultCertbotExecutable
-                          Text.unpack
-                          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"),
-                      certbotArguments =
-                        maybe
-                          []
-                          (parseDelimitedTextsUnsafe ",")
-                          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
-                    }
-            else
-              Left
-                ( InvalidConfigValue
-                    (indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND")
-                    backendValue
-                )
+    rejectRemovedCertbotConfig listenerIndex =
+      case optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND" of
+        Nothing -> Right ()
+        Just backendValue ->
+          Left
+            ( InvalidConfigValue
+                (indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND")
+                backendValue
+            )
+
+    parseAcmeCertbotConfig listenerIndex =
+      pure $
+        CertbotConfig
+          { certbotExecutable =
+              maybe
+                defaultCertbotExecutable
+                Text.unpack
+                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"),
+            certbotArguments =
+              maybe
+                []
+                (parseDelimitedTextsUnsafe ",")
+                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
+          }
 
     parseStaticAssetsConfig =
       StaticAssetsConfig

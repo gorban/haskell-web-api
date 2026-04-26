@@ -4,12 +4,13 @@
 module Unit.HarchWeb.AcmeSpec (spec) where
 
 import Control.Concurrent (forkIO, killThread, newMVar, readMVar, threadDelay)
-import Control.Exception (IOException, finally, try)
+import Control.Exception (IOException, evaluate, finally, try)
 import Control.Monad (void)
 import qualified Data.ByteString as ByteString
+import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
-import Data.IORef (atomicModifyIORef', newIORef)
+import Data.IORef (atomicModifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -36,20 +37,19 @@ sampleEndpoint =
       endpointPort = 5443
     }
 
-certbotBackend :: AcmeChallengeBackend
+certbotBackend :: CertbotConfig
 certbotBackend =
-  CertbotHttp01
-    CertbotConfig
-      { certbotExecutable = "certbot",
-        certbotArguments =
-          [ "certonly",
-            "--webroot",
-            "--http-01-port",
-            "8080",
-            "--domain=cli.example.com",
-            "--cert-name=cli-cert"
-          ]
-      }
+  CertbotConfig
+    { certbotExecutable = "certbot",
+      certbotArguments =
+        [ "certonly",
+          "--webroot",
+          "--http-01-port",
+          "8080",
+          "--domain=cli.example.com",
+          "--cert-name=cli-cert"
+        ]
+    }
 
 inProcessConfig :: AcmeConfig
 inProcessConfig =
@@ -59,7 +59,7 @@ inProcessConfig =
       acmeDomains = ["example.com", "www.example.com"],
       acmeHttp01Port = 80,
       acmeCertificateDirectory = Nothing,
-      acmeChallengeBackend = InProcessHttp01
+      acmeCertbotConfig = certbotBackend
     }
 
 certbotConfigValue :: AcmeConfig
@@ -70,7 +70,7 @@ certbotConfigValue =
       acmeDomains = ["example.com", "www.example.com"],
       acmeHttp01Port = 8080,
       acmeCertificateDirectory = Nothing,
-      acmeChallengeBackend = certbotBackend
+      acmeCertbotConfig = certbotBackend
     }
 
 runtimeAcmePlanWith :: AcmeConfig -> RuntimeAcmeBindPlan
@@ -167,7 +167,7 @@ spec = do
                   "--cert-name=cli-cert"
                 ]
             }
-      runtimeCertbotArguments (runtimeAcmePlanWith inProcessConfig) `shouldBe` []
+      runtimeCertbotArguments (runtimeAcmePlanWith inProcessConfig) `shouldBe` certbotArguments (case certbotBackend of config -> config)
       certbotOptionValues "--cert-name" ["certonly", "--cert-name", "named-cert"]
         `shouldBe` ["named-cert"]
       certbotOptionValues "--domain" ["--domain=cli.example.com", "--domain", "other.example.com"]
@@ -179,16 +179,40 @@ spec = do
         `shouldBe` ["example.com", "www.example.com"]
       firstCertbotDomain ["-d", "one.example.com", "--domains=two.example.com,three.example.com"]
         `shouldBe` Just "one.example.com"
+      (certbotBackend == certbotBackend) `shouldBe` True
+      (certbotBackend == CertbotConfig "other-certbot" []) `shouldBe` False
+      certbotBackend
+        `shouldBe` CertbotConfig
+          { certbotExecutable = "certbot",
+            certbotArguments =
+              [ "certonly",
+                "--webroot",
+                "--http-01-port",
+                "8080",
+                "--domain=cli.example.com",
+                "--cert-name=cli-cert"
+              ]
+          }
+      evaluate
+        ( certbotConfigValue
+            == certbotConfigValue
+              { acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "other-certbot",
+                      certbotArguments = []
+                    }
+              }
+        )
+        `shouldReturn` False
       certbotCertificateName (runtimeAcmePlanWith certbotConfigValue) `shouldBe` Right "cli-cert"
       certbotCertificateName
         ( runtimeAcmePlanWith
             certbotConfigValue
-              { acmeChallengeBackend =
-                  CertbotHttp01
-                    CertbotConfig
-                      { certbotExecutable = "certbot",
-                        certbotArguments = ["certonly", "--domains=domain.example.com"]
-                      },
+              { acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = ["certonly", "--domains=domain.example.com"]
+                    },
                 acmeDomains = []
               }
         )
@@ -196,19 +220,23 @@ spec = do
       certbotCertificateName
         ( runtimeAcmePlanWith
             certbotConfigValue
-              { acmeChallengeBackend =
-                  CertbotHttp01
-                    CertbotConfig
-                      { certbotExecutable = "certbot",
-                        certbotArguments = ["certonly"]
-                      }
+              { acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = ["certonly"]
+                    }
               }
         )
         `shouldBe` Right "example.com"
       certbotCertificateName
         ( runtimeAcmePlanWith
             inProcessConfig
-              { acmeDomains = []
+              { acmeDomains = [],
+                acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = []
+                    }
               }
         )
         `shouldSatisfy` isLeftWith "requires ACME domains or certbot arguments"
@@ -239,7 +267,7 @@ spec = do
                   runtimeAcmePlanWith
                     certbotConfigValue
                       { acmeCertificateDirectory = Just sharedDirectory,
-                        acmeChallengeBackend = CertbotHttp01 certbotConfig
+                        acmeCertbotConfig = certbotConfig
                       }
             (certbotManualPlan, certbotCleanupDirectory) <-
               prepareCertbotManualTlsBindPlan certbotPlan certbotConfig
@@ -258,37 +286,6 @@ spec = do
                     readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "FAKE KEY\n"
               )
               `finally` removePathForcibly certbotCleanupDirectory
-      withHttpAcmeServer $ \server ->
-        withSystemTempDirectory "harch-web-in-process-shared" $ \sharedDirectory ->
-          withSystemTempDirectory "harch-web-in-process-account" $ \tempDirectory -> do
-            challengeStore <- AcmeChallengeStore <$> newMVar []
-            let accountKeyPath = tempDirectory </> "account-key.pem"
-                inProcessPlan =
-                  runtimeAcmePlanWith
-                    inProcessConfig
-                      { acmeDirectoryUrl = serverBaseUrl server <> "/directory-immediately-valid",
-                        acmeCertificateDirectory = Just sharedDirectory
-                      }
-            withFakeOpenSslExecutable accountKeyPath $ \_ -> do
-              writeFile accountKeyPath "fake-account-key"
-              (inProcessManualPlan, inProcessCleanupDirectory) <-
-                prepareInProcessManualTlsBindPlan inProcessPlan challengeStore
-              ( do
-                  inProcessManualPlan `shouldSatisfy` (/= Nothing)
-                  case inProcessManualPlan of
-                    Nothing ->
-                      expectationFailure "Expected in-process ACME plan to produce a manual TLS bind plan"
-                    Just resolvedInProcessManualPlan -> do
-                      tlsEndpoint resolvedInProcessManualPlan `shouldBe` sampleEndpoint
-                      tlsCredentialSourceKind resolvedInProcessManualPlan `shouldBe` ManualTlsCredentials
-                      tlsStartupMode resolvedInProcessManualPlan `shouldBe` RequireCertificateFiles
-                      tlsCertificateFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "fullchain.pem"
-                      tlsPrivateKeyFile resolvedInProcessManualPlan `shouldBe` sharedDirectory </> "privkey.pem"
-                      readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` "PEM CERT"
-                      readFile (sharedDirectory </> "privkey.pem") `shouldReturn` "fake-account-key"
-                )
-                `finally` removePathForcibly inProcessCleanupDirectory
-
     it "covers challenge matching and store update helpers" $ do
       challengeStore <- AcmeChallengeStore <$> newMVar []
       let challenge =
@@ -328,7 +325,10 @@ spec = do
       registeredChallenges `shouldBe` [challenge]
       challengeResponse <- acmeChallengeResponseForRequest challengeStore matchingRequest
       case challengeResponse of
-        Just _ -> pure ()
+        Just response -> do
+          Wai.responseStatus response `shouldBe` Http.ok200
+          Wai.responseHeaders response `shouldBe` [("Content-Type", "text/plain; charset=utf-8")]
+          readResponseBody response `shouldReturn` "response-1"
         Nothing -> expectationFailure "expected a registered ACME challenge response"
       unregisterAcmeChallenges challengeStore [challenge]
       unwrapChallengeStore challengeStore `shouldReturn` []
@@ -646,6 +646,8 @@ spec = do
               prepareAcmeAuthorization plan manager directory accountKeyPath "kid-1" (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz/1")
             preparedChallenge
               `shouldSatisfy` isPreparedChallengeFor (serverBaseUrl server <> "/challenge/1")
+            activeAcmeChallengeDomain (preparedAcmeChallengeRegistration preparedChallenge) `shouldBe` "example.com"
+            activeAcmeChallengeToken (preparedAcmeChallengeRegistration preparedChallenge) `shouldBe` "token"
             triggerAcmeChallenge plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/challenge/1")
             finalizeAcmeOrder plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/finalize/1") "csr"
             fetchAcmeCertificate plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/cert/1")
@@ -867,118 +869,22 @@ spec = do
             fetchAcmeCertificate plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/status-500")
               `shouldThrow` errorContaining "certificate fetch"
 
-    it "covers in-process ACME challenge helper branches" $
-      withHttpAcmeServer $ \server -> do
-        let basePlan directoryUrl =
-              runtimeAcmePlanWith inProcessConfig {acmeDirectoryUrl = directoryUrl}
-        withSystemTempDirectory "harch-web-acme-in-process" $ \tempDirectory -> do
-          challengeStore <- AcmeChallengeStore <$> newMVar []
-          let accountKeyPath = tempDirectory </> "account-key.pem"
-              privateKeyPath = tempDirectory </> "server-key.pem"
-              certificatePath = tempDirectory </> "server-cert.pem"
-          withFakeOpenSslExecutable accountKeyPath $ \_ -> do
-            writeFile accountKeyPath "fake-account-key"
-            runInProcessAcmeChallenge
-              (runtimeAcmePlanWith inProcessConfig {acmeDomains = [], acmeDirectoryUrl = serverDirectoryUrl server})
-              challengeStore
-              tempDirectory
-              certificatePath
-              privateKeyPath
-              `shouldThrow` errorContaining "requires ACME domains"
-            runInProcessAcmeChallenge
-              (basePlan (serverBaseUrl server <> "/directory-no-authorizations"))
-              challengeStore
-              tempDirectory
-              certificatePath
-              privateKeyPath
-              `shouldThrow` errorContaining "did not include authorization URLs"
-            runInProcessAcmeChallenge
-              (basePlan (serverBaseUrl server <> "/directory-ready-no-finalize"))
-              challengeStore
-              tempDirectory
-              certificatePath
-              privateKeyPath
-              `shouldThrow` errorContaining "did not include a finalize URL"
-            runInProcessAcmeChallenge
-              (basePlan (serverBaseUrl server <> "/directory-valid-no-certificate"))
-              challengeStore
-              tempDirectory
-              certificatePath
-              privateKeyPath
-              `shouldThrow` errorContaining "did not include a certificate URL"
-            runInProcessAcmeChallenge
-              (basePlan (serverBaseUrl server <> "/directory-immediately-valid"))
-              challengeStore
-              tempDirectory
-              certificatePath
-              privateKeyPath
-            ByteString.readFile certificatePath `shouldReturn` "PEM CERT"
-        withSystemTempDirectory "harch-web-acme-in-process-missing-key" $ \tempDirectory -> do
-          challengeStore <- AcmeChallengeStore <$> newMVar []
-          let privateKeyPath = tempDirectory </> "server-key.pem"
-              certificatePath = tempDirectory </> "server-cert.pem"
-          withFakeOpenSslScript
-            [ "#!/bin/sh",
-              "set -eu",
-              "command=\"$1\"",
-              "shift",
-              "case \"$command\" in",
-              "  genrsa)",
-              "    output=''",
-              "    while [ \"$#\" -gt 0 ]; do",
-              "      case \"$1\" in",
-              "        -out) output=\"$2\"; shift 2 ;;",
-              "        *) shift ;;",
-              "      esac",
-              "    done",
-              "    printf '%s\\n' 'FAKE ACCOUNT KEY' > \"$output\"",
-              "    ;;",
-              "  rsa)",
-              "    printf 'Modulus=A1B2C3D4E5F60718293A4B5C6D7E8F90\\n'",
-              "    ;;",
-              "  req)",
-              "    input=''",
-              "    output=''",
-              "    while [ \"$#\" -gt 0 ]; do",
-              "      case \"$1\" in",
-              "        -in) input=\"$2\"; shift 2 ;;",
-              "        -out) output=\"$2\"; shift 2 ;;",
-              "        *) shift ;;",
-              "      esac",
-              "    done",
-              "    if [ -n \"$input\" ]; then",
-              "      printf 'FAKE DER' > \"$output\"",
-              "    else",
-              "      printf '%s\\n' 'FAKE CSR PEM' > \"$output\"",
-              "    fi",
-              "    ;;",
-              "  dgst)",
-              "    output=''",
-              "    while [ \"$#\" -gt 0 ]; do",
-              "      case \"$1\" in",
-              "        -out) output=\"$2\"; shift 2 ;;",
-              "        *) shift ;;",
-              "      esac",
-              "    done",
-              "    printf 'fake-bytes' > \"$output\"",
-              "    ;;",
-              "esac"
-            ]
-            $ \scriptPath -> do
-              withPrependedPathDirectory (takeDirectory scriptPath) $
-                runInProcessAcmeChallenge
-                  (basePlan (serverBaseUrl server <> "/directory-immediately-valid"))
-                  challengeStore
-                  tempDirectory
-                  certificatePath
-                  privateKeyPath
-                  `shouldThrow` errorContaining "In-process ACME private key file does not exist"
-
 instance Eq ActiveAcmeChallenge where
   left == right =
     activeAcmeChallengeDomain left == activeAcmeChallengeDomain right
       && activeAcmeChallengeToken left == activeAcmeChallengeToken right
       && activeAcmeChallengeResponse left == activeAcmeChallengeResponse right
+
+readResponseBody :: Wai.Response -> IO Text
+readResponseBody response = do
+  let (_, _, withStreamingBody) = Wai.responseToStream response
+  chunksReference <- newIORef []
+  withStreamingBody $ \streamingBody ->
+    streamingBody
+      (\builder -> atomicModifyIORef' chunksReference (\chunks -> (chunks <> [Builder.toLazyByteString builder], ())))
+      (pure ())
+  chunks <- readIORef chunksReference
+  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
 
 instance Show ActiveAcmeChallenge where
   show challenge =
