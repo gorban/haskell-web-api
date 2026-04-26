@@ -3352,7 +3352,9 @@ exportRequestObservabilityToOtlp ::
   IO ()
 exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
-  let childSpans = requestDatabaseChildSpans requestObservability
+  let childSpans =
+        requestRuntimePhaseChildSpans requestObservability
+          <> requestDatabaseChildSpans requestObservability
   childSpanIds <- mapM (const nextOtlpSpanId) childSpans
   endTimeUnixNano <- currentUnixTimeNSec
   let (startTimeUnixNano, childSpanTimings) =
@@ -3544,6 +3546,41 @@ planOtlpSpanTimings endTimeUnixNano childSpanCount =
 nonNegativeStartTime :: Word64 -> Word64 -> Word64
 nonNegativeStartTime endTimeUnixNano durationNanos =
   endTimeUnixNano - min endTimeUnixNano durationNanos
+
+requestRuntimePhaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
+requestRuntimePhaseChildSpans requestObservability =
+  [ runtimePhaseChildSpan
+      "HarchWeb request policy"
+      "request-policy"
+      ["http.request.method", "url.scheme"],
+    runtimePhaseChildSpan
+      "HarchWeb route match"
+      "route-match"
+      ["url.path", "http.route"],
+    runtimePhaseChildSpan
+      "HarchWeb render response"
+      "render-response"
+      ["http.response.status_code", "harch.response.kind"]
+  ]
+  where
+    rootAttributes =
+      Observability.requestSpanAttributes
+        (Observability.observabilityRequestSpan requestObservability)
+
+    runtimePhaseChildSpan displayName phaseName copiedAttributeNames =
+      Observability.RequestSpan
+        { Observability.requestSpanDisplayName = displayName,
+          Observability.requestSpanAttributes =
+            textObservabilityAttribute "harch.span.phase" phaseName
+              : concatMap (`attributesNamed` rootAttributes) copiedAttributeNames
+        }
+
+attributesNamed :: Text -> [Observability.ObservabilityAttribute] -> [Observability.ObservabilityAttribute]
+attributesNamed expectedName attributes =
+  [ attribute
+  | attribute <- attributes,
+    Observability.attributeName attribute == expectedName
+  ]
 
 requestDatabaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
 requestDatabaseChildSpans requestObservability =

@@ -2813,12 +2813,22 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-second-page-summary\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.phase\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"request-policy\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"route-match\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"render-response\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.name\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.query.template\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
         Text.count "\"name\":\"GET /known\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"HarchWeb request policy\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"HarchWeb route match\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"HarchWeb render response\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
         extractQuotedJsonField "traceId" requestBodyText
           `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
