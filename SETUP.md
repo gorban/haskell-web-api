@@ -481,6 +481,13 @@ explicitly configure them.
 podman build -t localhost/haskell-web-api:dev .
 ```
 
+The default Dockerfile target builds the real runtime image without running the coverage/test gate. To
+make the image build run the coverage/test gate first, opt in explicitly:
+
+```bash
+podman build --target runtime-with-tests -t localhost/haskell-web-api:dev .
+```
+
 The tracked runtime image now includes `libpq` for in-process PostgreSQL queries plus `certbot` and
 `openssl`, so normal runtime traffic does not need the `psql` CLI and later ACME walkthroughs can use either
 backend without rebuilding the image.
