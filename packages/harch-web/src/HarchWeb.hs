@@ -2718,8 +2718,16 @@ requestContextObservabilityAttributes request =
   ]
     ++ maybe
       []
+      (pure . textObservabilityAttribute "harch.client.address.source")
+      (effectiveClientAddressSource request)
+    ++ maybe
+      []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_for")
       (requestHeaderText "X-Forwarded-For" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.forwarded")
+      (requestHeaderText "Forwarded" request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_proto")
@@ -2728,6 +2736,22 @@ requestContextObservabilityAttributes request =
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_prefix")
       (requestHeaderText "X-Forwarded-Prefix" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "user_agent.original")
+      (requestHeaderText "User-Agent" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.referer")
+      (sanitizedReferer request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "http.request.header.x_requested_with")
+      (requestHeaderText "X-Requested-With" request)
+    ++ maybe
+      []
+      (pure . textObservabilityAttribute "harch.request.source")
+      (requestSource request)
 
 requestLogContextFields :: Wai.Request -> [Text]
 requestLogContextFields request =
@@ -2735,14 +2759,32 @@ requestLogContextFields request =
     renderRequestLogField "network.peer.address" (peerAddressText request)
   ]
     ++ optionalRequestLogField
+      "harch.client.address.source"
+      (effectiveClientAddressSource request)
+    ++ optionalRequestLogField
       "http.request.header.x_forwarded_for"
       (requestHeaderText "X-Forwarded-For" request)
+    ++ optionalRequestLogField
+      "http.request.header.forwarded"
+      (requestHeaderText "Forwarded" request)
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_proto"
       (requestHeaderText "X-Forwarded-Proto" request)
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_prefix"
       (requestHeaderText "X-Forwarded-Prefix" request)
+    ++ optionalRequestLogField
+      "user_agent.original"
+      (requestHeaderText "User-Agent" request)
+    ++ optionalRequestLogField
+      "http.request.header.referer"
+      (sanitizedReferer request)
+    ++ optionalRequestLogField
+      "http.request.header.x_requested_with"
+      (requestHeaderText "X-Requested-With" request)
+    ++ optionalRequestLogField
+      "harch.request.source"
+      (requestSource request)
     ++ [renderRequestLogField "url.scheme" (requestScheme request)]
 
 optionalRequestLogField :: Text -> Maybe Text -> [Text]
@@ -2760,7 +2802,7 @@ textObservabilityAttribute name value =
 
 requestScheme :: Wai.Request -> Text
 requestScheme request =
-  case fmap Text.toLower (requestHeaderToken "X-Forwarded-Proto" request) of
+  case fmap Text.toLower (forwardedHeaderToken "proto" request <|> requestHeaderToken "X-Forwarded-Proto" request) of
     Just "https" -> "https"
     Just "http" -> "http"
     _ ->
@@ -2778,7 +2820,16 @@ effectiveClientAddress :: Wai.Request -> Text
 effectiveClientAddress request =
   fromMaybe
     (peerAddressText request)
-    (requestHeaderToken "X-Forwarded-For" request)
+    (forwardedHeaderToken "for" request <|> requestHeaderToken "X-Forwarded-For" request)
+
+effectiveClientAddressSource :: Wai.Request -> Maybe Text
+effectiveClientAddressSource request =
+  case forwardedHeaderToken "for" request of
+    Just _ -> Just "forwarded"
+    Nothing ->
+      case requestHeaderToken "X-Forwarded-For" request of
+        Just _ -> Just "x-forwarded-for"
+        Nothing -> Nothing
 
 peerAddressText :: Wai.Request -> Text
 peerAddressText request =
@@ -2802,8 +2853,60 @@ requestHeaderToken headerName request =
 requestHeaderText :: Http.HeaderName -> Wai.Request -> Maybe Text
 requestHeaderText headerName request =
   fmap
-    (Text.strip . TextEncoding.decodeUtf8)
+    (limitObservabilityHeaderValue . Text.strip . TextEncoding.decodeUtf8)
     (lookup headerName (Wai.requestHeaders request))
+
+forwardedHeaderToken :: Text -> Wai.Request -> Maybe Text
+forwardedHeaderToken parameterName request =
+  requestHeaderText "Forwarded" request >>= forwardedParameterValue parameterName
+
+forwardedParameterValue :: Text -> Text -> Maybe Text
+forwardedParameterValue parameterName headerValue =
+  case firstCommaSeparatedValue headerValue of
+    Nothing -> Nothing
+    Just forwardedElement ->
+      listToMaybe
+        [ cleanForwardedParameterValue parameterValue
+        | parameter <- Text.splitOn ";" forwardedElement,
+          let (parameterKey, parameterValueWithEquals) = Text.breakOn "=" (Text.strip parameter),
+          Text.toLower (Text.strip parameterKey) == Text.toLower parameterName,
+          Just parameterValue <- [Text.stripPrefix "=" parameterValueWithEquals],
+          not (Text.null (cleanForwardedParameterValue parameterValue))
+        ]
+
+cleanForwardedParameterValue :: Text -> Text
+cleanForwardedParameterValue =
+  Text.strip . stripSurroundingQuotes . Text.strip
+
+stripSurroundingQuotes :: Text -> Text
+stripSurroundingQuotes value =
+  fromMaybe value (Text.stripPrefix "\"" value >>= Text.stripSuffix "\"")
+
+sanitizedReferer :: Wai.Request -> Maybe Text
+sanitizedReferer request =
+  sanitizeRefererValue <$> requestHeaderText "Referer" request
+
+sanitizeRefererValue :: Text -> Text
+sanitizeRefererValue =
+  limitObservabilityHeaderValue
+    . Text.takeWhile (\character -> character /= '?' && character /= '#')
+
+requestSource :: Wai.Request -> Maybe Text
+requestSource request =
+  case fmap Text.toLower (requestHeaderText "X-Requested-With" request) of
+    Just "tiny-navigation" -> Just "enhanced-navigation"
+    Just "xmlhttprequest" -> Just "xml-http-request"
+    Just _ -> Just "scripted-request"
+    Nothing ->
+      case (fmap Text.toLower (requestHeaderText "Accept" request), fmap Text.toLower (requestHeaderText "User-Agent" request)) of
+        (Just acceptHeader, _) | "application/json" `Text.isInfixOf` acceptHeader -> Just "api-client"
+        (_, Just userAgent) | "curl/" `Text.isPrefixOf` userAgent -> Just "manual-client"
+        (_, Just _) -> Just "browser-or-client"
+        _ -> Nothing
+
+limitObservabilityHeaderValue :: Text -> Text
+limitObservabilityHeaderValue =
+  Text.take 256
 
 requestPathPrefix :: Wai.Request -> Text
 requestPathPrefix request =

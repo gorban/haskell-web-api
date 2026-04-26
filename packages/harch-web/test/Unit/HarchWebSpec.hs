@@ -1553,6 +1553,11 @@ spec = do
               { Observability.attributeName = "network.peer.address",
                 Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
               }
+          clientAddressSourceAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.client.address.source",
+                Observability.attributeValue = Observability.TextAttribute "x-forwarded-for"
+              }
           forwardedForAttribute =
             Observability.ObservabilityAttribute
               { Observability.attributeName = "http.request.header.x_forwarded_for",
@@ -1599,6 +1604,7 @@ spec = do
                            Observability.BodyResponseKind
                            [ clientAddressAttribute,
                              peerAddressAttribute,
+                             clientAddressSourceAttribute,
                              forwardedForAttribute,
                              forwardedProtoAttribute,
                              forwardedPrefixAttribute,
@@ -1606,7 +1612,144 @@ spec = do
                            ]
                        ]
       readIORef logEntriesReference
-        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log"
+        `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"x-forwarded-for\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log"
+                       ]
+
+    it "enriches request observability with safe forwarded, user-agent, referrer, and request-source attributes" $ do
+      requestObservabilityReference <- newIORef []
+      logEntriesReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          enrichedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [ ("Forwarded", "for=\"198.51.100.7\";proto=\"https\""),
+                ("User-Agent", "curl/8.7.1"),
+                ("Referer", "https://client.example.com/path?secret=token#fragment"),
+                ("X-Requested-With", "tiny-navigation")
+              ]
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "198.51.100.7"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          clientAddressSourceAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.client.address.source",
+                Observability.attributeValue = Observability.TextAttribute "forwarded"
+              }
+          forwardedAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.forwarded",
+                Observability.attributeValue = Observability.TextAttribute "for=\"198.51.100.7\";proto=\"https\""
+              }
+          userAgentAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "user_agent.original",
+                Observability.attributeValue = Observability.TextAttribute "curl/8.7.1"
+              }
+          refererAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.referer",
+                Observability.attributeValue = Observability.TextAttribute "https://client.example.com/path"
+              }
+          requestedWithAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_requested_with",
+                Observability.attributeValue = Observability.TextAttribute "tiny-navigation"
+              }
+          requestSourceAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.request.source",
+                Observability.attributeValue = Observability.TextAttribute "enhanced-navigation"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { renderResponse =
+                  \_ ->
+                    pure $
+                      BodyResponse
+                        ResponseBody
+                          { responseStatus = 202,
+                            responseContentType = "application/json",
+                            responseBody = "{\"route\":\"data\"}",
+                            responseObservabilityAttributes = [],
+                            responseLogEntries = ["Enriched source log"]
+                          },
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                reportApplicationLog = \logEntry ->
+                  modifyIORef' logEntriesReference (<> [logEntry])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) enrichedRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "https"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [ clientAddressAttribute,
+                             peerAddressAttribute,
+                             clientAddressSourceAttribute,
+                             forwardedAttribute,
+                             userAgentAttribute,
+                             refererAttribute,
+                             requestedWithAttribute,
+                             requestSourceAttribute
+                           ]
+                       ]
+      readIORef logEntriesReference
+        `shouldReturn` [ "[client.address=\"198.51.100.7\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"forwarded\" http.request.header.forwarded=\"for=\\\"198.51.100.7\\\";proto=\\\"https\\\"\" user_agent.original=\"curl/8.7.1\" http.request.header.referer=\"https://client.example.com/path\" http.request.header.x_requested_with=\"tiny-navigation\" harch.request.source=\"enhanced-navigation\" url.scheme=\"https\"] Enriched source log"
+                       ]
+
+    it "classifies scripted, API, manual, and browser-like request sources" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+              }
+          requestWithSource headers =
+            performWaiRequest
+              (toWaiApplication diagnosticApplication)
+              (waiRequestWithRemoteHostAndHeaders ["data"] directRemoteHost headers)
+          requestSourceValues requestObservabilityValue =
+            [ sourceValue
+            | Observability.ObservabilityAttribute
+                { Observability.attributeName = "harch.request.source",
+                  Observability.attributeValue = Observability.TextAttribute sourceValue
+                } <-
+                Observability.requestSpanAttributes
+                  (Observability.observabilityRequestSpan requestObservabilityValue)
+            ]
+      _ <- requestWithSource [("X-Requested-With", "XMLHttpRequest")]
+      _ <- requestWithSource [("X-Requested-With", "custom-script")]
+      _ <- requestWithSource [("Accept", "application/json")]
+      _ <- requestWithSource [("User-Agent", "curl/8.7.1")]
+      _ <- requestWithSource [("User-Agent", "Mozilla/5.0")]
+      _ <- requestWithSource [("Forwarded", " , ")]
+      _ <- requestWithSource [("Forwarded", "for=\"\";proto=http")]
+      _ <- requestWithSource [("Forwarded", "for=203.0.113.8;proto=http")]
+      fmap (map requestSourceValues) (readIORef requestObservabilityReference)
+        `shouldReturn` [ ["xml-http-request"],
+                         ["scripted-request"],
+                         ["api-client"],
+                         ["manual-client"],
+                         ["browser-or-client"],
+                         [],
+                         [],
+                         []
                        ]
 
     it "falls back to the direct peer address and request security when forwarding headers are absent" $ do
@@ -1797,6 +1940,11 @@ spec = do
               { Observability.attributeName = "http.request.header.x_forwarded_for",
                 Observability.attributeValue = Observability.TextAttribute "198.51.100.24"
               }
+          clientAddressSourceAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.client.address.source",
+                Observability.attributeValue = Observability.TextAttribute "x-forwarded-for"
+              }
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
@@ -1812,7 +1960,7 @@ spec = do
                            "/data"
                            202
                            Observability.BodyResponseKind
-                           [clientAddressAttribute, peerAddressAttribute, forwardedForAttribute]
+                           [clientAddressAttribute, peerAddressAttribute, clientAddressSourceAttribute, forwardedForAttribute]
                        ]
 
     it "keeps unmatched request paths in request span display names instead of collapsing them to the synthetic not-found route" $ do
