@@ -987,44 +987,41 @@ runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPri
 prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
 prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
   tempDirectory <- getCanonicalTemporaryDirectory
-  bracketOnError
-    (createTempDirectory tempDirectory "harch-web-certbot")
-    removePathForcibly
-    $ \stateDirectory -> do
-      let configDirectory = stateDirectory </> "config"
-          workDirectory = stateDirectory </> "work"
-          logsDirectory = stateDirectory </> "logs"
-          webrootDirectory = stateDirectory </> "webroot"
-      mapM_
-        (createDirectoryIfMissing True)
-        [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
-      certificateName <-
-        either
-          (ioError . userError)
-          pure
-          (certbotCertificateName runtimeAcmePlan)
-      bracket_
-        (registerCertbotAcmeChallengeWebroot webrootDirectory)
-        (unregisterCertbotAcmeChallengeWebroot webrootDirectory)
-        (runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory)
-      let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
-          certificatePath = certificateDirectory </> "fullchain.pem"
-          privateKeyPath = certificateDirectory </> "privkey.pem"
-      ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
-      ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
-      (resolvedCertificatePath, resolvedPrivateKeyPath) <-
-        case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
-          Nothing ->
-            pure (certificatePath, privateKeyPath)
-          Just sharedDirectory ->
-            publishCertificateFiles sharedDirectory certificatePath privateKeyPath
+  stateDirectory <- createTempDirectory tempDirectory "harch-web-certbot"
+  let configDirectory = stateDirectory </> "config"
+      workDirectory = stateDirectory </> "work"
+      logsDirectory = stateDirectory </> "logs"
+      webrootDirectory = stateDirectory </> "webroot"
+  mapM_
+    (createDirectoryIfMissing True)
+    [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
+  certificateName <-
+    either
+      (ioError . userError)
       pure
-        ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
-          stateDirectory
-        )
+      (certbotCertificateName runtimeAcmePlan)
+  bracket_
+    (registerCertbotAcmeChallengeWebroot webrootDirectory)
+    (unregisterCertbotAcmeChallengeWebroot webrootDirectory)
+    (runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory)
+  let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
+      certificatePath = certificateDirectory </> "fullchain.pem"
+      privateKeyPath = certificateDirectory </> "privkey.pem"
+  ensureRuntimeFileExists "Certbot ACME certificate file does not exist: " certificatePath
+  ensureRuntimeFileExists "Certbot ACME private key file does not exist: " privateKeyPath
+  (resolvedCertificatePath, resolvedPrivateKeyPath) <-
+    case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
+      Nothing ->
+        pure (certificatePath, privateKeyPath)
+      Just sharedDirectory ->
+        publishCertificateFiles sharedDirectory certificatePath privateKeyPath
+  pure
+    ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
+      stateDirectory
+    )
 
-runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory = do
+runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory = do
   let commandArguments =
         certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory
   processResult <-
@@ -1039,7 +1036,8 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirect
           <> show launchError
     Right (ExitSuccess, stdoutText, stderrText) -> do
       void (evaluate (length stdoutText + length stderrText))
-    Right (exitCode, stdoutText, stderrText) ->
+    Right (exitCode, stdoutText, stderrText) -> do
+      diagnostics <- certbotFailureDiagnostics stateDirectory logsDirectory
       ioError . userError $
         "Certbot failed for ACME listener on "
           <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
@@ -1049,6 +1047,34 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig configDirectory workDirect
           <> stdoutText
           <> "\nstderr:\n"
           <> stderrText
+          <> diagnostics
+
+certbotFailureDiagnostics :: FilePath -> FilePath -> IO String
+certbotFailureDiagnostics stateDirectory logsDirectory = do
+  let logPath = logsDirectory </> "letsencrypt.log"
+  logExists <- doesFileExist logPath
+  if logExists
+    then do
+      logText <- readFile logPath
+      _ <- evaluate (length logText)
+      pure $
+        "\nCertbot state directory was preserved for inspection: "
+          <> stateDirectory
+          <> "\nletsencrypt.log tail:\n"
+          <> tailTextLines 80 logText
+    else
+      pure $
+        "\nCertbot state directory was preserved for inspection: "
+          <> stateDirectory
+          <> "\nNo certbot logfile was found at "
+          <> logPath
+          <> ".\n"
+
+tailTextLines :: Int -> String -> String
+tailTextLines lineCount textValue =
+  unlines (drop (max 0 (length textLines - lineCount)) textLines)
+  where
+    textLines = lines textValue
 
 certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> [String]
 certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory =
@@ -1094,6 +1120,7 @@ certbotWebrootPathArguments certbotConfig webrootDirectory =
 certbotHttp01PortArguments :: RuntimeAcmeBindPlan -> [String]
 certbotHttp01PortArguments runtimeAcmePlan =
   if certbotHasOption "--http-01-port" (runtimeCertbotArguments runtimeAcmePlan)
+    || certbotShouldUseWebroot (runtimeCertbotArguments runtimeAcmePlan)
     then []
     else ["--http-01-port", show (acmeHttp01Port (runtimeAcmeListenerConfig runtimeAcmePlan))]
 

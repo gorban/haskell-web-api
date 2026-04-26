@@ -10,7 +10,7 @@ import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (isHexDigit)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (find, isInfixOf, isPrefixOf)
+import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -371,6 +371,17 @@ withFailingFakeCertbotExecutable :: (FilePath -> IO a) -> IO a
 withFailingFakeCertbotExecutable =
   withCustomFakeCertbotExecutable
     [ "#!/bin/sh",
+      "logs_dir=''",
+      "while [ \"$#\" -gt 0 ]; do",
+      "  case \"$1\" in",
+      "    --logs-dir) logs_dir=\"$2\"; shift 2 ;;",
+      "    *) shift ;;",
+      "  esac",
+      "done",
+      "if [ -n \"$logs_dir\" ]; then",
+      "  mkdir -p \"$logs_dir\"",
+      "  printf '%s\\n' 'fake letsencrypt detail' > \"$logs_dir/letsencrypt.log\"",
+      "fi",
       "echo fake certbot failure >&2",
       "exit 42"
     ]
@@ -3346,7 +3357,7 @@ spec = do
             "test \"$has_agree_tos\" = 1",
             "test \"$has_webroot\" = 1",
             "test -n \"$webroot_path\"",
-            "test \"$http_port\" = 80",
+            "test -z \"$http_port\"",
             "test \"$server_url\" = https://acme-v02.api.letsencrypt.org/directory",
             "test \"$email\" = ops@example.com",
             "test \"$domain\" = example.com,www.example.com",
@@ -3875,7 +3886,38 @@ spec = do
                       acmeHttpsListener "127.0.0.1" 5443 certbotBackend
                     ]
             runServer outputHandle acmeTlsConfig sampleApplication
-              `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n)")
+              `shouldThrow` ( \exception ->
+                                let rendered = show (exception :: IOError)
+                                 in "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n" `isPrefixOf` rendered
+                                      && "Certbot state directory was preserved for inspection: " `isInfixOf` rendered
+                                      && "letsencrypt.log tail:\nfake letsencrypt detail\n" `isInfixOf` rendered
+                            )
+
+    it "keeps certbot failure diagnostics useful when certbot exits without a logfile" $
+      withUnusedLoopbackPort $ \challengePort ->
+        withCustomFakeCertbotExecutable ["#!/bin/sh", "echo fake certbot failure without log >&2", "exit 42"] $ \certbotExecutable ->
+          withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            let certbotBackend =
+                  certbotHttp01BackendWithExecutable
+                    certbotExecutable
+                    [ "certonly",
+                      "--http-01-port",
+                      Text.pack (show challengePort),
+                      "--cert-name",
+                      "loopback.example"
+                    ]
+                acmeTlsConfig =
+                  serverConfigWithListeners
+                    [ httpRuntimeListener "127.0.0.1" challengePort,
+                      acmeHttpsListener "127.0.0.1" 5443 certbotBackend
+                    ]
+            runServer outputHandle acmeTlsConfig sampleApplication
+              `shouldThrow` ( \exception ->
+                                let rendered = show (exception :: IOError)
+                                 in "fake certbot failure without log" `isInfixOf` rendered
+                                      && "No certbot logfile was found at " `isInfixOf` rendered
+                                      && ".\n)" `isSuffixOf` rendered
+                            )
 
     it "fails explicitly when certbot-backed ACME listeners cannot launch the certbot executable" $
       withUnusedLoopbackPort $ \challengePort ->

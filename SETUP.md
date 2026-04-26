@@ -1012,7 +1012,7 @@ Set `LISTENER_<n>_ACME_DOMAINS` to the certificate domains you want the ACME ord
 certbot runtime path reuses that list when its arguments do not already declare `-d` / `--domain` /
 `--domains`, and when `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` is unset it also derives a working
 `certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path`, `--server`,
-`--email`, and `--http-01-port` from the ACME listener config. During that certbot run, the HTTP
+`--email`, and `--domains` from the ACME listener config. During that certbot run, the HTTP
 listener serves `/.well-known/acme-challenge/*` files from the temporary derived webroot path. The
 native in-process backend uses the same domain list for its ACME order identifiers and CSR.
 When `LISTENER_<n>_ACME_DIRECTORY_URL` is omitted, runtime config defaults it to the production Let's
