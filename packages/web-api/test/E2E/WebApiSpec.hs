@@ -9,7 +9,7 @@ import qualified Language.Haskell.TH.Syntax as TH
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi (buildApp)
-import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig)
+import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 
 spec =
   describe "browser e2e" $ do
@@ -64,6 +64,7 @@ withE2EAppConfig action =
                             staticDirectory = assetDirectory
                           }
                       ],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   }
             }

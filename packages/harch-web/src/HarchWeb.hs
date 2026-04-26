@@ -73,6 +73,7 @@ module HarchWeb
     createAcmeAccount,
     createAcmeOrder,
     decodeAcmeJsonResponse,
+    defaultStaticAssetContentTypes,
     escapeJsonCharacter,
     exportConnectionObservabilityToOtlp,
     exportRequestObservabilityToOtlp,
@@ -279,9 +280,20 @@ data StaticAssetRoot = StaticAssetRoot
 
 data StaticAssetsConfig = StaticAssetsConfig
   { staticAssetRoots :: [StaticAssetRoot],
+    staticAssetContentTypes :: [(Text, Text)],
     staticCacheControlSeconds :: Maybe Int
   }
   deriving (Eq, Show)
+
+defaultStaticAssetContentTypes :: [(Text, Text)]
+defaultStaticAssetContentTypes =
+  [ (".css", "text/css; charset=utf-8"),
+    (".html", "text/html; charset=utf-8"),
+    (".js", "application/javascript; charset=utf-8"),
+    (".json", "application/json; charset=utf-8"),
+    (".svg", "image/svg+xml"),
+    (".txt", "text/plain; charset=utf-8")
+  ]
 
 data OtlpExporter = OtlpExporter
   { otlpEndpoint :: Text,
@@ -2832,20 +2844,23 @@ serveStaticAssetResponse staticAssetsConfig requestPath =
       case sanitizeStaticAssetPath relativeAssetPath of
         Nothing -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
         Just safeAssetPath -> do
-          let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
-          assetExists <- doesFileExist assetFilePath
-          case assetExists of
-            True -> do
-              assetContents <- ByteString.readFile assetFilePath
-              pure
-                ( Just
-                    ( Wai.responseLBS
-                        Http.status200
-                        (staticAssetHeaders staticAssetsConfig assetFilePath)
-                        (LazyByteString.fromStrict assetContents)
+          case staticAssetContentType staticAssetsConfig safeAssetPath of
+            Nothing -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+            Just assetContentType -> do
+              let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
+              assetExists <- doesFileExist assetFilePath
+              case assetExists of
+                True -> do
+                  assetContents <- ByteString.readFile assetFilePath
+                  pure
+                    ( Just
+                        ( Wai.responseLBS
+                            Http.status200
+                            (staticAssetHeaders staticAssetsConfig assetContentType)
+                            (LazyByteString.fromStrict assetContents)
+                        )
                     )
-                )
-            False -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+                False -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
 
 matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, FilePath)
 matchStaticAssetRoot staticAssetsConfig requestPath =
@@ -2891,10 +2906,17 @@ sanitizeStaticAssetPath assetPath =
       not (null segment)
         && segment /= "."
         && segment /= ".."
+        && not (isHiddenStaticAssetSegment segment)
 
-staticAssetHeaders :: StaticAssetsConfig -> FilePath -> Http.ResponseHeaders
-staticAssetHeaders staticAssetsConfig assetFilePath =
-  (Http.hContentType, TextEncoding.encodeUtf8 (staticAssetContentType assetFilePath))
+isHiddenStaticAssetSegment :: FilePath -> Bool
+isHiddenStaticAssetSegment segment =
+  case segment of
+    '.' : _ -> True
+    _ -> False
+
+staticAssetHeaders :: StaticAssetsConfig -> Text -> Http.ResponseHeaders
+staticAssetHeaders staticAssetsConfig assetContentType =
+  (Http.hContentType, TextEncoding.encodeUtf8 assetContentType)
     : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
 
 staticCacheControlHeaderValue :: StaticAssetsConfig -> Maybe Text
@@ -2903,16 +2925,9 @@ staticCacheControlHeaderValue staticAssetsConfig =
     (\seconds -> Text.pack ("public, max-age=" <> show seconds))
     (staticCacheControlSeconds staticAssetsConfig)
 
-staticAssetContentType :: FilePath -> Text
-staticAssetContentType assetFilePath =
-  case takeExtension assetFilePath of
-    ".css" -> "text/css; charset=utf-8"
-    ".html" -> "text/html; charset=utf-8"
-    ".js" -> "application/javascript; charset=utf-8"
-    ".json" -> "application/json; charset=utf-8"
-    ".svg" -> "image/svg+xml"
-    ".txt" -> "text/plain; charset=utf-8"
-    _ -> "application/octet-stream"
+staticAssetContentType :: StaticAssetsConfig -> FilePath -> Maybe Text
+staticAssetContentType staticAssetsConfig assetFilePath =
+  lookup (Text.pack (takeExtension assetFilePath)) (staticAssetContentTypes staticAssetsConfig)
 
 missingStaticAssetResponse :: StaticAssetsConfig -> Wai.Response
 missingStaticAssetResponse staticAssetsConfig =

@@ -124,6 +124,8 @@ understands the following values:
 | `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited extra arguments passed to certbot. When unset, runtime startup derives a working `certonly --non-interactive --agree-tos --webroot` invocation plus `--webroot-path` / `--server` / `--email` / `--domains` / `--http-01-port` from the ACME config. Explicit values here still win for `--cert-name` / `-d` / `--domains` / `--http-01-port` and other certbot flags. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix served from static asset root `n`. | (`unset`) |
 | `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static asset root `n`. | (`unset`) |
+| `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Extension allowlist entry for static assets, including the leading dot. Use an empty value to opt into extensionless files for that entry. | default `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |
+| `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type emitted for the matching `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION`. | default MIME types for the default extensions |
 | `STATIC_CACHE_CONTROL_SECONDS` | Cache-Control max-age for configured static assets. | (`unset`) |
 | `REDIRECT_HTTP_TO_HTTPS` | Whether insecure requests should receive an HTTPS redirect before app/static handling. Supported values are `true` / `false`. When unset, runtime config defaults this to `true` if at least one HTTP listener and one HTTPS listener are configured together; otherwise it stays `false`. | (`listener-aware`) |
 | `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
@@ -140,6 +142,11 @@ understands the following values:
 OTLP request span names use the stable route value from `http.route` so Jaeger operations group by
 route, including synthetic not-found routes such as `/404` or `/api/404`. The concrete incoming URL
 remains available on the `url.path` span attribute for troubleshooting individual unmatched paths.
+
+Static asset requests only serve files whose extension is present in the configured content-type
+allowlist, and hidden path segments such as `.env` or `.well-known` are rejected under configured asset
+roots. Extensionless files are disabled by default; add an empty-extension content-type entry when a
+specific deployment needs them.
 
 The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the
 runtime application config consumed by `cabal run exe:haskell-web-api`. They are intended for build and

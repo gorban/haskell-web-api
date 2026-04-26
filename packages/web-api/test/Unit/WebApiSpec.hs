@@ -40,7 +40,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -62,6 +62,7 @@ navigationAppConfig =
     { staticAssets =
         StaticAssetsConfig
           { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
+            staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           }
     }
@@ -302,6 +303,7 @@ withClearedRuntimeEnvironment =
   withClearedEnvironmentPrefixes
     [ "APP_TITLE_PREFIX",
       "LISTENER_",
+      "STATIC_ASSET_CONTENT_TYPE_",
       "STATIC_ASSET_ROOT_",
       "STATIC_CACHE_CONTROL_SECONDS",
       "REDIRECT_HTTP_TO_HTTPS",
@@ -661,6 +663,7 @@ spec = do
             staticAssets =
               StaticAssetsConfig
                 { staticAssetRoots = [],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 },
             requestPolicy =
@@ -726,6 +729,7 @@ spec = do
               staticAssets =
                 StaticAssetsConfig
                   { staticAssetRoots = [],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1229,6 +1233,7 @@ spec = do
               staticAssets =
                 StaticAssetsConfig
                   { staticAssetRoots = [],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1297,6 +1302,7 @@ spec = do
                             staticDirectory = "vendor/public"
                           }
                       ],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Just 3600
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1306,6 +1312,23 @@ spec = do
                     metricsExporter = Nothing
                   }
             }
+
+    it "parses numbered static asset content type entries including extensionless opt-in" $ do
+      let committedDefaults =
+            [ ("APP_TITLE_PREFIX", "runtime-test"),
+              ("LISTENER_0_HOST", "127.0.0.1"),
+              ("LISTENER_0_PORT", "5001"),
+              ("LISTENER_0_SCHEME", "http"),
+              ("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", ".wasm"),
+              ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "application/wasm"),
+              ("STATIC_ASSET_CONTENT_TYPE_2_EXTENSION", ""),
+              ("STATIC_ASSET_CONTENT_TYPE_2_MIME_TYPE", "application/octet-stream")
+            ]
+      fmap (staticAssetContentTypes . staticAssets) (parseRuntimeAppConfig committedDefaults [] [])
+        `shouldBe` Right
+          [ (".wasm", "application/wasm"),
+            ("", "application/octet-stream")
+          ]
 
     it "parses redirect and HSTS request policy values for TLS-offload deployments" $
       parseRuntimeAppConfig
@@ -1707,6 +1730,7 @@ spec = do
               staticAssets =
                 StaticAssetsConfig
                   { staticAssetRoots = [],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1756,6 +1780,7 @@ spec = do
               staticAssets =
                 StaticAssetsConfig
                   { staticAssetRoots = [],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1809,6 +1834,7 @@ spec = do
               staticAssets =
                 StaticAssetsConfig
                   { staticAssetRoots = [],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
                     staticCacheControlSeconds = Nothing
                   },
               requestPolicy = requestPolicy defaultAppConfig,
@@ -1828,6 +1854,20 @@ spec = do
         []
         []
         `shouldBe` Left (InvalidConfigValue "STATIC_CACHE_CONTROL_SECONDS" "-1")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", "wasm"),
+          ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "application/wasm")
+        ]
+        `shouldBe` Left (InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_EXTENSION" "wasm")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [ ("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", ".wasm"),
+          ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "")
+        ]
+        `shouldBe` Left (InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE" "")
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
@@ -3281,9 +3321,9 @@ spec = do
       startupConfig `shouldBe` startupConfig
       startupConfig `shouldNotBe` differentStartupConfig
       show startupConfig
-        `shouldBe` "AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [startupConfig]
-        `shouldBe` "[AppStartupConfig {startupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, startupAppConfig = AppConfig {appTitlePrefix = \"web-api-test\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}}]"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -3651,11 +3691,11 @@ spec = do
                 }
           }
       show setupConfig
-        `shouldBe` "AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       showsPrec 11 setupConfig ""
-        `shouldBe` "(AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}})"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [setupConfig]
-        `shouldBe` "[AppSetupConfig {setupEnvironmentConfig = AppEnvironmentConfig {appMode = Test, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}}, setupAppConfig = AppConfig {appTitlePrefix = \"setup-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}, setupMigrationDatabaseConfig = Just (DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_owner\", databasePassword = \"owner-secret\"}), setupAutostartConfig = SetupAutostartConfig {setupAutostartDatabase = True, setupAutostartJaeger = False}}]"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       fileLoadError `shouldBe` fileLoadError
       fileLoadError `shouldNotBe` parseLoadError
       show fileLoadError
@@ -4408,6 +4448,7 @@ spec = do
           staticConfig =
             StaticAssetsConfig
               { staticAssetRoots = [staticRoot],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
                 staticCacheControlSeconds = Just 3600
               }
           exporter =
@@ -4642,10 +4683,14 @@ spec = do
       show
         ( StaticAssetsConfig
             { staticAssetRoots = [staticRoot],
+              staticAssetContentTypes = defaultStaticAssetContentTypes,
               staticCacheControlSeconds = Just 3600
             }
         )
-        `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
+        `shouldBe` ( "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
+                       <> show defaultStaticAssetContentTypes
+                       <> ", staticCacheControlSeconds = Just 3600}"
+                   )
       show
         ( ObservabilityConfig
             { tracingExporter =
@@ -4697,12 +4742,17 @@ spec = do
         ( AppConfig
             { appTitlePrefix = "test-app",
               listenerConfigs = [ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing}],
-              staticAssets = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600},
+              staticAssets =
+                StaticAssetsConfig
+                  { staticAssetRoots = [staticRoot],
+                    staticAssetContentTypes = defaultStaticAssetContentTypes,
+                    staticCacheControlSeconds = Just 3600
+                  },
               requestPolicy = requestPolicy defaultAppConfig,
               observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
             }
         )
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
 
     it "covers direct equality branches across the remaining public config and page types" $ do
       let certbotConfig =
@@ -4764,6 +4814,7 @@ spec = do
           staticAssetsConfig =
             StaticAssetsConfig
               { staticAssetRoots = [staticRoot],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
                 staticCacheControlSeconds = Just 3600
               }
           exporter =
@@ -4835,7 +4886,12 @@ spec = do
       staticRoot `shouldBe` staticRoot
       staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
       staticAssetsConfig `shouldBe` staticAssetsConfig
-      staticAssetsConfig `shouldNotBe` StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}
+      staticAssetsConfig
+        `shouldNotBe` StaticAssetsConfig
+          { staticAssetRoots = [],
+            staticAssetContentTypes = defaultStaticAssetContentTypes,
+            staticCacheControlSeconds = Nothing
+          }
       exporter `shouldBe` exporter
       exporter `shouldNotBe` OtlpExporter {otlpEndpoint = "http://other-collector:4318", otlpHeaders = []}
       observabilityConfig `shouldBe` observabilityConfig
@@ -4905,6 +4961,7 @@ spec = do
           staticAssetsConfig =
             StaticAssetsConfig
               { staticAssetRoots = [staticRoot],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
                 staticCacheControlSeconds = Just 3600
               }
           exporter =
@@ -5026,6 +5083,7 @@ spec = do
           staticAssetsConfig =
             StaticAssetsConfig
               { staticAssetRoots = [staticRoot],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
                 staticCacheControlSeconds = Just 3600
               }
           exporter =
@@ -5096,13 +5154,16 @@ spec = do
         `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
       show [staticAssetsConfig]
-        `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
+        `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
+                       <> show defaultStaticAssetContentTypes
+                       <> ", staticCacheControlSeconds = Just 3600}]"
+                   )
       show [exporter]
         `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityConfig]
         `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
       show [appConfig]
-        `shouldBe` "[AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 5443, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}}]"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [English, French] `shouldBe` "[English,French]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
@@ -5300,7 +5361,7 @@ spec = do
                 observability = observability defaultAppConfig
               }
       show config
-        `shouldBe` "AppConfig {appTitlePrefix = \"test-app\", listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}], staticAssets = StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = False, httpsRedirectPort = Nothing, strictTransportSecurity = Nothing}, observability = ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}}"
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
         `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
@@ -5955,6 +6016,7 @@ spec = do
               { staticAssets =
                   StaticAssetsConfig
                     { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = "public"}],
+                      staticAssetContentTypes = defaultStaticAssetContentTypes,
                       staticCacheControlSeconds = Nothing
                     }
               }

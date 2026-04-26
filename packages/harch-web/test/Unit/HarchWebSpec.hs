@@ -184,6 +184,7 @@ emptyStaticAssets :: StaticAssetsConfig
 emptyStaticAssets =
   StaticAssetsConfig
     { staticAssetRoots = [],
+      staticAssetContentTypes = defaultStaticAssetContentTypes,
       staticCacheControlSeconds = Nothing
     }
 
@@ -234,6 +235,7 @@ sampleServerConfig =
       staticAssets =
         StaticAssetsConfig
           { staticAssetRoots = [],
+            staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           },
       requestPolicy = defaultRequestPolicy,
@@ -614,6 +616,7 @@ spec = do
                 staticAssets =
                   StaticAssetsConfig
                     { staticAssetRoots = [staticRoot],
+                      staticAssetContentTypes = defaultStaticAssetContentTypes,
                       staticCacheControlSeconds = Just 3600
                     },
                 requestPolicy = requestPolicyConfig,
@@ -748,7 +751,12 @@ spec = do
                 listenerAcme = Just otherAcmeConfig
               }
           staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
-          staticAssetsConfig = StaticAssetsConfig {staticAssetRoots = [staticRoot], staticCacheControlSeconds = Just 3600}
+          staticAssetsConfig =
+            StaticAssetsConfig
+              { staticAssetRoots = [staticRoot],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
+                staticCacheControlSeconds = Just 3600
+              }
           tracingConfig =
             OtlpExporter
               { otlpEndpoint = "http://collector:4318/v1/traces",
@@ -802,7 +810,12 @@ spec = do
       staticRoot `shouldBe` staticRoot
       staticRoot `shouldNotBe` StaticAssetRoot {staticUrlPrefix = "/static", staticDirectory = "public"}
       staticAssetsConfig `shouldBe` staticAssetsConfig
-      staticAssetsConfig `shouldNotBe` StaticAssetsConfig {staticAssetRoots = [], staticCacheControlSeconds = Nothing}
+      staticAssetsConfig
+        `shouldNotBe` StaticAssetsConfig
+          { staticAssetRoots = [],
+            staticAssetContentTypes = defaultStaticAssetContentTypes,
+            staticCacheControlSeconds = Nothing
+          }
       tracingConfig `shouldBe` tracingConfig
       tracingConfig `shouldNotBe` otherTracingConfig
       observabilityConfig `shouldBe` observabilityConfig
@@ -833,7 +846,11 @@ spec = do
       show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}"
       show httpAcmeListenerConfig `shouldBe` "ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeChallengeBackend = InProcessHttp01}}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
-      show staticAssetsConfig `shouldBe` "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}"
+      show staticAssetsConfig
+        `shouldBe` ( "StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
+                       <> show defaultStaticAssetContentTypes
+                       <> ", staticCacheControlSeconds = Just 3600}"
+                   )
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
       show ManualTlsCredentials `shouldBe` "ManualTlsCredentials"
@@ -841,7 +858,7 @@ spec = do
       show TracingSignal `shouldBe` "TracingSignal"
       show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
-      show serverConfig `shouldBe` "ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}"
+      show serverConfig `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 strictTransportSecurityConfig "")
       shouldBeParenthesized (showsPrec 11 requestPolicyConfig "")
@@ -873,13 +890,17 @@ spec = do
       show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}]"
       show [httpAcmeListenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeChallengeBackend = InProcessHttp01}}]"
       show [staticRoot] `shouldBe` "[StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}]"
-      show [staticAssetsConfig] `shouldBe` "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}]"
+      show [staticAssetsConfig]
+        `shouldBe` ( "[StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticAssetContentTypes = "
+                       <> show defaultStaticAssetContentTypes
+                       <> ", staticCacheControlSeconds = Just 3600}]"
+                   )
       show [tracingConfig] `shouldBe` "[OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityConfig] `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}]"
       show [TracingSignal, MetricsSignal] `shouldBe` "[TracingSignal,MetricsSignal]"
       show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
-      show [serverConfig] `shouldBe` "[ServerConfig {listenerConfigs = [ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})})}], staticAssets = StaticAssetsConfig {staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}], staticCacheControlSeconds = Just 3600}, requestPolicy = RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}, observability = ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}}]"
+      show [serverConfig] `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do
@@ -1698,6 +1719,7 @@ spec = do
             assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Just 3600
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
@@ -1718,6 +1740,7 @@ spec = do
             assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 }
             requestPolicyConfig =
@@ -1752,6 +1775,7 @@ spec = do
             assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 }
             prefixedRequest =
@@ -1772,6 +1796,7 @@ spec = do
             assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
@@ -1780,8 +1805,7 @@ spec = do
                 (["index.html"], "<h1>Home</h1>", "text/html; charset=utf-8"),
                 (["data.json"], "{\"ok\":true}", "application/json; charset=utf-8"),
                 (["logo.svg"], "<svg></svg>", "image/svg+xml"),
-                (["note.txt"], "hello", "text/plain; charset=utf-8"),
-                (["blob.bin"], "0101", "application/octet-stream")
+                (["note.txt"], "hello", "text/plain; charset=utf-8")
               ]
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/styles.css") "body{}"
@@ -1804,6 +1828,51 @@ spec = do
         Wai.responseHeaders rootResponse
           `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 "text/plain; charset=utf-8")]
         readResponseBody rootResponse `shouldReturn` "Not Found"
+        unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["blob.bin"])
+        Wai.responseStatus unsupportedExtensionResponse `shouldBe` Http.status404
+        readResponseBody unsupportedExtensionResponse `shouldReturn` "Not Found"
+
+    it "serves configured extensionless static assets when the empty extension is explicitly allowlisted" $
+      withSystemTempDirectory "harch-web-static-extensionless" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes <> [("", "application/octet-stream")],
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/download") "raw"
+        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "download"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/octet-stream"
+        readResponseBody response `shouldReturn` "raw"
+
+    it "serves visible nested static assets but rejects hidden files and hidden directories" $
+      withSystemTempDirectory "harch-web-static-hidden" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True (assetDirectory <> "/scripts")
+        createDirectoryIfMissing True (assetDirectory <> "/.hidden")
+        writeFile (assetDirectory <> "/scripts/app.js") "console.log('nested');"
+        writeFile (assetDirectory <> "/.env") "SECRET=true"
+        writeFile (assetDirectory <> "/.hidden/app.js") "console.log('hidden');"
+        nestedResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "scripts", "app.js"])
+        Wai.responseStatus nestedResponse `shouldBe` Http.status200
+        readResponseBody nestedResponse `shouldReturn` "console.log('nested');"
+        hiddenFileResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", ".env"])
+        Wai.responseStatus hiddenFileResponse `shouldBe` Http.status404
+        readResponseBody hiddenFileResponse `shouldReturn` "Not Found"
+        hiddenDirectoryResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", ".hidden", "app.js"])
+        Wai.responseStatus hiddenDirectoryResponse `shouldBe` Http.status404
+        readResponseBody hiddenDirectoryResponse `shouldReturn` "Not Found"
 
     it "uses the most specific matching static root when multiple prefixes overlap" $
       withSystemTempDirectory "harch-web-static-overlap" $ \tempDirectory -> do
@@ -1815,6 +1884,7 @@ spec = do
                     [ StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = publicDirectory},
                       StaticAssetRoot {staticUrlPrefix = "/assets/admin", staticDirectory = adminDirectory}
                     ],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
@@ -1831,6 +1901,7 @@ spec = do
         let assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = tempDirectory <> "/public"}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Nothing
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
@@ -1850,6 +1921,7 @@ spec = do
         let assetConfig =
               StaticAssetsConfig
                 { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = tempDirectory <> "/public"}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Just 60
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
@@ -1860,6 +1932,8 @@ spec = do
         lookup Http.hCacheControl (Wai.responseHeaders invalidResponse) `shouldBe` expectedCacheControl
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` expectedCacheControl
+        unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "secret.bin"])
+        lookup Http.hCacheControl (Wai.responseHeaders unsupportedExtensionResponse) `shouldBe` expectedCacheControl
 
   describe "planServerStartup" $ do
     it "groups HTTP listeners into the expected bind plan" $ do
@@ -3862,6 +3936,7 @@ spec = do
                           staticDirectory = tempDirectory
                         }
                     ],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
                   staticCacheControlSeconds = Just 60
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig

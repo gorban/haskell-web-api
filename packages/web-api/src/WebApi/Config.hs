@@ -30,6 +30,7 @@ module WebApi.Config
     defaultAppConfig,
     defaultAppEnvironmentConfig,
     defaultAppStartupConfig,
+    defaultStaticAssetContentTypes,
     loadAppEnvironmentConfig,
     loadAppEnvironmentConfigWithFiles,
     loadAppStartupConfig,
@@ -78,6 +79,7 @@ import HarchWeb
     TlsConfig (..),
     TlsStartupMode (..),
     certbotOptionValues,
+    defaultStaticAssetContentTypes,
     firstCertbotDomain,
   )
 import System.Environment (getEnvironment)
@@ -197,6 +199,7 @@ defaultAppConfig =
       staticAssets =
         StaticAssetsConfig
           { staticAssetRoots = [],
+            staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           },
       requestPolicy =
@@ -545,6 +548,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
     parseStaticAssetsConfig =
       StaticAssetsConfig
         <$> traverse parseStaticAssetRoot (declaredIndices "STATIC_ASSET_ROOT_" allConfigEntries)
+        <*> parseStaticAssetContentTypes
         <*> traverse
           (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS")
           (optionalConfigValue "STATIC_CACHE_CONTROL_SECONDS")
@@ -598,6 +602,30 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
       StaticAssetRoot
         <$> requiredIndexedConfigValue "STATIC_ASSET_ROOT" staticRootIndex "URL_PREFIX"
         <*> requiredIndexedFilePathValue "STATIC_ASSET_ROOT" staticRootIndex "DIRECTORY"
+
+    parseStaticAssetContentTypes =
+      case declaredIndices "STATIC_ASSET_CONTENT_TYPE_" allConfigEntries of
+        [] -> Right defaultStaticAssetContentTypes
+        contentTypeIndices -> traverse parseStaticAssetContentType contentTypeIndices
+
+    parseStaticAssetContentType contentTypeIndex =
+      (,)
+        <$> parseStaticAssetExtension contentTypeIndex
+        <*> parseStaticAssetMimeType contentTypeIndex
+
+    parseStaticAssetExtension contentTypeIndex = do
+      let extensionKey = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "EXTENSION"
+      extension <- requiredConfigValue extensionKey
+      if Text.null extension || Text.isPrefixOf "." extension
+        then Right extension
+        else Left (InvalidConfigValue extensionKey extension)
+
+    parseStaticAssetMimeType contentTypeIndex = do
+      let mimeTypeKey = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "MIME_TYPE"
+      mimeType <- requiredConfigValue mimeTypeKey
+      if Text.null mimeType
+        then Left (InvalidConfigValue mimeTypeKey mimeType)
+        else Right mimeType
 
     parseObservabilityConfig =
       ObservabilityConfig
