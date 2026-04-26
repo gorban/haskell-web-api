@@ -24,7 +24,7 @@ module WebApi.Postgres
   )
 where
 
-import Control.Exception (bracket)
+import Control.Exception (bracket, evaluate)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.Text (Text)
@@ -32,6 +32,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error (lenientDecode)
 import Database.PostgreSQL.LibPQ qualified as LibPQ
+import GHC.Clock (getMonotonicTimeNSec)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
@@ -84,20 +85,20 @@ buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
     }
   where
     loadPostgresHomePageData requestContext = do
-      let operation = homeSummaryOperation
-      summaryResult <-
-        fmap
-          (fmap HomePageData)
-          (runRequiredScalarQuery runCommand databaseConfig (homeSummaryQuery (requestLocale requestContext)) HomePageDataError)
+      (summaryResult, operation) <-
+        timedDatabaseOperation homeSummaryOperation $
+          fmap
+            (fmap HomePageData)
+            (runRequiredScalarQuery runCommand databaseConfig (homeSummaryQuery (requestLocale requestContext)) HomePageDataError)
       pure
         DatabaseResult
           { databaseResultValue = summaryResult,
             databaseResultOperations = [operation]
           }
     loadPostgresSecondPageData requestContext = do
-      let summaryOperation = secondSummaryOperation
-          highlightsOperation = secondHighlightsOperation
-      summaryResult <- runRequiredScalarQuery runCommand databaseConfig (secondSummaryQuery (requestLocale requestContext)) SecondPageDataError
+      (summaryResult, summaryOperation) <-
+        timedDatabaseOperation secondSummaryOperation $
+          runRequiredScalarQuery runCommand databaseConfig (secondSummaryQuery (requestLocale requestContext)) SecondPageDataError
       case summaryResult of
         Left databaseError ->
           pure
@@ -106,7 +107,9 @@ buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
                 databaseResultOperations = [summaryOperation]
               }
         Right secondSummary -> do
-          highlightsResult <- runOptionalRowsQuery runCommand databaseConfig (secondHighlightsQuery (requestLocale requestContext)) SecondPageDataError
+          (highlightsResult, highlightsOperation) <-
+            timedDatabaseOperation secondHighlightsOperation $
+              runOptionalRowsQuery runCommand databaseConfig (secondHighlightsQuery (requestLocale requestContext)) SecondPageDataError
           pure
             DatabaseResult
               { databaseResultValue =
@@ -139,20 +142,20 @@ buildRuntimePostgresDatabaseEffectWithRunner runScalarQuery runRowsQuery databas
     }
   where
     loadRuntimeHomePageData requestContext = do
-      let operation = homeSummaryOperation
-      summaryResult <-
-        fmap
-          (fmap HomePageData)
-          (runScalarQuery databaseConfig (homeSummaryQuery (requestLocale requestContext)))
+      (summaryResult, operation) <-
+        timedDatabaseOperation homeSummaryOperation $
+          fmap
+            (fmap HomePageData)
+            (runScalarQuery databaseConfig (homeSummaryQuery (requestLocale requestContext)))
       pure
         DatabaseResult
           { databaseResultValue = first HomePageDataError summaryResult,
             databaseResultOperations = [operation]
           }
     loadRuntimeSecondPageData requestContext = do
-      let summaryOperation = secondSummaryOperation
-          highlightsOperation = secondHighlightsOperation
-      summaryResult <- runScalarQuery databaseConfig (secondSummaryQuery (requestLocale requestContext))
+      (summaryResult, summaryOperation) <-
+        timedDatabaseOperation secondSummaryOperation $
+          runScalarQuery databaseConfig (secondSummaryQuery (requestLocale requestContext))
       case first SecondPageDataError summaryResult of
         Left databaseError ->
           pure
@@ -161,7 +164,9 @@ buildRuntimePostgresDatabaseEffectWithRunner runScalarQuery runRowsQuery databas
                 databaseResultOperations = [summaryOperation]
               }
         Right secondSummary -> do
-          highlightsResult <- runRowsQuery databaseConfig (secondHighlightsQuery (requestLocale requestContext))
+          (highlightsResult, highlightsOperation) <-
+            timedDatabaseOperation secondHighlightsOperation $
+              runRowsQuery databaseConfig (secondHighlightsQuery (requestLocale requestContext))
           pure
             DatabaseResult
               { databaseResultValue =
@@ -175,6 +180,21 @@ buildRuntimePostgresDatabaseEffectWithRunner runScalarQuery runRowsQuery databas
                     (first SecondPageDataError highlightsResult),
                 databaseResultOperations = [summaryOperation, highlightsOperation]
               }
+
+timedDatabaseOperation :: DatabaseOperation -> IO a -> IO (a, DatabaseOperation)
+timedDatabaseOperation databaseOperation action = do
+  _ <- evaluate (databaseOperationStartedAtNanoseconds databaseOperation)
+  _ <- evaluate (databaseOperationEndedAtNanoseconds databaseOperation)
+  startedAt <- getMonotonicTimeNSec
+  result <- action
+  endedAt <- getMonotonicTimeNSec
+  pure
+    ( result,
+      databaseOperation
+        { databaseOperationStartedAtNanoseconds = Just startedAt,
+          databaseOperationEndedAtNanoseconds = Just endedAt
+        }
+    )
 
 runPostgresMigrations :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrations =
@@ -463,21 +483,27 @@ homeSummaryOperation :: DatabaseOperation
 homeSummaryOperation =
   DatabaseOperation
     { databaseOperationName = "load-home-page-summary",
-      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+      databaseOperationStartedAtNanoseconds = Nothing,
+      databaseOperationEndedAtNanoseconds = Nothing
     }
 
 secondSummaryOperation :: DatabaseOperation
 secondSummaryOperation =
   DatabaseOperation
     { databaseOperationName = "load-second-page-summary",
-      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+      databaseOperationStartedAtNanoseconds = Nothing,
+      databaseOperationEndedAtNanoseconds = Nothing
     }
 
 secondHighlightsOperation :: DatabaseOperation
 secondHighlightsOperation =
   DatabaseOperation
     { databaseOperationName = "load-second-page-highlights",
-      databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+      databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+      databaseOperationStartedAtNanoseconds = Nothing,
+      databaseOperationEndedAtNanoseconds = Nothing
     }
 
 qualifiedTableName :: Text -> Text

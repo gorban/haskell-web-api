@@ -2107,7 +2107,9 @@ spec = do
           databaseOperation =
             DatabaseOperation
               { databaseOperationName = "load-second-page-summary",
-                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                databaseOperationStartedAtNanoseconds = Nothing,
+                databaseOperationEndedAtNanoseconds = Nothing
               }
           databaseResult =
             DatabaseResult
@@ -2282,7 +2284,9 @@ spec = do
       let databaseOperation =
             DatabaseOperation
               { databaseOperationName = "load-second-page-summary",
-                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                databaseOperationStartedAtNanoseconds = Nothing,
+                databaseOperationEndedAtNanoseconds = Nothing
               }
           routeDataSelection =
             RouteDataSelection
@@ -2440,7 +2444,9 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-home-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2477,11 +2483,15 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   },
                 DatabaseOperation
                   { databaseOperationName = "load-second-page-highlights",
-                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2543,7 +2553,9 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2586,11 +2598,15 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   },
                 DatabaseOperation
                   { databaseOperationName = "load-second-page-highlights",
-                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2638,7 +2654,9 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-home-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2664,11 +2682,15 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   },
                 DatabaseOperation
                   { databaseOperationName = "load-second-page-highlights",
-                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2706,11 +2728,15 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   },
                 DatabaseOperation
                   { databaseOperationName = "load-second-page-highlights",
-                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+                    databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2734,7 +2760,9 @@ spec = do
             databaseResultOperations =
               [ DatabaseOperation
                   { databaseOperationName = "load-second-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                    databaseOperationStartedAtNanoseconds = Nothing,
+                    databaseOperationEndedAtNanoseconds = Nothing
                   }
               ]
           }
@@ -2918,7 +2946,7 @@ spec = do
         )
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
-        HarchWeb.renderResponse application secondRequest
+        fmap stripVolatileDatabaseTimingResponse (HarchWeb.renderResponse application secondRequest)
           `shouldReturn` HarchWeb.PageResponseWithMetadata
             HarchWeb.ResponseBody
               { HarchWeb.responseStatus = 200,
@@ -5528,7 +5556,7 @@ spec = do
                         }
                   )
               )
-      selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest
+      fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest)
         `shouldReturn` HarchWeb.PageResponseWithMetadata
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
@@ -5563,7 +5591,7 @@ spec = do
               HarchWeb.responseLogEntries = []
             }
           renderedSecondPage
-      selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest
+      fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
@@ -5650,6 +5678,49 @@ spec = do
                 ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
             }
 
+    it "omits volatile database timing fields when a database effect reports untimed operations" $ do
+      let untimedOperation =
+            DatabaseOperation
+              { databaseOperationName = "load-second-page-summary",
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                databaseOperationStartedAtNanoseconds = Nothing,
+                databaseOperationEndedAtNanoseconds = Nothing
+              }
+          untimedDatabaseEffect =
+            defaultDatabaseEffect
+              { loadSecondPageDataWithObservability =
+                  \_ ->
+                    pure
+                      DatabaseResult
+                        { databaseResultValue =
+                            Right
+                              SecondPageData
+                                { secondPageDataSummary = "Untimed summary.",
+                                  secondPageDataHighlights = []
+                                },
+                          databaseResultOperations = [untimedOperation]
+                        }
+              }
+      response <- selectResponseWithDatabase defaultAppConfig untimedDatabaseEffect apiSecondRequest
+      case response of
+        HarchWeb.BodyResponse responseBody ->
+          HarchWeb.responseObservabilityAttributes responseBody
+            `shouldBe` [ Observability.ObservabilityAttribute
+                           { Observability.attributeName = "db.system",
+                             Observability.attributeValue = Observability.TextAttribute "postgresql"
+                           },
+                         Observability.ObservabilityAttribute
+                           { Observability.attributeName = "db.operation.name",
+                             Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                           },
+                         Observability.ObservabilityAttribute
+                           { Observability.attributeName = "db.query.template",
+                             Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                           }
+                       ]
+        _ ->
+          expectationFailure "expected API response body for untimed database operation"
+
     it "adds safe database operation details to postgres-backed failure diagnostics" $ do
       let failingRunner command =
             pure $
@@ -5662,7 +5733,7 @@ spec = do
                   | otherwise ->
                       failingPostgresResult "unexpected query"
           postgresEffect = buildPostgresDatabaseEffectWithRunner failingRunner postgresTestConfig
-      selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest
+      fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 503,
@@ -6708,3 +6779,28 @@ spec = do
                   `shouldContain` "Failed to load app startup config: AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")"
               Right () ->
                 expectationFailure "expected run to fail on invalid runtime startup config"
+
+stripVolatileDatabaseTimingResponse :: HarchWeb.Response route context -> HarchWeb.Response route context
+stripVolatileDatabaseTimingResponse response =
+  case response of
+    HarchWeb.PageResponse page -> HarchWeb.PageResponse page
+    HarchWeb.PageResponseWithMetadata responseBody page ->
+      HarchWeb.PageResponseWithMetadata (stripVolatileDatabaseTimingResponseBody responseBody) page
+    HarchWeb.BodyResponse responseBody ->
+      HarchWeb.BodyResponse (stripVolatileDatabaseTimingResponseBody responseBody)
+
+stripVolatileDatabaseTimingResponseBody :: HarchWeb.ResponseBody -> HarchWeb.ResponseBody
+stripVolatileDatabaseTimingResponseBody responseBody =
+  responseBody
+    { HarchWeb.responseObservabilityAttributes =
+        filter
+          (not . isVolatileDatabaseTimingAttribute)
+          (HarchWeb.responseObservabilityAttributes responseBody)
+    }
+
+isVolatileDatabaseTimingAttribute :: Observability.ObservabilityAttribute -> Bool
+isVolatileDatabaseTimingAttribute attribute =
+  Observability.attributeName attribute
+    `elem` [ "db.operation.start_monotonic_ns",
+             "db.operation.duration_ns"
+           ]

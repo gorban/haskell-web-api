@@ -228,6 +228,22 @@ databaseOperationObservabilityEntries databaseOperation =
         Observability.attributeValue = Observability.TextAttribute (databaseQueryTemplate databaseOperation)
       }
   ]
+    <> maybeDatabaseOperationTimingAttributes databaseOperation
+
+maybeDatabaseOperationTimingAttributes :: DatabaseOperation -> [Observability.ObservabilityAttribute]
+maybeDatabaseOperationTimingAttributes databaseOperation =
+  case (databaseOperationStartedAtNanoseconds databaseOperation, databaseOperationEndedAtNanoseconds databaseOperation) of
+    (Just startedAt, Just endedAt) ->
+      [ Observability.ObservabilityAttribute
+          { Observability.attributeName = "db.operation.start_monotonic_ns",
+            Observability.attributeValue = Observability.IntAttribute (fromIntegral startedAt)
+          },
+        Observability.ObservabilityAttribute
+          { Observability.attributeName = "db.operation.duration_ns",
+            Observability.attributeValue = Observability.IntAttribute (fromIntegral (endedAt - min startedAt endedAt))
+          }
+      ]
+    _ -> []
 
 renderDatabaseOperationsSuffix :: [DatabaseOperation] -> Text
 renderDatabaseOperationsSuffix databaseOperations =

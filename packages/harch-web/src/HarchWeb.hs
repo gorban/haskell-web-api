@@ -632,84 +632,97 @@ matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route 
 matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
-toWaiApplication webApplication request respond =
+toWaiApplication webApplication request respond = do
+  requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
-   in case corsPreflightResponse requestPolicyConfig request of
-        Just preflightResponse ->
-          respond (applyResponseHeaders policyResponseHeaders preflightResponse)
-        Nothing ->
-          case requestRedirectLocation requestPolicyConfig request of
-            Just redirectLocation ->
+  policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
+  case corsPreflightResponse requestPolicyConfig request of
+    Just preflightResponse ->
+      respond (applyResponseHeaders policyResponseHeaders preflightResponse)
+    Nothing ->
+      case requestRedirectLocation requestPolicyConfig request of
+        Just redirectLocation ->
+          respond
+            (applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation))
+        Nothing -> do
+          maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
+          case maybeStaticResponse of
+            Just staticResponse ->
               respond
-                (applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation))
+                (applyResponseHeaders policyResponseHeaders staticResponse)
             Nothing -> do
-              maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
-              case maybeStaticResponse of
-                Just staticResponse ->
-                  respond
-                    (applyResponseHeaders policyResponseHeaders staticResponse)
-                Nothing -> do
-                  let requestContext =
-                        requestContextFromRequest
-                          webApplication
-                          request
-                          (defaultRequestContext webApplication)
-                      routeRequest =
-                        matchRoute
-                          (routeCodec webApplication)
-                          requestContext
-                          (waiRequestPath request)
-                  response <- renderResponse webApplication routeRequest
-                  let requestContextAttributes = requestContextObservabilityAttributes request
-                      requestLogFields = requestLogContextFields request
-                      extraObservabilityAttributes =
-                        requestContextAttributes
-                          <> case response of
-                            PageResponse _ -> []
-                            PageResponseWithMetadata pageResponseBodyValue _ ->
-                              responseObservabilityAttributes pageResponseBodyValue
-                            BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-                      contextualizedResponseLogEntries =
-                        case response of
-                          PageResponse _ -> []
+              routeMatchingStartedAt <- getMonotonicTimeNSec
+              let requestContext =
+                    requestContextFromRequest
+                      webApplication
+                      request
+                      (defaultRequestContext webApplication)
+                  routeRequest =
+                    matchRoute
+                      (routeCodec webApplication)
+                      requestContext
+                      (waiRequestPath request)
+              routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
+              renderStartedAt <- getMonotonicTimeNSec
+              response <- renderResponse webApplication routeRequest
+              responseRenderedAt <- response `seq` getMonotonicTimeNSec
+              let requestContextAttributes = requestContextObservabilityAttributes request
+                  requestLogFields = requestLogContextFields request
+                  extraObservabilityAttributes =
+                    requestContextAttributes
+                      <> case response of
+                        PageResponse _ -> []
+                        PageResponseWithMetadata pageResponseBodyValue _ ->
+                          responseObservabilityAttributes pageResponseBodyValue
+                        BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+                  contextualizedResponseLogEntries =
+                    case response of
+                      PageResponse _ -> []
+                      PageResponseWithMetadata pageResponseBodyValue _ ->
+                        map
+                          (prependRequestLogContext requestLogFields)
+                          (responseLogEntries pageResponseBodyValue)
+                      BodyResponse responseBodyValue ->
+                        map
+                          (prependRequestLogContext requestLogFields)
+                          (responseLogEntries responseBodyValue)
+                  requestObservability =
+                    Observability.buildRequestObservability
+                      (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                      (requestScheme request)
+                      (waiRequestPath request)
+                      (renderRoute (routeCodec webApplication) routeRequest)
+                      ( case response of
+                          PageResponse page ->
+                            if isNotFoundPage webApplication page
+                              then 404
+                              else 200
                           PageResponseWithMetadata pageResponseBodyValue _ ->
-                            map
-                              (prependRequestLogContext requestLogFields)
-                              (responseLogEntries pageResponseBodyValue)
-                          BodyResponse responseBodyValue ->
-                            map
-                              (prependRequestLogContext requestLogFields)
-                              (responseLogEntries responseBodyValue)
-                      requestObservability =
-                        Observability.buildRequestObservability
-                          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                          (requestScheme request)
-                          (waiRequestPath request)
-                          (renderRoute (routeCodec webApplication) routeRequest)
-                          ( case response of
-                              PageResponse page ->
-                                if isNotFoundPage webApplication page
-                                  then 404
-                                  else 200
-                              PageResponseWithMetadata pageResponseBodyValue _ ->
-                                responseStatus pageResponseBodyValue
-                              BodyResponse responseBodyValue -> responseStatus responseBodyValue
-                          )
-                          ( case response of
-                              PageResponse _ -> Observability.PageResponseKind
-                              PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-                              BodyResponse _ -> Observability.BodyResponseKind
-                          )
-                          extraObservabilityAttributes
-                  Observability.forceRequestObservability requestObservability `seq`
-                    reportRequestObservability webApplication requestObservability
-                      >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-                      >> respond
-                        ( applyResponseHeaders
-                            policyResponseHeaders
-                            (toWaiResponse [] webApplication response)
-                        )
+                            responseStatus pageResponseBodyValue
+                          BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                      )
+                      ( case response of
+                          PageResponse _ -> Observability.PageResponseKind
+                          PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+                          BodyResponse _ -> Observability.BodyResponseKind
+                      )
+                      ( extraObservabilityAttributes
+                          <> requestTimingObservabilityAttributes
+                            requestStartedAt
+                            [ ("request-policy", requestStartedAt, policyEvaluatedAt),
+                              ("route-match", routeMatchingStartedAt, routeMatchedAt),
+                              ("render-response", renderStartedAt, responseRenderedAt)
+                            ]
+                      )
+              Observability.forceRequestObservability requestObservability `seq`
+                reportRequestObservability webApplication requestObservability
+                  >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
+                  >> respond
+                    ( applyResponseHeaders
+                        policyResponseHeaders
+                        (toWaiResponse [] webApplication response)
+                    )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -2793,11 +2806,40 @@ optionalRequestLogField fieldName maybeFieldValue =
     Just fieldValue -> [renderRequestLogField fieldName fieldValue]
     Nothing -> []
 
+requestTimingObservabilityAttributes :: Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
+requestTimingObservabilityAttributes requestStartedAt phaseTimings =
+  intObservabilityAttribute "harch.request.start_monotonic_ns" (fromIntegral requestStartedAt)
+    : intObservabilityAttribute "harch.request.duration_ns" (nanosecondsBetween requestStartedAt requestCompletedAt)
+    : concatMap phaseTimingAttributes phaseTimings
+  where
+    requestCompletedAt =
+      maximum (requestStartedAt : [phaseEndedAt | (_, _, phaseEndedAt) <- phaseTimings])
+
+    phaseTimingAttributes (phaseName, phaseStartedAt, phaseEndedAt) =
+      [ intObservabilityAttribute
+          ("harch.phase." <> phaseName <> ".start_offset_ns")
+          (nanosecondsBetween requestStartedAt phaseStartedAt),
+        intObservabilityAttribute
+          ("harch.phase." <> phaseName <> ".duration_ns")
+          (nanosecondsBetween phaseStartedAt phaseEndedAt)
+      ]
+
+nanosecondsBetween :: Word64 -> Word64 -> Int
+nanosecondsBetween start end =
+  fromIntegral (end - min start end)
+
 textObservabilityAttribute :: Text -> Text -> Observability.ObservabilityAttribute
 textObservabilityAttribute name value =
   Observability.ObservabilityAttribute
     { Observability.attributeName = name,
       Observability.attributeValue = Observability.TextAttribute value
+    }
+
+intObservabilityAttribute :: Text -> Int -> Observability.ObservabilityAttribute
+intObservabilityAttribute name value =
+  Observability.ObservabilityAttribute
+    { Observability.attributeName = name,
+      Observability.attributeValue = Observability.IntAttribute value
     }
 
 requestScheme :: Wai.Request -> Text
@@ -3357,13 +3399,15 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           <> requestDatabaseChildSpans requestObservability
   childSpanIds <- mapM (const nextOtlpSpanId) childSpans
   endTimeUnixNano <- currentUnixTimeNSec
-  let (startTimeUnixNano, childSpanTimings) =
-        planOtlpSpanTimings endTimeUnixNano (length childSpans)
+  let rootDurationNanoseconds =
+        fromMaybe
+          (minimumOtlpSpanDurationNanoseconds * fromIntegral (max 1 (length childSpans + 1)))
+          (requestDurationNanoseconds requestObservability)
+      startTimeUnixNano = nonNegativeStartTime endTimeUnixNano rootDurationNanoseconds
       timedChildSpans =
-        zipWith3
-          (\childSpanId (childStartTime, childEndTime) childSpan -> (childSpanId, childStartTime, childEndTime, childSpan))
+        zipWith
+          (timedOtlpChildSpan startTimeUnixNano rootDurationNanoseconds)
           childSpanIds
-          childSpanTimings
           childSpans
   let requestBody =
         otlpTraceBodyFromSpan
@@ -3385,7 +3429,7 @@ exportConnectionObservabilityToOtlp ::
 exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
   endTimeUnixNano <- currentUnixTimeNSec
-  let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano 1
+  let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano minimumOtlpSpanDurationNanoseconds
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
@@ -3531,21 +3575,44 @@ otlpSpanObject traceId spanId maybeParentSpanId spanKind startTimeUnixNano endTi
         ++ statusFields
     )
 
-planOtlpSpanTimings :: Word64 -> Int -> (Word64, [(Word64, Word64)])
-planOtlpSpanTimings endTimeUnixNano childSpanCount =
-  (startTimeUnixNano, childSpanTimings)
-  where
-    durationNanos = fromIntegral (max 1 (childSpanCount + 1))
-    startTimeUnixNano = nonNegativeStartTime endTimeUnixNano durationNanos
-    childSpanTimings =
-      [ let childStartTime = startTimeUnixNano + fromIntegral childIndex
-         in (childStartTime, childStartTime + 1)
-      | childIndex <- [1 .. childSpanCount]
-      ]
+minimumOtlpSpanDurationNanoseconds :: Word64
+minimumOtlpSpanDurationNanoseconds = 1000
 
 nonNegativeStartTime :: Word64 -> Word64 -> Word64
 nonNegativeStartTime endTimeUnixNano durationNanos =
   endTimeUnixNano - min endTimeUnixNano durationNanos
+
+timedOtlpChildSpan :: Word64 -> Word64 -> Text -> Observability.RequestSpan -> (Text, Word64, Word64, Observability.RequestSpan)
+timedOtlpChildSpan rootStartTimeUnixNano rootDurationNanoseconds childSpanId childSpan =
+  ( childSpanId,
+    childStartTimeUnixNano,
+    childStartTimeUnixNano + childDurationNanoseconds,
+    childSpan
+  )
+  where
+    childStartOffsetNanoseconds =
+      fromMaybe 0 (requestSpanIntAttribute "harch.span.start_offset_ns" childSpan)
+    childDurationNanoseconds =
+      fromMaybe rootDurationNanoseconds (requestSpanIntAttribute "harch.span.duration_ns" childSpan)
+    childStartTimeUnixNano =
+      rootStartTimeUnixNano + min rootDurationNanoseconds childStartOffsetNanoseconds
+
+requestDurationNanoseconds :: Observability.RequestObservability -> Maybe Word64
+requestDurationNanoseconds requestObservability =
+  requestSpanIntAttribute "harch.request.duration_ns" (Observability.observabilityRequestSpan requestObservability)
+
+requestSpanIntAttribute :: Text -> Observability.RequestSpan -> Maybe Word64
+requestSpanIntAttribute attributeName requestSpan =
+  listToMaybe
+    [ fromIntegral attributeValue
+    | Observability.ObservabilityAttribute
+        { Observability.attributeName = currentName,
+          Observability.attributeValue = Observability.IntAttribute attributeValue
+        } <-
+        Observability.requestSpanAttributes requestSpan,
+      currentName == attributeName,
+      attributeValue >= 0
+    ]
 
 requestRuntimePhaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
 requestRuntimePhaseChildSpans requestObservability =
@@ -3571,9 +3638,31 @@ requestRuntimePhaseChildSpans requestObservability =
       Observability.RequestSpan
         { Observability.requestSpanDisplayName = displayName,
           Observability.requestSpanAttributes =
-            textObservabilityAttribute "harch.span.phase" phaseName
-              : concatMap (`attributesNamed` rootAttributes) copiedAttributeNames
+            [textObservabilityAttribute "harch.span.phase" phaseName]
+              <> phaseTimingAttributes phaseName
+              <> concatMap (`attributesNamed` rootAttributes) copiedAttributeNames
         }
+
+    phaseTimingAttributes phaseName =
+      renamedIntAttribute
+        "harch.span.start_offset_ns"
+        ("harch.phase." <> phaseName <> ".start_offset_ns")
+        <> renamedIntAttribute
+          "harch.span.duration_ns"
+          ("harch.phase." <> phaseName <> ".duration_ns")
+
+    renamedIntAttribute childName rootName =
+      [ Observability.ObservabilityAttribute
+          { Observability.attributeName = childName,
+            Observability.attributeValue = Observability.IntAttribute attributeValue
+          }
+      | Observability.ObservabilityAttribute
+          { Observability.attributeName = currentName,
+            Observability.attributeValue = Observability.IntAttribute attributeValue
+          } <-
+          rootAttributes,
+        currentName == rootName
+      ]
 
 attributesNamed :: Text -> [Observability.ObservabilityAttribute] -> [Observability.ObservabilityAttribute]
 attributesNamed expectedName attributes =
@@ -3584,37 +3673,85 @@ attributesNamed expectedName attributes =
 
 requestDatabaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
 requestDatabaseChildSpans requestObservability =
-  databaseChildSpansFromAttributes
-    ( Observability.requestSpanAttributes
-        (Observability.observabilityRequestSpan requestObservability)
-    )
+  databaseChildSpansFromAttributes requestStartMonotonicNanoseconds rootAttributes
+  where
+    rootSpan = Observability.observabilityRequestSpan requestObservability
+    rootAttributes = Observability.requestSpanAttributes rootSpan
+    requestStartMonotonicNanoseconds =
+      requestSpanIntAttribute "harch.request.start_monotonic_ns" rootSpan
 
-databaseChildSpansFromAttributes :: [Observability.ObservabilityAttribute] -> [Observability.RequestSpan]
-databaseChildSpansFromAttributes attributes =
-  case attributes of
-    [] -> []
-    systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
-      : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
-      : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
-      : remainingAttributes ->
-        databaseOperationChildSpan operationName systemAttribute operationAttribute queryAttribute
-          : databaseChildSpansFromAttributes remainingAttributes
-    _ : remainingAttributes ->
-      databaseChildSpansFromAttributes remainingAttributes
+databaseChildSpansFromAttributes :: Maybe Word64 -> [Observability.ObservabilityAttribute] -> [Observability.RequestSpan]
+databaseChildSpansFromAttributes requestStartMonotonicNanoseconds =
+  go
+  where
+    go currentAttributes =
+      case currentAttributes of
+        [] -> []
+        systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
+          : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
+          : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
+          : startedAtAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.start_monotonic_ns", Observability.attributeValue = Observability.IntAttribute _}
+          : durationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.duration_ns", Observability.attributeValue = Observability.IntAttribute _}
+          : remainingAttributes ->
+            databaseOperationChildSpan
+              requestStartMonotonicNanoseconds
+              operationName
+              systemAttribute
+              operationAttribute
+              queryAttribute
+              [startedAtAttribute, durationAttribute]
+              : go remainingAttributes
+        systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
+          : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
+          : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
+          : remainingAttributes ->
+            databaseOperationChildSpan requestStartMonotonicNanoseconds operationName systemAttribute operationAttribute queryAttribute []
+              : go remainingAttributes
+        _ : remainingAttributes ->
+          go remainingAttributes
 
 databaseOperationChildSpan ::
+  Maybe Word64 ->
   Text ->
   Observability.ObservabilityAttribute ->
   Observability.ObservabilityAttribute ->
   Observability.ObservabilityAttribute ->
+  [Observability.ObservabilityAttribute] ->
   Observability.RequestSpan
-databaseOperationChildSpan operationName systemAttribute operationAttribute queryAttribute =
+databaseOperationChildSpan requestStartMonotonicNanoseconds operationName systemAttribute operationAttribute queryAttribute timingAttributes =
   Observability.RequestSpan
     { Observability.requestSpanDisplayName =
         "DB " <> operationName,
       Observability.requestSpanAttributes =
         [systemAttribute, operationAttribute, queryAttribute]
+          <> databaseOperationTimingAttributes requestStartMonotonicNanoseconds timingAttributes
     }
+
+databaseOperationTimingAttributes :: Maybe Word64 -> [Observability.ObservabilityAttribute] -> [Observability.ObservabilityAttribute]
+databaseOperationTimingAttributes requestStartMonotonicNanoseconds timingAttributes =
+  case (requestStartMonotonicNanoseconds, attributeIntValue "db.operation.start_monotonic_ns" timingAttributes, attributeIntValue "db.operation.duration_ns" timingAttributes) of
+    (Just requestStartedAt, Just operationStartedAt, Just operationDuration) ->
+      [ intObservabilityAttribute
+          "harch.span.start_offset_ns"
+          (fromIntegral (operationStartedAt - min requestStartedAt operationStartedAt)),
+        intObservabilityAttribute
+          "harch.span.duration_ns"
+          (fromIntegral operationDuration)
+      ]
+    _ -> []
+
+attributeIntValue :: Text -> [Observability.ObservabilityAttribute] -> Maybe Word64
+attributeIntValue expectedName attributes =
+  listToMaybe
+    [ fromIntegral attributeValue
+    | Observability.ObservabilityAttribute
+        { Observability.attributeName = currentName,
+          Observability.attributeValue = Observability.IntAttribute attributeValue
+        } <-
+        attributes,
+      currentName == expectedName,
+      attributeValue >= 0
+    ]
 
 otlpRequestSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
 otlpRequestSpanStatusFields requestObservability =

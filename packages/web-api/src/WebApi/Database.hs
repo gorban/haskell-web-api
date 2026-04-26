@@ -15,6 +15,7 @@ module WebApi.Database
 where
 
 import Data.Text (Text)
+import Data.Word (Word64)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -45,9 +46,24 @@ data SecondPageData = SecondPageData
 
 data DatabaseOperation = DatabaseOperation
   { databaseOperationName :: Text,
-    databaseQueryTemplate :: Text
+    databaseQueryTemplate :: Text,
+    databaseOperationStartedAtNanoseconds :: Maybe Word64,
+    databaseOperationEndedAtNanoseconds :: Maybe Word64
   }
-  deriving (Eq, Show)
+
+instance Eq DatabaseOperation where
+  left == right =
+    databaseOperationName left == databaseOperationName right
+      && databaseQueryTemplate left == databaseQueryTemplate right
+
+instance Show DatabaseOperation where
+  showsPrec precedence databaseOperation =
+    showParen (precedence > 10) $
+      showString "DatabaseOperation {databaseOperationName = "
+        . shows (databaseOperationName databaseOperation)
+        . showString ", databaseQueryTemplate = "
+        . shows (databaseQueryTemplate databaseOperation)
+        . showString "}"
 
 data DatabaseResult a = DatabaseResult
   { databaseResultValue :: Either DatabaseError a,

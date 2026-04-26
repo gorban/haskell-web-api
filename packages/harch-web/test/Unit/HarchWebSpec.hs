@@ -11,7 +11,7 @@ import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (isHexDigit)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
-import Data.Maybe (fromMaybe, isNothing)
+import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
@@ -1587,7 +1587,7 @@ spec = do
                             responseLogEntries = ["Sample failure log"]
                           },
                 reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
                 reportApplicationLog = \logEntry ->
                   modifyIORef' logEntriesReference (<> [logEntry])
               }
@@ -1683,7 +1683,7 @@ spec = do
                             responseLogEntries = ["Enriched source log"]
                           },
                 reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
                 reportApplicationLog = \logEntry ->
                   modifyIORef' logEntriesReference (<> [logEntry])
               }
@@ -1718,7 +1718,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
           requestWithSource headers =
             performWaiRequest
@@ -1785,7 +1785,7 @@ spec = do
                             responseLogEntries = ["Direct peer log"]
                           },
                 reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
                 reportApplicationLog = \logEntry ->
                   modifyIORef' logEntriesReference (<> [logEntry])
               }
@@ -1840,7 +1840,7 @@ spec = do
                         }
                     . samplePage,
                 reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue]),
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
                 reportApplicationLog = \logEntry ->
                   modifyIORef' logEntriesReference (<> [logEntry])
               }
@@ -1899,7 +1899,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) forwardedRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
@@ -1948,7 +1948,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) unixSocketRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
@@ -1985,7 +1985,7 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) missingRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 404
@@ -2791,6 +2791,78 @@ spec = do
                 Observability.ObservabilityAttribute
                   { Observability.attributeName = "db.query.template",
                     Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.start_monotonic_ns",
+                    Observability.attributeValue = Observability.IntAttribute 3000000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 1250000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.system",
+                    Observability.attributeValue = Observability.TextAttribute "postgresql"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.name",
+                    Observability.attributeValue = Observability.TextAttribute "load-home-page-summary"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.query.template",
+                    Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.start_monotonic_ns",
+                    Observability.attributeValue = Observability.IntAttribute (-1)
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute (-1)
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.system",
+                    Observability.attributeValue = Observability.TextAttribute "postgresql"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.name",
+                    Observability.attributeValue = Observability.TextAttribute "load-health-check"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.query.template",
+                    Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.request.start_monotonic_ns",
+                    Observability.attributeValue = Observability.IntAttribute 1000000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.request.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 5000000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.request-policy.start_offset_ns",
+                    Observability.attributeValue = Observability.IntAttribute 0
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.request-policy.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 250000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.route-match.start_offset_ns",
+                    Observability.attributeValue = Observability.IntAttribute 500000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.route-match.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 750000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.render-response.start_offset_ns",
+                    Observability.attributeValue = Observability.IntAttribute 1500000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.phase.render-response.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 3000000
                   }
               ]
           )
@@ -2817,7 +2889,14 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-second-page-summary\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-home-page-summary\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-health-check\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.phase\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.start_offset_ns\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.duration_ns\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.start_monotonic_ns\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.duration_ns\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"request-policy\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"route-match\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"render-response\""
@@ -2830,6 +2909,8 @@ spec = do
         Text.count "\"name\":\"HarchWeb route match\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"HarchWeb render response\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1
         extractQuotedJsonField "traceId" requestBodyText
           `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
         extractQuotedJsonField "spanId" requestBodyText
@@ -2846,7 +2927,19 @@ spec = do
                   { otlpEndpoint = collectorUrl,
                     otlpHeaders = []
                   }
-                (Observability.buildRequestObservability "GET" "http" "/" "/" 200 Observability.BodyResponseKind [])
+                ( Observability.buildRequestObservability
+                    "GET"
+                    "http"
+                    "/"
+                    "/"
+                    200
+                    Observability.BodyResponseKind
+                    [ Observability.ObservabilityAttribute
+                        { Observability.attributeName = "harch.request.duration_ns",
+                          Observability.attributeValue = Observability.IntAttribute (-1)
+                        }
+                    ]
+                )
             ) ::
             IO (Either IOError ())
         _ <- readMVar capturedRequestReference
@@ -4502,6 +4595,42 @@ withEmptyExecutablePath action =
     setEnv "PATH" tempDirectory
     action `finally` maybe (unsetEnv "PATH") (setEnv "PATH") originalPath
 
+stripVolatileRequestTiming :: Observability.RequestObservability -> Observability.RequestObservability
+stripVolatileRequestTiming requestObservability =
+  requestObservability
+    { Observability.observabilityRequestSpan =
+        stripVolatileRequestSpanTiming (Observability.observabilityRequestSpan requestObservability),
+      Observability.observabilityHttpServerMetrics =
+        (Observability.observabilityHttpServerMetrics requestObservability)
+          { Observability.httpServerMetricAttributes =
+              filter
+                (not . isVolatileRequestTimingAttribute)
+                (Observability.httpServerMetricAttributes (Observability.observabilityHttpServerMetrics requestObservability))
+          }
+    }
+
+stripVolatileRequestSpanTiming :: Observability.RequestSpan -> Observability.RequestSpan
+stripVolatileRequestSpanTiming requestSpan =
+  requestSpan
+    { Observability.requestSpanAttributes =
+        filter
+          (not . isVolatileRequestTimingAttribute)
+          (Observability.requestSpanAttributes requestSpan)
+    }
+
+isVolatileRequestTimingAttribute :: Observability.ObservabilityAttribute -> Bool
+isVolatileRequestTimingAttribute attribute =
+  Observability.attributeName attribute
+    `elem` [ "harch.request.start_monotonic_ns",
+             "harch.request.duration_ns",
+             "harch.phase.request-policy.start_offset_ns",
+             "harch.phase.request-policy.duration_ns",
+             "harch.phase.route-match.start_offset_ns",
+             "harch.phase.route-match.duration_ns",
+             "harch.phase.render-response.start_offset_ns",
+             "harch.phase.render-response.duration_ns"
+           ]
+
 withOtlpCollector ::
   Http.Status ->
   LazyByteString.ByteString ->
@@ -4528,32 +4657,41 @@ withOtlpCollector responseStatus responseBody action =
 
 extractQuotedJsonField :: Text -> Text -> Maybe Text
 extractQuotedJsonField fieldName bodyText =
-  if Text.null withField
-    then Nothing
-    else
-      Just
-        ( Text.takeWhile (/= '"') $
-            Text.drop (Text.length fieldPrefix) withField
-        )
+  listToMaybe (extractQuotedJsonFields fieldName bodyText)
+
+extractQuotedJsonFields :: Text -> Text -> [Text]
+extractQuotedJsonFields fieldName bodyText =
+  case Text.breakOn fieldPrefix bodyText of
+    (_, withField)
+      | Text.null withField -> []
+      | otherwise ->
+          let fieldValueStart = Text.drop (Text.length fieldPrefix) withField
+              fieldValue = Text.takeWhile (/= '"') fieldValueStart
+              remainingBody = Text.drop (Text.length fieldValue + 1) fieldValueStart
+           in fieldValue : extractQuotedJsonFields fieldName remainingBody
   where
     fieldPrefix = "\"" <> fieldName <> "\":\""
-    (_, withField) = Text.breakOn fieldPrefix bodyText
 
-extractQuotedJsonIntegerField :: Text -> Text -> Maybe Integer
-extractQuotedJsonIntegerField fieldName bodyText =
-  extractQuotedJsonField fieldName bodyText >>= readMaybe . Text.unpack
+extractQuotedJsonIntegerFields :: Text -> Text -> [Integer]
+extractQuotedJsonIntegerFields fieldName bodyText =
+  mapMaybe (readMaybe . Text.unpack) (extractQuotedJsonFields fieldName bodyText)
 
 expectPlausibleEpochNanoTimestamps :: Text -> Expectation
 expectPlausibleEpochNanoTimestamps bodyText = do
   let earliestPlausibleEpochNano = 1577836800000000000
       latestPlausibleEpochNano = 4102444800000000000
-  case (extractQuotedJsonIntegerField "startTimeUnixNano" bodyText, extractQuotedJsonIntegerField "endTimeUnixNano" bodyText) of
-    (Just startTimeUnixNano, Just endTimeUnixNano) -> do
-      startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano)
-      endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano)
-      startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano)
-    _ ->
-      expectationFailure "expected OTLP startTimeUnixNano and endTimeUnixNano string fields with integer values"
+      startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" bodyText
+      endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" bodyText
+  startTimes `shouldSatisfy` (not . null)
+  length startTimes `shouldBe` length endTimes
+  mapM_
+    ( \(startTimeUnixNano, endTimeUnixNano) -> do
+        startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano)
+        endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano)
+        startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano)
+        (endTimeUnixNano - startTimeUnixNano) `shouldSatisfy` (>= 1000)
+    )
+    (zip startTimes endTimes)
 
 expectLoopbackPortReusable :: Int -> IO ()
 expectLoopbackPortReusable port = do
