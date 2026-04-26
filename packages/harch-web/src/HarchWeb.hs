@@ -18,6 +18,7 @@ module HarchWeb
     ActiveAcmeChallenge (..),
     Application (..),
     CertbotConfig (..),
+    CorsPolicyConfig (..),
     Document (..),
     HasServerConfig (..),
     HtmlAttribute (..),
@@ -41,6 +42,7 @@ module HarchWeb
     ReloadingTlsCredentials,
     Response (..),
     ResponseBody (..),
+    ResponseSecurityHeadersConfig (..),
     ResolvedNavigationItem (..),
     RouteCodec (..),
     RouteRequest (..),
@@ -73,6 +75,9 @@ module HarchWeb
     createAcmeAccount,
     createAcmeOrder,
     decodeAcmeJsonResponse,
+    defaultContentSecurityPolicy,
+    defaultCorsPolicyConfig,
+    defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     escapeJsonCharacter,
     exportConnectionObservabilityToOtlp,
@@ -163,7 +168,7 @@ import Data.Functor (($>))
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find, intercalate, maximumBy)
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe, mapMaybe, maybeToList)
+import Data.Maybe (catMaybes, fromMaybe, isJust, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -314,10 +319,66 @@ data StrictTransportSecurityConfig = StrictTransportSecurityConfig
   }
   deriving (Eq, Show)
 
+data CorsPolicyConfig = CorsPolicyConfig
+  { corsAllowedOrigins :: [Text],
+    corsAllowedMethods :: [Text],
+    corsAllowedHeaders :: [Text],
+    corsMaxAgeSeconds :: Maybe Int
+  }
+  deriving (Eq, Show)
+
+defaultCorsPolicyConfig :: CorsPolicyConfig
+defaultCorsPolicyConfig =
+  CorsPolicyConfig
+    { corsAllowedOrigins = [],
+      corsAllowedMethods = ["GET", "HEAD", "OPTIONS"],
+      corsAllowedHeaders = ["Content-Type", "X-Requested-With"],
+      corsMaxAgeSeconds = Nothing
+    }
+
+data ResponseSecurityHeadersConfig = ResponseSecurityHeadersConfig
+  { contentSecurityPolicy :: Maybe Text,
+    contentTypeOptionsNoSniff :: Bool,
+    xssProtection :: Maybe Text,
+    referrerPolicy :: Maybe Text,
+    permissionsPolicy :: Maybe Text,
+    frameOptions :: Maybe Text
+  }
+  deriving (Eq, Show)
+
+defaultContentSecurityPolicy :: Text
+defaultContentSecurityPolicy =
+  Text.intercalate
+    "; "
+    [ "default-src 'self'",
+      "base-uri 'self'",
+      "object-src 'none'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "script-src 'self'",
+      "style-src 'self'",
+      "img-src 'self' data:",
+      "font-src 'self'",
+      "connect-src 'self'"
+    ]
+
+defaultResponseSecurityHeadersConfig :: ResponseSecurityHeadersConfig
+defaultResponseSecurityHeadersConfig =
+  ResponseSecurityHeadersConfig
+    { contentSecurityPolicy = Just defaultContentSecurityPolicy,
+      contentTypeOptionsNoSniff = True,
+      xssProtection = Just "1; mode=block",
+      referrerPolicy = Just "strict-origin-when-cross-origin",
+      permissionsPolicy = Just "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()",
+      frameOptions = Just "DENY"
+    }
+
 data RequestPolicyConfig = RequestPolicyConfig
   { redirectHttpToHttps :: Bool,
     httpsRedirectPort :: Maybe Int,
-    strictTransportSecurity :: Maybe StrictTransportSecurityConfig
+    strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
+    corsPolicy :: CorsPolicyConfig,
+    responseSecurityHeaders :: ResponseSecurityHeadersConfig
   }
   deriving (Eq, Show)
 
@@ -580,77 +641,83 @@ matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parse
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
 toWaiApplication webApplication request respond =
-  case requestRedirectLocation (applicationRequestPolicy webApplication) request of
-    Just redirectLocation ->
-      respond
-        (httpsRedirectResponse redirectLocation)
-    Nothing -> do
-      maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
-      case maybeStaticResponse of
-        Just staticResponse ->
-          respond
-            (applyResponseHeaders (requestPolicyResponseHeaders (applicationRequestPolicy webApplication) request) staticResponse)
-        Nothing -> do
-          let requestContext =
-                requestContextFromRequest
-                  webApplication
-                  request
-                  (defaultRequestContext webApplication)
-              routeRequest =
-                matchRoute
-                  (routeCodec webApplication)
-                  requestContext
-                  (waiRequestPath request)
-          response <- renderResponse webApplication routeRequest
-          let requestContextAttributes = requestContextObservabilityAttributes request
-              requestLogFields = requestLogContextFields request
-              extraObservabilityAttributes =
-                requestContextAttributes
-                  <> case response of
-                    PageResponse _ -> []
-                    PageResponseWithMetadata pageResponseBodyValue _ ->
-                      responseObservabilityAttributes pageResponseBodyValue
-                    BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-              contextualizedResponseLogEntries =
-                case response of
-                  PageResponse _ -> []
-                  PageResponseWithMetadata pageResponseBodyValue _ ->
-                    map
-                      (prependRequestLogContext requestLogFields)
-                      (responseLogEntries pageResponseBodyValue)
-                  BodyResponse responseBodyValue ->
-                    map
-                      (prependRequestLogContext requestLogFields)
-                      (responseLogEntries responseBodyValue)
-              requestObservability =
-                Observability.buildRequestObservability
-                  (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                  (requestScheme request)
-                  (waiRequestPath request)
-                  (renderRoute (routeCodec webApplication) routeRequest)
-                  ( case response of
-                      PageResponse page ->
-                        if isNotFoundPage webApplication page
-                          then 404
-                          else 200
-                      PageResponseWithMetadata pageResponseBodyValue _ ->
-                        responseStatus pageResponseBodyValue
-                      BodyResponse responseBodyValue -> responseStatus responseBodyValue
-                  )
-                  ( case response of
-                      PageResponse _ -> Observability.PageResponseKind
-                      PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-                      BodyResponse _ -> Observability.BodyResponseKind
-                  )
-                  extraObservabilityAttributes
-          Observability.forceRequestObservability requestObservability `seq`
-            reportRequestObservability webApplication requestObservability
-              >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-              >> respond
-                ( applyResponseHeaders
-                    (requestPolicyResponseHeaders (applicationRequestPolicy webApplication) request)
-                    (toWaiResponse [] webApplication response)
-                )
+  let requestPolicyConfig = applicationRequestPolicy webApplication
+      policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
+   in case corsPreflightResponse requestPolicyConfig request of
+        Just preflightResponse ->
+          respond (applyResponseHeaders policyResponseHeaders preflightResponse)
+        Nothing ->
+          case requestRedirectLocation requestPolicyConfig request of
+            Just redirectLocation ->
+              respond
+                (applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation))
+            Nothing -> do
+              maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
+              case maybeStaticResponse of
+                Just staticResponse ->
+                  respond
+                    (applyResponseHeaders policyResponseHeaders staticResponse)
+                Nothing -> do
+                  let requestContext =
+                        requestContextFromRequest
+                          webApplication
+                          request
+                          (defaultRequestContext webApplication)
+                      routeRequest =
+                        matchRoute
+                          (routeCodec webApplication)
+                          requestContext
+                          (waiRequestPath request)
+                  response <- renderResponse webApplication routeRequest
+                  let requestContextAttributes = requestContextObservabilityAttributes request
+                      requestLogFields = requestLogContextFields request
+                      extraObservabilityAttributes =
+                        requestContextAttributes
+                          <> case response of
+                            PageResponse _ -> []
+                            PageResponseWithMetadata pageResponseBodyValue _ ->
+                              responseObservabilityAttributes pageResponseBodyValue
+                            BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+                      contextualizedResponseLogEntries =
+                        case response of
+                          PageResponse _ -> []
+                          PageResponseWithMetadata pageResponseBodyValue _ ->
+                            map
+                              (prependRequestLogContext requestLogFields)
+                              (responseLogEntries pageResponseBodyValue)
+                          BodyResponse responseBodyValue ->
+                            map
+                              (prependRequestLogContext requestLogFields)
+                              (responseLogEntries responseBodyValue)
+                      requestObservability =
+                        Observability.buildRequestObservability
+                          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                          (requestScheme request)
+                          (waiRequestPath request)
+                          (renderRoute (routeCodec webApplication) routeRequest)
+                          ( case response of
+                              PageResponse page ->
+                                if isNotFoundPage webApplication page
+                                  then 404
+                                  else 200
+                              PageResponseWithMetadata pageResponseBodyValue _ ->
+                                responseStatus pageResponseBodyValue
+                              BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                          )
+                          ( case response of
+                              PageResponse _ -> Observability.PageResponseKind
+                              PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+                              BodyResponse _ -> Observability.BodyResponseKind
+                          )
+                          extraObservabilityAttributes
+                  Observability.forceRequestObservability requestObservability `seq`
+                    reportRequestObservability webApplication requestObservability
+                      >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
+                      >> respond
+                        ( applyResponseHeaders
+                            policyResponseHeaders
+                            (toWaiResponse [] webApplication response)
+                        )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -2650,6 +2717,30 @@ isAcmeHttp01ChallengeRequest request =
 
 requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
 requestPolicyResponseHeaders requestPolicyConfig request =
+  responseSecurityHeaderValues (responseSecurityHeaders requestPolicyConfig)
+    <> strictTransportSecurityHeaders requestPolicyConfig request
+    <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request
+
+responseSecurityHeaderValues :: ResponseSecurityHeadersConfig -> Http.ResponseHeaders
+responseSecurityHeaderValues responseSecurityHeadersConfig =
+  catMaybes
+    [ ("Content-Security-Policy",) . TextEncoding.encodeUtf8
+        <$> contentSecurityPolicy responseSecurityHeadersConfig,
+      if contentTypeOptionsNoSniff responseSecurityHeadersConfig
+        then Just ("X-Content-Type-Options", "nosniff")
+        else Nothing,
+      ("X-XSS-Protection",) . TextEncoding.encodeUtf8
+        <$> xssProtection responseSecurityHeadersConfig,
+      ("Referrer-Policy",) . TextEncoding.encodeUtf8
+        <$> referrerPolicy responseSecurityHeadersConfig,
+      ("Permissions-Policy",) . TextEncoding.encodeUtf8
+        <$> permissionsPolicy responseSecurityHeadersConfig,
+      ("X-Frame-Options",) . TextEncoding.encodeUtf8
+        <$> frameOptions responseSecurityHeadersConfig
+    ]
+
+strictTransportSecurityHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+strictTransportSecurityHeaders requestPolicyConfig request =
   case strictTransportSecurity requestPolicyConfig of
     Just strictTransportSecurityConfig
       | requestScheme request == "https" ->
@@ -2658,6 +2749,66 @@ requestPolicyResponseHeaders requestPolicyConfig request =
             )
           ]
     _ -> []
+
+corsPolicyHeaders :: CorsPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+corsPolicyHeaders corsPolicyConfig request =
+  case lookup "Origin" (Wai.requestHeaders request) of
+    Just originHeader
+      | originAllowed corsPolicyConfig originHeader ->
+          [ ("Access-Control-Allow-Origin", originHeader),
+            ("Vary", "Origin")
+          ]
+            <> corsPreflightHeaders corsPolicyConfig request
+    _ -> []
+
+corsPreflightHeaders :: CorsPolicyConfig -> Wai.Request -> Http.ResponseHeaders
+corsPreflightHeaders corsPolicyConfig request =
+  if corsPreflightRequestAllowed corsPolicyConfig request
+    then
+      [ ("Access-Control-Allow-Methods", corsHeaderValue (corsAllowedMethods corsPolicyConfig))
+      ]
+        <> [ ("Access-Control-Allow-Headers", corsHeaderValue (corsAllowedHeaders corsPolicyConfig))
+           | not (null (corsAllowedHeaders corsPolicyConfig))
+           ]
+        <> [ ("Access-Control-Max-Age", ByteStringChar8.pack (show maxAgeSeconds))
+           | Just maxAgeSeconds <- [corsMaxAgeSeconds corsPolicyConfig]
+           ]
+    else []
+
+corsPreflightResponse :: RequestPolicyConfig -> Wai.Request -> Maybe Wai.Response
+corsPreflightResponse requestPolicyConfig request =
+  case lookup "Origin" (Wai.requestHeaders request) of
+    Just originHeader
+      | originAllowed (corsPolicy requestPolicyConfig) originHeader
+          && corsPreflightRequestAllowed (corsPolicy requestPolicyConfig) request ->
+          Just (Wai.responseLBS Http.status204 [] "")
+    _ -> Nothing
+
+isCorsPreflightRequest :: Wai.Request -> Bool
+isCorsPreflightRequest request =
+  Wai.requestMethod request == "OPTIONS"
+    && isJust (lookup "Origin" (Wai.requestHeaders request))
+    && isJust (lookup "Access-Control-Request-Method" (Wai.requestHeaders request))
+
+corsPreflightRequestAllowed :: CorsPolicyConfig -> Wai.Request -> Bool
+corsPreflightRequestAllowed corsPolicyConfig request =
+  case lookup "Access-Control-Request-Method" (Wai.requestHeaders request) of
+    Just requestedMethod ->
+      isCorsPreflightRequest request
+        && requestedMethodAllowed corsPolicyConfig requestedMethod
+    Nothing -> False
+
+originAllowed :: CorsPolicyConfig -> ByteString.ByteString -> Bool
+originAllowed corsPolicyConfig originHeader =
+  originHeader `elem` map TextEncoding.encodeUtf8 (corsAllowedOrigins corsPolicyConfig)
+
+requestedMethodAllowed :: CorsPolicyConfig -> ByteString.ByteString -> Bool
+requestedMethodAllowed corsPolicyConfig requestedMethod =
+  requestedMethod `elem` map TextEncoding.encodeUtf8 (corsAllowedMethods corsPolicyConfig)
+
+corsHeaderValue :: [Text] -> ByteString.ByteString
+corsHeaderValue =
+  TextEncoding.encodeUtf8 . Text.intercalate ", "
 
 strictTransportSecurityHeaderValue :: StrictTransportSecurityConfig -> Text
 strictTransportSecurityHeaderValue strictTransportSecurityConfig =

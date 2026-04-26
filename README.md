@@ -131,6 +131,16 @@ understands the following values:
 | `HSTS_MAX_AGE_SECONDS` | Max-age used for `Strict-Transport-Security` on effective HTTPS requests. | (`unset`) |
 | `HSTS_INCLUDE_SUBDOMAINS` | Whether emitted HSTS headers should include `includeSubDomains`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
 | `HSTS_PRELOAD` | Whether emitted HSTS headers should include `preload`. Requires `HSTS_MAX_AGE_SECONDS`. Supported values are `true` / `false`. | (`false`) |
+| `CORS_ALLOWED_ORIGINS` | Comma-delimited exact origins allowed for browser cross-origin reads. When unset, no `Access-Control-Allow-Origin` header is emitted, preserving same-origin behavior. | (`unset`) |
+| `CORS_ALLOWED_METHODS` | Comma-delimited methods returned on allowed CORS preflight requests. | (`GET,HEAD,OPTIONS`) |
+| `CORS_ALLOWED_HEADERS` | Comma-delimited request headers returned on allowed CORS preflight requests. | (`Content-Type,X-Requested-With`) |
+| `CORS_MAX_AGE_SECONDS` | Optional `Access-Control-Max-Age` for allowed CORS preflight responses. | (`unset`) |
+| `CONTENT_SECURITY_POLICY` | Content-Security-Policy header. The default permits only same-origin scripts/styles/fonts/connects, same-origin plus `data:` images, and denies object embedding and frame ancestors. | strict same-origin policy |
+| `X_CONTENT_TYPE_OPTIONS_NOSNIFF` | Whether to emit `X-Content-Type-Options: nosniff`. Supported values use the shared boolean parser. | (`true`) |
+| `X_XSS_PROTECTION` | Compatibility `X-XSS-Protection` header value. | (`1; mode=block`) |
+| `REFERRER_POLICY` | Referrer-Policy header value. | (`strict-origin-when-cross-origin`) |
+| `PERMISSIONS_POLICY` | Permissions-Policy header value. | disables common powerful browser features |
+| `X_FRAME_OPTIONS` | Compatibility frame policy header value; CSP also includes `frame-ancestors 'none'` by default. | (`DENY`) |
 | `OTLP_TRACING_ENABLED` | Whether tracing export should be enabled. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. `true` uses the default local endpoint `http://127.0.0.1:4318/v1/traces` unless `OTLP_TRACING_ENDPOINT` overrides it; `false` disables tracing even if tracing endpoint/headers are set. | (`unset`) |
 | `OTLP_TRACING_ENDPOINT` | OTLP endpoint for tracing export. | (`unset`) |
 | `OTLP_TRACING_HEADERS` | Comma-delimited OTLP tracing headers in `name=value` form. | (`unset`) |
@@ -147,6 +157,10 @@ Static asset requests only serve files whose extension is present in the configu
 allowlist, and hidden path segments such as `.env` or `.well-known` are rejected under configured asset
 roots. Extensionless files are disabled by default; add an empty-extension content-type entry when a
 specific deployment needs them.
+
+Runtime responses emit default hardening headers for CSP, nosniff, XSS-protection compatibility, referrer
+policy, permissions policy, and frame denial. CORS stays same-origin by default: configure
+`CORS_ALLOWED_ORIGINS` only for explicit browser clients that must read this app from another origin.
 
 The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the
 runtime application config consumed by `cabal run exe:haskell-web-api`. They are intended for build and

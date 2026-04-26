@@ -13,12 +13,14 @@ module WebApi.Config
     CertbotConfig (..),
     ConfigOverridesFileError (..),
     ConfigParseError (..),
+    CorsPolicyConfig (..),
     DatabaseConfig (..),
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
     RequestPolicyConfig (..),
+    ResponseSecurityHeadersConfig (..),
     StaticAssetsConfig (..),
     StaticAssetRoot (..),
     StrictTransportSecurityConfig (..),
@@ -30,6 +32,9 @@ module WebApi.Config
     defaultAppConfig,
     defaultAppEnvironmentConfig,
     defaultAppStartupConfig,
+    defaultContentSecurityPolicy,
+    defaultCorsPolicyConfig,
+    defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     loadAppEnvironmentConfig,
     loadAppEnvironmentConfigWithFiles,
@@ -65,12 +70,14 @@ import HarchWeb
   ( AcmeChallengeBackend (..),
     AcmeConfig (..),
     CertbotConfig (..),
+    CorsPolicyConfig (..),
     HasServerConfig (..),
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
     RequestPolicyConfig (..),
+    ResponseSecurityHeadersConfig (..),
     ServerConfig (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
@@ -79,6 +86,9 @@ import HarchWeb
     TlsConfig (..),
     TlsStartupMode (..),
     certbotOptionValues,
+    defaultContentSecurityPolicy,
+    defaultCorsPolicyConfig,
+    defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     firstCertbotDomain,
   )
@@ -206,7 +216,9 @@ defaultAppConfig =
         RequestPolicyConfig
           { redirectHttpToHttps = False,
             httpsRedirectPort = Nothing,
-            strictTransportSecurity = Nothing
+            strictTransportSecurity = Nothing,
+            corsPolicy = defaultCorsPolicyConfig,
+            responseSecurityHeaders = defaultResponseSecurityHeadersConfig
           },
       observability =
         ObservabilityConfig
@@ -558,6 +570,8 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         <$> parseRedirectHttpToHttps parsedListeners
         <*> pure (defaultHttpsRedirectPort parsedListeners)
         <*> parseOptionalStrictTransportSecurity
+        <*> parseCorsPolicyConfig
+        <*> parseResponseSecurityHeadersConfig
 
     parseRedirectHttpToHttps parsedListeners =
       case optionalConfigValue "REDIRECT_HTTP_TO_HTTPS" of
@@ -597,6 +611,42 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         Just "true" -> Right True
         Just "false" -> Right False
         Just value -> Left (InvalidConfigValue key value)
+
+    parseCorsPolicyConfig =
+      CorsPolicyConfig
+        <$> parseOptionalDelimitedTextList "CORS_ALLOWED_ORIGINS" (corsAllowedOrigins defaultCorsPolicyConfig)
+        <*> parseOptionalDelimitedTextList "CORS_ALLOWED_METHODS" (corsAllowedMethods defaultCorsPolicyConfig)
+        <*> parseOptionalDelimitedTextList "CORS_ALLOWED_HEADERS" (corsAllowedHeaders defaultCorsPolicyConfig)
+        <*> traverse
+          (parseNonNegativeInt "CORS_MAX_AGE_SECONDS")
+          (optionalConfigValue "CORS_MAX_AGE_SECONDS")
+
+    parseResponseSecurityHeadersConfig =
+      ResponseSecurityHeadersConfig
+        <$> parseOptionalTextHeader "CONTENT_SECURITY_POLICY" (contentSecurityPolicy defaultResponseSecurityHeadersConfig)
+        <*> parseOptionalBoolWithDefault "X_CONTENT_TYPE_OPTIONS_NOSNIFF" (contentTypeOptionsNoSniff defaultResponseSecurityHeadersConfig)
+        <*> parseOptionalTextHeader "X_XSS_PROTECTION" (xssProtection defaultResponseSecurityHeadersConfig)
+        <*> parseOptionalTextHeader "REFERRER_POLICY" (referrerPolicy defaultResponseSecurityHeadersConfig)
+        <*> parseOptionalTextHeader "PERMISSIONS_POLICY" (permissionsPolicy defaultResponseSecurityHeadersConfig)
+        <*> parseOptionalTextHeader "X_FRAME_OPTIONS" (frameOptions defaultResponseSecurityHeadersConfig)
+
+    parseOptionalDelimitedTextList key defaultValues =
+      case optionalConfigValue key of
+        Nothing -> Right defaultValues
+        Just value -> parseDelimitedTexts key value
+
+    parseOptionalTextHeader key defaultValue =
+      case optionalConfigValue key of
+        Nothing -> Right defaultValue
+        Just value ->
+          if Text.null value
+            then Left (InvalidConfigValue key value)
+            else Right (Just value)
+
+    parseOptionalBoolWithDefault key defaultValue =
+      case optionalConfigValue key of
+        Nothing -> Right defaultValue
+        Just value -> parseBoolean key value
 
     parseStaticAssetRoot staticRootIndex =
       StaticAssetRoot

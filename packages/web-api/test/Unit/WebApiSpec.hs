@@ -40,7 +40,7 @@ import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell)
-import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeChallengeBackend (..), AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -309,6 +309,13 @@ withClearedRuntimeEnvironment =
       "REDIRECT_HTTP_TO_HTTPS",
       "HTTPS_REDIRECT_PORT",
       "HSTS_",
+      "CORS_",
+      "CONTENT_SECURITY_POLICY",
+      "X_CONTENT_TYPE_OPTIONS_NOSNIFF",
+      "X_XSS_PROTECTION",
+      "REFERRER_POLICY",
+      "PERMISSIONS_POLICY",
+      "X_FRAME_OPTIONS",
       "OTLP_TRACING_",
       "OTLP_METRICS_"
     ]
@@ -670,7 +677,9 @@ spec = do
               RequestPolicyConfig
                 { redirectHttpToHttps = False,
                   httpsRedirectPort = Nothing,
-                  strictTransportSecurity = Nothing
+                  strictTransportSecurity = Nothing,
+                  corsPolicy = defaultCorsPolicyConfig,
+                  responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 },
             observability =
               ObservabilityConfig
@@ -797,7 +806,9 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
-                    strictTransportSecurity = Nothing
+                    strictTransportSecurity = Nothing,
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1132,7 +1143,9 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
-                    strictTransportSecurity = Nothing
+                    strictTransportSecurity = Nothing,
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1351,7 +1364,9 @@ spec = do
                           { strictTransportSecurityMaxAgeSeconds = 31536000,
                             strictTransportSecurityIncludeSubDomains = True,
                             strictTransportSecurityPreload = True
-                          }
+                          },
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1376,7 +1391,9 @@ spec = do
                           { strictTransportSecurityMaxAgeSeconds = 86400,
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
-                          }
+                          },
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1397,9 +1414,50 @@ spec = do
                           { strictTransportSecurityMaxAgeSeconds = 86400,
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
-                          }
+                          },
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
+
+    it "parses CORS and response security policy overrides" $
+      fmap
+        requestPolicy
+        ( parseRuntimeAppConfig
+            committedRuntimeDefaults
+            []
+            [ ("CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com"),
+              ("CORS_ALLOWED_METHODS", "GET, HEAD"),
+              ("CORS_ALLOWED_HEADERS", "Content-Type, X-Requested-With"),
+              ("CORS_MAX_AGE_SECONDS", "600"),
+              ("CONTENT_SECURITY_POLICY", "default-src 'self'; connect-src 'self' https://collector.example.com"),
+              ("X_CONTENT_TYPE_OPTIONS_NOSNIFF", "false"),
+              ("X_XSS_PROTECTION", "0"),
+              ("REFERRER_POLICY", "no-referrer"),
+              ("PERMISSIONS_POLICY", "camera=()"),
+              ("X_FRAME_OPTIONS", "SAMEORIGIN")
+            ]
+        )
+        `shouldBe` Right
+          ( (requestPolicy defaultAppConfig)
+              { corsPolicy =
+                  CorsPolicyConfig
+                    { corsAllowedOrigins = ["https://app.example.com", "https://admin.example.com"],
+                      corsAllowedMethods = ["GET", "HEAD"],
+                      corsAllowedHeaders = ["Content-Type", "X-Requested-With"],
+                      corsMaxAgeSeconds = Just 600
+                    },
+                responseSecurityHeaders =
+                  ResponseSecurityHeadersConfig
+                    { contentSecurityPolicy = Just "default-src 'self'; connect-src 'self' https://collector.example.com",
+                      contentTypeOptionsNoSniff = False,
+                      xssProtection = Just "0",
+                      referrerPolicy = Just "no-referrer",
+                      permissionsPolicy = Just "camera=()",
+                      frameOptions = Just "SAMEORIGIN"
+                    }
+              }
+          )
 
     it "lets REDIRECT_HTTP_TO_HTTPS=false disable the listener-aware default for dual listeners" $
       parseRuntimeAppConfig
@@ -1447,7 +1505,9 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
                     httpsRedirectPort = Just 5443,
-                    strictTransportSecurity = Nothing
+                    strictTransportSecurity = Nothing,
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1518,7 +1578,9 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Nothing,
-                    strictTransportSecurity = Nothing
+                    strictTransportSecurity = Nothing,
+                    corsPolicy = defaultCorsPolicyConfig,
+                    responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
             }
 
@@ -1900,6 +1962,26 @@ spec = do
         []
         [("HSTS_MAX_AGE_SECONDS", "-1")]
         `shouldBe` Left (InvalidConfigValue "HSTS_MAX_AGE_SECONDS" "-1")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("CORS_ALLOWED_ORIGINS", " , ")]
+        `shouldBe` Left (InvalidConfigValue "CORS_ALLOWED_ORIGINS" " , ")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("CORS_MAX_AGE_SECONDS", "-1")]
+        `shouldBe` Left (InvalidConfigValue "CORS_MAX_AGE_SECONDS" "-1")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("CONTENT_SECURITY_POLICY", "")]
+        `shouldBe` Left (InvalidConfigValue "CONTENT_SECURITY_POLICY" "")
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("X_CONTENT_TYPE_OPTIONS_NOSNIFF", "maybe")]
+        `shouldBe` Left (InvalidConfigValue "X_CONTENT_TYPE_OPTIONS_NOSNIFF" "maybe")
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults aligned with the parsed development config" $ do

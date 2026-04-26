@@ -1129,6 +1129,28 @@ If more than one distinct HTTPS listener port is configured, the runtime keeps r
 an explicit port in the redirect target, which means browsers fall back to the default HTTPS authority
 on port `443`.
 
+## Response Security Headers And CORS
+
+Application and static responses now include a strict default security header set:
+`Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-XSS-Protection: 1; mode=block`,
+`Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `X-Frame-Options: DENY`.
+The default CSP is same-origin oriented (`default-src 'self'`, `script-src 'self'`,
+`style-src 'self'`, `connect-src 'self'`) and denies framing with `frame-ancestors 'none'`.
+
+CORS is disabled by default in the browser sense: without `CORS_ALLOWED_ORIGINS`, responses do not emit
+`Access-Control-Allow-Origin`. For an explicit cross-origin browser client, configure exact origins and
+keep the method/header lists narrow:
+
+```env
+CORS_ALLOWED_ORIGINS=https://app.example.com
+CORS_ALLOWED_METHODS=GET,HEAD
+CORS_ALLOWED_HEADERS=Content-Type,X-Requested-With
+CORS_MAX_AGE_SECONDS=600
+```
+
+Only allowed origins receive CORS response headers, and preflight requests are answered only when the
+requested method is in `CORS_ALLOWED_METHODS`.
+
 ## External Port 80 Reachability for ACME / http-01
 
 If you want to test Let's Encrypt or another external `http-01` style flow against this machine from the

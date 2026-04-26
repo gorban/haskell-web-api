@@ -193,7 +193,9 @@ defaultRequestPolicy =
   RequestPolicyConfig
     { redirectHttpToHttps = False,
       httpsRedirectPort = Nothing,
-      strictTransportSecurity = Nothing
+      strictTransportSecurity = Nothing,
+      corsPolicy = defaultCorsPolicyConfig,
+      responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
 
 sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute TestContext
@@ -600,7 +602,9 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
-                strictTransportSecurity = Just strictTransportSecurityConfig
+                strictTransportSecurity = Just strictTransportSecurityConfig,
+                corsPolicy = defaultCorsPolicyConfig,
+                responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
           serverConfig =
             ServerConfig
@@ -651,6 +655,8 @@ spec = do
       redirectHttpToHttps requestPolicyConfig `shouldBe` True
       httpsRedirectPort requestPolicyConfig `shouldBe` Just 5443
       strictTransportSecurity requestPolicyConfig `shouldBe` Just strictTransportSecurityConfig
+      corsPolicy requestPolicyConfig `shouldBe` defaultCorsPolicyConfig
+      responseSecurityHeaders requestPolicyConfig `shouldBe` defaultResponseSecurityHeadersConfig
       strictTransportSecurityMaxAgeSeconds strictTransportSecurityConfig `shouldBe` 31536000
       strictTransportSecurityIncludeSubDomains strictTransportSecurityConfig `shouldBe` True
       strictTransportSecurityPreload strictTransportSecurityConfig `shouldBe` True
@@ -688,17 +694,44 @@ spec = do
                 strictTransportSecurityIncludeSubDomains = False,
                 strictTransportSecurityPreload = False
               }
+          corsPolicyConfig =
+            defaultCorsPolicyConfig
+              { corsAllowedOrigins = ["https://client.example.com"],
+                corsMaxAgeSeconds = Just 600
+              }
+          otherCorsPolicyConfig =
+            defaultCorsPolicyConfig
+              { corsAllowedOrigins = ["https://admin.example.com"]
+              }
+          responseSecurityHeadersConfig =
+            defaultResponseSecurityHeadersConfig
+              { frameOptions = Just "SAMEORIGIN"
+              }
+          otherResponseSecurityHeadersConfig =
+            defaultResponseSecurityHeadersConfig
+              { contentSecurityPolicy = Just "default-src 'none'"
+              }
           requestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
-                strictTransportSecurity = Just strictTransportSecurityConfig
+                strictTransportSecurity = Just strictTransportSecurityConfig,
+                corsPolicy = corsPolicyConfig,
+                responseSecurityHeaders = responseSecurityHeadersConfig
               }
           otherRequestPolicyConfig =
             RequestPolicyConfig
               { redirectHttpToHttps = False,
                 httpsRedirectPort = Nothing,
-                strictTransportSecurity = Just otherStrictTransportSecurityConfig
+                strictTransportSecurity = Just otherStrictTransportSecurityConfig,
+                corsPolicy =
+                  defaultCorsPolicyConfig
+                    { corsAllowedOrigins = ["https://app.example.com"]
+                    },
+                responseSecurityHeaders =
+                  defaultResponseSecurityHeadersConfig
+                    { frameOptions = Just "SAMEORIGIN"
+                    }
               }
           acmeConfig =
             AcmeConfig
@@ -789,6 +822,10 @@ spec = do
       certbotConfig `shouldNotBe` otherCertbotConfig
       strictTransportSecurityConfig `shouldBe` strictTransportSecurityConfig
       strictTransportSecurityConfig `shouldNotBe` otherStrictTransportSecurityConfig
+      corsPolicyConfig `shouldBe` corsPolicyConfig
+      corsPolicyConfig `shouldNotBe` otherCorsPolicyConfig
+      responseSecurityHeadersConfig `shouldBe` responseSecurityHeadersConfig
+      responseSecurityHeadersConfig `shouldNotBe` otherResponseSecurityHeadersConfig
       requestPolicyConfig `shouldBe` requestPolicyConfig
       requestPolicyConfig `shouldNotBe` otherRequestPolicyConfig
       InProcessHttp01 `shouldNotBe` CertbotHttp01 certbotConfig
@@ -836,7 +873,10 @@ spec = do
       show Https `shouldBe` "Https"
       show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
       show strictTransportSecurityConfig `shouldBe` "StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}"
-      show requestPolicyConfig `shouldBe` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}"
+      show corsPolicyConfig `shouldBe` "CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}"
+      show responseSecurityHeadersConfig `shouldContain` "ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
+      show requestPolicyConfig `shouldContain` "corsPolicy = CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}"
+      show requestPolicyConfig `shouldContain` "responseSecurityHeaders = ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
       show (CertbotHttp01 certbotConfig) `shouldBe` "CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})"
       show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}"
       show manualCertificateSource `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
@@ -861,6 +901,8 @@ spec = do
       show serverConfig `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 strictTransportSecurityConfig "")
+      shouldBeParenthesized (showsPrec 11 corsPolicyConfig "")
+      shouldBeParenthesized (showsPrec 11 responseSecurityHeadersConfig "")
       shouldBeParenthesized (showsPrec 11 requestPolicyConfig "")
       shouldBeParenthesized (showsPrec 11 (CertbotHttp01 certbotConfig) "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
@@ -882,7 +924,9 @@ spec = do
       show [RequireCertificateFiles, AwaitCertificateFiles Nothing] `shouldBe` "[RequireCertificateFiles,AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
-      show [requestPolicyConfig] `shouldBe` "[RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})}]"
+      show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
+      show [responseSecurityHeadersConfig] `shouldContain` "[ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
+      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})"
       show [InProcessHttp01, CertbotHttp01 certbotConfig] `shouldBe` "[InProcessHttp01,CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})}]"
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeChallengeBackend = CertbotHttp01 (CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]})})]"
@@ -1353,7 +1397,9 @@ spec = do
                       { strictTransportSecurityMaxAgeSeconds = 31536000,
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = True
-                      }
+                      },
+                corsPolicy = defaultCorsPolicyConfig,
+                responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
           proxiedHttpsRequest =
             waiRequestWithRemoteHostAndHeaders
@@ -1380,11 +1426,160 @@ spec = do
                       { strictTransportSecurityMaxAgeSeconds = 31536000,
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = False
-                      }
+                      },
+                corsPolicy = defaultCorsPolicyConfig,
+                responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
       response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) (waiRequest ["data"])
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       lookup "Strict-Transport-Security" (Wai.responseHeaders response) `shouldBe` Nothing
+
+    it "emits strict default response security headers without enabling cross-origin reads" $ do
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets defaultRequestPolicy)) (waiRequest ["data"])
+      let headers = Wai.responseHeaders response
+      lookup "Content-Security-Policy" headers `shouldBe` Just (TextEncoding.encodeUtf8 defaultContentSecurityPolicy)
+      lookup "X-Content-Type-Options" headers `shouldBe` Just "nosniff"
+      lookup "X-XSS-Protection" headers `shouldBe` Just "1; mode=block"
+      lookup "Referrer-Policy" headers `shouldBe` Just "strict-origin-when-cross-origin"
+      lookup "Permissions-Policy" headers `shouldBe` Just "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+      lookup "X-Frame-Options" headers `shouldBe` Just "DENY"
+      lookup "Access-Control-Allow-Origin" headers `shouldBe` Nothing
+
+    it "allows response security headers to be disabled explicitly" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { responseSecurityHeaders =
+                  ResponseSecurityHeadersConfig
+                    { contentSecurityPolicy = Nothing,
+                      contentTypeOptionsNoSniff = False,
+                      xssProtection = Nothing,
+                      referrerPolicy = Nothing,
+                      permissionsPolicy = Nothing,
+                      frameOptions = Nothing
+                    }
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) (waiRequest ["data"])
+      let headers = Wai.responseHeaders response
+      lookup "Content-Security-Policy" headers `shouldBe` Nothing
+      lookup "X-Content-Type-Options" headers `shouldBe` Nothing
+      lookup "X-XSS-Protection" headers `shouldBe` Nothing
+      lookup "Referrer-Policy" headers `shouldBe` Nothing
+      lookup "Permissions-Policy" headers `shouldBe` Nothing
+      lookup "X-Frame-Options" headers `shouldBe` Nothing
+
+    it "applies response security headers to HTTPS redirects" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { redirectHttpToHttps = True
+              }
+          redirectRequest =
+            (waiRequest [])
+              { Wai.requestHeaders = [("Host", "app.example.com")]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 defaultContentSecurityPolicy)
+
+    it "adds CORS headers only for explicitly allowed origins" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { corsPolicy =
+                  defaultCorsPolicyConfig
+                    { corsAllowedOrigins = ["https://client.example.com"]
+                    }
+              }
+          allowedRequest =
+            (waiRequest ["data"])
+              { Wai.requestHeaders = [("Origin", "https://client.example.com")]
+              }
+          blockedRequest =
+            (waiRequest ["data"])
+              { Wai.requestHeaders = [("Origin", "https://evil.example.com")]
+              }
+      allowedResponse <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) allowedRequest
+      blockedResponse <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) blockedRequest
+      lookup "Access-Control-Allow-Origin" (Wai.responseHeaders allowedResponse) `shouldBe` Just "https://client.example.com"
+      lookup "Vary" (Wai.responseHeaders allowedResponse) `shouldBe` Just "Origin"
+      lookup "Access-Control-Allow-Methods" (Wai.responseHeaders allowedResponse) `shouldBe` Nothing
+      lookup "Access-Control-Allow-Origin" (Wai.responseHeaders blockedResponse) `shouldBe` Nothing
+
+    it "answers allowed CORS preflight requests with constrained methods and headers" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { corsPolicy =
+                  CorsPolicyConfig
+                    { corsAllowedOrigins = ["https://client.example.com"],
+                      corsAllowedMethods = ["GET", "HEAD"],
+                      corsAllowedHeaders = ["Content-Type", "X-Requested-With"],
+                      corsMaxAgeSeconds = Just 600
+                    }
+              }
+          preflightRequest =
+            (waiRequest ["data"])
+              { Wai.requestMethod = "OPTIONS",
+                Wai.requestHeaders =
+                  [ ("Origin", "https://client.example.com"),
+                    ("Access-Control-Request-Method", "GET")
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) preflightRequest
+      Wai.responseStatus response `shouldBe` Http.status204
+      lookup "Access-Control-Allow-Origin" (Wai.responseHeaders response) `shouldBe` Just "https://client.example.com"
+      lookup "Access-Control-Allow-Methods" (Wai.responseHeaders response) `shouldBe` Just "GET, HEAD"
+      lookup "Access-Control-Allow-Headers" (Wai.responseHeaders response) `shouldBe` Just "Content-Type, X-Requested-With"
+      lookup "Access-Control-Max-Age" (Wai.responseHeaders response) `shouldBe` Just "600"
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Nothing
+      readResponseBody response `shouldReturn` ""
+
+    it "does not answer CORS preflight requests for disallowed methods" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { corsPolicy =
+                  CorsPolicyConfig
+                    { corsAllowedOrigins = ["https://client.example.com"],
+                      corsAllowedMethods = ["GET"],
+                      corsAllowedHeaders = [],
+                      corsMaxAgeSeconds = Nothing
+                    }
+              }
+          preflightRequest =
+            (waiRequest ["data"])
+              { Wai.requestMethod = "OPTIONS",
+                Wai.requestHeaders =
+                  [ ("Origin", "https://client.example.com"),
+                    ("Access-Control-Request-Method", "DELETE")
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) preflightRequest
+      Wai.responseStatus response `shouldBe` Http.status202
+      lookup "Access-Control-Allow-Origin" (Wai.responseHeaders response) `shouldBe` Just "https://client.example.com"
+      lookup "Access-Control-Allow-Methods" (Wai.responseHeaders response) `shouldBe` Nothing
+      lookup "Access-Control-Allow-Headers" (Wai.responseHeaders response) `shouldBe` Nothing
+
+    it "omits optional CORS preflight headers when they are not configured" $ do
+      let requestPolicyConfig =
+            defaultRequestPolicy
+              { corsPolicy =
+                  CorsPolicyConfig
+                    { corsAllowedOrigins = ["https://client.example.com"],
+                      corsAllowedMethods = ["GET"],
+                      corsAllowedHeaders = [],
+                      corsMaxAgeSeconds = Nothing
+                    }
+              }
+          preflightRequest =
+            (waiRequest ["data"])
+              { Wai.requestMethod = "OPTIONS",
+                Wai.requestHeaders =
+                  [ ("Origin", "https://client.example.com"),
+                    ("Access-Control-Request-Method", "GET")
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) preflightRequest
+      Wai.responseStatus response `shouldBe` Http.status204
+      lookup "Access-Control-Allow-Methods" (Wai.responseHeaders response) `shouldBe` Just "GET"
+      lookup "Access-Control-Allow-Headers" (Wai.responseHeaders response) `shouldBe` Nothing
+      lookup "Access-Control-Max-Age" (Wai.responseHeaders response) `shouldBe` Nothing
 
     it "reports body-response observability attributes and logs through the application hooks" $ do
       requestObservabilityReference <- newIORef []
@@ -1753,7 +1948,9 @@ spec = do
                         { strictTransportSecurityMaxAgeSeconds = 86400,
                           strictTransportSecurityIncludeSubDomains = False,
                           strictTransportSecurityPreload = False
-                        }
+                        },
+                  corsPolicy = defaultCorsPolicyConfig,
+                  responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 }
             staticApplication = sampleApplicationWithConfig assetConfig requestPolicyConfig
             proxiedHttpsRequest =
@@ -1818,15 +2015,17 @@ spec = do
           ( \(segments, expectedBody, expectedContentType) -> do
               response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest segments)
               Wai.responseStatus response `shouldBe` Http.status200
-              Wai.responseHeaders response
-                `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 expectedContentType)]
+              lookup Http.hContentType (Wai.responseHeaders response)
+                `shouldBe` Just (TextEncoding.encodeUtf8 expectedContentType)
+              lookup Http.hCacheControl (Wai.responseHeaders response) `shouldBe` Nothing
               readResponseBody response `shouldReturn` expectedBody
           )
           expectedResponses
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) Wai.defaultRequest
         Wai.responseStatus rootResponse `shouldBe` Http.status404
-        Wai.responseHeaders rootResponse
-          `shouldBe` [(Http.hContentType, TextEncoding.encodeUtf8 "text/plain; charset=utf-8")]
+        lookup Http.hContentType (Wai.responseHeaders rootResponse)
+          `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+        lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` Nothing
         readResponseBody rootResponse `shouldReturn` "Not Found"
         unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["blob.bin"])
         Wai.responseStatus unsupportedExtensionResponse `shouldBe` Http.status404
