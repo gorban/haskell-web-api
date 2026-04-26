@@ -3249,16 +3249,27 @@ exportRequestObservabilityToOtlp ::
   IO ()
 exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
+  let childSpans = requestDatabaseChildSpans requestObservability
+  childSpanIds <- mapM (const nextOtlpSpanId) childSpans
   endTimeUnixNano <- currentUnixTimeNSec
+  let (startTimeUnixNano, childSpanTimings) =
+        planOtlpSpanTimings endTimeUnixNano (length childSpans)
+      timedChildSpans =
+        zipWith3
+          (\childSpanId (childStartTime, childEndTime) childSpan -> (childSpanId, childStartTime, childEndTime, childSpan))
+          childSpanIds
+          childSpanTimings
+          childSpans
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
           traceId
           spanId
-          endTimeUnixNano
+          startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityRequestSpan requestObservability)
           (otlpRequestSpanStatusFields requestObservability)
+          timedChildSpans
   sendOtlpTraceRequest exporter requestBody
 
 exportConnectionObservabilityToOtlp ::
@@ -3269,15 +3280,17 @@ exportConnectionObservabilityToOtlp ::
 exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
   endTimeUnixNano <- currentUnixTimeNSec
+  let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano 1
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
           traceId
           spanId
-          endTimeUnixNano
+          startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityConnectionSpan connectionObservability)
           otlpErrorStatusFields
+          []
   sendOtlpTraceRequest exporter requestBody
 
 sendOtlpTraceRequest :: OtlpExporter -> LazyByteString.ByteString -> IO ()
@@ -3313,8 +3326,9 @@ otlpTraceBodyFromSpan ::
   Word64 ->
   Observability.RequestSpan ->
   [(Text, LazyByteString.ByteString)] ->
+  [(Text, Word64, Word64, Observability.RequestSpan)] ->
   LazyByteString.ByteString
-otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields =
+otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields childSpans =
   jsonObjectBytes
     [ ( "resourceSpans",
         jsonArrayBytes
@@ -3329,14 +3343,27 @@ otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNa
                           ),
                           ( "spans",
                             jsonArrayBytes
-                              [ otlpSpanObject
+                              ( otlpSpanObject
                                   traceId
                                   spanId
+                                  Nothing
+                                  "SPAN_KIND_SERVER"
                                   startTimeUnixNano
                                   endTimeUnixNano
                                   requestSpan
                                   statusFields
-                              ]
+                                  : [ otlpSpanObject
+                                        traceId
+                                        childSpanId
+                                        (Just spanId)
+                                        "SPAN_KIND_INTERNAL"
+                                        childStartTimeUnixNano
+                                        childEndTimeUnixNano
+                                        childSpan
+                                        []
+                                    | (childSpanId, childStartTimeUnixNano, childEndTimeUnixNano, childSpan) <- childSpans
+                                    ]
+                              )
                           )
                         ]
                     ]
@@ -3373,17 +3400,19 @@ otlpResourceObject serviceName =
 otlpSpanObject ::
   Text ->
   Text ->
+  Maybe Text ->
+  Text ->
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
   [(Text, LazyByteString.ByteString)] ->
   LazyByteString.ByteString
-otlpSpanObject traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields =
+otlpSpanObject traceId spanId maybeParentSpanId spanKind startTimeUnixNano endTimeUnixNano requestSpan statusFields =
   jsonObjectBytes
     ( [ ("traceId", jsonStringBytes traceId),
         ("spanId", jsonStringBytes spanId),
         ("name", jsonStringBytes (Observability.requestSpanDisplayName requestSpan)),
-        ("kind", jsonStringBytes "SPAN_KIND_SERVER"),
+        ("kind", jsonStringBytes spanKind),
         ("startTimeUnixNano", jsonStringBytes (Text.pack (show startTimeUnixNano))),
         ("endTimeUnixNano", jsonStringBytes (Text.pack (show endTimeUnixNano))),
         ( "attributes",
@@ -3393,8 +3422,59 @@ otlpSpanObject traceId spanId startTimeUnixNano endTimeUnixNano requestSpan stat
             )
         )
       ]
+        ++ maybe [] (\parentSpanId -> [("parentSpanId", jsonStringBytes parentSpanId)]) maybeParentSpanId
         ++ statusFields
     )
+
+planOtlpSpanTimings :: Word64 -> Int -> (Word64, [(Word64, Word64)])
+planOtlpSpanTimings endTimeUnixNano childSpanCount =
+  (startTimeUnixNano, childSpanTimings)
+  where
+    durationNanos = fromIntegral (max 1 (childSpanCount + 1))
+    startTimeUnixNano = nonNegativeStartTime endTimeUnixNano durationNanos
+    childSpanTimings =
+      [ let childStartTime = startTimeUnixNano + fromIntegral childIndex
+         in (childStartTime, childStartTime + 1)
+      | childIndex <- [1 .. childSpanCount]
+      ]
+
+nonNegativeStartTime :: Word64 -> Word64 -> Word64
+nonNegativeStartTime endTimeUnixNano durationNanos =
+  endTimeUnixNano - min endTimeUnixNano durationNanos
+
+requestDatabaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
+requestDatabaseChildSpans requestObservability =
+  databaseChildSpansFromAttributes
+    ( Observability.requestSpanAttributes
+        (Observability.observabilityRequestSpan requestObservability)
+    )
+
+databaseChildSpansFromAttributes :: [Observability.ObservabilityAttribute] -> [Observability.RequestSpan]
+databaseChildSpansFromAttributes attributes =
+  case attributes of
+    [] -> []
+    systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
+      : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
+      : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
+      : remainingAttributes ->
+        databaseOperationChildSpan operationName systemAttribute operationAttribute queryAttribute
+          : databaseChildSpansFromAttributes remainingAttributes
+    _ : remainingAttributes ->
+      databaseChildSpansFromAttributes remainingAttributes
+
+databaseOperationChildSpan ::
+  Text ->
+  Observability.ObservabilityAttribute ->
+  Observability.ObservabilityAttribute ->
+  Observability.ObservabilityAttribute ->
+  Observability.RequestSpan
+databaseOperationChildSpan operationName systemAttribute operationAttribute queryAttribute =
+  Observability.RequestSpan
+    { Observability.requestSpanDisplayName =
+        "DB " <> operationName,
+      Observability.requestSpanAttributes =
+        [systemAttribute, operationAttribute, queryAttribute]
+    }
 
 otlpRequestSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
 otlpRequestSpanStatusFields requestObservability =
@@ -3452,6 +3532,9 @@ nextOtlpSpanIdentifiers = do
   let traceIdBytes = word64Bytes monotonicTime <> word64Bytes requestSeed
       spanIdBytes = word64Bytes (monotonicTime `xor` (requestSeed + 0x9e3779b97f4a7c15))
   pure (otlpIdHexText traceIdBytes, otlpIdHexText spanIdBytes)
+
+nextOtlpSpanId :: IO Text
+nextOtlpSpanId = snd <$> nextOtlpSpanIdentifiers
 
 otlpIdHexText :: ByteString.ByteString -> Text
 otlpIdHexText =

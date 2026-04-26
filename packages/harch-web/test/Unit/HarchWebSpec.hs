@@ -2631,6 +2631,18 @@ spec = do
               [ Observability.ObservabilityAttribute
                   { Observability.attributeName = "exception.type",
                     Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.system",
+                    Observability.attributeValue = Observability.TextAttribute "postgresql"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.name",
+                    Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.query.template",
+                    Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
                   }
               ]
           )
@@ -2651,8 +2663,15 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"telemetry.sdk.language\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-second-page-summary\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.name\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.query.template\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+        Text.count "\"name\":\"GET /known\"" requestBodyText `shouldBe` 1
+        Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
         extractQuotedJsonField "traceId" requestBodyText
           `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
         extractQuotedJsonField "spanId" requestBodyText
@@ -4374,7 +4393,7 @@ expectPlausibleEpochNanoTimestamps bodyText = do
     (Just startTimeUnixNano, Just endTimeUnixNano) -> do
       startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano)
       endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano)
-      startTimeUnixNano `shouldSatisfy` (<= endTimeUnixNano)
+      startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano)
     _ ->
       expectationFailure "expected OTLP startTimeUnixNano and endTimeUnixNano string fields with integer values"
 
