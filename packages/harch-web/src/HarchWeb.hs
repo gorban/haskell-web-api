@@ -648,7 +648,15 @@ toWaiApplication webApplication request respond = do
         Nothing -> do
           maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
           case maybeStaticResponse of
-            Just staticResponse ->
+            Just (staticRoutePath, staticResponse) -> do
+              staticResponseReportedAt <- getMonotonicTimeNSec
+              reportEarlyRequestObservability
+                webApplication
+                request
+                requestStartedAt
+                staticResponseReportedAt
+                (applyRequestPathPrefix (requestPathPrefix request) staticRoutePath)
+                staticResponse
               respond
                 (applyResponseHeaders policyResponseHeaders staticResponse)
             Nothing -> do
@@ -710,6 +718,7 @@ toWaiApplication webApplication request respond = do
                       ( extraObservabilityAttributes
                           <> requestTimingObservabilityAttributes
                             requestStartedAt
+                            responseRenderedAt
                             [ ("request-policy", requestStartedAt, policyEvaluatedAt),
                               ("route-match", routeMatchingStartedAt, routeMatchedAt),
                               ("render-response", renderStartedAt, responseRenderedAt)
@@ -2806,15 +2815,12 @@ optionalRequestLogField fieldName maybeFieldValue =
     Just fieldValue -> [renderRequestLogField fieldName fieldValue]
     Nothing -> []
 
-requestTimingObservabilityAttributes :: Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
-requestTimingObservabilityAttributes requestStartedAt phaseTimings =
+requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
+requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =
   intObservabilityAttribute "harch.request.start_monotonic_ns" (fromIntegral requestStartedAt)
     : intObservabilityAttribute "harch.request.duration_ns" (nanosecondsBetween requestStartedAt requestCompletedAt)
     : concatMap phaseTimingAttributes phaseTimings
   where
-    requestCompletedAt =
-      maximum (requestStartedAt : [phaseEndedAt | (_, _, phaseEndedAt) <- phaseTimings])
-
     phaseTimingAttributes (phaseName, phaseStartedAt, phaseEndedAt) =
       [ intObservabilityAttribute
           ("harch.phase." <> phaseName <> ".start_offset_ns")
@@ -3021,16 +3027,40 @@ htmlContentType = "text/html; charset=utf-8"
 plainTextContentType :: Text
 plainTextContentType = "text/plain; charset=utf-8"
 
-serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe Wai.Response)
+reportEarlyRequestObservability ::
+  (Eq route) =>
+  Application route context ->
+  Wai.Request ->
+  Word64 ->
+  Word64 ->
+  Text ->
+  Wai.Response ->
+  IO ()
+reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
+  let requestObservability =
+        Observability.buildRequestObservability
+          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+          (requestScheme request)
+          (waiRequestPath request)
+          routePath
+          (Http.statusCode (Wai.responseStatus response))
+          Observability.BodyResponseKind
+          ( requestContextObservabilityAttributes request
+              <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
+          )
+   in Observability.forceRequestObservability requestObservability `seq`
+        reportRequestObservability webApplication requestObservability
+
+serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe (Text, Wai.Response))
 serveStaticAssetResponse staticAssetsConfig requestPath =
   case matchStaticAssetRoot staticAssetsConfig requestPath of
     Nothing -> pure Nothing
     Just (matchedRoot, relativeAssetPath) ->
       case sanitizeStaticAssetPath relativeAssetPath of
-        Nothing -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+        Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
         Just safeAssetPath -> do
           case staticAssetContentType staticAssetsConfig safeAssetPath of
-            Nothing -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+            Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
             Just assetContentType -> do
               let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
               assetExists <- doesFileExist assetFilePath
@@ -3039,13 +3069,20 @@ serveStaticAssetResponse staticAssetsConfig requestPath =
                   assetContents <- ByteString.readFile assetFilePath
                   pure
                     ( Just
-                        ( Wai.responseLBS
+                        ( staticAssetRoutePath matchedRoot,
+                          Wai.responseLBS
                             Http.status200
                             (staticAssetHeaders staticAssetsConfig assetContentType)
                             (LazyByteString.fromStrict assetContents)
                         )
                     )
-                False -> pure (Just (missingStaticAssetResponse staticAssetsConfig))
+                False -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
+
+staticAssetRoutePath :: StaticAssetRoot -> Text
+staticAssetRoutePath staticRoot =
+  case staticUrlPrefix staticRoot of
+    "/" -> "/*"
+    staticPrefix -> staticPrefix <> "/*"
 
 matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, FilePath)
 matchStaticAssetRoot staticAssetsConfig requestPath =
@@ -3616,32 +3653,29 @@ requestSpanIntAttribute attributeName requestSpan =
 
 requestRuntimePhaseChildSpans :: Observability.RequestObservability -> [Observability.RequestSpan]
 requestRuntimePhaseChildSpans requestObservability =
-  [ runtimePhaseChildSpan
-      "HarchWeb request policy"
-      "request-policy"
-      ["http.request.method", "url.scheme"],
-    runtimePhaseChildSpan
-      "HarchWeb route match"
-      "route-match"
-      ["url.path", "http.route"],
-    runtimePhaseChildSpan
-      "HarchWeb render response"
-      "render-response"
-      ["http.response.status_code", "harch.response.kind"]
-  ]
+  mapMaybe
+    (\(displayName, phaseName, copiedAttributeNames) -> runtimePhaseChildSpan displayName phaseName copiedAttributeNames)
+    [ ("HarchWeb request policy", "request-policy", ["http.request.method", "url.scheme"]),
+      ("HarchWeb route match", "route-match", ["url.path", "http.route"]),
+      ("HarchWeb render response", "render-response", ["http.response.status_code", "harch.response.kind"])
+    ]
   where
     rootAttributes =
       Observability.requestSpanAttributes
         (Observability.observabilityRequestSpan requestObservability)
 
     runtimePhaseChildSpan displayName phaseName copiedAttributeNames =
-      Observability.RequestSpan
-        { Observability.requestSpanDisplayName = displayName,
-          Observability.requestSpanAttributes =
-            [textObservabilityAttribute "harch.span.phase" phaseName]
-              <> phaseTimingAttributes phaseName
-              <> concatMap (`attributesNamed` rootAttributes) copiedAttributeNames
-        }
+      case phaseTimingAttributes phaseName of
+        [] -> Nothing
+        timingAttributes ->
+          Just
+            Observability.RequestSpan
+              { Observability.requestSpanDisplayName = displayName,
+                Observability.requestSpanAttributes =
+                  [textObservabilityAttribute "harch.span.phase" phaseName]
+                    <> timingAttributes
+                    <> concatMap (`attributesNamed` rootAttributes) copiedAttributeNames
+              }
 
     phaseTimingAttributes phaseName =
       renamedIntAttribute

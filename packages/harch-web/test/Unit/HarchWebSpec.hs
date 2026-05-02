@@ -2000,6 +2000,99 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute]
                        ]
 
+    it "reports request observability for root-prefixed static asset responses with a wildcard route" $
+      withSystemTempDirectory "harch-web-static-observability-root" $ \tempDirectory -> do
+        requestObservabilityReference <- newIORef []
+        let directRemoteHost =
+              Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+            assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            clientAddressAttribute =
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "client.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            peerAddressAttribute =
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "network.peer.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            staticApplication =
+              (sampleApplicationWithStaticAssets assetConfig)
+                { reportRequestObservability = \requestObservabilityValue ->
+                    modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                }
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/styles.css") "body{}"
+        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequestWithRemoteHostAndHeaders ["styles.css"] directRemoteHost [])
+        Wai.responseStatus response `shouldBe` Http.status200
+        readIORef requestObservabilityReference
+          `shouldReturn` [ Observability.buildRequestObservability
+                             "GET"
+                             "http"
+                             "/styles.css"
+                             "/*"
+                             200
+                             Observability.BodyResponseKind
+                             [clientAddressAttribute, peerAddressAttribute]
+                         ]
+
+    it "reports request observability for matched static asset misses with the prefixed wildcard route" $
+      withSystemTempDirectory "harch-web-static-observability-missing" $ \tempDirectory -> do
+        requestObservabilityReference <- newIORef []
+        let directRemoteHost =
+              Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+            assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            forwardedPrefixAttribute =
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "http.request.header.x_forwarded_prefix",
+                  Observability.attributeValue = Observability.TextAttribute "/app"
+                }
+            clientAddressAttribute =
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "client.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            peerAddressAttribute =
+              Observability.ObservabilityAttribute
+                { Observability.attributeName = "network.peer.address",
+                  Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                }
+            missingRequest =
+              waiRequestWithRemoteHostAndHeaders
+                ["app", "assets", "missing.js"]
+                directRemoteHost
+                [("X-Forwarded-Prefix", "/app")]
+            staticApplication =
+              (sampleApplicationWithStaticAssets assetConfig)
+                { reportRequestObservability = \requestObservabilityValue ->
+                    modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                }
+        createDirectoryIfMissing True assetDirectory
+        response <- performWaiRequest (toWaiApplication staticApplication) missingRequest
+        Wai.responseStatus response `shouldBe` Http.status404
+        readIORef requestObservabilityReference
+          `shouldReturn` [ Observability.buildRequestObservability
+                             "GET"
+                             "http"
+                             "/assets/missing.js"
+                             "/app/assets/*"
+                             404
+                             Observability.BodyResponseKind
+                             [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
+                         ]
+
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
         let assetDirectory = tempDirectory <> "/public"
@@ -2916,6 +3009,42 @@ spec = do
         extractQuotedJsonField "spanId" requestBodyText
           `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
         expectPlausibleEpochNanoTimestamps requestBodyText
+
+    it "omits runtime phase child spans when request timing has only a measured root duration" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportRequestObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = []
+            }
+          ( Observability.buildRequestObservability
+              "GET"
+              "http"
+              "/assets/app.js"
+              "/assets/*"
+              200
+              Observability.BodyResponseKind
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.request.start_monotonic_ns",
+                    Observability.attributeValue = Observability.IntAttribute 1000000
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.request.duration_ns",
+                    Observability.attributeValue = Observability.IntAttribute 5000000
+                  }
+              ]
+          )
+        CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /assets/*\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.phase\""
+        Text.count "\"name\":\"GET /assets/*\"" requestBodyText `shouldBe` 1
 
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
