@@ -3250,6 +3250,60 @@ spec = do
         extractQuotedJsonField "spanId" requestBodyText
           `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
         expectPlausibleEpochNanoTimestamps requestBodyText
+        let startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
+            endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
+            durations = zipWith (-) endTimes startTimes
+        case (startTimes, endTimes, durations) of
+          ( [ rootStart,
+              requestPolicyStart,
+              routeMatchStart,
+              renderResponseStart,
+              secondPageDbStart,
+              homePageDbStart,
+              healthCheckDbStart
+              ],
+            [ rootEnd,
+              requestPolicyEnd,
+              routeMatchEnd,
+              renderResponseEnd,
+              secondPageDbEnd,
+              homePageDbEnd,
+              healthCheckDbEnd
+              ],
+            [ rootDuration,
+              requestPolicyDuration,
+              routeMatchDuration,
+              renderResponseDuration,
+              secondPageDbDuration,
+              homePageDbDuration,
+              healthCheckDbDuration
+              ]
+            ) -> do
+              rootDuration `shouldBe` 5000000
+              rootEnd - rootStart `shouldBe` rootDuration
+              requestPolicyStart - rootStart `shouldBe` 0
+              requestPolicyDuration `shouldBe` 250000
+              requestPolicyEnd `shouldBe` requestPolicyStart + requestPolicyDuration
+              routeMatchStart - rootStart `shouldBe` 500000
+              routeMatchDuration `shouldBe` 750000
+              routeMatchEnd `shouldBe` routeMatchStart + routeMatchDuration
+              renderResponseStart - rootStart `shouldBe` 1500000
+              renderResponseDuration `shouldBe` 3000000
+              renderResponseEnd `shouldBe` renderResponseStart + renderResponseDuration
+              secondPageDbStart - rootStart `shouldBe` 2000000
+              secondPageDbDuration `shouldBe` 1250000
+              secondPageDbEnd `shouldBe` secondPageDbStart + secondPageDbDuration
+              homePageDbStart `shouldBe` rootStart
+              homePageDbDuration `shouldBe` rootDuration
+              homePageDbEnd `shouldBe` rootEnd
+              healthCheckDbStart `shouldBe` rootStart
+              healthCheckDbDuration `shouldBe` rootDuration
+              healthCheckDbEnd `shouldBe` rootEnd
+              mapM_
+                (`shouldSatisfy` (<= rootEnd))
+                [requestPolicyEnd, routeMatchEnd, renderResponseEnd, secondPageDbEnd, homePageDbEnd, healthCheckDbEnd]
+          _ ->
+            expectationFailure "expected rooted OTLP timing data for one request span, three phase spans, and three DB spans"
 
     it "omits runtime phase child spans when request timing has only a measured root duration" $
       withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
