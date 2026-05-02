@@ -3547,7 +3547,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
   endTimeUnixNano <- currentUnixTimeNSec
   let rootDurationNanoseconds =
         fromMaybe
-          (minimumOtlpSpanDurationNanoseconds * fromIntegral (max 1 (length childSpans + 1)))
+          (requestFallbackDurationNanoseconds childSpans)
           (requestDurationNanoseconds requestObservability)
       startTimeUnixNano = nonNegativeStartTime endTimeUnixNano rootDurationNanoseconds
       traceId =
@@ -3589,7 +3589,7 @@ exportConnectionObservabilityToOtlp ::
 exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
   (traceId, spanId) <- nextOtlpSpanIdentifiers
   endTimeUnixNano <- currentUnixTimeNSec
-  let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano minimumOtlpSpanDurationNanoseconds
+  let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano connectionFallbackDurationNanoseconds
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
@@ -3747,6 +3747,13 @@ otlpSpanObject traceId spanId maybeParentSpanId maybeTraceState spanKind startTi
 
 minimumOtlpSpanDurationNanoseconds :: Word64
 minimumOtlpSpanDurationNanoseconds = 1000
+
+requestFallbackDurationNanoseconds :: [(Text, Observability.RequestSpan)] -> Word64
+requestFallbackDurationNanoseconds childSpans =
+  minimumOtlpSpanDurationNanoseconds * fromIntegral (max 1 (length childSpans + 1))
+
+connectionFallbackDurationNanoseconds :: Word64
+connectionFallbackDurationNanoseconds = minimumOtlpSpanDurationNanoseconds
 
 nonNegativeStartTime :: Word64 -> Word64 -> Word64
 nonNegativeStartTime endTimeUnixNano durationNanos =

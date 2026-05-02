@@ -3329,6 +3329,52 @@ spec = do
         extractQuotedJsonField "traceId" requestBodyText `shouldBe` Just "4bf92f3577b34da6a3ce929d0e0e4736"
         Text.count "\"parentSpanId\":\"00f067aa0ba902b7\"" requestBodyText `shouldBe` 1
 
+    it "uses an intentional fallback duration when direct request exports lack runtime timing metadata" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportRequestObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = []
+            }
+          ( Observability.buildRequestObservability
+              "GET"
+              "http"
+              "/health"
+              "/health"
+              200
+              Observability.BodyResponseKind
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.system",
+                    Observability.attributeValue = Observability.TextAttribute "postgresql"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.operation.name",
+                    Observability.attributeValue = Observability.TextAttribute "ping-database"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "db.query.template",
+                    Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
+                  }
+              ]
+          )
+        CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+            startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
+            endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
+            durations = zipWith (-) endTimes startTimes
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /health\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB ping-database\""
+        Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1
+        Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 1
+        startTimes `shouldSatisfy` ((== 2) . length)
+        endTimes `shouldSatisfy` ((== 2) . length)
+        durations `shouldBe` [2000, 2000]
+        case startTimes of
+          [rootStart, childStart] -> rootStart `shouldBe` childStart
+          _ -> expectationFailure "expected root and child OTLP spans"
+
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
         exportResult <-
@@ -3402,6 +3448,11 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
         expectPlausibleEpochNanoTimestamps requestBodyText
+        let startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
+            endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
+        startTimes `shouldSatisfy` ((== 1) . length)
+        endTimes `shouldSatisfy` ((== 1) . length)
+        zipWith (-) endTimes startTimes `shouldBe` [1000]
 
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
