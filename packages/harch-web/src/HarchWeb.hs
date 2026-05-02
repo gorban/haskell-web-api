@@ -638,13 +638,32 @@ toWaiApplication webApplication request respond = do
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
   policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
   case corsPreflightResponse requestPolicyConfig request of
-    Just preflightResponse ->
-      respond (applyResponseHeaders policyResponseHeaders preflightResponse)
+    Just preflightResponse -> do
+      let preflightResponseWithHeaders =
+            applyResponseHeaders policyResponseHeaders preflightResponse
+      preflightResponseReportedAt <- preflightResponseWithHeaders `seq` getMonotonicTimeNSec
+      reportEarlyRequestObservability
+        webApplication
+        request
+        requestStartedAt
+        preflightResponseReportedAt
+        (externalRequestPath request)
+        preflightResponseWithHeaders
+      respond preflightResponseWithHeaders
     Nothing ->
       case requestRedirectLocation requestPolicyConfig request of
-        Just redirectLocation ->
-          respond
-            (applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation))
+        Just redirectLocation -> do
+          let redirectResponse =
+                applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation)
+          redirectResponseReportedAt <- redirectResponse `seq` getMonotonicTimeNSec
+          reportEarlyRequestObservability
+            webApplication
+            request
+            requestStartedAt
+            redirectResponseReportedAt
+            (externalRequestPath request)
+            redirectResponse
+          respond redirectResponse
         Nothing -> do
           maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
           case maybeStaticResponse of

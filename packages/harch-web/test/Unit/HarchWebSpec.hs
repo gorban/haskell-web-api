@@ -1424,6 +1424,51 @@ spec = do
       Wai.responseStatus response `shouldBe` Http.status308
       lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 defaultContentSecurityPolicy)
 
+    it "reports request observability for HTTPS redirects with the externally visible request path" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          forwardedPrefixAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_prefix",
+                Observability.attributeValue = Observability.TextAttribute "/app"
+              }
+          redirectingApplication =
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
+              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+          redirectRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["second"]
+              directRemoteHost
+              [ ("Host", "app.example.com"),
+                ("X-Forwarded-Prefix", "/app")
+              ]
+      response <- performWaiRequest (toWaiApplication redirectingApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/second"
+                           "/app/second"
+                           308
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
+                       ]
+
     it "adds CORS headers only for explicitly allowed origins" $ do
       let requestPolicyConfig =
             defaultRequestPolicy
@@ -1524,6 +1569,56 @@ spec = do
       lookup "Access-Control-Allow-Methods" (Wai.responseHeaders response) `shouldBe` Just "GET"
       lookup "Access-Control-Allow-Headers" (Wai.responseHeaders response) `shouldBe` Nothing
       lookup "Access-Control-Max-Age" (Wai.responseHeaders response) `shouldBe` Nothing
+
+    it "reports request observability for allowed CORS preflight responses" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          requestPolicyConfig =
+            defaultRequestPolicy
+              { corsPolicy =
+                  CorsPolicyConfig
+                    { corsAllowedOrigins = ["https://client.example.com"],
+                      corsAllowedMethods = ["GET"],
+                      corsAllowedHeaders = [],
+                      corsMaxAgeSeconds = Nothing
+                    }
+              }
+          preflightRequest =
+            (waiRequestWithRemoteHostAndHeaders ["data"] directRemoteHost [])
+              { Wai.requestMethod = "OPTIONS",
+                Wai.requestHeaders =
+                  [ ("Origin", "https://client.example.com"),
+                    ("Access-Control-Request-Method", "GET")
+                  ]
+              }
+          applicationWithObservability =
+            (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication applicationWithObservability) preflightRequest
+      Wai.responseStatus response `shouldBe` Http.status204
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "OPTIONS"
+                           "http"
+                           "/data"
+                           "/data"
+                           204
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       ]
 
     it "reports body-response observability attributes and logs through the application hooks" $ do
       requestObservabilityReference <- newIORef []
