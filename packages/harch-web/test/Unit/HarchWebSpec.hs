@@ -2389,22 +2389,24 @@ spec = do
             staticApplication =
               (sampleApplicationWithStaticAssets assetConfig)
                 { reportRequestObservability = \requestObservabilityValue ->
-                    modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                    modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                 }
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/styles.css") "body{}"
         response <- performWaiRequest (toWaiApplication staticApplication) (waiRequestWithRemoteHostAndHeaders ["styles.css"] directRemoteHost [])
         Wai.responseStatus response `shouldBe` Http.status200
-        readIORef requestObservabilityReference
-          `shouldReturn` [ Observability.buildRequestObservability
-                             "GET"
-                             "http"
-                             "/styles.css"
-                             "/*"
-                             200
-                             Observability.BodyResponseKind
-                             [clientAddressAttribute, peerAddressAttribute]
-                         ]
+        capturedRequestObservability <- readIORef requestObservabilityReference
+        map stripVolatileRequestTiming capturedRequestObservability
+          `shouldBe` [ Observability.buildRequestObservability
+                         "GET"
+                         "http"
+                         "/styles.css"
+                         "/*"
+                         200
+                         Observability.BodyResponseKind
+                         [clientAddressAttribute, peerAddressAttribute]
+                     ]
+        mapM_ expectMeasuredRootRequestTiming capturedRequestObservability
 
     it "reports request observability for matched static asset misses with the prefixed wildcard route" $
       withSystemTempDirectory "harch-web-static-observability-missing" $ \tempDirectory -> do
@@ -2441,21 +2443,23 @@ spec = do
             staticApplication =
               (sampleApplicationWithStaticAssets assetConfig)
                 { reportRequestObservability = \requestObservabilityValue ->
-                    modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                    modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                 }
         createDirectoryIfMissing True assetDirectory
         response <- performWaiRequest (toWaiApplication staticApplication) missingRequest
         Wai.responseStatus response `shouldBe` Http.status404
-        readIORef requestObservabilityReference
-          `shouldReturn` [ Observability.buildRequestObservability
-                             "GET"
-                             "http"
-                             "/assets/missing.js"
-                             "/app/assets/*"
-                             404
-                             Observability.BodyResponseKind
-                             [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
-                         ]
+        capturedRequestObservability <- readIORef requestObservabilityReference
+        map stripVolatileRequestTiming capturedRequestObservability
+          `shouldBe` [ Observability.buildRequestObservability
+                         "GET"
+                         "http"
+                         "/assets/missing.js"
+                         "/app/assets/*"
+                         404
+                         Observability.BodyResponseKind
+                         [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
+                     ]
+        mapM_ expectMeasuredRootRequestTiming capturedRequestObservability
 
     it "serves configured static assets with deterministic cache-control headers" $
       withSystemTempDirectory "harch-web-static" $ \tempDirectory -> do
