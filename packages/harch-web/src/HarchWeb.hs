@@ -1186,9 +1186,19 @@ runtimeCertbotArguments runtimeAcmePlan =
 
 toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do
+  requestStartedAt <- getMonotonicTimeNSec
   maybeChallengeResponse <- acmeChallengeResponseForRequest challengeStore request
   case maybeChallengeResponse of
-    Just challengeResponse -> respond challengeResponse
+    Just challengeResponse -> do
+      challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
+      reportEarlyRequestObservability
+        webApplication
+        request
+        requestStartedAt
+        challengeResponseReportedAt
+        (acmeChallengeRoutePath request)
+        challengeResponse
+      respond challengeResponse
     Nothing -> toWaiApplication webApplication request respond
 
 acmeChallengeResponseForRequest :: AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
@@ -1219,6 +1229,12 @@ matchesRuntimeAcmeChallenge request challenge =
 acmeHttp01ChallengeToken :: Wai.Request -> Maybe Text
 acmeHttp01ChallengeToken request =
   Text.stripPrefix "/.well-known/acme-challenge/" (waiRequestPath request)
+
+acmeChallengeRoutePath :: Wai.Request -> Text
+acmeChallengeRoutePath request =
+  applyRequestPathPrefix
+    (requestPathPrefix request)
+    "/.well-known/acme-challenge/*"
 
 requestHostWithoutPort :: Wai.Request -> Maybe Text
 requestHostWithoutPort request =

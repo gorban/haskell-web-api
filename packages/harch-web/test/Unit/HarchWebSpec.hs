@@ -4090,10 +4090,21 @@ spec = do
               $ \certbotExecutable ->
                 withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
                   completionReference <- newIORef Nothing
+                  requestObservabilityReference <- newIORef []
                   let certbotBackend =
                         certbotHttp01BackendWithExecutable
                           certbotExecutable
                           []
+                      clientAddressAttribute =
+                        Observability.ObservabilityAttribute
+                          { Observability.attributeName = "client.address",
+                            Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                          }
+                      peerAddressAttribute =
+                        Observability.ObservabilityAttribute
+                          { Observability.attributeName = "network.peer.address",
+                            Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                          }
                       acmeTlsConfig =
                         serverConfigWithListeners
                           [ httpRuntimeListener "127.0.0.1" challengePort,
@@ -4129,11 +4140,39 @@ spec = do
                               _ ->
                                 expectationFailure "expected runServer to serve certbot webroot challenge files on the HTTP listener"
                                   >> pure ByteString.empty
+                      waitForRequestObservability remainingAttempts = do
+                        observedValues <- readIORef requestObservabilityReference
+                        case observedValues of
+                          requestObservabilityValue : _ ->
+                            pure requestObservabilityValue
+                          [] ->
+                            if remainingAttempts > 0
+                              then threadDelay 10000 >> waitForRequestObservability (remainingAttempts - 1)
+                              else expectationFailure "expected certbot webroot challenge response to report request observability" >> pure (Observability.buildRequestObservability "GET" "http" "/.well-known/acme-challenge/loopback-token" "/.well-known/acme-challenge/*" 200 Observability.BodyResponseKind [clientAddressAttribute, peerAddressAttribute])
                   serverThreadId <- forkIO $ do
-                    result <- try (runServer outputHandle acmeTlsConfig sampleApplication) :: IO (Either SomeException ())
+                    result <-
+                      try
+                        ( runServer
+                            outputHandle
+                            acmeTlsConfig
+                            sampleApplication
+                              { reportRequestObservability = \requestObservabilityValue ->
+                                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                              }
+                        ) ::
+                        IO (Either SomeException ())
                     writeIORef completionReference (Just result)
                   challengeResponseBytes <- waitForChallengeResponse (500 :: Int)
                   challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
+                  waitForRequestObservability (500 :: Int)
+                    `shouldReturn` Observability.buildRequestObservability
+                      "GET"
+                      "http"
+                      "/.well-known/acme-challenge/loopback-token"
+                      "/.well-known/acme-challenge/*"
+                      200
+                      Observability.BodyResponseKind
+                      [clientAddressAttribute, peerAddressAttribute]
                   firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
                   Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
                   killThread serverThreadId
