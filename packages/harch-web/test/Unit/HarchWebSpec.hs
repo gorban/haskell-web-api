@@ -3711,6 +3711,7 @@ spec = do
               \certbotPath ->
                 withSystemTempFile "harch-web-output.txt" $ \outputPath outputHandle -> do
                   completionReference <- newIORef Nothing
+                  logEntriesReference <- newIORef []
                   let acmeConfig =
                         AcmeConfig
                           { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
@@ -3735,8 +3736,13 @@ spec = do
                                 listenerAcme = Nothing
                               }
                           ]
+                      observingApplication =
+                        sampleApplication
+                          { reportApplicationLog = \logEntry ->
+                              modifyIORef' logEntriesReference (<> [logEntry])
+                          }
                   serverThreadId <- forkIO $ do
-                    result <- try (runServer outputHandle acmeTlsConfig sampleApplication) :: IO (Either SomeException ())
+                    result <- try (runServer outputHandle acmeTlsConfig observingApplication) :: IO (Either SomeException ())
                     writeIORef completionReference (Just result)
                   firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
                   Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
@@ -3753,6 +3759,11 @@ spec = do
                       [ "HTTP Server listening at http://0.0.0.0:" <> show challengePort,
                         "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
                       ]
+                  readIORef logEntriesReference
+                    `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:" <> Text.pack (show httpsPort),
+                                     "Launching certbot for ACME listener on 127.0.0.1:" <> Text.pack (show httpsPort),
+                                     "ACME certbot webroot unregistered for listener 127.0.0.1:" <> Text.pack (show httpsPort)
+                                   ]
 
     it "lets shared HTTPS listeners reuse certificates issued by the certbot-backed ACME backend" $
       withUnusedLoopbackPort $ \challengePort ->
@@ -3763,6 +3774,7 @@ spec = do
                 withSystemTempDirectory "harch-web-shared-certs" $ \sharedDirectory ->
                   withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
                     completionReference <- newIORef Nothing
+                    logEntriesReference <- newIORef []
                     let acmeConfig =
                           AcmeConfig
                             { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
@@ -3783,8 +3795,13 @@ spec = do
                                 },
                               sharedHttpsListener "127.0.0.1" sharedHttpsPort sharedDirectory
                             ]
+                        observingApplication =
+                          sampleApplication
+                            { reportApplicationLog = \logEntry ->
+                                modifyIORef' logEntriesReference (<> [logEntry])
+                            }
                     serverThreadId <- forkIO $ do
-                      result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+                      result <- try (runServer outputHandle runtimeConfig observingApplication) :: IO (Either SomeException ())
                       writeIORef completionReference (Just result)
                     sharedResponseText <- waitForHttpsServerResponse completionReference sharedHttpsPort "/known"
                     Text.isInfixOf "<h1>Known</h1>" sharedResponseText `shouldBe` True
@@ -3792,6 +3809,12 @@ spec = do
                     readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
                     killThread serverThreadId
                     waitForServerExit completionReference
+                    readIORef logEntriesReference
+                      `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:" <> Text.pack (show challengePort),
+                                       "Launching certbot for ACME listener on 127.0.0.1:" <> Text.pack (show challengePort),
+                                       "ACME certbot webroot unregistered for listener 127.0.0.1:" <> Text.pack (show challengePort),
+                                       "Published ACME certificate files to shared directory " <> Text.pack sharedDirectory
+                                     ]
 
     it "shuts down HTTP ACME producers that only publish certificates without starting HTTPS" $
       withUnusedLoopbackPort $ \challengePort ->
@@ -3832,6 +3855,7 @@ spec = do
       withUnusedLoopbackPort $ \challengePort ->
         withSystemTempFile "harch-web-output.txt" $ \_ outputHandle ->
           withEmptyExecutablePath $ do
+            logEntriesReference <- newIORef []
             let acmeConfig =
                   AcmeConfig
                     { acmeDirectoryUrl = "http://127.0.0.1:14000/directory",
@@ -3856,8 +3880,22 @@ spec = do
                           listenerAcme = Nothing
                         }
                     ]
-            runServer outputHandle acmeTlsConfig sampleApplication
+                observingApplication =
+                  sampleApplication
+                    { reportApplicationLog = \logEntry ->
+                        modifyIORef' logEntriesReference (<> [logEntry])
+                    }
+            runServer outputHandle acmeTlsConfig observingApplication
               `shouldThrow` (\exception -> "user error (Failed to launch certbot for ACME listener on 127.0.0.1:5443:" `isPrefixOf` show (exception :: IOError))
+            logEntries <- readIORef logEntriesReference
+            case logEntries of
+              [registeredLog, launchLog, failureLog, unregisterLog] -> do
+                registeredLog `shouldBe` "ACME certbot webroot registered for listener 127.0.0.1:5443"
+                launchLog `shouldBe` "Launching certbot for ACME listener on 127.0.0.1:5443"
+                failureLog `shouldSatisfy` Text.isPrefixOf "Failed to launch certbot for ACME listener on 127.0.0.1:5443: "
+                unregisterLog `shouldBe` "ACME certbot webroot unregistered for listener 127.0.0.1:5443"
+              _ ->
+                expectationFailure ("Expected four ACME certbot lifecycle logs, got: " <> show logEntries)
 
     it "fails explicitly when certbot-backed ACME listeners do not have the declared http-01 port listener" $
       withUnusedLoopbackPort $ \challengePort ->
@@ -4420,50 +4458,53 @@ spec = do
               withFakeCertbotExecutable certificatePath privateKeyPath $
                 \certbotExecutable ->
                   withSystemTempDirectory "harch-web-shared-certs" $ \sharedDirectory ->
-                    withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
-                      completionReference <- newIORef Nothing
-                      let certbotBackend =
-                            certbotHttp01BackendWithExecutable
-                              certbotExecutable
-                              ["certonly", "--http-01-port", Text.pack (show challengePort)]
-                          acmeConfig =
-                            AcmeConfig
-                              { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
-                                acmeContactEmails = ["ops@example.com"],
-                                acmeDomains = ["loopback.example", "alt.example"],
-                                acmeHttp01Port = challengePort,
-                                acmeCertificateDirectory = Just sharedDirectory,
-                                acmeCertbotConfig = certbotBackend
-                              }
-                          acmeListener =
-                            ListenerConfig
-                              { listenerHost = "127.0.0.1",
-                                listenerPort = acmeHttpsPort,
-                                listenerScheme = Https,
-                                listenerTls =
-                                  Just
-                                    TlsConfig
-                                      { certificateSource = AcmeCertificateSource acmeConfig
-                                      },
-                                listenerAcme = Nothing
-                              }
-                          runtimeConfig =
-                            serverConfigWithListeners
-                              [ httpRuntimeListener "127.0.0.1" challengePort,
-                                acmeListener,
-                                sharedHttpsListener "127.0.0.1" sharedHttpsPort sharedDirectory
-                              ]
-                      serverThreadId <- forkIO $ do
-                        result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
-                        writeIORef completionReference (Just result)
-                      acmeResponseText <- waitForHttpsServerResponse completionReference acmeHttpsPort "/known"
-                      Text.isInfixOf "<h1>Known</h1>" acmeResponseText `shouldBe` True
-                      sharedResponseText <- waitForHttpsServerResponse completionReference sharedHttpsPort "/known"
-                      Text.isInfixOf "<h1>Known</h1>" sharedResponseText `shouldBe` True
-                      readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` manualTlsCertificatePem
-                      readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
-                      killThread serverThreadId
-                      waitForServerExit completionReference
+                    withSystemTempFile
+                      "harch-web-output.txt"
+                      ( \_ outputHandle -> do
+                          completionReference <- newIORef Nothing
+                          let certbotBackend =
+                                certbotHttp01BackendWithExecutable
+                                  certbotExecutable
+                                  ["certonly", "--http-01-port", Text.pack (show challengePort)]
+                              acmeConfig =
+                                AcmeConfig
+                                  { acmeDirectoryUrl = "https://acme-v02.api.letsencrypt.org/directory",
+                                    acmeContactEmails = ["ops@example.com"],
+                                    acmeDomains = ["loopback.example", "alt.example"],
+                                    acmeHttp01Port = challengePort,
+                                    acmeCertificateDirectory = Just sharedDirectory,
+                                    acmeCertbotConfig = certbotBackend
+                                  }
+                              acmeListener =
+                                ListenerConfig
+                                  { listenerHost = "127.0.0.1",
+                                    listenerPort = acmeHttpsPort,
+                                    listenerScheme = Https,
+                                    listenerTls =
+                                      Just
+                                        TlsConfig
+                                          { certificateSource = AcmeCertificateSource acmeConfig
+                                          },
+                                    listenerAcme = Nothing
+                                  }
+                              runtimeConfig =
+                                serverConfigWithListeners
+                                  [ httpRuntimeListener "127.0.0.1" challengePort,
+                                    acmeListener,
+                                    sharedHttpsListener "127.0.0.1" sharedHttpsPort sharedDirectory
+                                  ]
+                          serverThreadId <- forkIO $ do
+                            result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+                            writeIORef completionReference (Just result)
+                          acmeResponseText <- waitForHttpsServerResponse completionReference acmeHttpsPort "/known"
+                          Text.isInfixOf "<h1>Known</h1>" acmeResponseText `shouldBe` True
+                          sharedResponseText <- waitForHttpsServerResponse completionReference sharedHttpsPort "/known"
+                          Text.isInfixOf "<h1>Known</h1>" sharedResponseText `shouldBe` True
+                          readFile (sharedDirectory </> "fullchain.pem") `shouldReturn` manualTlsCertificatePem
+                          readFile (sharedDirectory </> "privkey.pem") `shouldReturn` manualTlsPrivateKeyPem
+                          killThread serverThreadId
+                          waitForServerExit completionReference
+                      )
 
     it "waits for shared TLS certificate files to appear before starting the HTTPS listener" $
       withUnusedLoopbackPort $ \httpsPort ->
@@ -4521,6 +4562,7 @@ spec = do
       withUnusedLoopbackPort $ \challengePort ->
         withFailingFakeCertbotExecutable $ \certbotExecutable ->
           withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do
+            logEntriesReference <- newIORef []
             let certbotBackend =
                   certbotHttp01BackendWithExecutable
                     certbotExecutable
@@ -4539,13 +4581,24 @@ spec = do
                     [ httpRuntimeListener "127.0.0.1" challengePort,
                       acmeHttpsListener "127.0.0.1" 5443 certbotBackend
                     ]
-            runServer outputHandle acmeTlsConfig sampleApplication
+                observingApplication =
+                  sampleApplication
+                    { reportApplicationLog = \logEntry ->
+                        modifyIORef' logEntriesReference (<> [logEntry])
+                    }
+            runServer outputHandle acmeTlsConfig observingApplication
               `shouldThrow` ( \exception ->
                                 let rendered = show (exception :: IOError)
                                  in "user error (Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42.\nstdout:\n\nstderr:\nfake certbot failure\n" `isPrefixOf` rendered
                                       && "Certbot state directory was preserved for inspection: " `isInfixOf` rendered
                                       && "letsencrypt.log tail:\nfake letsencrypt detail\n" `isInfixOf` rendered
                             )
+            readIORef logEntriesReference
+              `shouldReturn` [ "ACME certbot webroot registered for listener 127.0.0.1:5443",
+                               "Launching certbot for ACME listener on 127.0.0.1:5443",
+                               "Certbot failed for ACME listener on 127.0.0.1:5443 with exit code ExitFailure 42",
+                               "ACME certbot webroot unregistered for listener 127.0.0.1:5443"
+                             ]
 
     it "keeps certbot failure diagnostics useful when certbot exits without a logfile" $
       withUnusedLoopbackPort $ \challengePort ->

@@ -782,7 +782,7 @@ runServer outputHandle config webApplication =
                 stopRuntimeServers
                 ( \httpServers ->
                     bracket
-                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter)
+                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
                       stopAcmeRuntimeServers
                       ( \acmeServers ->
                           bracket
@@ -915,16 +915,16 @@ startManualTlsRuntimeServers manualTlsPlans waiApplication connectionReporter =
           )
             `onException` stopRuntimeServers runningServers
 
-startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServers acmePlans waiApplication connectionReporter =
-  connectionReporter `seq` go [] acmePlans
+startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServers acmePlans waiApplication connectionReporter applicationLogger =
+  connectionReporter `seq` applicationLogger `seq` go [] acmePlans
   where
     go runningServers remainingPlans =
       case remainingPlans of
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter
+              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter applicationLogger
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
@@ -990,11 +990,11 @@ startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplicati
           runningRuntimeThreadId = serverThreadId
         }
 
-startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter = do
+startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter applicationLogger = do
   let certbotConfig = acmeCertbotConfig (runtimeAcmeListenerConfig runtimeAcmePlan)
   (maybeManualTlsPlan, cleanupDirectory) <-
-    prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig
+    prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan certbotConfig
   maybeRunningServer <-
     connectionReporter `seq`
       traverse (\manualTlsPlan -> startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
@@ -1020,7 +1020,12 @@ runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPri
     (runtimeAcmeTlsEndpoint runtimeAcmePlan)
 
 prepareCertbotManualTlsBindPlan :: RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
-prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
+prepareCertbotManualTlsBindPlan =
+  prepareCertbotManualTlsBindPlanWithLogger ignoreTextLog
+
+prepareCertbotManualTlsBindPlanWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> IO (Maybe ManualTlsBindPlan, FilePath)
+prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan certbotConfig = do
+  let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
   tempDirectory <- getCanonicalTemporaryDirectory
   stateDirectory <- createTempDirectory tempDirectory "harch-web-certbot"
   let configDirectory = stateDirectory </> "config"
@@ -1036,9 +1041,13 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
       pure
       (certbotCertificateName runtimeAcmePlan)
   bracket_
-    (registerCertbotAcmeChallengeWebroot webrootDirectory)
-    (unregisterCertbotAcmeChallengeWebroot webrootDirectory)
-    (runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory)
+    ( applicationLogger ("ACME certbot webroot registered for listener " <> endpointText)
+        >> registerCertbotAcmeChallengeWebroot webrootDirectory
+    )
+    ( unregisterCertbotAcmeChallengeWebroot webrootDirectory
+        >> applicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
+    )
+    (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory)
   let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
       certificatePath = certificateDirectory </> "fullchain.pem"
       privateKeyPath = certificateDirectory </> "privkey.pem"
@@ -1048,22 +1057,27 @@ prepareCertbotManualTlsBindPlan runtimeAcmePlan certbotConfig = do
     case acmeCertificateDirectory (runtimeAcmeListenerConfig runtimeAcmePlan) of
       Nothing ->
         pure (certificatePath, privateKeyPath)
-      Just sharedDirectory ->
-        publishCertificateFiles sharedDirectory certificatePath privateKeyPath
+      Just sharedDirectory -> do
+        publishedPaths <- publishCertificateFiles sharedDirectory certificatePath privateKeyPath
+        applicationLogger ("Published ACME certificate files to shared directory " <> Text.pack sharedDirectory)
+        pure publishedPaths
   pure
     ( runtimeAcmeManualTlsBindPlan runtimeAcmePlan resolvedCertificatePath resolvedPrivateKeyPath,
       stateDirectory
     )
 
-runCertbotAcmeChallenge :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory = do
+runCertbotAcmeChallengeWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
+runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory = do
+  let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
+  applicationLogger ("Launching certbot for ACME listener on " <> endpointText)
   let commandArguments =
         certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory
   processResult <-
     try (readCreateProcessWithExitCode (proc (certbotExecutable certbotConfig) commandArguments) "") ::
       IO (Either IOException (ExitCode, String, String))
   case processResult of
-    Left launchError ->
+    Left launchError -> do
+      applicationLogger ("Failed to launch certbot for ACME listener on " <> endpointText <> ": " <> Text.pack (show launchError))
       ioError . userError $
         "Failed to launch certbot for ACME listener on "
           <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
@@ -1072,6 +1086,7 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirec
     Right (ExitSuccess, stdoutText, stderrText) -> do
       void (evaluate (length stdoutText + length stderrText))
     Right (exitCode, stdoutText, stderrText) -> do
+      applicationLogger ("Certbot failed for ACME listener on " <> endpointText <> " with exit code " <> Text.pack (show exitCode))
       diagnostics <- certbotFailureDiagnostics stateDirectory logsDirectory
       ioError . userError $
         "Certbot failed for ACME listener on "
@@ -1083,6 +1098,9 @@ runCertbotAcmeChallenge runtimeAcmePlan certbotConfig stateDirectory configDirec
           <> "\nstderr:\n"
           <> stderrText
           <> diagnostics
+
+ignoreTextLog :: Text -> IO ()
+ignoreTextLog textValue = void (evaluate (Text.length textValue))
 
 certbotFailureDiagnostics :: FilePath -> FilePath -> IO String
 certbotFailureDiagnostics stateDirectory logsDirectory = do
