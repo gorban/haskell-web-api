@@ -3207,6 +3207,7 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_CLIENT\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
@@ -3241,6 +3242,9 @@ spec = do
         Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1
+        Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1
+        Text.count "\"kind\":\"SPAN_KIND_INTERNAL\"" requestBodyText `shouldBe` 3
+        Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 3
         extractQuotedJsonField "traceId" requestBodyText
           `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
         extractQuotedJsonField "spanId" requestBodyText
@@ -3392,6 +3396,7 @@ spec = do
         lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
         lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token"
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
