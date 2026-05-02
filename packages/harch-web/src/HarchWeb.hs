@@ -3558,6 +3558,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityRequestSpan requestObservability)
+          "SPAN_KIND_SERVER"
           (otlpRequestSpanStatusFields requestObservability)
           timedChildSpans
   sendOtlpTraceRequest exporter requestBody
@@ -3581,6 +3582,7 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
           startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityConnectionSpan connectionObservability)
+          "SPAN_KIND_INTERNAL"
           otlpErrorStatusFields
           []
   sendOtlpTraceRequest exporter requestBody
@@ -3619,10 +3621,11 @@ otlpTraceBodyFromSpan ::
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
+  Text ->
   [(Text, LazyByteString.ByteString)] ->
   [(Text, Text, Word64, Word64, Observability.RequestSpan)] ->
   LazyByteString.ByteString
-otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceState startTimeUnixNano endTimeUnixNano requestSpan statusFields childSpans =
+otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceState startTimeUnixNano endTimeUnixNano requestSpan rootSpanKind statusFields childSpans =
   jsonObjectBytes
     [ ( "resourceSpans",
         jsonArrayBytes
@@ -3642,7 +3645,7 @@ otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceSta
                                   spanId
                                   maybeParentSpanId
                                   maybeTraceState
-                                  "SPAN_KIND_SERVER"
+                                  rootSpanKind
                                   startTimeUnixNano
                                   endTimeUnixNano
                                   requestSpan
