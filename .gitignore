@@ -8,7 +8,7 @@
 cabal.project.local
 cabal.project.local~
 /.env.local
-/.tls/
+**/.tls/
 
 # Ignore LICENSE files copied by Setup.hs, except root and 3rd party packages
 **/LICENSE
