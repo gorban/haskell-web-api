@@ -1469,6 +1469,56 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
                        ]
 
+    it "propagates incoming W3C trace context for HTTPS redirect observability" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          traceContext =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Just "vendor=value"
+              }
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          redirectingApplication =
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
+              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+          redirectRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["second"]
+              directRemoteHost
+              [ ("Host", "app.example.com"),
+                ("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+                ("tracestate", "vendor=value")
+              ]
+      response <- performWaiRequest (toWaiApplication redirectingApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.withRequestTraceContext
+                           traceContext
+                           ( Observability.buildRequestObservability
+                               "GET"
+                               "http"
+                               "/second"
+                               "/second"
+                               308
+                               Observability.BodyResponseKind
+                               [clientAddressAttribute, peerAddressAttribute]
+                           )
+                       ]
+
     it "adds CORS headers only for explicitly allowed origins" $ do
       let requestPolicyConfig =
             defaultRequestPolicy
@@ -1616,6 +1666,91 @@ spec = do
                            "/data"
                            "/data"
                            204
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       ]
+
+    it "extracts incoming W3C trace context into request observability without changing local request attributes" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          traceContext =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Just "vendor=value"
+              }
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          tracedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [ ("traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+                ("tracestate", "vendor=value")
+              ]
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) tracedRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.withRequestTraceContext
+                           traceContext
+                           ( Observability.buildRequestObservability
+                               "GET"
+                               "http"
+                               "/data"
+                               "/data"
+                               202
+                               Observability.BodyResponseKind
+                               [clientAddressAttribute, peerAddressAttribute]
+                           )
+                       ]
+
+    it "ignores malformed W3C traceparent headers" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          tracedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [("traceparent", "00-00000000000000000000000000000000-00f067aa0ba902b7-01")]
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) tracedRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
                            Observability.BodyResponseKind
                            [clientAddressAttribute, peerAddressAttribute]
                        ]
@@ -3149,6 +3284,47 @@ spec = do
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
         Text.count "\"name\":\"GET /assets/*\"" requestBodyText `shouldBe` 1
 
+    it "reuses incoming W3C trace context for OTLP request exports" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportRequestObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = []
+            }
+          ( Observability.withRequestTraceContext
+              Observability.RequestTraceContext
+                { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                  Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                  Observability.traceContextState = Just "vendor=value"
+                }
+              ( Observability.buildRequestObservability
+                  "GET"
+                  "http"
+                  "/known"
+                  "/known"
+                  200
+                  Observability.BodyResponseKind
+                  [ Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.request.start_monotonic_ns",
+                        Observability.attributeValue = Observability.IntAttribute 1000000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.request.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 5000000
+                      }
+                  ]
+              )
+          )
+        CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"traceId\":\"4bf92f3577b34da6a3ce929d0e0e4736\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\":\"00f067aa0ba902b7\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"traceState\":\"vendor=value\""
+        extractQuotedJsonField "traceId" requestBodyText `shouldBe` Just "4bf92f3577b34da6a3ce929d0e0e4736"
+        Text.count "\"parentSpanId\":\"00f067aa0ba902b7\"" requestBodyText `shouldBe` 1
+
     it "fails explicitly when the collector rejects the export request" $
       withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
         exportResult <-
@@ -4150,13 +4326,21 @@ spec = do
                                   >> pure ByteString.empty
                       waitForRequestObservability remainingAttempts = do
                         observedValues <- readIORef requestObservabilityReference
-                        case observedValues of
-                          requestObservabilityValue : _ ->
-                            pure requestObservabilityValue
-                          [] ->
+                        let expectedObservability =
+                              Observability.buildRequestObservability
+                                "GET"
+                                "http"
+                                "/.well-known/acme-challenge/loopback-token"
+                                "/.well-known/acme-challenge/*"
+                                200
+                                Observability.BodyResponseKind
+                                [clientAddressAttribute, peerAddressAttribute]
+                        if expectedObservability `elem` observedValues
+                          then pure expectedObservability
+                          else
                             if remainingAttempts > 0
                               then threadDelay 10000 >> waitForRequestObservability (remainingAttempts - 1)
-                              else expectationFailure "expected certbot webroot challenge response to report request observability" >> pure (Observability.buildRequestObservability "GET" "http" "/.well-known/acme-challenge/loopback-token" "/.well-known/acme-challenge/*" 200 Observability.BodyResponseKind [clientAddressAttribute, peerAddressAttribute])
+                              else expectationFailure "expected certbot webroot challenge response to report request observability" >> pure expectedObservability
                   serverThreadId <- forkIO $ do
                     result <-
                       try

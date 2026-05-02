@@ -158,7 +158,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.Char (digitToInt, isDigit, toLower)
+import Data.Char (digitToInt, isDigit, isHexDigit, toLower)
 import Data.Either (lefts)
 import Data.Foldable (for_)
 import Data.Functor (($>))
@@ -715,33 +715,38 @@ toWaiApplication webApplication request respond = do
                           (prependRequestLogContext requestLogFields)
                           (responseLogEntries responseBodyValue)
                   requestObservability =
-                    Observability.buildRequestObservability
-                      (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                      (requestScheme request)
-                      (waiRequestPath request)
-                      (renderRoute (routeCodec webApplication) routeRequest)
-                      ( case response of
-                          PageResponse page ->
-                            if isNotFoundPage webApplication page
-                              then 404
-                              else 200
-                          PageResponseWithMetadata pageResponseBodyValue _ ->
-                            responseStatus pageResponseBodyValue
-                          BodyResponse responseBodyValue -> responseStatus responseBodyValue
-                      )
-                      ( case response of
-                          PageResponse _ -> Observability.PageResponseKind
-                          PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-                          BodyResponse _ -> Observability.BodyResponseKind
-                      )
-                      ( extraObservabilityAttributes
-                          <> requestTimingObservabilityAttributes
-                            requestStartedAt
-                            responseRenderedAt
-                            [ ("request-policy", requestStartedAt, policyEvaluatedAt),
-                              ("route-match", routeMatchingStartedAt, routeMatchedAt),
-                              ("render-response", renderStartedAt, responseRenderedAt)
-                            ]
+                    maybe
+                      id
+                      Observability.withRequestTraceContext
+                      (requestTraceContext request)
+                      ( Observability.buildRequestObservability
+                          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                          (requestScheme request)
+                          (waiRequestPath request)
+                          (renderRoute (routeCodec webApplication) routeRequest)
+                          ( case response of
+                              PageResponse page ->
+                                if isNotFoundPage webApplication page
+                                  then 404
+                                  else 200
+                              PageResponseWithMetadata pageResponseBodyValue _ ->
+                                responseStatus pageResponseBodyValue
+                              BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                          )
+                          ( case response of
+                              PageResponse _ -> Observability.PageResponseKind
+                              PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+                              BodyResponse _ -> Observability.BodyResponseKind
+                          )
+                          ( extraObservabilityAttributes
+                              <> requestTimingObservabilityAttributes
+                                requestStartedAt
+                                responseRenderedAt
+                                [ ("request-policy", requestStartedAt, policyEvaluatedAt),
+                                  ("route-match", routeMatchingStartedAt, routeMatchedAt),
+                                  ("render-response", renderStartedAt, responseRenderedAt)
+                                ]
+                          )
                       )
               Observability.forceRequestObservability requestObservability `seq`
                 reportRequestObservability webApplication requestObservability
@@ -2987,6 +2992,52 @@ requestSource request =
         (_, Just _) -> Just "browser-or-client"
         _ -> Nothing
 
+requestTraceContext :: Wai.Request -> Maybe Observability.RequestTraceContext
+requestTraceContext request =
+  parseTraceParentHeader =<< requestHeaderText "traceparent" request
+  where
+    parseTraceParentHeader traceParentHeader =
+      case Text.splitOn "-" traceParentHeader of
+        [version, traceId, parentSpanId, traceFlags]
+          | isValidTraceParentVersion version
+              && isValidTraceParentTraceId traceId
+              && isValidTraceParentSpanId parentSpanId
+              && isValidTraceParentFlags traceFlags ->
+              Just
+                Observability.RequestTraceContext
+                  { Observability.traceContextTraceId = Text.toLower traceId,
+                    Observability.traceContextParentSpanId = Text.toLower parentSpanId,
+                    Observability.traceContextState = requestHeaderText "tracestate" request
+                  }
+        _ -> Nothing
+
+isValidTraceParentVersion :: Text -> Bool
+isValidTraceParentVersion version =
+  Text.length version == 2
+    && Text.all isAsciiHexText version
+    && Text.toLower version /= "ff"
+
+isValidTraceParentTraceId :: Text -> Bool
+isValidTraceParentTraceId traceId =
+  Text.length traceId == 32
+    && Text.all isAsciiHexText traceId
+    && traceId /= "00000000000000000000000000000000"
+
+isValidTraceParentSpanId :: Text -> Bool
+isValidTraceParentSpanId spanId =
+  Text.length spanId == 16
+    && Text.all isAsciiHexText spanId
+    && spanId /= "0000000000000000"
+
+isValidTraceParentFlags :: Text -> Bool
+isValidTraceParentFlags traceFlags =
+  Text.length traceFlags == 2
+    && Text.all isAsciiHexText traceFlags
+
+isAsciiHexText :: Char -> Bool
+isAsciiHexText character =
+  isHexDigit character && fromEnum character < 128
+
 limitObservabilityHeaderValue :: Text -> Text
 limitObservabilityHeaderValue =
   Text.take 256
@@ -3073,15 +3124,20 @@ reportEarlyRequestObservability ::
   IO ()
 reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
   let requestObservability =
-        Observability.buildRequestObservability
-          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-          (requestScheme request)
-          (waiRequestPath request)
-          routePath
-          (Http.statusCode (Wai.responseStatus response))
-          Observability.BodyResponseKind
-          ( requestContextObservabilityAttributes request
-              <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
+        maybe
+          id
+          Observability.withRequestTraceContext
+          (requestTraceContext request)
+          ( Observability.buildRequestObservability
+              (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+              (requestScheme request)
+              (waiRequestPath request)
+              routePath
+              (Http.statusCode (Wai.responseStatus response))
+              Observability.BodyResponseKind
+              ( requestContextObservabilityAttributes request
+                  <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
+              )
           )
    in Observability.forceRequestObservability requestObservability `seq`
         reportRequestObservability webApplication requestObservability
@@ -3465,7 +3521,7 @@ exportRequestObservabilityToOtlp ::
   Observability.RequestObservability ->
   IO ()
 exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
-  (traceId, spanId) <- nextOtlpSpanIdentifiers
+  (generatedTraceId, spanId) <- nextOtlpSpanIdentifiers
   let childSpans =
         requestRuntimePhaseChildSpans requestObservability
           <> requestDatabaseChildSpans requestObservability
@@ -3476,6 +3532,17 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           (minimumOtlpSpanDurationNanoseconds * fromIntegral (max 1 (length childSpans + 1)))
           (requestDurationNanoseconds requestObservability)
       startTimeUnixNano = nonNegativeStartTime endTimeUnixNano rootDurationNanoseconds
+      traceId =
+        maybe
+          generatedTraceId
+          Observability.traceContextTraceId
+          (Observability.observabilityTraceContext requestObservability)
+      parentSpanId =
+        Observability.traceContextParentSpanId
+          <$> Observability.observabilityTraceContext requestObservability
+      traceState =
+        Observability.traceContextState
+          =<< Observability.observabilityTraceContext requestObservability
       timedChildSpans =
         zipWith
           (timedOtlpChildSpan startTimeUnixNano rootDurationNanoseconds)
@@ -3486,6 +3553,8 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           serviceName
           traceId
           spanId
+          parentSpanId
+          traceState
           startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityRequestSpan requestObservability)
@@ -3507,6 +3576,8 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
           serviceName
           traceId
           spanId
+          Nothing
+          Nothing
           startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityConnectionSpan connectionObservability)
@@ -3543,13 +3614,15 @@ otlpTraceBodyFromSpan ::
   Text ->
   Text ->
   Text ->
+  Maybe Text ->
+  Maybe Text ->
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
   [(Text, LazyByteString.ByteString)] ->
   [(Text, Word64, Word64, Observability.RequestSpan)] ->
   LazyByteString.ByteString
-otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNano requestSpan statusFields childSpans =
+otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceState startTimeUnixNano endTimeUnixNano requestSpan statusFields childSpans =
   jsonObjectBytes
     [ ( "resourceSpans",
         jsonArrayBytes
@@ -3567,7 +3640,8 @@ otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNa
                               ( otlpSpanObject
                                   traceId
                                   spanId
-                                  Nothing
+                                  maybeParentSpanId
+                                  maybeTraceState
                                   "SPAN_KIND_SERVER"
                                   startTimeUnixNano
                                   endTimeUnixNano
@@ -3577,6 +3651,7 @@ otlpTraceBodyFromSpan serviceName traceId spanId startTimeUnixNano endTimeUnixNa
                                         traceId
                                         childSpanId
                                         (Just spanId)
+                                        maybeTraceState
                                         "SPAN_KIND_INTERNAL"
                                         childStartTimeUnixNano
                                         childEndTimeUnixNano
@@ -3622,13 +3697,14 @@ otlpSpanObject ::
   Text ->
   Text ->
   Maybe Text ->
+  Maybe Text ->
   Text ->
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
   [(Text, LazyByteString.ByteString)] ->
   LazyByteString.ByteString
-otlpSpanObject traceId spanId maybeParentSpanId spanKind startTimeUnixNano endTimeUnixNano requestSpan statusFields =
+otlpSpanObject traceId spanId maybeParentSpanId maybeTraceState spanKind startTimeUnixNano endTimeUnixNano requestSpan statusFields =
   jsonObjectBytes
     ( [ ("traceId", jsonStringBytes traceId),
         ("spanId", jsonStringBytes spanId),
@@ -3644,6 +3720,7 @@ otlpSpanObject traceId spanId maybeParentSpanId spanKind startTimeUnixNano endTi
         )
       ]
         ++ maybe [] (\parentSpanId -> [("parentSpanId", jsonStringBytes parentSpanId)]) maybeParentSpanId
+        ++ maybe [] (\traceState -> [("traceState", jsonStringBytes traceState)]) maybeTraceState
         ++ statusFields
     )
 

@@ -5,6 +5,7 @@ module HarchWeb.Observability
     HttpServerMetrics (..),
     ObservabilityAttribute (..),
     ObservabilityAttributeValue (..),
+    RequestTraceContext (..),
     RequestObservability (..),
     RequestSpan (..),
     ResponseKind (..),
@@ -14,6 +15,7 @@ module HarchWeb.Observability
     forceRequestObservability,
     requestObservabilityAttributes,
     requestSpanName,
+    withRequestTraceContext,
   )
 where
 
@@ -49,9 +51,17 @@ data HttpServerMetrics = HttpServerMetrics
   }
   deriving (Eq, Show)
 
+data RequestTraceContext = RequestTraceContext
+  { traceContextTraceId :: Text,
+    traceContextParentSpanId :: Text,
+    traceContextState :: Maybe Text
+  }
+  deriving (Eq, Show)
+
 data RequestObservability = RequestObservability
   { observabilityRequestSpan :: RequestSpan,
-    observabilityHttpServerMetrics :: HttpServerMetrics
+    observabilityHttpServerMetrics :: HttpServerMetrics,
+    observabilityTraceContext :: Maybe RequestTraceContext
   }
   deriving (Eq, Show)
 
@@ -125,8 +135,15 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
               { requestDurationMetricName = "http.server.request.duration",
                 activeRequestsMetricName = "http.server.active_requests",
                 httpServerMetricAttributes = attributes
-              }
+              },
+          observabilityTraceContext = Nothing
         }
+
+withRequestTraceContext :: RequestTraceContext -> RequestObservability -> RequestObservability
+withRequestTraceContext traceContext requestObservability =
+  requestObservability
+    { observabilityTraceContext = Just traceContext
+    }
 
 buildConnectionObservability :: Text -> [ObservabilityAttribute] -> ConnectionObservability
 buildConnectionObservability displayName attributes =
@@ -141,11 +158,21 @@ buildConnectionObservability displayName attributes =
 forceRequestObservability :: RequestObservability -> ()
 forceRequestObservability requestObservability =
   forceRequestSpan (observabilityRequestSpan requestObservability) `seq`
-    forceHttpServerMetrics (observabilityHttpServerMetrics requestObservability)
+    forceHttpServerMetrics (observabilityHttpServerMetrics requestObservability) `seq`
+      forceTraceContext (observabilityTraceContext requestObservability)
 
 forceConnectionObservability :: ConnectionObservability -> ()
 forceConnectionObservability =
   forceRequestSpan . observabilityConnectionSpan
+
+forceTraceContext :: Maybe RequestTraceContext -> ()
+forceTraceContext maybeTraceContext =
+  case maybeTraceContext of
+    Nothing -> ()
+    Just traceContext ->
+      Text.length (traceContextTraceId traceContext) `seq`
+        Text.length (traceContextParentSpanId traceContext) `seq`
+          maybe () (\traceState -> Text.length traceState `seq` ()) (traceContextState traceContext)
 
 forceRequestSpan :: RequestSpan -> ()
 forceRequestSpan requestSpan =

@@ -38,7 +38,8 @@ spec = do
           requestObservability =
             Observability.RequestObservability
               { Observability.observabilityRequestSpan = requestSpan,
-                Observability.observabilityHttpServerMetrics = httpServerMetrics
+                Observability.observabilityHttpServerMetrics = httpServerMetrics,
+                Observability.observabilityTraceContext = Nothing
               }
           connectionObservability =
             Observability.ConnectionObservability
@@ -57,6 +58,27 @@ spec = do
       Observability.httpServerMetricAttributes httpServerMetrics `shouldBe` [statusAttribute]
       Observability.observabilityRequestSpan requestObservability `shouldBe` requestSpan
       Observability.observabilityHttpServerMetrics requestObservability `shouldBe` httpServerMetrics
+      Observability.traceContextTraceId
+        Observability.RequestTraceContext
+          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+            Observability.traceContextState = Nothing
+          }
+        `shouldBe` "4bf92f3577b34da6a3ce929d0e0e4736"
+      Observability.traceContextParentSpanId
+        Observability.RequestTraceContext
+          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+            Observability.traceContextState = Nothing
+          }
+        `shouldBe` "00f067aa0ba902b7"
+      Observability.traceContextState
+        Observability.RequestTraceContext
+          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+            Observability.traceContextState = Nothing
+          }
+        `shouldBe` Nothing
       Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan
 
     it "covers derived Eq and Show instances for the observability helper types" $ do
@@ -84,7 +106,14 @@ spec = do
           requestObservability =
             Observability.RequestObservability
               { Observability.observabilityRequestSpan = requestSpan,
-                Observability.observabilityHttpServerMetrics = httpServerMetrics
+                Observability.observabilityHttpServerMetrics = httpServerMetrics,
+                Observability.observabilityTraceContext = Nothing
+              }
+          traceContext =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Just "vendor=value"
               }
           connectionObservability =
             Observability.ConnectionObservability
@@ -104,21 +133,57 @@ spec = do
       httpServerMetrics `shouldNotBe` httpServerMetrics {Observability.activeRequestsMetricName = "other.metric"}
       requestObservability `shouldBe` requestObservability
       requestObservability `shouldNotBe` requestObservability {Observability.observabilityRequestSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}}
+      traceContext `shouldBe` traceContext
+      traceContext `shouldNotBe` traceContext {Observability.traceContextState = Nothing}
+      Observability.withRequestTraceContext traceContext requestObservability
+        `shouldBe` requestObservability {Observability.observabilityTraceContext = Just traceContext}
       connectionObservability `shouldBe` connectionObservability
       connectionObservability `shouldNotBe` connectionObservability {Observability.observabilityConnectionSpan = requestSpan {Observability.requestSpanDisplayName = "POST /"}}
       show (Observability.TextAttribute "page") `shouldBe` "TextAttribute \"page\""
       show [Observability.IntAttribute 200] `shouldBe` "[IntAttribute 200]"
       show Observability.PageResponseKind `shouldBe` "PageResponseKind"
       show [Observability.BodyResponseKind] `shouldBe` "[BodyResponseKind]"
+      show traceContext `shouldBe` "RequestTraceContext {traceContextTraceId = \"4bf92f3577b34da6a3ce929d0e0e4736\", traceContextParentSpanId = \"00f067aa0ba902b7\", traceContextState = Just \"vendor=value\"}"
+      show [traceContext {Observability.traceContextState = Nothing}]
+        `shouldBe` "[RequestTraceContext {traceContextTraceId = \"4bf92f3577b34da6a3ce929d0e0e4736\", traceContextParentSpanId = \"00f067aa0ba902b7\", traceContextState = Nothing}]"
       show pageKindAttribute `shouldBe` "ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}"
       show requestSpan `shouldBe` "RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}"
       show [requestSpan] `shouldBe` "[RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}]"
       show httpServerMetrics `shouldBe` "HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}"
       show [httpServerMetrics] `shouldBe` "[HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}]"
-      show requestObservability `shouldBe` "RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}}"
-      show [requestObservability] `shouldBe` "[RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}}]"
+      show requestObservability `shouldBe` "RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing}"
+      show [requestObservability] `shouldBe` "[RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing}]"
       show connectionObservability `shouldBe` "ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}"
       show [connectionObservability] `shouldBe` "[ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}]"
+
+    it "forces optional trace context state when present or absent" $ do
+      let requestObservability =
+            Observability.buildRequestObservability
+              "GET"
+              "http"
+              "/health"
+              "/health"
+              200
+              Observability.BodyResponseKind
+              []
+          traceContextWithState =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Just "vendor=value"
+              }
+          traceContextWithoutState =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Nothing
+              }
+      Observability.forceRequestObservability
+        (Observability.withRequestTraceContext traceContextWithState requestObservability)
+        `shouldBe` ()
+      Observability.forceRequestObservability
+        (Observability.withRequestTraceContext traceContextWithoutState requestObservability)
+        `shouldBe` ()
 
   describe "requestSpanName" $ do
     it "uses the request method with the canonical route path" $
@@ -252,7 +317,8 @@ spec = do
                           Observability.attributeValue = Observability.TextAttribute "api"
                         }
                     ]
-                }
+                },
+            Observability.observabilityTraceContext = Nothing
           }
 
   describe "buildConnectionObservability" $
@@ -348,5 +414,6 @@ spec = do
                           Observability.attributeValue = Observability.TextAttribute "page"
                         }
                     ]
-                }
+                },
+            Observability.observabilityTraceContext = Nothing
           }
