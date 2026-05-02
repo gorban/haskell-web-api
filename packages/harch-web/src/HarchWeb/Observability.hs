@@ -210,9 +210,10 @@ responseKindText responseKind =
     BodyResponseKind -> "body"
 
 requestSpanOperationName :: Text -> Text
-requestSpanOperationName routePath
-  | isNotFoundRoutePath routePath = "not-found"
-  | otherwise = routePath
+requestSpanOperationName routePath =
+  if isNotFoundRoutePath routePath
+    then "not-found"
+    else routePath
 
 isNotFoundRoutePath :: Text -> Bool
 isNotFoundRoutePath routePath =
