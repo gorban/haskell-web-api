@@ -3639,7 +3639,7 @@ otlpSpanObject traceId spanId maybeParentSpanId spanKind startTimeUnixNano endTi
         ( "attributes",
           jsonArrayBytes
             ( map otlpAttribute $
-                Observability.requestSpanAttributes requestSpan
+                filter shouldExportOtlpAttribute (Observability.requestSpanAttributes requestSpan)
             )
         )
       ]
@@ -3856,6 +3856,23 @@ otlpAttribute attribute =
     [ ("key", jsonStringBytes (Observability.attributeName attribute)),
       ("value", otlpAttributeValue (Observability.attributeValue attribute))
     ]
+
+shouldExportOtlpAttribute :: Observability.ObservabilityAttribute -> Bool
+shouldExportOtlpAttribute attribute =
+  not (isInternalTimingAttributeName (Observability.attributeName attribute))
+
+isInternalTimingAttributeName :: Text -> Bool
+isInternalTimingAttributeName attributeName =
+  attributeName
+    `elem` [ "harch.request.start_monotonic_ns",
+             "harch.request.duration_ns",
+             "harch.span.start_offset_ns",
+             "harch.span.duration_ns",
+             "db.operation.start_monotonic_ns",
+             "db.operation.duration_ns"
+           ]
+    || ("harch.phase." `Text.isPrefixOf` attributeName && ".start_offset_ns" `Text.isSuffixOf` attributeName)
+    || ("harch.phase." `Text.isPrefixOf` attributeName && ".duration_ns" `Text.isSuffixOf` attributeName)
 
 otlpAttributeValue :: Observability.ObservabilityAttributeValue -> LazyByteString.ByteString
 otlpAttributeValue attributeValue =

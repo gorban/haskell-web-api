@@ -3080,11 +3080,6 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-home-page-summary\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-health-check\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.phase\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.start_offset_ns\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.duration_ns\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.start_monotonic_ns\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.duration_ns\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"request-policy\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"route-match\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"render-response\""
@@ -3092,6 +3087,18 @@ spec = do
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.name\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.query.template\""
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.start_monotonic_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.start_offset_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.start_offset_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.start_offset_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.start_offset_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.duration_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.start_monotonic_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.duration_ns\""
         Text.count "\"name\":\"GET /known\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"HarchWeb request policy\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"HarchWeb route match\"" requestBodyText `shouldBe` 1
@@ -3134,11 +3141,12 @@ spec = do
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
         requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /assets/*\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\""
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\""
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.phase\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.start_monotonic_ns\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
         Text.count "\"name\":\"GET /assets/*\"" requestBodyText `shouldBe` 1
 
     it "fails explicitly when the collector rejects the export request" $
