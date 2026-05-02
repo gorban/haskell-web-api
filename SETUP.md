@@ -1251,9 +1251,15 @@ machine.
      in front),
    - `network.peer.address` still shows the immediate peer on the last hop into `haskell-web-api`.
 
-Jaeger operations use the stable `http.route` value for span names, so unmatched requests group under
-synthetic not-found routes such as `GET /404` or `GET /api/404`; inspect the `url.path` span attribute
-when you need the concrete unmatched path.
+Jaeger operations use the stable `http.route` value for span names, so unmatched requests now group
+under a stable `not-found` operation instead of route-looking names such as `GET /404` or
+`GET /api/404`; inspect the `url.path` span attribute when you need the concrete unmatched path.
+
+The runtime currently keeps its custom OTLP export layer instead of replacing it with generic
+`hs-opentelemetry` / WAI middleware. That preserves low-cardinality route naming, traces early-return
+paths such as redirects, static assets, CORS preflight, and ACME challenge responses, and keeps
+connection-level TLS failures plus ACME/certbot lifecycle diagnostics visible even though they happen
+outside normal WAI request middleware.
 
 If the request does not appear, re-check the firewall and router steps above first, then confirm the test
 device is really off the LAN (for example, disable Wi-Fi on the phone before retrying).

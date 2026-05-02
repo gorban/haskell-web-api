@@ -149,8 +149,15 @@ understands the following values:
 | `SETUP_AUTOSTART_JAEGER` | Setup/prerequisite-planning flag for whether build/setup tooling should plan automatic local Jaeger startup when OTLP tracing is configured but unreachable. Supported values are `true` / `false` plus the existing boolean aliases accepted by the config parser. | (`false`) |
 
 OTLP request span names use the stable route value from `http.route` so Jaeger operations group by
-route, including synthetic not-found routes such as `/404` or `/api/404`. The concrete incoming URL
-remains available on the `url.path` span attribute for troubleshooting individual unmatched paths.
+route. Unmatched requests now group under a stable `not-found` operation instead of route-looking names
+such as `/404`, while the concrete incoming URL remains available on the `url.path` span attribute for
+troubleshooting individual misses.
+
+The runtime currently keeps its custom OTLP export layer instead of swapping to generic
+`hs-opentelemetry` / WAI middleware. That custom layer is what lets the app keep low-cardinality route
+names, trace early-return paths such as redirects, static assets, CORS preflight, and ACME challenge
+responses, and emit connection-level TLS failures plus ACME/certbot lifecycle diagnostics that happen
+outside ordinary WAI request handling.
 
 Static asset requests only serve files whose extension is present in the configured content-type
 allowlist, and hidden path segments such as `.env` or `.well-known` are rejected under configured asset
