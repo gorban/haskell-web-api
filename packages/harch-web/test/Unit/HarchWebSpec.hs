@@ -1704,23 +1704,25 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) tracedRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
-      readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.withRequestTraceContext
-                           traceContext
-                           ( Observability.buildRequestObservability
-                               "GET"
-                               "http"
-                               "/data"
-                               "/data"
-                               202
-                               Observability.BodyResponseKind
-                               [clientAddressAttribute, peerAddressAttribute]
-                           )
-                       ]
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.withRequestTraceContext
+                       traceContext
+                       ( Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       )
+                   ]
+      mapM_ expectMeasuredRequestTiming capturedRequestObservability
 
     it "ignores malformed W3C traceparent headers" $ do
       requestObservabilityReference <- newIORef []
@@ -1744,20 +1746,22 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) tracedRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
-      readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
-                           202
-                           Observability.BodyResponseKind
-                           [clientAddressAttribute, peerAddressAttribute]
-                       ]
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/data"
+                       "/data"
+                       202
+                       Observability.BodyResponseKind
+                       [clientAddressAttribute, peerAddressAttribute]
+                   ]
+      mapM_ expectMeasuredRequestTiming capturedRequestObservability
 
     it "reports body-response observability attributes and logs through the application hooks" $ do
       requestObservabilityReference <- newIORef []
