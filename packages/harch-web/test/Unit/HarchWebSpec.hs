@@ -3638,6 +3638,56 @@ spec = do
         endTimes `shouldSatisfy` ((== 1) . length)
         zipWith (-) endTimes startTimes `shouldBe` [1000]
 
+    it "posts OTLP trace payloads for prematurely closed connection observability" $
+      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+        exportConnectionObservabilityToOtlp
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = []
+            }
+          ( Observability.buildConnectionObservability
+              "CONNECTION client-closed-connection-prematurely"
+              [ Observability.ObservabilityAttribute
+                  { Observability.attributeName = "network.peer.address",
+                    Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "exception.type",
+                    Observability.attributeValue = Observability.TextAttribute "ClientClosedConnectionPrematurely"
+                  },
+                Observability.ObservabilityAttribute
+                  { Observability.attributeName = "harch.connection.event",
+                    Observability.attributeValue = Observability.TextAttribute "client-closed-connection-prematurely"
+                  }
+              ]
+          )
+        CapturedCollectorRequest
+          { capturedCollectorMethod = requestMethod,
+            capturedCollectorPath = requestPath,
+            capturedCollectorHeaders = requestHeaders,
+            capturedCollectorBody = requestBody
+          } <-
+          readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+            startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
+            endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
+        requestMethod `shouldBe` "POST"
+        requestPath `shouldBe` "/v1/traces"
+        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION client-closed-connection-prematurely\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
+        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"ClientClosedConnectionPrematurely\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.connection.event\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"client-closed-connection-prematurely\""
+        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
+        expectPlausibleEpochNanoTimestamps requestBodyText
+        startTimes `shouldSatisfy` ((== 1) . length)
+        endTimes `shouldSatisfy` ((== 1) . length)
+        zipWith (-) endTimes startTimes `shouldBe` [1000]
+
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
