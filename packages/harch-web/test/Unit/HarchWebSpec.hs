@@ -4664,9 +4664,10 @@ spec = do
                                 200
                                 Observability.BodyResponseKind
                                 [clientAddressAttribute, peerAddressAttribute]
-                        if expectedObservability `elem` observedValues
-                          then pure expectedObservability
-                          else
+                        case find ((== expectedObservability) . stripVolatileRequestTiming) observedValues of
+                          Just requestObservabilityValue ->
+                            pure requestObservabilityValue
+                          Nothing ->
                             if remainingAttempts > 0
                               then threadDelay 10000 >> waitForRequestObservability (remainingAttempts - 1)
                               else expectationFailure "expected certbot webroot challenge response to report request observability" >> pure expectedObservability
@@ -4678,15 +4679,16 @@ spec = do
                             acmeTlsConfig
                             sampleApplication
                               { reportRequestObservability = \requestObservabilityValue ->
-                                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                               }
                         ) ::
                         IO (Either SomeException ())
                     writeIORef completionReference (Just result)
                   challengeResponseBytes <- waitForChallengeResponse (500 :: Int)
                   challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
-                  waitForRequestObservability (500 :: Int)
-                    `shouldReturn` Observability.buildRequestObservability
+                  challengeRequestObservability <- waitForRequestObservability (500 :: Int)
+                  stripVolatileRequestTiming challengeRequestObservability
+                    `shouldBe` Observability.buildRequestObservability
                       "GET"
                       "http"
                       "/.well-known/acme-challenge/loopback-token"
@@ -4694,6 +4696,7 @@ spec = do
                       200
                       Observability.BodyResponseKind
                       [clientAddressAttribute, peerAddressAttribute]
+                  expectMeasuredRootRequestTiming challengeRequestObservability
                   firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
                   Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
                   killThread serverThreadId
@@ -5271,8 +5274,8 @@ lookupIntAttribute expectedName =
             _ -> Nothing
       )
 
-expectMeasuredRequestTiming :: Observability.RequestObservability -> Expectation
-expectMeasuredRequestTiming requestObservabilityValue = do
+expectMeasuredRootRequestTiming :: Observability.RequestObservability -> Expectation
+expectMeasuredRootRequestTiming requestObservabilityValue = do
   let spanAttributes =
         Observability.requestSpanAttributes
           (Observability.observabilityRequestSpan requestObservabilityValue)
@@ -5286,6 +5289,21 @@ expectMeasuredRequestTiming requestObservabilityValue = do
           `shouldSatisfy` maybe False (>= 0)
   expectTimingAttribute "harch.request.start_monotonic_ns"
   expectTimingAttribute "harch.request.duration_ns"
+
+expectMeasuredRequestTiming :: Observability.RequestObservability -> Expectation
+expectMeasuredRequestTiming requestObservabilityValue = do
+  expectMeasuredRootRequestTiming requestObservabilityValue
+  let spanAttributes =
+        Observability.requestSpanAttributes
+          (Observability.observabilityRequestSpan requestObservabilityValue)
+      metricAttributes =
+        Observability.httpServerMetricAttributes
+          (Observability.observabilityHttpServerMetrics requestObservabilityValue)
+      expectTimingAttribute attributeName = do
+        lookupIntAttribute attributeName spanAttributes
+          `shouldSatisfy` maybe False (>= 0)
+        lookupIntAttribute attributeName metricAttributes
+          `shouldSatisfy` maybe False (>= 0)
   expectTimingAttribute "harch.phase.request-policy.start_offset_ns"
   expectTimingAttribute "harch.phase.request-policy.duration_ns"
   expectTimingAttribute "harch.phase.route-match.start_offset_ns"
