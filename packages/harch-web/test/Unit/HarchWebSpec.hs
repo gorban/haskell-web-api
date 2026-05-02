@@ -1447,7 +1447,7 @@ spec = do
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
               { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
           redirectRequest =
             waiRequestWithRemoteHostAndHeaders
@@ -1458,16 +1458,18 @@ spec = do
               ]
       response <- performWaiRequest (toWaiApplication redirectingApplication) redirectRequest
       Wai.responseStatus response `shouldBe` Http.status308
-      readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/second"
-                           "/app/second"
-                           308
-                           Observability.BodyResponseKind
-                           [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
-                       ]
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/second"
+                       "/app/second"
+                       308
+                       Observability.BodyResponseKind
+                       [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
+                   ]
+      mapM_ expectMeasuredRootRequestTiming capturedRequestObservability
 
     it "propagates incoming W3C trace context for HTTPS redirect observability" $ do
       requestObservabilityReference <- newIORef []
@@ -1655,20 +1657,22 @@ spec = do
           applicationWithObservability =
             (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication applicationWithObservability) preflightRequest
       Wai.responseStatus response `shouldBe` Http.status204
-      readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.buildRequestObservability
-                           "OPTIONS"
-                           "http"
-                           "/data"
-                           "/data"
-                           204
-                           Observability.BodyResponseKind
-                           [clientAddressAttribute, peerAddressAttribute]
-                       ]
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.buildRequestObservability
+                       "OPTIONS"
+                       "http"
+                       "/data"
+                       "/data"
+                       204
+                       Observability.BodyResponseKind
+                       [clientAddressAttribute, peerAddressAttribute]
+                   ]
+      mapM_ expectMeasuredRootRequestTiming capturedRequestObservability
 
     it "extracts incoming W3C trace context into request observability without changing local request attributes" $ do
       requestObservabilityReference <- newIORef []
