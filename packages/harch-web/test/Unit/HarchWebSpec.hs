@@ -2092,6 +2092,136 @@ spec = do
       readIORef logEntriesReference
         `shouldReturn` ["[client.address=\"127.0.0.1\" network.peer.address=\"127.0.0.1\" url.scheme=\"http\"] Sample page failure log"]
 
+    it "retains measured request timing across page and body response variants" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          forwardedPrefixAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.x_forwarded_prefix",
+                Observability.attributeValue = Observability.TextAttribute "/app"
+              }
+          pageFailureAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "exception.type",
+                Observability.attributeValue = Observability.TextAttribute "PageFailure"
+              }
+          bodyFailureAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "exception.type",
+                Observability.attributeValue = Observability.TextAttribute "BodyFailure"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { renderResponse =
+                  \request ->
+                    pure $
+                      case (requestRoute request, requestLanguage (requestContext request), requestPathPrefix (requestContext request)) of
+                        (KnownRoute, "es", _) ->
+                          PageResponseWithMetadata
+                            ResponseBody
+                              { responseStatus = 500,
+                                responseContentType = "text/html; charset=utf-8",
+                                responseBody = "",
+                                responseObservabilityAttributes = [pageFailureAttribute],
+                                responseLogEntries = []
+                              }
+                            (samplePage request)
+                        (KnownRoute, _, _) ->
+                          PageResponse (samplePage request)
+                        (DataRoute, _, "/app") ->
+                          BodyResponse
+                            ResponseBody
+                              { responseStatus = 503,
+                                responseContentType = "application/json",
+                                responseBody = "{\"error\":\"body-failure\"}",
+                                responseObservabilityAttributes = [bodyFailureAttribute],
+                                responseLogEntries = []
+                              }
+                        _ ->
+                          renderSampleResponse request,
+                reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
+              }
+          pageSuccessRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["known"]
+              directRemoteHost
+              []
+          pageFailureRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["es", "known"]
+              directRemoteHost
+              []
+          bodySuccessRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              []
+          bodyFailureRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [("X-Forwarded-Prefix", "/app")]
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) pageSuccessRequest
+        `shouldReturn` 200
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) pageFailureRequest
+        `shouldReturn` 500
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) bodySuccessRequest
+        `shouldReturn` 202
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) bodyFailureRequest
+        `shouldReturn` 503
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/known"
+                       "/known"
+                       200
+                       Observability.PageResponseKind
+                       [clientAddressAttribute, peerAddressAttribute],
+                     Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/es/known"
+                       "/es/known"
+                       500
+                       Observability.PageResponseKind
+                       [clientAddressAttribute, peerAddressAttribute, pageFailureAttribute],
+                     Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/data"
+                       "/data"
+                       202
+                       Observability.BodyResponseKind
+                       [clientAddressAttribute, peerAddressAttribute],
+                     Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/data"
+                       "/app/data"
+                       503
+                       Observability.BodyResponseKind
+                       [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute, bodyFailureAttribute]
+                   ]
+      mapM_ expectMeasuredRequestTiming capturedRequestObservability
+
     it "ignores empty forwarded-for tokens while still honoring forwarded plain-http scheme" $ do
       requestObservabilityReference <- newIORef []
       let directRemoteHost =
@@ -5079,6 +5209,39 @@ hasTextAttribute attributeName expectedValue =
         Observability.attributeName attribute == attributeName
           && Observability.attributeValue attribute == Observability.TextAttribute expectedValue
     )
+
+lookupIntAttribute :: Text -> [Observability.ObservabilityAttribute] -> Maybe Int
+lookupIntAttribute expectedName =
+  listToMaybe
+    . mapMaybe
+      ( \attribute ->
+          case (Observability.attributeName attribute, Observability.attributeValue attribute) of
+            (currentName, Observability.IntAttribute attributeValue)
+              | currentName == expectedName -> Just attributeValue
+            _ -> Nothing
+      )
+
+expectMeasuredRequestTiming :: Observability.RequestObservability -> Expectation
+expectMeasuredRequestTiming requestObservabilityValue = do
+  let spanAttributes =
+        Observability.requestSpanAttributes
+          (Observability.observabilityRequestSpan requestObservabilityValue)
+      metricAttributes =
+        Observability.httpServerMetricAttributes
+          (Observability.observabilityHttpServerMetrics requestObservabilityValue)
+      expectTimingAttribute attributeName = do
+        lookupIntAttribute attributeName spanAttributes
+          `shouldSatisfy` maybe False (>= 0)
+        lookupIntAttribute attributeName metricAttributes
+          `shouldSatisfy` maybe False (>= 0)
+  expectTimingAttribute "harch.request.start_monotonic_ns"
+  expectTimingAttribute "harch.request.duration_ns"
+  expectTimingAttribute "harch.phase.request-policy.start_offset_ns"
+  expectTimingAttribute "harch.phase.request-policy.duration_ns"
+  expectTimingAttribute "harch.phase.route-match.start_offset_ns"
+  expectTimingAttribute "harch.phase.route-match.duration_ns"
+  expectTimingAttribute "harch.phase.render-response.start_offset_ns"
+  expectTimingAttribute "harch.phase.render-response.duration_ns"
 
 waitForConnectionObservability :: IORef [Observability.ConnectionObservability] -> Text -> IO Observability.ConnectionObservability
 waitForConnectionObservability connectionObservabilityReference expectedEventName =
