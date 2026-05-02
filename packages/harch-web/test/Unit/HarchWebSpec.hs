@@ -2349,20 +2349,22 @@ spec = do
           diagnosticApplication =
             sampleApplication
               { reportRequestObservability = \requestObservabilityValue ->
-                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+                  modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) missingRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 404
-      readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/favicon.ico"
-                           "/404"
-                           404
-                           Observability.PageResponseKind
-                           [clientAddressAttribute, peerAddressAttribute]
-                       ]
+      capturedRequestObservability <- readIORef requestObservabilityReference
+      map stripVolatileRequestTiming capturedRequestObservability
+        `shouldBe` [ Observability.buildRequestObservability
+                       "GET"
+                       "http"
+                       "/favicon.ico"
+                       "/404"
+                       404
+                       Observability.PageResponseKind
+                       [clientAddressAttribute, peerAddressAttribute]
+                   ]
+      mapM_ expectMeasuredRequestTiming capturedRequestObservability
 
     it "reports request observability for root-prefixed static asset responses with a wildcard route" $
       withSystemTempDirectory "harch-web-static-observability-root" $ \tempDirectory -> do
