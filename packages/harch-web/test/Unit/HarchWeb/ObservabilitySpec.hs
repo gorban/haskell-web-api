@@ -120,9 +120,12 @@ spec = do
       show connectionObservability `shouldBe` "ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}"
       show [connectionObservability] `shouldBe` "[ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}]"
 
-  describe "requestSpanName" $
+  describe "requestSpanName" $ do
     it "uses the request method with the canonical route path" $
       Observability.requestSpanName "GET" "/fr/second" `shouldBe` "GET /fr/second"
+
+    it "uses a stable not-found operation name instead of a route-looking synthetic path" $
+      Observability.requestSpanName "GET" "/fr/404" `shouldBe` "GET not-found"
 
   describe "requestObservabilityAttributes" $
     it "builds stable common attributes for page responses and preserves extra attributes" $
@@ -275,7 +278,7 @@ spec = do
           }
 
   describe "buildRequestObservability" $
-    it "groups unmatched request spans by the synthetic not-found route while retaining the concrete URL path attribute" $
+    it "groups unmatched request spans under a stable not-found operation name while retaining the concrete URL path attribute" $
       Observability.buildRequestObservability
         "GET"
         "http"
@@ -287,7 +290,7 @@ spec = do
         `shouldBe` Observability.RequestObservability
           { Observability.observabilityRequestSpan =
               Observability.RequestSpan
-                { Observability.requestSpanDisplayName = "GET /404",
+                { Observability.requestSpanDisplayName = "GET not-found",
                   Observability.requestSpanAttributes =
                     [ Observability.ObservabilityAttribute
                         { Observability.attributeName = "http.request.method",

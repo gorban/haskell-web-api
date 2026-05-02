@@ -1963,7 +1963,7 @@ spec = do
                            [clientAddressAttribute, peerAddressAttribute, clientAddressSourceAttribute, forwardedForAttribute]
                        ]
 
-    it "keeps unmatched request paths in request span display names instead of collapsing them to the synthetic not-found route" $ do
+    it "groups unmatched requests under a stable not-found span display name while keeping the concrete missing path in attributes" $ do
       requestObservabilityReference <- newIORef []
       let directRemoteHost =
             Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))

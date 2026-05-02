@@ -62,7 +62,7 @@ newtype ConnectionObservability = ConnectionObservability
 
 requestSpanName :: Text -> Text -> Text
 requestSpanName method routePath =
-  Text.concat [method, " ", routePath]
+  Text.concat [method, " ", requestSpanOperationName routePath]
 
 requestObservabilityAttributes ::
   Text ->
@@ -181,3 +181,14 @@ responseKindText responseKind =
   case responseKind of
     PageResponseKind -> "page"
     BodyResponseKind -> "body"
+
+requestSpanOperationName :: Text -> Text
+requestSpanOperationName routePath
+  | isNotFoundRoutePath routePath = "not-found"
+  | otherwise = routePath
+
+isNotFoundRoutePath :: Text -> Bool
+isNotFoundRoutePath routePath =
+  case filter (not . Text.null) (Text.splitOn "/" routePath) of
+    [] -> False
+    segments -> last segments == "404"
