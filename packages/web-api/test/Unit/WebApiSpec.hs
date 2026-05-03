@@ -13,7 +13,7 @@ import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (toLower)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (isPrefixOf)
+import Data.List (find, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -6351,6 +6351,28 @@ spec = do
       readResponseBody apiMissingResponse
         `shouldReturn` "{\"error\":\"not-found\"}"
 
+    it "emits second-page observability through the WAI facade" $ do
+      requestObservabilityReference <- newIORef Nothing
+      let observingApplication =
+            pureApplication
+              { HarchWeb.reportRequestObservability =
+                  writeIORef requestObservabilityReference . Just
+              }
+      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication observingApplication) (waiRequest ["second"])
+      Wai.responseStatus secondResponse `shouldBe` Http.status200
+      readResponseBody secondResponse
+        `shouldReturn` "<html><head><title>web-api: Second</title></head><body data-app=\"web-api\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\"><section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section></main></body></html>"
+      maybeRequestObservability <- readIORef requestObservabilityReference
+      case maybeRequestObservability of
+        Nothing ->
+          expectationFailure "expected request observability to be reported for /second"
+        Just requestObservability -> do
+          let requestSpan = Observability.observabilityRequestSpan requestObservability
+              requestAttributes = Observability.requestSpanAttributes requestSpan
+          Observability.requestSpanDisplayName requestSpan `shouldBe` "GET /second"
+          lookupTextObservabilityAttribute "url.path" requestAttributes `shouldBe` Just "/second"
+          lookupTextObservabilityAttribute "http.route" requestAttributes `shouldBe` Just "/second"
+
     it "adapts forwarded path prefixes through the WAI facade for pages and static assets" $ do
       let prefixedPageRequest =
             (waiRequest ["app", "second"])
@@ -6804,3 +6826,12 @@ isVolatileDatabaseTimingAttribute attribute =
     `elem` [ "db.operation.start_monotonic_ns",
              "db.operation.duration_ns"
            ]
+
+lookupTextObservabilityAttribute :: Text -> [Observability.ObservabilityAttribute] -> Maybe Text
+lookupTextObservabilityAttribute attributeName attributes =
+  find ((== attributeName) . Observability.attributeName) attributes >>= attributeTextValue
+  where
+    attributeTextValue attribute =
+      case Observability.attributeValue attribute of
+        Observability.TextAttribute value -> Just value
+        Observability.IntAttribute _ -> Nothing
