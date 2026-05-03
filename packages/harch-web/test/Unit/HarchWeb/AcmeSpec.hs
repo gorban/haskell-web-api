@@ -37,6 +37,17 @@ sampleEndpoint =
       endpointPort = 5443
     }
 
+defaultRequestPolicy :: RequestPolicyConfig
+defaultRequestPolicy =
+  RequestPolicyConfig
+    { redirectHttpToHttps = False,
+      httpsRedirectPort = Nothing,
+      strictTransportSecurity = Nothing,
+      trustForwardedHeaders = False,
+      corsPolicy = defaultCorsPolicyConfig,
+      responseSecurityHeaders = defaultResponseSecurityHeadersConfig
+    }
+
 certbotBackend :: CertbotConfig
 certbotBackend =
   CertbotConfig
@@ -313,17 +324,17 @@ spec = do
             Wai.defaultRequest
               { Wai.rawPathInfo = "/.well-known/acme-challenge/token-1"
               }
-      acmeHttp01ChallengeToken matchingRequest `shouldBe` Just "token-1"
-      acmeHttp01ChallengeToken missingTokenRequest `shouldBe` Nothing
+      acmeHttp01ChallengeToken defaultRequestPolicy matchingRequest `shouldBe` Just "token-1"
+      acmeHttp01ChallengeToken defaultRequestPolicy missingTokenRequest `shouldBe` Nothing
       requestHostWithoutPort matchingRequest `shouldBe` Just "example.com"
-      matchesRuntimeAcmeChallenge matchingRequest challenge `shouldBe` True
-      matchesRuntimeAcmeChallenge mismatchedHostRequest challenge `shouldBe` False
-      matchesRuntimeAcmeChallenge hostlessRequest challenge `shouldBe` True
-      matchesRuntimeAcmeChallenge missingTokenRequest challenge `shouldBe` False
+      matchesRuntimeAcmeChallenge defaultRequestPolicy matchingRequest challenge `shouldBe` True
+      matchesRuntimeAcmeChallenge defaultRequestPolicy mismatchedHostRequest challenge `shouldBe` False
+      matchesRuntimeAcmeChallenge defaultRequestPolicy hostlessRequest challenge `shouldBe` True
+      matchesRuntimeAcmeChallenge defaultRequestPolicy missingTokenRequest challenge `shouldBe` False
       registerAcmeChallenges challengeStore [challenge]
       registeredChallenges <- unwrapChallengeStore challengeStore
       registeredChallenges `shouldBe` [challenge]
-      challengeResponse <- acmeChallengeResponseForRequest challengeStore matchingRequest
+      challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStore matchingRequest
       case challengeResponse of
         Just response -> do
           Wai.responseStatus response `shouldBe` Http.ok200

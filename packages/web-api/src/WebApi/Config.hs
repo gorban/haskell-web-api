@@ -215,6 +215,7 @@ defaultAppConfig =
           { redirectHttpToHttps = False,
             httpsRedirectPort = Nothing,
             strictTransportSecurity = Nothing,
+            trustForwardedHeaders = False,
             corsPolicy = defaultCorsPolicyConfig,
             responseSecurityHeaders = defaultResponseSecurityHeadersConfig
           },
@@ -562,6 +563,7 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         <$> parseRedirectHttpToHttps parsedListeners
         <*> pure (defaultHttpsRedirectPort parsedListeners)
         <*> parseOptionalStrictTransportSecurity
+        <*> parseOptionalBoolWithDefault "TRUST_FORWARDED_HEADERS" False
         <*> parseCorsPolicyConfig
         <*> parseResponseSecurityHeadersConfig
 

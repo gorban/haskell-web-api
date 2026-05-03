@@ -95,16 +95,19 @@ applyTestPathPrefix pathPrefix path
   | path == "/" = pathPrefix
   | otherwise = pathPrefix <> path
 
-sampleRequestContextFromRequest :: Wai.Request -> TestContext -> TestContext
-sampleRequestContextFromRequest request requestContext =
+sampleRequestContextFromRequest :: Bool -> Wai.Request -> TestContext -> TestContext
+sampleRequestContextFromRequest trustProxyHeaders request requestContext =
   requestContext
     { requestPathPrefix =
-        maybe
-          ""
-          normalizeTestPathPrefix
-          ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
-              >>= firstTestHeaderValue
-          )
+        if trustProxyHeaders
+          then
+            maybe
+              ""
+              normalizeTestPathPrefix
+              ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
+                  >>= firstTestHeaderValue
+              )
+          else ""
     }
 
 normalizeTestPathPrefix :: Text -> Text
@@ -194,6 +197,7 @@ defaultRequestPolicy =
     { redirectHttpToHttps = False,
       httpsRedirectPort = Nothing,
       strictTransportSecurity = Nothing,
+      trustForwardedHeaders = False,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
@@ -207,7 +211,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest,
+      requestContextFromRequest = sampleRequestContextFromRequest (trustForwardedHeaders requestPolicyConfig),
       applicationStaticAssets = staticAssetsConfig,
       applicationRequestPolicy = requestPolicyConfig,
       routeCodec = sampleCodec,
@@ -221,6 +225,14 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
 sampleApplication :: Application TestRoute TestContext
 sampleApplication =
   sampleApplicationWithStaticAssets emptyStaticAssets
+
+trustedForwardedApplication :: Application TestRoute TestContext
+trustedForwardedApplication =
+  sampleApplicationWithConfig
+    emptyStaticAssets
+    defaultRequestPolicy
+      { trustForwardedHeaders = True
+      }
 
 sampleServerConfig :: ServerConfig
 sampleServerConfig =
@@ -412,9 +424,9 @@ rootPathApplication =
   Application
     { appName = "root-path",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest,
+      requestContextFromRequest = sampleRequestContextFromRequest True,
       applicationStaticAssets = emptyStaticAssets,
-      applicationRequestPolicy = defaultRequestPolicy,
+      applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
       pageShell = buildPageShell rootPathCodec sampleShell,
@@ -548,6 +560,7 @@ spec = do
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig,
+                trustForwardedHeaders = False,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -661,6 +674,7 @@ spec = do
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig,
+                trustForwardedHeaders = False,
                 corsPolicy = corsPolicyConfig,
                 responseSecurityHeaders = responseSecurityHeadersConfig
               }
@@ -669,6 +683,7 @@ spec = do
               { redirectHttpToHttps = False,
                 httpsRedirectPort = Nothing,
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig,
+                trustForwardedHeaders = False,
                 corsPolicy =
                   defaultCorsPolicyConfig
                     { corsAllowedOrigins = ["https://app.example.com"]
@@ -870,7 +885,7 @@ spec = do
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
       show [responseSecurityHeadersConfig] `shouldContain` "[ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
-      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True})"
+      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), trustForwardedHeaders = False"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
@@ -1217,7 +1232,7 @@ spec = do
               { Wai.rawPathInfo = "/app/known",
                 Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
               }
-      response <- performWaiRequest (toWaiApplication sampleApplication) prefixedRequest
+      response <- performWaiRequest (toWaiApplication trustedForwardedApplication) prefixedRequest
       Wai.responseStatus response `shouldBe` Http.status200
       readResponseBody response
         `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app/known\" aria-current=\"page\">Known</a><a href=\"/app/404\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
@@ -1302,7 +1317,7 @@ spec = do
                     ("X-Forwarded-Prefix", "/app")
                   ]
               }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))) redirectRequest
       Wai.responseStatus response `shouldBe` Http.status308
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
 
@@ -1342,6 +1357,7 @@ spec = do
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = True
                       },
+                trustForwardedHeaders = True,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -1371,6 +1387,7 @@ spec = do
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = False
                       },
+                trustForwardedHeaders = False,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -1763,6 +1780,46 @@ spec = do
                    ]
       mapM_ expectMeasuredRequestTiming capturedRequestObservability
 
+    it "ignores forwarded client, scheme, and prefix headers unless trust is enabled" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          forwardedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [ ("X-Forwarded-For", "203.0.113.10, 10.0.0.1"),
+                ("X-Forwarded-Proto", "https"),
+                ("X-Forwarded-Prefix", "/app")
+              ]
+          clientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          diagnosticApplication =
+            sampleApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+      response <- performWaiRequest (toWaiApplication diagnosticApplication) forwardedRequest
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [clientAddressAttribute, peerAddressAttribute]
+                       ]
+
     it "reports body-response observability attributes and logs through the application hooks" $ do
       requestObservabilityReference <- newIORef []
       logEntriesReference <- newIORef []
@@ -1812,7 +1869,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "/app"
               }
           diagnosticApplication =
-            sampleApplication
+            trustedForwardedApplication
               { renderResponse =
                   \_ ->
                     pure $
@@ -1908,7 +1965,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "enhanced-navigation"
               }
           diagnosticApplication =
-            sampleApplication
+            trustedForwardedApplication
               { renderResponse =
                   \_ ->
                     pure $
@@ -2010,7 +2067,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
               }
           diagnosticApplication =
-            sampleApplication
+            trustedForwardedApplication
               { renderResponse =
                   \_ ->
                     pure $
@@ -2265,7 +2322,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "http"
               }
           diagnosticApplication =
-            sampleApplication
+            trustedForwardedApplication
               { reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
@@ -2314,7 +2371,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "x-forwarded-for"
               }
           diagnosticApplication =
-            sampleApplication
+            trustedForwardedApplication
               { reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
@@ -2508,6 +2565,7 @@ spec = do
                           strictTransportSecurityIncludeSubDomains = False,
                           strictTransportSecurityPreload = False
                         },
+                  trustForwardedHeaders = True,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 }
@@ -2539,7 +2597,12 @@ spec = do
                 { Wai.rawPathInfo = "/app/assets/app.js",
                   Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
                 }
-            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            staticApplication =
+              sampleApplicationWithConfig
+                assetConfig
+                defaultRequestPolicy
+                  { trustForwardedHeaders = True
+                  }
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/app.js") "console.log('asset');"
         response <- performWaiRequest (toWaiApplication staticApplication) prefixedRequest
@@ -4575,7 +4638,7 @@ spec = do
                 putMVar prepareResultReference result
               waitForMarker (500 :: Int)
               challengeStoreValue <- challengeStore
-              challengeResponse <- acmeChallengeResponseForRequest challengeStoreValue challengeRequest
+              challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStoreValue challengeRequest
               isNothing challengeResponse `shouldBe` True
               prepareResult <- readMVar prepareResultReference
               case prepareResult of

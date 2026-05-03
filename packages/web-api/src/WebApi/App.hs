@@ -57,7 +57,7 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
       HarchWeb.Application
         { HarchWeb.appName = "web-api",
           HarchWeb.defaultRequestContext = defaultRequestContext,
-          HarchWeb.requestContextFromRequest = requestContextFromWaiRequest,
+          HarchWeb.requestContextFromRequest = requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
           HarchWeb.applicationStaticAssets = staticAssets config,
           HarchWeb.applicationRequestPolicy = requestPolicy config,
           HarchWeb.routeCodec = routeCodec,

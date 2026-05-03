@@ -108,16 +108,19 @@ mergeRequestContext requestContext maybeLocale pathSurface =
       requestSurface = pathSurface
     }
 
-requestContextFromWaiRequest :: Wai.Request -> AppRequestContext -> AppRequestContext
-requestContextFromWaiRequest request requestContext =
+requestContextFromWaiRequest :: Bool -> Wai.Request -> AppRequestContext -> AppRequestContext
+requestContextFromWaiRequest trustProxyHeaders request requestContext =
   requestContext
     { requestPathPrefix =
-        maybe
-          Text.empty
-          normalizeRequestPathPrefix
-          ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
-              >>= firstCommaSeparatedValue . Text.strip . TextEncoding.decodeUtf8
-          )
+        if trustProxyHeaders
+          then
+            maybe
+              Text.empty
+              normalizeRequestPathPrefix
+              ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
+                  >>= firstCommaSeparatedValue . Text.strip . TextEncoding.decodeUtf8
+              )
+          else Text.empty
     }
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)

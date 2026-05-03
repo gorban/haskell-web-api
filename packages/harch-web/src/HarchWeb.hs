@@ -369,6 +369,7 @@ data RequestPolicyConfig = RequestPolicyConfig
   { redirectHttpToHttps :: Bool,
     httpsRedirectPort :: Maybe Int,
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
+    trustForwardedHeaders :: Bool,
     corsPolicy :: CorsPolicyConfig,
     responseSecurityHeaders :: ResponseSecurityHeadersConfig
   }
@@ -647,7 +648,7 @@ toWaiApplication webApplication request respond = do
         request
         requestStartedAt
         preflightResponseReportedAt
-        (externalRequestPath request)
+        (externalRequestPath requestPolicyConfig request)
         preflightResponseWithHeaders
       respond preflightResponseWithHeaders
     Nothing ->
@@ -661,11 +662,11 @@ toWaiApplication webApplication request respond = do
             request
             requestStartedAt
             redirectResponseReportedAt
-            (externalRequestPath request)
+            (externalRequestPath requestPolicyConfig request)
             redirectResponse
           respond redirectResponse
         Nothing -> do
-          maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath request)
+          maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath requestPolicyConfig request)
           case maybeStaticResponse of
             Just (staticRoutePath, staticResponse) -> do
               staticResponseReportedAt <- getMonotonicTimeNSec
@@ -674,7 +675,7 @@ toWaiApplication webApplication request respond = do
                 request
                 requestStartedAt
                 staticResponseReportedAt
-                (applyRequestPathPrefix (requestPathPrefix request) staticRoutePath)
+                (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath)
                 staticResponse
               respond
                 (applyResponseHeaders policyResponseHeaders staticResponse)
@@ -689,13 +690,13 @@ toWaiApplication webApplication request respond = do
                     matchRoute
                       (routeCodec webApplication)
                       requestContext
-                      (waiRequestPath request)
+                      (waiRequestPath requestPolicyConfig request)
               routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
               renderStartedAt <- getMonotonicTimeNSec
               response <- renderResponse webApplication routeRequest
               responseRenderedAt <- response `seq` getMonotonicTimeNSec
-              let requestContextAttributes = requestContextObservabilityAttributes request
-                  requestLogFields = requestLogContextFields request
+              let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
+                  requestLogFields = requestLogContextFields requestPolicyConfig request
                   extraObservabilityAttributes =
                     requestContextAttributes
                       <> case response of
@@ -721,8 +722,8 @@ toWaiApplication webApplication request respond = do
                       (requestTraceContext request)
                       ( Observability.buildRequestObservability
                           (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                          (requestScheme request)
-                          (waiRequestPath request)
+                          (requestScheme requestPolicyConfig request)
+                          (waiRequestPath requestPolicyConfig request)
                           (renderRoute (routeCodec webApplication) routeRequest)
                           ( case response of
                               PageResponse page ->
@@ -1210,7 +1211,8 @@ runtimeCertbotArguments runtimeAcmePlan =
 toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
-  maybeChallengeResponse <- acmeChallengeResponseForRequest challengeStore request
+  let requestPolicyConfig = applicationRequestPolicy webApplication
+  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore request
   case maybeChallengeResponse of
     Just challengeResponse -> do
       challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
@@ -1219,13 +1221,13 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
         request
         requestStartedAt
         challengeResponseReportedAt
-        (acmeChallengeRoutePath request)
+        (acmeChallengeRoutePath requestPolicyConfig request)
         challengeResponse
       respond challengeResponse
     Nothing -> toWaiApplication webApplication request respond
 
-acmeChallengeResponseForRequest :: AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
-acmeChallengeResponseForRequest (AcmeChallengeStore challengeStore) request = do
+acmeChallengeResponseForRequest :: RequestPolicyConfig -> AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
+acmeChallengeResponseForRequest requestPolicyConfig (AcmeChallengeStore challengeStore) request = do
   challenges <- readMVar challengeStore
   case fmap
     ( Wai.responseLBS
@@ -1235,28 +1237,28 @@ acmeChallengeResponseForRequest (AcmeChallengeStore challengeStore) request = do
         . TextEncoding.encodeUtf8
         . activeAcmeChallengeResponse
     )
-    (find (matchesRuntimeAcmeChallenge request) challenges) of
+    (find (matchesRuntimeAcmeChallenge requestPolicyConfig request) challenges) of
     Just challengeResponse ->
       pure (Just challengeResponse)
     Nothing ->
-      certbotAcmeChallengeResponseForRequest request
+      certbotAcmeChallengeResponseForRequest requestPolicyConfig request
 
-matchesRuntimeAcmeChallenge :: Wai.Request -> ActiveAcmeChallenge -> Bool
-matchesRuntimeAcmeChallenge request challenge =
-  case acmeHttp01ChallengeToken request of
+matchesRuntimeAcmeChallenge :: RequestPolicyConfig -> Wai.Request -> ActiveAcmeChallenge -> Bool
+matchesRuntimeAcmeChallenge requestPolicyConfig request challenge =
+  case acmeHttp01ChallengeToken requestPolicyConfig request of
     Just challengeToken ->
       challengeToken == activeAcmeChallengeToken challenge
         && maybe True (== activeAcmeChallengeDomain challenge) (requestHostWithoutPort request)
     Nothing -> False
 
-acmeHttp01ChallengeToken :: Wai.Request -> Maybe Text
-acmeHttp01ChallengeToken request =
-  Text.stripPrefix "/.well-known/acme-challenge/" (waiRequestPath request)
+acmeHttp01ChallengeToken :: RequestPolicyConfig -> Wai.Request -> Maybe Text
+acmeHttp01ChallengeToken requestPolicyConfig request =
+  Text.stripPrefix "/.well-known/acme-challenge/" (waiRequestPath requestPolicyConfig request)
 
-acmeChallengeRoutePath :: Wai.Request -> Text
-acmeChallengeRoutePath request =
+acmeChallengeRoutePath :: RequestPolicyConfig -> Wai.Request -> Text
+acmeChallengeRoutePath requestPolicyConfig request =
   applyRequestPathPrefix
-    (requestPathPrefix request)
+    (requestPathPrefix requestPolicyConfig request)
     "/.well-known/acme-challenge/*"
 
 requestHostWithoutPort :: Wai.Request -> Maybe Text
@@ -1284,9 +1286,9 @@ unregisterCertbotAcmeChallengeWebroot :: FilePath -> IO ()
 unregisterCertbotAcmeChallengeWebroot webrootDirectory =
   modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . filter (/= webrootDirectory))
 
-certbotAcmeChallengeResponseForRequest :: Wai.Request -> IO (Maybe Wai.Response)
-certbotAcmeChallengeResponseForRequest request =
-  case acmeHttp01ChallengeToken request >>= validAcmeHttp01ChallengeToken of
+certbotAcmeChallengeResponseForRequest :: RequestPolicyConfig -> Wai.Request -> IO (Maybe Wai.Response)
+certbotAcmeChallengeResponseForRequest requestPolicyConfig request =
+  case acmeHttp01ChallengeToken requestPolicyConfig request >>= validAcmeHttp01ChallengeToken of
     Nothing ->
       pure Nothing
     Just challengeToken -> do
@@ -2638,23 +2640,23 @@ isNotFoundPage webApplication page =
    in pageRequestContext `seq`
         pageRoute page == requestRoute (notFoundRequest (routeCodec webApplication) pageRequestContext)
 
-waiRequestPath :: Wai.Request -> Text
-waiRequestPath request =
+waiRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
+waiRequestPath requestPolicyConfig request =
   stripRequestPathPrefix
-    (requestPathPrefix request)
+    (requestPathPrefix requestPolicyConfig request)
     (rawRequestPath request)
 
 requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
 requestRedirectLocation requestPolicyConfig request =
   if redirectHttpToHttps requestPolicyConfig
-    && requestScheme request == "http"
-    && not (isAcmeHttp01ChallengeRequest request)
+    && requestScheme requestPolicyConfig request == "http"
+    && not (isAcmeHttp01ChallengeRequest requestPolicyConfig request)
     then
       fmap
         ( \redirectAuthority ->
             "https://"
               <> redirectAuthority
-              <> requestRedirectPathAndQuery request
+              <> requestRedirectPathAndQuery requestPolicyConfig request
         )
         (requestRedirectAuthority requestPolicyConfig request)
     else Nothing
@@ -2665,9 +2667,9 @@ requestRedirectAuthority requestPolicyConfig request =
     (applyHttpsRedirectPort (httpsRedirectPort requestPolicyConfig))
     (lookup "Host" (Wai.requestHeaders request))
 
-requestRedirectPathAndQuery :: Wai.Request -> ByteString.ByteString
-requestRedirectPathAndQuery request =
-  TextEncoding.encodeUtf8 (externalRequestPath request) <> Wai.rawQueryString request
+requestRedirectPathAndQuery :: RequestPolicyConfig -> Wai.Request -> ByteString.ByteString
+requestRedirectPathAndQuery requestPolicyConfig request =
+  TextEncoding.encodeUtf8 (externalRequestPath requestPolicyConfig request) <> Wai.rawQueryString request
 
 applyHttpsRedirectPort :: Maybe Int -> ByteString.ByteString -> ByteString.ByteString
 applyHttpsRedirectPort maybeRedirectPort hostHeader =
@@ -2680,9 +2682,9 @@ applyHttpsRedirectPort maybeRedirectPort hostHeader =
         Just redirectPort ->
           hostOnly <> ":" <> ByteStringChar8.pack (show redirectPort)
 
-isAcmeHttp01ChallengeRequest :: Wai.Request -> Bool
-isAcmeHttp01ChallengeRequest request =
-  Text.isPrefixOf "/.well-known/acme-challenge/" (waiRequestPath request)
+isAcmeHttp01ChallengeRequest :: RequestPolicyConfig -> Wai.Request -> Bool
+isAcmeHttp01ChallengeRequest requestPolicyConfig request =
+  Text.isPrefixOf "/.well-known/acme-challenge/" (waiRequestPath requestPolicyConfig request)
 
 requestPolicyResponseHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
 requestPolicyResponseHeaders requestPolicyConfig request =
@@ -2712,7 +2714,7 @@ strictTransportSecurityHeaders :: RequestPolicyConfig -> Wai.Request -> Http.Res
 strictTransportSecurityHeaders requestPolicyConfig request =
   case strictTransportSecurity requestPolicyConfig of
     Just strictTransportSecurityConfig
-      | requestScheme request == "https" ->
+      | requestScheme requestPolicyConfig request == "https" ->
           [ ( "Strict-Transport-Security",
               TextEncoding.encodeUtf8 (strictTransportSecurityHeaderValue strictTransportSecurityConfig)
             )
@@ -2791,31 +2793,31 @@ strictTransportSecurityHeaderValue strictTransportSecurityConfig =
         ++ ["preload" | strictTransportSecurityPreload strictTransportSecurityConfig]
     )
 
-requestContextObservabilityAttributes :: Wai.Request -> [Observability.ObservabilityAttribute]
-requestContextObservabilityAttributes request =
-  [ textObservabilityAttribute "client.address" (effectiveClientAddress request),
+requestContextObservabilityAttributes :: RequestPolicyConfig -> Wai.Request -> [Observability.ObservabilityAttribute]
+requestContextObservabilityAttributes requestPolicyConfig request =
+  [ textObservabilityAttribute "client.address" (effectiveClientAddress requestPolicyConfig request),
     textObservabilityAttribute "network.peer.address" (peerAddressText request)
   ]
     ++ maybe
       []
       (pure . textObservabilityAttribute "harch.client.address.source")
-      (effectiveClientAddressSource request)
+      (effectiveClientAddressSource requestPolicyConfig request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_for")
-      (requestHeaderText "X-Forwarded-For" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "http.request.header.forwarded")
-      (requestHeaderText "Forwarded" request)
+      (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_proto")
-      (requestHeaderText "X-Forwarded-Proto" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "http.request.header.x_forwarded_prefix")
-      (requestHeaderText "X-Forwarded-Prefix" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
     ++ maybe
       []
       (pure . textObservabilityAttribute "user_agent.original")
@@ -2833,26 +2835,26 @@ requestContextObservabilityAttributes request =
       (pure . textObservabilityAttribute "harch.request.source")
       (requestSource request)
 
-requestLogContextFields :: Wai.Request -> [Text]
-requestLogContextFields request =
-  [ renderRequestLogField "client.address" (effectiveClientAddress request),
+requestLogContextFields :: RequestPolicyConfig -> Wai.Request -> [Text]
+requestLogContextFields requestPolicyConfig request =
+  [ renderRequestLogField "client.address" (effectiveClientAddress requestPolicyConfig request),
     renderRequestLogField "network.peer.address" (peerAddressText request)
   ]
     ++ optionalRequestLogField
       "harch.client.address.source"
-      (effectiveClientAddressSource request)
+      (effectiveClientAddressSource requestPolicyConfig request)
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_for"
-      (requestHeaderText "X-Forwarded-For" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
     ++ optionalRequestLogField
       "http.request.header.forwarded"
-      (requestHeaderText "Forwarded" request)
+      (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_proto"
-      (requestHeaderText "X-Forwarded-Proto" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
     ++ optionalRequestLogField
       "http.request.header.x_forwarded_prefix"
-      (requestHeaderText "X-Forwarded-Prefix" request)
+      (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
     ++ optionalRequestLogField
       "user_agent.original"
       (requestHeaderText "User-Agent" request)
@@ -2865,7 +2867,7 @@ requestLogContextFields request =
     ++ optionalRequestLogField
       "harch.request.source"
       (requestSource request)
-    ++ [renderRequestLogField "url.scheme" (requestScheme request)]
+    ++ [renderRequestLogField "url.scheme" (requestScheme requestPolicyConfig request)]
 
 optionalRequestLogField :: Text -> Maybe Text -> [Text]
 optionalRequestLogField fieldName maybeFieldValue =
@@ -2906,9 +2908,9 @@ intObservabilityAttribute name value =
       Observability.attributeValue = Observability.IntAttribute value
     }
 
-requestScheme :: Wai.Request -> Text
-requestScheme request =
-  case fmap Text.toLower (forwardedHeaderToken "proto" request <|> requestHeaderToken "X-Forwarded-Proto" request) of
+requestScheme :: RequestPolicyConfig -> Wai.Request -> Text
+requestScheme requestPolicyConfig request =
+  case fmap Text.toLower (trustedForwardedHeaderToken requestPolicyConfig "proto" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Proto" request) of
     Just "https" -> "https"
     Just "http" -> "http"
     _ ->
@@ -2922,18 +2924,18 @@ listenerSchemeText listenerScheme =
     Http -> "http"
     Https -> "https"
 
-effectiveClientAddress :: Wai.Request -> Text
-effectiveClientAddress request =
+effectiveClientAddress :: RequestPolicyConfig -> Wai.Request -> Text
+effectiveClientAddress requestPolicyConfig request =
   fromMaybe
     (peerAddressText request)
-    (forwardedHeaderToken "for" request <|> requestHeaderToken "X-Forwarded-For" request)
+    (trustedForwardedHeaderToken requestPolicyConfig "for" request <|> trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request)
 
-effectiveClientAddressSource :: Wai.Request -> Maybe Text
-effectiveClientAddressSource request =
-  case forwardedHeaderToken "for" request of
+effectiveClientAddressSource :: RequestPolicyConfig -> Wai.Request -> Maybe Text
+effectiveClientAddressSource requestPolicyConfig request =
+  case trustedForwardedHeaderToken requestPolicyConfig "for" request of
     Just _ -> Just "forwarded"
     Nothing ->
-      case requestHeaderToken "X-Forwarded-For" request of
+      case trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-For" request of
         Just _ -> Just "x-forwarded-for"
         Nothing -> Nothing
 
@@ -2965,6 +2967,24 @@ requestHeaderText headerName request =
 forwardedHeaderToken :: Text -> Wai.Request -> Maybe Text
 forwardedHeaderToken parameterName request =
   requestHeaderText "Forwarded" request >>= forwardedParameterValue parameterName
+
+trustedRequestHeaderText :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
+trustedRequestHeaderText requestPolicyConfig headerName request =
+  if trustForwardedHeaders requestPolicyConfig
+    then requestHeaderText headerName request
+    else Nothing
+
+trustedRequestHeaderToken :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
+trustedRequestHeaderToken requestPolicyConfig headerName request =
+  if trustForwardedHeaders requestPolicyConfig
+    then requestHeaderToken headerName request
+    else Nothing
+
+trustedForwardedHeaderToken :: RequestPolicyConfig -> Text -> Wai.Request -> Maybe Text
+trustedForwardedHeaderToken requestPolicyConfig parameterName request =
+  if trustForwardedHeaders requestPolicyConfig
+    then forwardedHeaderToken parameterName request
+    else Nothing
 
 forwardedParameterValue :: Text -> Text -> Maybe Text
 forwardedParameterValue parameterName headerValue =
@@ -3060,12 +3080,12 @@ limitObservabilityHeaderValue :: Text -> Text
 limitObservabilityHeaderValue =
   Text.take 256
 
-requestPathPrefix :: Wai.Request -> Text
-requestPathPrefix request =
+requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> Text
+requestPathPrefix requestPolicyConfig request =
   maybe
     Text.empty
     normalizeRequestPathPrefix
-    (requestHeaderToken "X-Forwarded-Prefix" request)
+    (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
 
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request =
@@ -3073,11 +3093,11 @@ rawRequestPath request =
     then "/"
     else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
 
-externalRequestPath :: Wai.Request -> Text
-externalRequestPath request =
+externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
+externalRequestPath requestPolicyConfig request =
   applyRequestPathPrefix
-    (requestPathPrefix request)
-    (waiRequestPath request)
+    (requestPathPrefix requestPolicyConfig request)
+    (waiRequestPath requestPolicyConfig request)
 
 normalizeRequestPathPrefix :: Text -> Text
 normalizeRequestPathPrefix pathPrefix =
@@ -3141,19 +3161,20 @@ reportEarlyRequestObservability ::
   Wai.Response ->
   IO ()
 reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
-  let requestObservability =
+  let requestPolicyConfig = applicationRequestPolicy webApplication
+      requestObservability =
         maybe
           id
           Observability.withRequestTraceContext
           (requestTraceContext request)
           ( Observability.buildRequestObservability
               (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-              (requestScheme request)
-              (waiRequestPath request)
+              (requestScheme requestPolicyConfig request)
+              (waiRequestPath requestPolicyConfig request)
               routePath
               (Http.statusCode (Wai.responseStatus response))
               Observability.BodyResponseKind
-              ( requestContextObservabilityAttributes request
+              ( requestContextObservabilityAttributes requestPolicyConfig request
                   <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
               )
           )

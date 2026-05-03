@@ -56,6 +56,16 @@ import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
 
+trustedForwardedApplication :: HarchWeb.Application AppRoute AppRequestContext
+trustedForwardedApplication =
+  buildApp
+    defaultAppConfig
+      { requestPolicy =
+          (requestPolicy defaultAppConfig)
+            { trustForwardedHeaders = True
+            }
+      }
+
 navigationAppConfig :: AppConfig
 navigationAppConfig =
   defaultAppConfig
@@ -678,6 +688,7 @@ spec = do
                 { redirectHttpToHttps = False,
                   httpsRedirectPort = Nothing,
                   strictTransportSecurity = Nothing,
+                  trustForwardedHeaders = False,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 },
@@ -807,6 +818,7 @@ spec = do
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1149,6 +1161,7 @@ spec = do
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1371,6 +1384,7 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = True,
                             strictTransportSecurityPreload = True
                           },
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1398,6 +1412,7 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
                           },
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1421,8 +1436,22 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
                           },
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
+                  }
+            }
+
+    it "parses trusted forwarded-header mode explicitly when enabled" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("TRUST_FORWARDED_HEADERS", "true")]
+        `shouldBe` Right
+          defaultAppConfig
+            { requestPolicy =
+                (requestPolicy defaultAppConfig)
+                  { trustForwardedHeaders = True
                   }
             }
 
@@ -1512,6 +1541,7 @@ spec = do
                   { redirectHttpToHttps = False,
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1585,6 +1615,7 @@ spec = do
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Nothing,
                     strictTransportSecurity = Nothing,
+                    trustForwardedHeaders = False,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -6246,7 +6277,7 @@ spec = do
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext
 
-    it "derives normalized forwarded path prefixes into the request context used by the WAI adapter" $ do
+    it "ignores forwarded path prefixes by default in the request context used by the WAI adapter" $ do
       let forwardedPrefixRequest =
             (waiRequest ["second"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", "app, /ignored")]
@@ -6256,8 +6287,22 @@ spec = do
               { Wai.requestHeaders = [("X-Forwarded-Prefix", ", ")]
               }
       HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
-        `shouldBe` defaultRequestContext {requestPathPrefix = "/app"}
+        `shouldBe` defaultRequestContext
       HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
+        `shouldBe` defaultRequestContext
+
+    it "derives normalized forwarded path prefixes when forwarded headers are trusted" $ do
+      let forwardedPrefixRequest =
+            (waiRequest ["second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "app, /ignored")]
+              }
+          emptyForwardedPrefixRequest =
+            (waiRequest ["second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", ", ")]
+              }
+      HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest defaultRequestContext
+        `shouldBe` defaultRequestContext {requestPathPrefix = "/app"}
+      HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
 
     it "stores the configured static assets used by the WAI adapter" $
@@ -6382,7 +6427,14 @@ spec = do
             (waiRequest ["app", "assets", "navigation.js"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", "/app")]
               }
-          prefixedApplication = buildApp navigationAppConfig
+          prefixedApplication =
+            buildApp
+              navigationAppConfig
+                { requestPolicy =
+                    (requestPolicy navigationAppConfig)
+                      { trustForwardedHeaders = True
+                      }
+                }
       pageResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedPageRequest
       Wai.responseStatus pageResponse `shouldBe` Http.status200
       pageBody <- readResponseBody pageResponse
