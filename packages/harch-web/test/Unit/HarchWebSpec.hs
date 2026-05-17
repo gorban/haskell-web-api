@@ -1461,7 +1461,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "/app"
               }
           redirectingApplication =
-            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))
               { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
@@ -2006,6 +2006,111 @@ spec = do
         `shouldReturn` [ "[client.address=\"198.51.100.7\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"forwarded\" http.request.header.forwarded=\"for=\\\"198.51.100.7\\\";proto=\\\"https\\\"\" user_agent.original=\"curl/8.7.1\" http.request.header.referer=\"https://client.example.com/path\" http.request.header.x_requested_with=\"tiny-navigation\" harch.request.source=\"enhanced-navigation\" url.scheme=\"https\"] Enriched source log"
                        ]
 
+    it "parses unquoted Forwarded values and ignores empty trusted forwarded elements" $ do
+      requestObservabilityReference <- newIORef []
+      let directRemoteHost =
+            Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (127, 0, 0, 1))
+          emptyForwardedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [("Forwarded", " , ")]
+          emptyForwardedForRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [("Forwarded", "for=\"\";proto=http")]
+          unquotedForwardedRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              directRemoteHost
+              [("Forwarded", "for=203.0.113.8;proto=http")]
+          peerAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "network.peer.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          emptyForwardedClientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
+              }
+          emptyForwardedAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.forwarded",
+                Observability.attributeValue = Observability.TextAttribute ","
+              }
+          emptyForwardedForAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.forwarded",
+                Observability.attributeValue = Observability.TextAttribute "for=\"\";proto=http"
+              }
+          unquotedForwardedClientAddressAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "client.address",
+                Observability.attributeValue = Observability.TextAttribute "203.0.113.8"
+              }
+          unquotedForwardedSourceAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "harch.client.address.source",
+                Observability.attributeValue = Observability.TextAttribute "forwarded"
+              }
+          unquotedForwardedAttribute =
+            Observability.ObservabilityAttribute
+              { Observability.attributeName = "http.request.header.forwarded",
+                Observability.attributeValue = Observability.TextAttribute "for=203.0.113.8;proto=http"
+              }
+          diagnosticApplication =
+            trustedForwardedApplication
+              { reportRequestObservability = \requestObservabilityValue ->
+                  modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
+              }
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) emptyForwardedRequest
+        `shouldReturn` 202
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) emptyForwardedForRequest
+        `shouldReturn` 202
+      Http.statusCode . Wai.responseStatus
+        <$> performWaiRequest (toWaiApplication diagnosticApplication) unquotedForwardedRequest
+        `shouldReturn` 202
+      readIORef requestObservabilityReference
+        `shouldReturn` [ Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [ emptyForwardedClientAddressAttribute,
+                             peerAddressAttribute,
+                             emptyForwardedAttribute
+                           ],
+                         Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [ emptyForwardedClientAddressAttribute,
+                             peerAddressAttribute,
+                             emptyForwardedForAttribute
+                           ],
+                         Observability.buildRequestObservability
+                           "GET"
+                           "http"
+                           "/data"
+                           "/data"
+                           202
+                           Observability.BodyResponseKind
+                           [ unquotedForwardedClientAddressAttribute,
+                             peerAddressAttribute,
+                             unquotedForwardedSourceAttribute,
+                             unquotedForwardedAttribute
+                           ]
+                       ]
+
     it "classifies scripted, API, manual, and browser-like request sources" $ do
       requestObservabilityReference <- newIORef []
       let directRemoteHost =
@@ -2188,7 +2293,9 @@ spec = do
               }
           diagnosticApplication =
             sampleApplication
-              { renderResponse =
+              { applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
+                requestContextFromRequest = sampleRequestContextFromRequest True,
+                renderResponse =
                   \request ->
                     pure $
                       case (requestRoute request, requestLanguage (requestContext request), requestPathPrefix (requestContext request)) of
@@ -2504,7 +2611,7 @@ spec = do
                 directRemoteHost
                 [("X-Forwarded-Prefix", "/app")]
             staticApplication =
-              (sampleApplicationWithStaticAssets assetConfig)
+              (sampleApplicationWithConfig assetConfig (defaultRequestPolicy {trustForwardedHeaders = True}))
                 { reportRequestObservability = \requestObservabilityValue ->
                     modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                 }
@@ -4695,6 +4802,11 @@ spec = do
                           { Observability.attributeName = "network.peer.address",
                             Observability.attributeValue = Observability.TextAttribute "127.0.0.1"
                           }
+                      forwardedPrefixAttribute =
+                        Observability.ObservabilityAttribute
+                          { Observability.attributeName = "http.request.header.x_forwarded_prefix",
+                            Observability.attributeValue = Observability.TextAttribute "/app"
+                          }
                       acmeTlsConfig =
                         serverConfigWithListeners
                           [ httpRuntimeListener "127.0.0.1" challengePort,
@@ -4730,24 +4842,46 @@ spec = do
                               _ ->
                                 expectationFailure "expected runServer to serve certbot webroot challenge files on the HTTP listener"
                                   >> pure ByteString.empty
-                      waitForRequestObservability remainingAttempts = do
+                      waitForPrefixedChallengeResponse remainingAttempts = do
+                        completionResult <- readIORef completionReference
+                        case completionResult of
+                          Just (Left exception) ->
+                            expectationFailure ("expected runServer to remain running, but it failed early: " <> displayException exception)
+                              >> pure ByteString.empty
+                          Just (Right ()) ->
+                            expectationFailure "expected runServer to remain running, but it exited early"
+                              >> pure ByteString.empty
+                          Nothing -> do
+                            responseResult <-
+                              readLoopbackHttpResponseBytesWithHostAndHeadersResult
+                                challengePort
+                                "loopback.example"
+                                "/app/.well-known/acme-challenge/loopback-token"
+                                [("X-Forwarded-Prefix", "/app")]
+                            case responseResult of
+                              Right responseBytes
+                                | "loopback-token-response" `ByteString.isInfixOf` responseBytes ->
+                                    pure responseBytes
+                              Right _
+                                | remainingAttempts > 0 -> do
+                                    threadDelay 10000
+                                    waitForPrefixedChallengeResponse (remainingAttempts - 1)
+                              Left _
+                                | remainingAttempts > 0 -> do
+                                    threadDelay 10000
+                                    waitForPrefixedChallengeResponse (remainingAttempts - 1)
+                              _ ->
+                                expectationFailure "expected runServer to serve prefixed certbot webroot challenge files on the HTTP listener"
+                                  >> pure ByteString.empty
+                      waitForRequestObservability expectedObservability failureMessage remainingAttempts = do
                         observedValues <- readIORef requestObservabilityReference
-                        let expectedObservability =
-                              Observability.buildRequestObservability
-                                "GET"
-                                "http"
-                                "/.well-known/acme-challenge/loopback-token"
-                                "/.well-known/acme-challenge/*"
-                                200
-                                Observability.BodyResponseKind
-                                [clientAddressAttribute, peerAddressAttribute]
                         case find ((== expectedObservability) . stripVolatileRequestTiming) observedValues of
                           Just requestObservabilityValue ->
                             pure requestObservabilityValue
                           Nothing ->
                             if remainingAttempts > 0
-                              then threadDelay 10000 >> waitForRequestObservability (remainingAttempts - 1)
-                              else expectationFailure "expected certbot webroot challenge response to report request observability" >> pure expectedObservability
+                              then threadDelay 10000 >> waitForRequestObservability expectedObservability failureMessage (remainingAttempts - 1)
+                              else expectationFailure failureMessage >> pure expectedObservability
                   serverThreadId <- forkIO $ do
                     result <-
                       try
@@ -4755,7 +4889,9 @@ spec = do
                             outputHandle
                             acmeTlsConfig
                             sampleApplication
-                              { reportRequestObservability = \requestObservabilityValue ->
+                              { applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
+                                requestContextFromRequest = sampleRequestContextFromRequest True,
+                                reportRequestObservability = \requestObservabilityValue ->
                                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                               }
                         ) ::
@@ -4763,17 +4899,42 @@ spec = do
                     writeIORef completionReference (Just result)
                   challengeResponseBytes <- waitForChallengeResponse (500 :: Int)
                   challengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
-                  challengeRequestObservability <- waitForRequestObservability (500 :: Int)
+                  prefixedChallengeResponseBytes <- waitForPrefixedChallengeResponse (500 :: Int)
+                  prefixedChallengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
+                  let expectedChallengeRequestObservability =
+                        Observability.buildRequestObservability
+                          "GET"
+                          "http"
+                          "/.well-known/acme-challenge/loopback-token"
+                          "/.well-known/acme-challenge/*"
+                          200
+                          Observability.BodyResponseKind
+                          [clientAddressAttribute, peerAddressAttribute]
+                      expectedPrefixedChallengeRequestObservability =
+                        Observability.buildRequestObservability
+                          "GET"
+                          "http"
+                          "/.well-known/acme-challenge/loopback-token"
+                          "/app/.well-known/acme-challenge/*"
+                          200
+                          Observability.BodyResponseKind
+                          [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
+                  challengeRequestObservability <-
+                    waitForRequestObservability
+                      expectedChallengeRequestObservability
+                      "expected certbot webroot challenge response to report request observability"
+                      (500 :: Int)
                   stripVolatileRequestTiming challengeRequestObservability
-                    `shouldBe` Observability.buildRequestObservability
-                      "GET"
-                      "http"
-                      "/.well-known/acme-challenge/loopback-token"
-                      "/.well-known/acme-challenge/*"
-                      200
-                      Observability.BodyResponseKind
-                      [clientAddressAttribute, peerAddressAttribute]
+                    `shouldBe` expectedChallengeRequestObservability
                   expectMeasuredRootRequestTiming challengeRequestObservability
+                  prefixedChallengeRequestObservability <-
+                    waitForRequestObservability
+                      expectedPrefixedChallengeRequestObservability
+                      "expected prefixed certbot webroot challenge response to report request observability"
+                      (500 :: Int)
+                  stripVolatileRequestTiming prefixedChallengeRequestObservability
+                    `shouldBe` expectedPrefixedChallengeRequestObservability
+                  expectMeasuredRootRequestTiming prefixedChallengeRequestObservability
                   firstResponseText <- waitForHttpsServerResponse completionReference httpsPort "/known"
                   Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True
                   killThread serverThreadId
@@ -5312,6 +5473,22 @@ readLoopbackHttpResponseBytesWithHostResult port hostHeader path =
         Right
         (responseResult :: Either IOError ByteString.ByteString)
 
+readLoopbackHttpResponseBytesWithHostAndHeadersResult :: Int -> Text -> Text -> [(Text, Text)] -> IO (Either String ByteString.ByteString)
+readLoopbackHttpResponseBytesWithHostAndHeadersResult port hostHeader path headers =
+  Socket.withSocketsDo $ do
+    clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    responseResult <- try $ do
+      Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+      SocketByteString.sendAll clientSocket (buildHttpRequestWithHostAndHeaders hostHeader path headers)
+      responseBytes <- readAllSocketChunks clientSocket
+      pure (extractHttpBody responseBytes)
+    Socket.close clientSocket
+    pure $
+      either
+        (Left . displayException)
+        Right
+        (responseResult :: Either IOError ByteString.ByteString)
+
 readLoopbackHttpsResponseResult :: Int -> Text -> IO (Either String Text)
 readLoopbackHttpsResponseResult port path = do
   let url = "https://127.0.0.1:" <> show port <> Text.unpack path
@@ -5636,11 +5813,18 @@ expectLoopbackPortReusable port = do
 
 buildHttpRequestWithHost :: Text -> Text -> ByteString.ByteString
 buildHttpRequestWithHost hostHeader path =
+  buildHttpRequestWithHostAndHeaders hostHeader path []
+
+buildHttpRequestWithHostAndHeaders :: Text -> Text -> [(Text, Text)] -> ByteString.ByteString
+buildHttpRequestWithHostAndHeaders hostHeader path headers =
   ByteStringChar8.pack $
     "GET "
       <> Text.unpack path
       <> " HTTP/1.1\r\nHost: "
       <> Text.unpack hostHeader
+      <> concatMap
+        (\(headerName, headerValue) -> "\r\n" <> Text.unpack headerName <> ": " <> Text.unpack headerValue)
+        headers
       <> "\r\nConnection: close\r\n\r\n"
 
 manualTlsCertificatePem :: String
