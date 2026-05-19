@@ -42,7 +42,6 @@ custom-setup
   setup-depends:
     base ^>=4.22.0.0,
     Cabal,
-    base ^>=4.22.0.0,
     directory,
     filepath,
 
@@ -77,7 +76,6 @@ library
   build-depends:
     base ^>=4.22.0.0,
     Cabal,
-    base ^>=4.22.0.0,
     directory,
     filepath,
     mtl,

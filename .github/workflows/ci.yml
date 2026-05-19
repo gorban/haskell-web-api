@@ -68,14 +68,41 @@ jobs:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
-      - name: Install dos2unix
+      - name: Setup Node
+        if: steps.setup_haskell.outcome == 'success'
+        id: setup_node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install system tools
+        if: steps.setup_node.outcome == 'success'
+        id: dos2unix
         run: |
           sudo apt-get update
-          sudo apt-get install -y dos2unix
+          sudo apt-get install -y dos2unix postgresql-client
 
-      - name: Cache Cabal
-        id: cache
-        uses: actions/cache@v4
+      - name: Wait for prerequisite services
+        if: steps.dos2unix.outcome == 'success'
+        id: prerequisite_services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          until pg_isready --host="$DATABASE_HOST" --port="$DATABASE_PORT" --username="$WEB_API_MIGRATION_DATABASE_USER" --dbname="$WEB_API_MIGRATION_DATABASE_NAME"; do
+            sleep 1
+          done
+
+          until curl --fail --silent --show-error http://127.0.0.1:16686/ >/dev/null; do
+            sleep 1
+          done
+
+          node --version
+
+      - name: Restore Cabal cache
+        if: steps.dos2unix.outcome == 'success'
+        id: cabal_cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cabal/bin
@@ -83,19 +110,17 @@ jobs:
           key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
 
       - name: Install test tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cabal_cache.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_test_tools
         run: |
           cabal update
+          cabal install --ignore-project hspec-discover
 
-          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
-          # Error: [Cabal-6661]
-          # filepath wildcard 'package.yaml' does not match any files.
-          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
-          cd hspec-discover-2.11.16
-          echo "packages: ." > cabal.project
-          cabal v2-build
-          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
-          cd ..
+      - name: Seed PostgreSQL test database
+        if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
+        id: seed_postgres
+        run: |
+          cabal run haskell-web-api-db -- migrate-and-seed
 
       - name: Run tests with coverage
         if: steps.seed_postgres.outcome == 'success'
@@ -167,21 +192,10 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Install formatting tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_formatting_tools
         run: |
-          set -euo pipefail
-
-          LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
-
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-
-          curl -fsSL https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz | tar -xzf - -C "$temp_dir"
-          install -Dm755 "$temp_dir/hlint-3.10/hlint" "$HOME/.cabal/bin/hlint"
-
-          curl -fsSL https://github.com/tweag/ormolu/archive/2164be7c68086e647c2c001a12a2f6f51c214ff0.tar.gz | tar -xzf - -C "$temp_dir"
-          cd "$temp_dir/ormolu-2164be7c68086e647c2c001a12a2f6f51c214ff0"
-          LANG=C.UTF-8 cabal install exe:ormolu --install-method=copy --overwrite-policy=always
+          .github/scripts/install-formatting-tools.sh
 
       - name: Formatting checks
         if: steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped'
