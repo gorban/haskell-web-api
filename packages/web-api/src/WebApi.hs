@@ -1,6 +1,9 @@
-module WebApi (run) where
+module WebApi
+  ( buildApp,
+    run,
+    runDatabaseSetupArgs,
+  )
+where
 
-import System.IO (Handle, hPutStrLn)
-
-run :: Handle -> IO ()
-run handle = hPutStrLn handle "Web API Module"
+import WebApi.App (buildApp, run)
+import WebApi.DatabaseSetup (runDatabaseSetupArgs)

@@ -2,7 +2,10 @@
 
 1. Source for third party package pulled from:
    <https://hackage.haskell.org/package/hspec-expectations-match-0.2.0.0/hspec-expectations-match-0.2.0.0.tar.gz>
-2. It had a maximum Template Haskell below 2.1.3, but we're on 2.24.0, so it had to be upgraded to increase the maximum.
+2. It had a maximum Template Haskell below 2.1.3, but we're on 2.24.0, so it had to be upgraded to
+   increase the maximum.
+3. Removed extra-source-files: package.yaml and stack.yaml since we're not using those files in this
+   repository.
 
 # 0.2.0.0 (November 17th, 2017)
 

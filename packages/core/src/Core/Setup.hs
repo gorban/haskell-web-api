@@ -10,6 +10,8 @@ where
 
 import Control.Monad (when)
 import Distribution.Simple (defaultMainWithHooks, preConf, simpleUserHooks)
+import Distribution.Simple.Setup (BuildFlags, CommonSetupFlags (..), TestFlags, buildCommonFlags, emptyBuildFlags, testCabalFilePath, testDistPref, testTargets, testVerbosity, testWorkingDir)
+import Distribution.Simple.UserHooks (buildHook, testHook)
 import System.Directory (copyFile, doesFileExist)
 
 -- | Main entry point for Custom Setup.hs files.
@@ -27,8 +29,25 @@ coreMain actions =
     simpleUserHooks
       { preConf = \args flags -> do
           sequence_ actions
-          preConf simpleUserHooks args flags
+          preConf simpleUserHooks args flags,
+        testHook = \args packageDescription localBuildInfo hooks flags -> do
+          buildHook simpleUserHooks packageDescription localBuildInfo hooks (buildFlagsFromTestFlags flags)
+          testHook simpleUserHooks args packageDescription localBuildInfo hooks flags
       }
+
+buildFlagsFromTestFlags :: TestFlags -> BuildFlags
+buildFlagsFromTestFlags flags =
+  emptyBuildFlags
+    { buildCommonFlags =
+        CommonSetupFlags
+          { setupVerbosity = testVerbosity flags,
+            setupWorkingDir = testWorkingDir flags,
+            setupDistPref = testDistPref flags,
+            setupCabalFilePath = testCabalFilePath flags,
+            setupTargets = testTargets flags,
+            setupKeepTempFiles = mempty
+          }
+    }
 
 -- | Copy LICENSE from the repository root if it doesn't exist locally.
 copyLicenseFromRoot :: IO ()

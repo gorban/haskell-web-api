@@ -18,7 +18,7 @@ name: haskell-web-api
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version: 0.1.0.0
+version: 0.1.1.0
 -- A short (one-line) description of the package.
 synopsis: haskell web api
 -- A longer description of the package.
@@ -42,7 +42,12 @@ extra-doc-files: CHANGELOG.md
 custom-setup
   setup-depends:
     base ^>=4.22.0.0,
+    Cabal,
+    Cabal-syntax,
     core,
+    directory,
+    filepath,
+    process,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -57,13 +62,37 @@ library
   -- Common library settings.
   exposed: True
   -- Modules included in this library.
-  exposed-modules: WebApi
+  exposed-modules:
+    WebApi
+    WebApi.App
+    WebApi.App.Assets
+    WebApi.App.Enhancements
+    WebApi.App.Shell
+    WebApi.Config
+    WebApi.Database
+    WebApi.DatabaseSetup
+    WebApi.Page
+    WebApi.PageShell
+    WebApi.Postgres
+    WebApi.Response
+    WebApi.Route
+    WebApi.RouteData
+    WebApi.SetupConfig
+    WebApi.SetupPlan
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
+    bytestring,
     core,
+    directory,
+    harch-web,
+    postgresql-libpq,
+    process,
+    text,
+    wai,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -72,6 +101,11 @@ executable haskell-web-api
   import: common
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
+  ghc-options:
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+
   -- Modules included in this executable, other than Main.
   -- other-modules:
   -- LANGUAGE extensions used by modules in this package.
@@ -82,6 +116,15 @@ executable haskell-web-api
     haskell-web-api,
 
   -- Directories containing source files.
+  hs-source-dirs: app
+
+executable haskell-web-api-db
+  import: common
+  main-is: DatabaseSetupMain.hs
+  build-depends:
+    base ^>=4.22.0.0,
+    haskell-web-api,
+
   hs-source-dirs: app
 
 test-suite haskell-web-api-tests
@@ -107,6 +150,7 @@ test-suite haskell-web-api-tests
     -- Discovers hspec *Spec.hs tests
     -- Our spec-preprocessor to fill in {-# SPEC #-} headers
     haskell-web-api:haskell-web-api,
+    haskell-web-api:haskell-web-api-db,
     hspec-discover:hspec-discover,
     test-core:spec-preprocessor,
 
@@ -119,10 +163,19 @@ test-suite haskell-web-api-tests
     -- For testing framework:
     -- For running the executable in tests:
     base ^>=4.22.0.0,
+    bytestring,
     core,
+    directory,
+    filepath,
+    harch-web,
     haskell-web-api,
     hspec,
+    http-types,
+    network,
+    postgresql-libpq,
     process,
+    template-haskell,
     temporary,
     test-core,
     text,
+    wai,

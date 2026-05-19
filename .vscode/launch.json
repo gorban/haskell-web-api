@@ -7,9 +7,9 @@
         {
             "type": "haskell-debugger",
             "request": "launch",
-            "name": "debug test-lib",
+            "name": "debug current file",
             "projectRoot": "${workspaceFolder}",
-            "entryFile": "packages/test-lib/test/Main.hs",
+            "entryFile": "${file}",
             "entryPoint": "main",
             "entryArgs": [],
             "extraGhcArgs": []
@@ -17,12 +17,59 @@
         {
             "type": "haskell-debugger",
             "request": "launch",
-            "name": "debug web-api",
+            "name": "debug test suite",
             "projectRoot": "${workspaceFolder}",
-            "entryFile": "packages/web-api/test/Main.hs",
+            "entryFile": "packages/${input:haskellTestPackage}/test/Main.hs",
             "entryPoint": "main",
             "entryArgs": [],
             "extraGhcArgs": []
+        },
+        {
+            "type": "haskell-debugger",
+            "request": "launch",
+            "name": "debug filtered test suite",
+            "projectRoot": "${workspaceFolder}",
+            "entryFile": "packages/${input:haskellTestPackage}/test/Main.hs",
+            "entryPoint": "main",
+            "entryArgs": [
+                "--match",
+                "${input:haskellSpecFilter}"
+            ],
+            "extraGhcArgs": []
+        },
+        {
+            "type": "haskell-debugger",
+            "request": "launch",
+            "name": "debug current folder in test suite",
+            "projectRoot": "${workspaceFolder}",
+            "entryFile": "packages/${input:haskellTestPackage}/test/Main.hs",
+            "entryPoint": "main",
+            "entryArgs": [
+                "--match",
+                "${fileDirnameBasename}"
+            ],
+            "extraGhcArgs": []
+        }
+    ],
+    "inputs": [
+        {
+            "id": "haskellTestPackage",
+            "type": "pickString",
+            "description": "Select the test package to debug",
+            "options": [
+                "core",
+                "harch-web",
+                "hspec-expectations-match",
+                "test-core",
+                "web-api"
+            ],
+            "default": "web-api"
+        },
+        {
+            "id": "haskellSpecFilter",
+            "type": "promptString",
+            "description": "Hspec --match filter, for example Unit, Integration, or Unit.TestCore.CustomAssertions",
+            "default": "Unit"
         }
     ]
 }

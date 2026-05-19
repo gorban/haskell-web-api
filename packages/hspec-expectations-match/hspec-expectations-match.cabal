@@ -33,9 +33,7 @@ license-file:   LICENSE
 build-type:     Simple
 extra-source-files:
     CHANGELOG.md
-    package.yaml
     README.md
-    stack.yaml
 
 source-repository head
   type: git

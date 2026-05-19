@@ -21,25 +21,88 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    env:
+      DATABASE_HOST: 127.0.0.1
+      DATABASE_PORT: 5432
+      DATABASE_NAME: web_api_dev
+      DATABASE_USER: web_api_runtime
+      DATABASE_PASSWORD: web_api
+      WEB_API_MIGRATION_DATABASE_HOST: 127.0.0.1
+      WEB_API_MIGRATION_DATABASE_PORT: 5432
+      WEB_API_MIGRATION_DATABASE_NAME: web_api_dev
+      WEB_API_MIGRATION_DATABASE_USER: web_api_owner
+      WEB_API_MIGRATION_DATABASE_PASSWORD: web_api_owner
+      OTLP_TRACING_ENDPOINT: http://127.0.0.1:4318/v1/traces
+      SETUP_AUTOSTART_DATABASE: false
+      SETUP_AUTOSTART_JAEGER: false
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: web_api_owner
+          POSTGRES_PASSWORD: web_api_owner
+          POSTGRES_DB: web_api_dev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username=web_api_owner --dbname=web_api_dev"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      jaeger:
+        image: jaegertracing/all-in-one
+        ports:
+          - 4318:4318
+          - 16686:16686
 
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@v4
 
       - name: Setup Haskell
+        if: steps.checkout.outcome == 'success'
+        id: setup_haskell
         uses: haskell-actions/setup@v2
         with:
           ghc-version: '9.14.1'
           cabal-version: '3.16.1.0'
 
-      - name: Install dos2unix
+      - name: Setup Node
+        if: steps.setup_haskell.outcome == 'success'
+        id: setup_node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install system tools
+        if: steps.setup_node.outcome == 'success'
+        id: dos2unix
         run: |
           sudo apt-get update
-          sudo apt-get install -y dos2unix
+          sudo apt-get install -y dos2unix postgresql-client
 
-      - name: Cache Cabal
-        id: cache
-        uses: actions/cache@v4
+      - name: Wait for prerequisite services
+        if: steps.dos2unix.outcome == 'success'
+        id: prerequisite_services
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          until pg_isready --host="$DATABASE_HOST" --port="$DATABASE_PORT" --username="$WEB_API_MIGRATION_DATABASE_USER" --dbname="$WEB_API_MIGRATION_DATABASE_NAME"; do
+            sleep 1
+          done
+
+          until curl --fail --silent --show-error http://127.0.0.1:16686/ >/dev/null; do
+            sleep 1
+          done
+
+          node --version
+
+      - name: Restore Cabal cache
+        if: steps.dos2unix.outcome == 'success'
+        id: cabal_cache
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/.cabal/bin
@@ -47,21 +110,20 @@ jobs:
           key: ${{ runner.os }}-ghc-9.14.1-cabal-${{ hashFiles('**/*.cabal', 'cabal.project') }}
 
       - name: Install test tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cabal_cache.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_test_tools
         run: |
           cabal update
+          cabal install --ignore-project hspec-discover
 
-          # Cannot cabal install hspec-discover on GitHub actions runner, so we download and install it manually. Error:
-          # Error: [Cabal-6661]
-          # filepath wildcard 'package.yaml' does not match any files.
-          curl -L https://hackage.haskell.org/package/hspec-discover-2.11.16/hspec-discover-2.11.16.tar.gz | tar zx
-          cd hspec-discover-2.11.16
-          echo "packages: ." > cabal.project
-          cabal v2-build
-          cabal v2-install --installdir="$HOME/.cabal/bin" --overwrite-policy=always
-          cd ..
+      - name: Seed PostgreSQL test database
+        if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
+        id: seed_postgres
+        run: |
+          cabal run haskell-web-api-db -- migrate-and-seed
 
       - name: Run tests with coverage
+        if: steps.seed_postgres.outcome == 'success'
         id: coverage
         shell: bash
         run: |
@@ -79,7 +141,8 @@ jobs:
           # Continue even if coverage failed - we want to publish the report
 
       - name: Prepare coverage report for GitHub Pages
-        if: github.ref == 'refs/heads/main'
+        id: prepare_coverage_report
+        if: github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
         run: |
           set -euo pipefail
 
@@ -112,83 +175,44 @@ jobs:
           sed -i 's@if (!/^file:/i\.test(data\.href)) return;@if (new URL(data.href, window.location.href).origin !== window.location.origin) return;@g' _site/index.html
 
       - name: Setup Pages
-        if: github.ref == 'refs/heads/main'
+        id: setup_pages
+        if: github.ref == 'refs/heads/main' && steps.prepare_coverage_report.outcome == 'success'
         uses: actions/configure-pages@v5
 
       - name: Upload coverage artifact
-        if: github.ref == 'refs/heads/main'
+        id: upload_coverage_artifact
+        if: github.ref == 'refs/heads/main' && steps.setup_pages.outcome == 'success'
         uses: actions/upload-pages-artifact@v3
         with:
           path: _site
 
       - name: Deploy to GitHub Pages
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && steps.upload_coverage_artifact.outcome == 'success'
         id: deployment
         uses: actions/deploy-pages@v4
 
       - name: Install formatting tools
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        id: install_formatting_tools
         run: |
-          set -euo pipefail
-
-          LANG=C.UTF-8 cabal install cabal-gild --install-method=copy --overwrite-policy=always --ignore-project
-
-          temp_dir="$(mktemp -d)"
-          trap 'rm -rf "$temp_dir"' EXIT
-
-          curl -fsSL https://github.com/ndmitchell/hlint/releases/download/v3.10/hlint-3.10-x86_64-linux.tar.gz | tar -xzf - -C "$temp_dir"
-          install -Dm755 "$temp_dir/hlint-3.10/hlint" "$HOME/.cabal/bin/hlint"
-
-          curl -fsSL https://github.com/tweag/ormolu/archive/2164be7c68086e647c2c001a12a2f6f51c214ff0.tar.gz | tar -xzf - -C "$temp_dir"
-          cd "$temp_dir/ormolu-2164be7c68086e647c2c001a12a2f6f51c214ff0"
-          LANG=C.UTF-8 cabal install exe:ormolu --install-method=copy --overwrite-policy=always
+          .github/scripts/install-formatting-tools.sh
 
       - name: Formatting checks
+        if: steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped'
+        id: formatting_checks
         run: |
-          set -euo pipefail
-          format_ok=0
-          find packages -name '*.cabal' -type f | \
-            grep -v '^packages/hspec-expectations-match' | \
-            xargs -I {} bash -c '
-              output="$(cabal-gild -i "{}" -m check 2>&1)"
-              if [ $? -ne 0 ]; then
-                printf "%s: %s\\n\\n" "{}" "$output"
-                exit 1
-              fi' || format_ok=1
-          find packages -name '*.hs' -type f | \
-            grep -v '^packages/hspec-expectations-match' | \
-            xargs -I {} bash -c '
-              dos2unix -q "{}"
-              output="$(hlint "{}" 2>&1)"
-              issues_found=false
-              if [ $? -ne 0 ]; then
-                printf "%s\\n" "$output"
-                issues_found=true
-                exit 1
-              fi
-              output="$(ormolu -m check "{}" 2>&1)"
-              if [ $? -ne 0 ]; then
-                printf "%s\\n" "$output"
-                issues_found=true
-                exit 1
-              fi
-              if $issues_found; then
-                printf "\\n"
-                exit 1
-              fi' || format_ok=1
-          if [ "$format_ok" -ne 0 ]; then
-            echo "Found formatting issues in packages/ files"
-            exit 1
-          fi
-          echo "No formatting issues in packages/ files"
+          .github/scripts/formatting-checks.sh
 
-      - name: Run tests (skip Unit)
+      - name: Run integration and E2E tests
+        if: steps.coverage.outcome == 'success'
+        id: run_tests_skip_unit
         run: |
           cabal build all -O2 --ghc-options=-Werror
           cabal test all -O2 --test-options="--skip Unit"
 
       - name: Check coverage result
-        if: always()
+        if: steps.coverage.outcome == 'success'
+        id: check_coverage_result
         shell: bash
         run: |
           exit_code="${{ steps.coverage.outputs.exit_code }}"
@@ -196,3 +220,25 @@ jobs:
             echo "::error::Coverage script failed with exit code $exit_code"
             exit "$exit_code"
           fi
+
+      - name: Save Cabal cache
+        if: |
+          always() &&
+          steps.cabal_cache.outputs.cache-hit != 'true' &&
+          (
+            success() ||
+            steps.coverage.outcome == 'failure' ||
+            steps.prepare_coverage_report.outcome == 'failure' ||
+            steps.setup_pages.outcome == 'failure' ||
+            steps.upload_coverage_artifact.outcome == 'failure' ||
+            steps.deployment.outcome == 'failure' ||
+            steps.formatting_checks.outcome == 'failure' ||
+            steps.run_tests_skip_unit.outcome == 'failure' ||
+            steps.check_coverage_result.outcome == 'failure'
+          )
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ~/.cabal/bin
+            ~/.cabal/store
+          key: ${{ steps.cabal_cache.outputs.cache-primary-key }}

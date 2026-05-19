@@ -14,12 +14,12 @@ name: core
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version: 0.1.0.0
+version: 0.1.1.0
 -- A short (one-line) description of the package.
 synopsis: haskell core (utilities shared across application and tests)
 -- A longer description of the package.
 description:
-  Shared utility functions and types used by test-lib,
+  Shared utility functions and types used by test-core,
   haskell-web-api, and other packages in this repository.
 
 -- URL for the project homepage or repository.
@@ -40,8 +40,8 @@ extra-doc-files: CHANGELOG.md
 
 custom-setup
   setup-depends:
-    Cabal,
     base ^>=4.22.0.0,
+    Cabal,
     directory,
     filepath,
 
@@ -57,9 +57,16 @@ library
   exposed: True
   -- Modules included in this library.
   exposed-modules:
+    Core.Config
     Core.Control.Error
     Core.Prelude
     Core.Setup
+    Core.Setup.DatabaseAutostart
+    Core.Setup.Prerequisite
+    Core.Setup.PrerequisiteConfig
+    Core.Setup.PrerequisitePlan
+    Core.Setup.PrerequisiteReport
+    Core.Setup.TracingAutostart
     Core.System.Path
     Core.System.Temp
 
@@ -67,12 +74,15 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    Cabal,
     base ^>=4.22.0.0,
+    Cabal,
     directory,
     filepath,
     mtl,
+    network,
+    process,
     temporary,
+    text,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -132,6 +142,11 @@ test-suite core-tests
     -- For testing framework:
     base ^>=4.22.0.0,
     core,
+    directory,
     hspec,
     hspec-expectations-match,
     mtl,
+    network,
+    process,
+    temporary,
+    text,

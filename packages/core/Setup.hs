@@ -1,5 +1,7 @@
 import Control.Monad (forM_, when)
 import Distribution.Simple (defaultMainWithHooks, preConf, simpleUserHooks)
+import Distribution.Simple.Setup (BuildFlags, CommonSetupFlags (..), TestFlags, buildCommonFlags, emptyBuildFlags, testCabalFilePath, testDistPref, testTargets, testVerbosity, testWorkingDir)
+import Distribution.Simple.UserHooks (buildHook, testHook)
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist)
 import System.FilePath (takeDirectory)
 
@@ -10,8 +12,25 @@ main =
       { preConf = \args flags -> do
           copyLicenseFromRoot
           copyTestCoreSources
-          preConf simpleUserHooks args flags
+          preConf simpleUserHooks args flags,
+        testHook = \args packageDescription localBuildInfo hooks flags -> do
+          buildHook simpleUserHooks packageDescription localBuildInfo hooks (buildFlagsFromTestFlags flags)
+          testHook simpleUserHooks args packageDescription localBuildInfo hooks flags
       }
+
+buildFlagsFromTestFlags :: TestFlags -> BuildFlags
+buildFlagsFromTestFlags flags =
+  emptyBuildFlags
+    { buildCommonFlags =
+        CommonSetupFlags
+          { setupVerbosity = testVerbosity flags,
+            setupWorkingDir = testWorkingDir flags,
+            setupDistPref = testDistPref flags,
+            setupCabalFilePath = testCabalFilePath flags,
+            setupTargets = testTargets flags,
+            setupKeepTempFiles = mempty
+          }
+    }
 
 copyLicenseFromRoot :: IO ()
 copyLicenseFromRoot = do

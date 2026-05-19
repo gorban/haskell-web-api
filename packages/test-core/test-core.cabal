@@ -18,15 +18,18 @@ name: test-core
 -- PVP summary:     +-+------- breaking API changes
 --                  | | +----- non-breaking API additions
 --                  | | | +--- code changes with no API change
-version: 0.1.0.0
+version: 0.1.1.0
 -- A short (one-line) description of the package.
 synopsis: haskell test-core (test utilities)
 -- A longer description of the package.
 description:
   haskell test-core provides utilities for writing tests, including:
+  browser harness helpers,
   spec-preprocessor,
   custom assertions,
+  TestCore.Browser,
   TestCore.Prelude,
+  TestCore.E2EPrelude,
   etc.
 
 -- URL for the project homepage or repository.
@@ -64,7 +67,9 @@ library
   exposed: True
   -- Modules included in this library.
   exposed-modules:
+    TestCore.Browser
     TestCore.CustomAssertions
+    TestCore.E2EPrelude
     TestCore.Prelude
     TestCore.SpecPreprocessor
 
@@ -79,6 +84,8 @@ library
     hspec,
     hspec-expectations-match,
     mtl,
+    process,
+    text,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -142,13 +149,14 @@ test-suite test-core-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
-    HUnit,
     base ^>=4.22.0.0,
     core,
     directory,
     filepath,
     hspec,
     hspec-expectations-match,
+    HUnit,
     mtl,
     process,
+    temporary,
     test-core,

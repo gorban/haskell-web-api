@@ -1,12 +1,12 @@
 # syntax=docker/dockerfile:1
 # Multi-stage Dockerfile for Haskell web-api
-# Build with: docker build -t haskell-web-api .
+# Build a runtime image without running tests with: docker build -t haskell-web-api .
 #
 # To extract coverage reports from the build stage:
 #   docker build --target coverage-artifacts --output type=local,dest=./coverage-out .
 #
-# To build just the minimal runtime image:
-#   docker build -t haskell-web-api .
+# To build a runtime image after running coverage/tests:
+#   docker build --target runtime-with-tests -t haskell-web-api .
 
 # =============================================================================
 # Stage 1: Build environment with GHC 9.14.1 and Cabal 3.16.1.0
@@ -28,9 +28,13 @@ apt-get install -y --no-install-recommends \
     libc6-dev \
     libffi-dev \
     libgmp-dev \
+    libpq-dev \
     libnuma-dev \
     libncurses-dev \
     make \
+    nodejs \
+    pkg-config \
+    postgresql-client \
     xz-utils \
     zlib1g-dev \
     ca-certificates
@@ -59,6 +63,7 @@ WORKDIR /app
 # Copy cabal files first for better layer caching
 COPY cabal.project ./
 COPY packages/core/core.cabal packages/core/
+COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
 COPY packages/test-core/test-core.cabal packages/test-core/
 COPY packages/web-api/web-api.cabal packages/web-api/
@@ -120,18 +125,32 @@ FROM scratch AS coverage-artifacts
 COPY --from=coverage-prep /app/_coverage/ /
 
 # =============================================================================
-# Stage 5: Minimal runtime image (Alpine-based for security)
+# Stage 5: Release build without running coverage/tests
 # =============================================================================
-FROM alpine:3.20 AS runtime
+FROM builder AS release-build
 
-# Install runtime dependencies and create non-root user
+RUN <<EOF
+cabal build all -O2
+cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
+EOF
+
+# =============================================================================
+# Stage 6: Minimal runtime image after the coverage-tested build
+# =============================================================================
+FROM alpine:3.20 AS runtime-with-tests
+
+# Install runtime dependencies, including libpq for in-process PostgreSQL access
+# and certbot for the certbot ACME backend, then create the non-root runtime user.
 RUN <<EOF
 set -e
-apk add --no-cache \
+  apk add --no-cache \
     gmp \
     libffi \
+    libpq \
     gcompat \
-    ca-certificates
+    ca-certificates \
+    openssl \
+    certbot
 addgroup -g 1000 app
 adduser -D -u 1000 -G app app
 EOF
@@ -141,8 +160,58 @@ WORKDIR /app
 # Copy the compiled binary from build stage
 COPY --from=build-and-test --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
 
+# Copy the app's bundled public assets so runtime images keep the same asset layout
+# as the repository even before runtime config is expanded further.
+COPY --from=build-and-test --chown=app:app /app/packages/web-api/public /app/public
+
+# Grant only the runtime binary the capability to bind privileged ports such as 80/443,
+# then keep the container itself running as the non-root app user.
+RUN <<EOF
+set -e
+apk add --no-cache --virtual .bind-low-port-deps libcap
+setcap cap_net_bind_service+ep /app/haskell-web-api
+getcap /app/haskell-web-api
+apk del .bind-low-port-deps
+EOF
+
 # Switch to non-root user
 USER app
 
 # Default command
+ENTRYPOINT ["/app/haskell-web-api"]
+
+# =============================================================================
+# Stage 7: Minimal runtime image without running coverage/tests
+# =============================================================================
+FROM alpine:3.20 AS runtime
+
+RUN <<EOF
+set -e
+  apk add --no-cache \
+    gmp \
+    libffi \
+    libpq \
+    gcompat \
+    ca-certificates \
+    openssl \
+    certbot
+addgroup -g 1000 app
+adduser -D -u 1000 -G app app
+EOF
+
+WORKDIR /app
+
+COPY --from=release-build --chown=app:app /app/haskell-web-api-bin /app/haskell-web-api
+COPY --from=release-build --chown=app:app /app/packages/web-api/public /app/public
+
+RUN <<EOF
+set -e
+apk add --no-cache --virtual .bind-low-port-deps libcap
+setcap cap_net_bind_service+ep /app/haskell-web-api
+getcap /app/haskell-web-api
+apk del .bind-low-port-deps
+EOF
+
+USER app
+
 ENTRYPOINT ["/app/haskell-web-api"]

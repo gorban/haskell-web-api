@@ -1,5 +1,6 @@
 packages:
   packages/core/
+  packages/harch-web/
   packages/hspec-expectations-match/
   packages/test-core/
   packages/web-api/
