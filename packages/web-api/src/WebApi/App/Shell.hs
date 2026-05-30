@@ -2,6 +2,7 @@
 
 module WebApi.App.Shell
   ( buildAppPageShell,
+    buildAppPageShellConfig,
   )
 where
 
@@ -17,10 +18,10 @@ import WebApi.Route
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
 buildAppPageShell config page =
-  HarchWeb.buildPageShell routeCodec (appPageShellConfig config page) page
+  HarchWeb.buildPageShell routeCodec (addAppNavigationItems (buildAppPageShellConfig config page)) page
 
-appPageShellConfig :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
-appPageShellConfig config page =
+buildAppPageShellConfig :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+buildAppPageShellConfig config page =
   HarchWeb.PageShell
     { HarchWeb.shellBodyAttributes =
         [ HarchWeb.HtmlAttribute
@@ -34,16 +35,7 @@ appPageShellConfig config page =
               HarchWeb.attributeValue = "primary"
             }
         ],
-      HarchWeb.shellNavigationItems =
-        [ HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = "Home",
-              HarchWeb.navigationRoute = HomeRoute
-            },
-          HarchWeb.NavigationItem
-            { HarchWeb.navigationLabel = "Second",
-              HarchWeb.navigationRoute = SecondRoute
-            }
-        ],
+      HarchWeb.shellNavigationItems = [],
       HarchWeb.shellMainId = "app-main",
       HarchWeb.shellMainAttributes =
         [ HarchWeb.HtmlAttribute
@@ -52,4 +44,19 @@ appPageShellConfig config page =
             }
         ],
       HarchWeb.shellScriptSources = navigationScriptSources config (HarchWeb.pageContext page)
+    }
+
+addAppNavigationItems :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
+addAppNavigationItems shell =
+  shell
+    { HarchWeb.shellNavigationItems =
+        [ HarchWeb.NavigationItem
+            { HarchWeb.navigationLabel = "Home",
+              HarchWeb.navigationRoute = HomeRoute
+            },
+          HarchWeb.NavigationItem
+            { HarchWeb.navigationLabel = "Second",
+              HarchWeb.navigationRoute = SecondRoute
+            }
+        ]
     }

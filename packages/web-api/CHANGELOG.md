@@ -2,6 +2,8 @@
 
 ## 0.1.2.0
 
+* `web-api` now builds its `HarchWeb.Application` through the new `HarchWeb.Site` wrapper, keeping app-owned routes and shell details in the composition root while avoiding direct construction of the lower-level framework record.
+
 ## 0.1.1.0
 
 * `web-api` now serves as the composition root over the new `HarchWeb` facade instead of owning only a stdout placeholder.

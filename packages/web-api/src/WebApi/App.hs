@@ -17,9 +17,10 @@ import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
-import WebApi.App.Shell (buildAppPageShell)
+import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
@@ -53,24 +54,46 @@ buildAppWithDatabaseAndReporters ::
   HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
-    HarchWeb.application
-      HarchWeb.Application
-        { HarchWeb.appName = "web-api",
-          HarchWeb.defaultRequestContext = defaultRequestContext,
-          HarchWeb.requestContextFromRequest = requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
-          HarchWeb.applicationStaticAssets = staticAssets config,
-          HarchWeb.applicationRequestPolicy = requestPolicy config,
-          HarchWeb.routeCodec = routeCodec,
-          HarchWeb.renderResponse = selectResponseWithDatabase config databaseEffect,
-          HarchWeb.pageShell = buildAppPageShell config,
-          HarchWeb.reportRequestObservability = requestObservabilityReporter,
-          HarchWeb.reportConnectionObservability = connectionObservabilityReporter,
-          HarchWeb.reportApplicationLog = applicationLogReporter
-        }
+    Site.buildSiteApplication
+      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect))
+          { Site.siteRequestContextFromRequest =
+              requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
+            Site.siteStaticAssets = staticAssets config,
+            Site.siteRequestPolicy = requestPolicy config,
+            Site.siteReportRequestObservability = requestObservabilityReporter,
+            Site.siteReportConnectionObservability = connectionObservabilityReporter,
+            Site.siteReportApplicationLog = applicationLogReporter
+          }
+      )
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
   buildAppWithDatabase config defaultDatabaseEffect
+
+buildAppSiteRoutes :: AppConfig -> DatabaseEffect -> [Site.SiteRoute AppRoute AppRequestContext]
+buildAppSiteRoutes config databaseEffect =
+  let renderSelectedResponse = selectResponseWithDatabase config databaseEffect
+   in [ Site.SiteRoute
+          { Site.siteRouteValue = HomeRoute,
+            Site.siteRouteNavigationLabel = Just "Home",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = SecondRoute,
+            Site.siteRouteNavigationLabel = Just "Second",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = StatusApiRoute,
+            Site.siteRouteNavigationLabel = Nothing,
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = NotFoundRoute,
+            Site.siteRouteNavigationLabel = Nothing,
+            Site.siteRouteResponse = renderSelectedResponse
+          }
+      ]
 
 buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildRuntimeApp config =

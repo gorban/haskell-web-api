@@ -39,7 +39,7 @@ import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
-import WebApi.App.Shell (buildAppPageShell)
+import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
@@ -6265,6 +6265,15 @@ spec = do
       renderedPage <- renderPage defaultAppConfig secondRequest
       LegacyPageShell.buildAppPageShell defaultAppConfig renderedPage
         `shouldBe` buildAppPageShell defaultAppConfig renderedPage
+      navigationRenderedPage <- renderPage navigationAppConfig secondRequest
+      LegacyPageShell.buildAppPageShell navigationAppConfig navigationRenderedPage
+        `shouldBe` buildAppPageShell navigationAppConfig navigationRenderedPage
+
+    it "keeps the shell configuration seam aligned with the rendered shell entry point" $ do
+      renderedPage <- renderPage navigationAppConfig secondRequest
+      let shellConfig = buildAppPageShellConfig navigationAppConfig renderedPage
+      HarchWeb.shellNavigationItems shellConfig `shouldBe` []
+      HarchWeb.shellScriptSources shellConfig `shouldBe` ["/assets/navigation.js"]
 
     it "keeps not-found pages inside the shared shell" $
       renderedShell defaultAppConfig NotFoundRoute

@@ -2,6 +2,9 @@
 
 ## 0.1.2.0
 
+* Added a new `HarchWeb.Site` module with `Site`, `SiteRoute`, `simpleSite`, `pageSiteRoute`, and `buildSiteApplication` so small SSR apps can be described without directly constructing the full `Application` record.
+* Kept the wrapper compatible with existing route codecs, page shells, body responses, and not-found status behavior, and covered the new path with dedicated unit tests.
+
 ## 0.1.1.0
 
 * Initial stub facade package for the SSR framework boundary.
