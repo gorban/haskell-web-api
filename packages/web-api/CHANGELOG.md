@@ -1,5 +1,7 @@
 # Revision history for haskell-web-api
 
+## 0.1.2.0
+
 ## 0.1.1.0
 
 * `web-api` now serves as the composition root over the new `HarchWeb` facade instead of owning only a stdout placeholder.

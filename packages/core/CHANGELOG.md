@@ -1,5 +1,7 @@
 # Revision history for core
 
+## v0.1.2.0
+
 ## 0.1.1.0
 
 * Clarified package metadata to reference `test-core` instead of the retired `test-lib` name.

@@ -1,6 +1,8 @@
 # Changelog
 
-## v0.1.1.0
+## 0.1.2.0
+
+## 0.1.1.0
 
 1. Began extracting the future SSR-first web framework into the separate `harch-web` package so shared web architecture can evolve independently from the example app.
 2. Defined the first `HarchWeb` facade boundary around application description, route matching, page rendering, not-found handling, shared page shell attachment, and the final server startup seam.
@@ -10,10 +12,10 @@
 6. Cleaned related repository metadata while landing the new framework boundary, including `core` package terminology updates, `hspec-expectations-match` extra-source-file cleanup, and repository-wide changelog heading normalization without inline dates.
 7. Established the intended PR scope for `HarchWeb` as tracked in `TASKS.md`: pure SSR route/page/layout/config seams first, then a thin server adapter, then effect-backed data access and a tiny progressive-enhancement navigation runtime.
 
-## v0.1.0.1
+## 0.1.0.1
 
 1. Dropped Windows native support. Windows native was last fully supported in
-   [v0.1.0.0](https://github.com/gorban/haskell-web-api/tree/v0.1.0.0), but was later removed because, even
+   [0.1.0.0](https://github.com/gorban/haskell-web-api/tree/v0.1.0.0), but was later removed because, even
    after an immense effort to produce JavaScript output from Haskell (e.g. from GHCJS or the newer GHC with
    JavaScript backend), it just is not community-supported (see WIP PRs for unresolved issue
    [ghcjs#834](https://github.com/ghcjs/ghcjs/issues/830), for
@@ -24,7 +26,7 @@
 3. Split off this setup guide into its own file, and added a link to it from the main README.
 4. Upgraded GHC to 9.14.1 and Base to 4.22.0.0.
 
-## v0.1.0.0
+## 0.1.0.0
 
 1. Initial release.
 2. Completely lacks a real web API, but has a putStrLn in the main application executable as a placeholder.

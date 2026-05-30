@@ -1,5 +1,7 @@
 # Revision history for test-core
 
+## 0.1.2.0
+
 ## 0.1.1.0
 
 * Aligned changelog headings with the repository-wide version-first format used for the upcoming `0.1.1.0` work.

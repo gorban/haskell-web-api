@@ -71,6 +71,56 @@ edit first:
 To serve those bundled browser assets, point a static asset root at `packages/web-api/public` (or `public`
 when running from the package directory) and mount it at the URL prefix you want, such as `/assets`.
 
+## Getting Started
+
+If you want the cleanest "spin up your own site" story, start with the docs-first example ladder in
+[examples/README.md](examples/README.md) instead of jumping straight into the full `packages/web-api`
+app.
+
+- The desired usage model and the current-repo alignment analysis live in
+  [docs/design-guidance.md](docs/design-guidance.md).
+- The first example to copy is [examples/01-two-pages](examples/01-two-pages/README.md): a minimal
+  two-page SSR app with same-origin progressive enhancement, no database, no telemetry, and no HTTPS
+  yet.
+- The remaining example folders layer in isolated features such as PostgreSQL effects, telemetry,
+  testing, HTTPS modes, middleware/auth, custom API routes, i18n routing, and reverse-proxy support.
+
+The recommended first file shape is intentionally small:
+
+```text
+app/Main.hs
+src/App/Components/Layout.hs
+src/App/Pages/Home.hs
+src/App/Pages/Second.hs
+public/app.js
+public/app.css
+```
+
+The smallest starter snippet should feel roughly like this:
+
+```hs
+module Main where
+
+import App.Components.Layout (siteLayout)
+import App.Pages.Home (homePage)
+import App.Pages.Second (secondPage)
+
+main :: IO ()
+main =
+  runSite $
+    site
+      { appName = "my-site"
+      , pages = [homePage, secondPage]
+      , layout = siteLayout
+      , staticAssets = "public"
+      }
+```
+
+That is the target authoring model: a tiny composition root, two SSR pages, and a small browser
+layer that only enhances same-origin navigation. Today, the closest grounded equivalent remains the
+combined example app in `packages/web-api`, while the fuller starter walkthrough lives in
+[`examples/01-two-pages`](examples/01-two-pages/README.md).
+
 ### Build Status
 
 [![CI](https://github.com/gorban/haskell-web-api/actions/workflows/ci.yml/badge.svg)
