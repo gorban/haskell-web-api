@@ -1,0 +1,69 @@
+cabal-version: 3.14
+
+name: two-pages-example
+version: 0.1.0.0
+synopsis: Minimal two-page HarchWeb example
+description:
+  Buildable SSR-first example with two pages, a shared shell, and tiny
+  same-origin navigation enhancement.
+homepage: https://github.com/gorban/haskell-web-api
+license: BSD-2-Clause-Patent
+license-file: LICENSE
+author: David Bruck
+maintainer: 1393236+gorban@users.noreply.github.com
+copyright: (c) David Bruck
+category: Web
+build-type: Simple
+extra-doc-files:
+  README.md
+extra-source-files:
+  public/navigation.js
+
+common common
+  ghc-options: -Wall
+  default-language: GHC2024
+
+library
+  import: common
+  exposed-modules:
+    App.App
+    App.Components.Layout
+    App.Pages.Home
+    App.Pages.NotFound
+    App.Pages.Second
+    App.Routes
+  hs-source-dirs: src
+  build-depends:
+    base ^>=4.22.0.0,
+    harch-web,
+    text
+
+executable two-pages-example
+  import: common
+  main-is: Main.hs
+  hs-source-dirs: app
+  build-depends:
+    base ^>=4.22.0.0,
+    harch-web,
+    text,
+    two-pages-example
+
+test-suite two-pages-example-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options:
+    -Wno-missing-home-modules
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+  build-depends:
+    base ^>=4.22.0.0,
+    bytestring,
+    harch-web,
+    hspec,
+    http-types,
+    text,
+    two-pages-example,
+    wai

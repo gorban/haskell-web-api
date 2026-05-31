@@ -1,6 +1,6 @@
 # 01-two-pages
 
-**Status:** Iterative
+**Status:** Working
 
 Start here. This is the smallest example we want new users to copy first:
 
@@ -10,42 +10,36 @@ Start here. This is the smallest example we want new users to copy first:
 - a shared layout component,
 - no database, telemetry, HTTPS, or reverse proxy yet.
 
-Current repo alignment:
+This example now builds with the current framework seam:
 
-- `packages/web-api/src/WebApi/Page.hs` already models a two-page app.
-- `packages/web-api/public/navigation.js` already enhances same-origin navigation.
-- The desired file layout below is cleaner than the current example-app wiring, so treat it as the
-  target shape rather than today's exact API.
+- [two-pages-example.cabal](two-pages-example.cabal)
+- [app/Main.hs](app/Main.hs)
+- [src/App/App.hs](src/App/App.hs)
+- [src/App/Routes.hs](src/App/Routes.hs)
+- [src/App/Components/Layout.hs](src/App/Components/Layout.hs)
+- [src/App/Pages/Home.hs](src/App/Pages/Home.hs)
+- [src/App/Pages/Second.hs](src/App/Pages/Second.hs)
+- [public/navigation.js](public/navigation.js)
+- [test/Unit/AppSpec.hs](test/Unit/AppSpec.hs)
 
-Suggested files:
+Run it from the repository root with:
 
-- [app/Main.hs.md](app/Main.hs.md)
-- [src/App/Components/Layout.hs.md](src/App/Components/Layout.hs.md)
-- [src/App/Pages/Home.hs.md](src/App/Pages/Home.hs.md)
-- [src/App/Pages/Second.hs.md](src/App/Pages/Second.hs.md)
-- [public/app.js.md](public/app.js.md)
-
-## Starter shape
-
-The intended first composition root is deliberately tiny:
-
-```hs
-main :: IO ()
-main =
-  runSite $
-    site
-      { appName = "my-site"
-      , pages = [homePage, secondPage]
-      , layout = siteLayout
-      , staticAssets = "public"
-      }
+```bash
+cabal run two-pages-example
 ```
 
-The point is not the exact API surface yet. The point is the workflow:
+Then visit:
 
-- define pages as server-rendered routes,
+1. `http://127.0.0.1:8080/`
+2. `http://127.0.0.1:8080/second`
+
+The current composition root is still lower-level than the long-term `harch` / page-discovery goal,
+but it already shows the intended workflow:
+
+- define typed routes,
+- wire pages through `HarchWeb.Site`,
 - share a small layout component,
-- ship a tiny browser enhancement layer,
+- ship a tiny browser enhancement layer at `/assets/navigation.js`,
 - keep the app understandable before adding any effects or deployment concerns.
 
 ## Expected behavior

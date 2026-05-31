@@ -1,4 +1,5 @@
 packages:
+  examples/01-two-pages/
   packages/core/
   packages/harch-web/
   packages/hspec-expectations-match/

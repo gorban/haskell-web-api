@@ -20,7 +20,7 @@ The design target and alignment analysis live in [../docs/design-guidance.md](..
 
 | Example | Status | Purpose |
 | --- | --- | --- |
-| [01-two-pages](01-two-pages/README.md) | Iterative | The first thing a new user should copy: two SSR pages plus progressive enhancement. |
+| [01-two-pages](01-two-pages/README.md) | Working | The first thing a new user should copy: two SSR pages plus progressive enhancement. |
 | [02-postgres-effects](02-postgres-effects/README.md) | Current | Add a real PostgreSQL-backed effect and the migration environment needed for it. |
 | [03-custom-db-adapter](03-custom-db-adapter/README.md) | Iterative | Show the desired seam for swapping in another database technology. |
 | [04-logging-and-telemetry](04-logging-and-telemetry/README.md) | Current | Turn on logs/traces locally and show how to inspect them. |
