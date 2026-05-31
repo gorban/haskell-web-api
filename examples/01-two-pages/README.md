@@ -42,6 +42,52 @@ but it already shows the intended workflow:
 - ship a tiny browser enhancement layer at `/assets/navigation.js`,
 - keep the app understandable before adding any effects or deployment concerns.
 
+## Desired generated page surface
+
+The polished version should let the composition root opt into discovered pages with one generated
+export and keep explicit custom routes alongside it:
+
+```hs
+twoPageSite =
+  ( simpleSite
+      "two-pages-example"
+      ()
+      routeCodec
+      twoPageShell
+      (pagesTreeRoutes <> customRoutes)
+  )
+    { siteStaticAssets = twoPageStaticAssets,
+      siteRequestPolicy = twoPageRequestPolicy
+    }
+
+customRoutes =
+  [ pageSiteRoute NotFoundRoute Nothing notFoundPage
+  ]
+```
+
+The custom build tool should generate `pagesTreeRoutes` from `src/App/Pages/**/*.hs`, using the
+same `SiteRoute` shape the example already wires by hand today:
+
+```hs
+pagesTreeRoutes :: [SiteRoute TwoPageRoute ()]
+pagesTreeRoutes =
+  [ pageSiteRoute HomeRoute (Just "Home") homePage,
+    pageSiteRoute SecondRoute (Just "Second") secondPage
+  ]
+```
+
+For this example, the first hierarchy mapping is intentionally small:
+
+| Page module | Route constructor | Path | Navigation label |
+| --- | --- | --- | --- |
+| `App.Pages.Home` | `HomeRoute` | `/` | `Home` |
+| `App.Pages.Second` | `SecondRoute` | `/second` | `Second` |
+
+That keeps the first example focused on SSR, progressive enhancement, typed routes, shared layout,
+generated page routes, and custom-route composition. Database access, auth, i18n, telemetry,
+deployment concerns, and typed page-local asset generation are intentionally deferred to later
+examples.
+
 ## Expected behavior
 
 1. Loading `/` directly returns complete HTML rendered on the server.
