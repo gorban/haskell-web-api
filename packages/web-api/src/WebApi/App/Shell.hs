@@ -8,7 +8,6 @@ where
 
 import Data.Text (Text)
 import HarchWeb qualified
-import WebApi.App.Assets (navigationScriptSources)
 import WebApi.Config (AppConfig (..))
 import WebApi.Route
   ( AppRequestContext,
@@ -18,33 +17,35 @@ import WebApi.Route
 
 buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
 buildAppPageShell config page =
-  HarchWeb.buildPageShell routeCodec (addAppNavigationItems (buildAppPageShellConfig config page)) page
+  HarchWeb.pageTitle page `seq`
+    HarchWeb.buildPageShell routeCodec (addAppNavigationItems (buildAppPageShellConfig config page)) page
 
 buildAppPageShellConfig :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
 buildAppPageShellConfig config page =
-  HarchWeb.PageShell
-    { HarchWeb.shellBodyAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-app",
-              HarchWeb.attributeValue = appTitlePrefix config
-            }
-        ],
-      HarchWeb.shellNavigationAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-navigation-region",
-              HarchWeb.attributeValue = "primary"
-            }
-        ],
-      HarchWeb.shellNavigationItems = [],
-      HarchWeb.shellMainId = "app-main",
-      HarchWeb.shellMainAttributes =
-        [ HarchWeb.HtmlAttribute
-            { HarchWeb.attributeName = "data-navigation-content",
-              HarchWeb.attributeValue = "true"
-            }
-        ],
-      HarchWeb.shellScriptSources = navigationScriptSources config (HarchWeb.pageContext page)
-    }
+  HarchWeb.pageRoute page `seq`
+    HarchWeb.PageShell
+      { HarchWeb.shellBodyAttributes =
+          [ HarchWeb.HtmlAttribute
+              { HarchWeb.attributeName = "data-app",
+                HarchWeb.attributeValue = appTitlePrefix config
+              }
+          ],
+        HarchWeb.shellNavigationAttributes =
+          [ HarchWeb.HtmlAttribute
+              { HarchWeb.attributeName = "data-navigation-region",
+                HarchWeb.attributeValue = "primary"
+              }
+          ],
+        HarchWeb.shellNavigationItems = [],
+        HarchWeb.shellMainId = "app-main",
+        HarchWeb.shellMainAttributes =
+          [ HarchWeb.HtmlAttribute
+              { HarchWeb.attributeName = "data-navigation-content",
+                HarchWeb.attributeValue = "true"
+              }
+          ],
+        HarchWeb.shellScriptSources = []
+      }
 
 addAppNavigationItems :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext
 addAppNavigationItems shell =

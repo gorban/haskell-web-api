@@ -16,9 +16,6 @@ category: Web
 build-type: Simple
 extra-doc-files:
   README.md
-extra-source-files:
-  public/navigation.js
-
 common common
   ghc-options: -Wall
   default-language: GHC2024
@@ -36,7 +33,6 @@ library
   build-depends:
     base ^>=4.22.0.0,
     harch-web,
-    template-haskell,
     text
 
 executable two-pages-example

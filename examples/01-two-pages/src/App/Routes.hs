@@ -16,13 +16,11 @@ import HarchWeb
 data TwoPageRoute
   = HomeRoute
   | SecondRoute
-  | NavigationScriptRoute
   | NotFoundRoute
 
 instance Eq TwoPageRoute where
   HomeRoute == HomeRoute = True
   SecondRoute == SecondRoute = True
-  NavigationScriptRoute == NavigationScriptRoute = True
   NotFoundRoute == NotFoundRoute = True
   _ == _ = False
 
@@ -34,7 +32,6 @@ instance Show TwoPageRoute where
       case route of
         HomeRoute -> "HomeRoute"
         SecondRoute -> "SecondRoute"
-        NavigationScriptRoute -> "NavigationScriptRoute"
         NotFoundRoute -> "NotFoundRoute"
 
   showList routes =
@@ -53,7 +50,6 @@ routeCodec =
         case path of
           "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
           "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
-          "/assets/navigation.js" -> Just RouteRequest {requestRoute = NavigationScriptRoute, requestContext = ()}
           _ -> Nothing,
       renderRoute = \routeRequest -> routeHref (requestRoute routeRequest),
       notFoundRequest = \() -> RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
@@ -64,5 +60,4 @@ routeHref route =
   case route of
     HomeRoute -> "/"
     SecondRoute -> "/second"
-    NavigationScriptRoute -> "/assets/navigation.js"
     NotFoundRoute -> "/404"

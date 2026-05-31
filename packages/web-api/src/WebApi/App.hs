@@ -34,7 +34,7 @@ import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
 import WebApi.Postgres (buildRuntimePostgresDatabaseEffect)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
-  ( AppRequestContext,
+  ( AppRequestContext (..),
     AppRoute (..),
     defaultRequestContext,
     requestContextFromWaiRequest,
@@ -59,6 +59,7 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
           { Site.siteRequestContextFromRequest =
               requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
             Site.siteStaticAssets = staticAssets config,
+            Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
             Site.siteRequestPolicy = requestPolicy config,
             Site.siteReportRequestObservability = requestObservabilityReporter,
             Site.siteReportConnectionObservability = connectionObservabilityReporter,

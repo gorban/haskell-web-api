@@ -15,6 +15,7 @@ import Data.Text (Text)
 import HarchWeb
   ( Application (..),
     NavigationItem (..),
+    NavigationRuntime,
     Page,
     PageShell (..),
     RequestPolicyConfig (..),
@@ -26,7 +27,9 @@ import HarchWeb
     StrictTransportSecurityConfig,
     buildPageShell,
     defaultCorsPolicyConfig,
+    defaultNavigationRuntime,
     defaultResponseSecurityHeadersConfig,
+    navigationRuntimeScriptSource,
   )
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
@@ -43,6 +46,8 @@ data Site route context = Site
     siteDefaultRequestContext :: context,
     siteRequestContextFromRequest :: Wai.Request -> context -> context,
     siteStaticAssets :: StaticAssetsConfig,
+    siteNavigationRuntime :: Maybe NavigationRuntime,
+    siteNavigationRuntimePathPrefix :: context -> Text,
     siteRequestPolicy :: RequestPolicyConfig,
     siteRouteCodec :: RouteCodec route context,
     siteRoutes :: [SiteRoute route context],
@@ -65,6 +70,8 @@ simpleSite name defaultContext codec shellBuilder routeDefinitions =
       siteDefaultRequestContext = defaultContext,
       siteRequestContextFromRequest = \_ requestContext -> requestContext,
       siteStaticAssets = emptyStaticAssetsConfig,
+      siteNavigationRuntime = Just defaultNavigationRuntime,
+      siteNavigationRuntimePathPrefix = const "",
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRouteCodec = codec,
       siteRoutes = routeDefinitions,
@@ -96,6 +103,7 @@ buildSiteApplication site =
       { appName = siteName site,
         defaultRequestContext = siteDefaultRequestContext site,
         requestContextFromRequest = siteRequestContextFromRequest site,
+        applicationNavigationRuntime = siteNavigationRuntime site,
         applicationStaticAssets = siteStaticAssets site,
         applicationRequestPolicy = siteRequestPolicy site,
         routeCodec = siteRouteCodec site,
@@ -123,9 +131,13 @@ renderSitePageShell :: (Eq route) => Site route context -> Page route context ->
 renderSitePageShell site page =
   buildPageShell
     (siteRouteCodec site)
-    ( addRouteNavigation
-        (siteNavigationItems site)
-        (sitePageShell site page)
+    ( addFrameworkShellConventions
+        site
+        page
+        ( addRouteNavigation
+            (siteNavigationItems site)
+            (sitePageShell site page)
+        )
     )
     page
 
@@ -154,6 +166,42 @@ addRouteNavigation generatedNavigation shell =
     { shellNavigationItems =
         generatedNavigation <> shellNavigationItems shell
     }
+
+addFrameworkShellConventions :: Site route context -> Page route context -> PageShell route context -> PageShell route context
+addFrameworkShellConventions site page shell =
+  shell
+    { shellNavigationAttributes =
+        ensureAttribute "data-navigation-region" "primary" (shellNavigationAttributes shell),
+      shellMainAttributes =
+        ensureAttribute "data-navigation-content" "true" (shellMainAttributes shell),
+      shellScriptSources =
+        maybe
+          (shellScriptSources shell)
+          ( \runtime ->
+              appendUnique
+                (navigationRuntimeScriptSource (siteNavigationRuntimePathPrefix site (HarchWeb.pageContext page)) runtime)
+                (shellScriptSources shell)
+          )
+          (siteNavigationRuntime site)
+    }
+
+ensureAttribute :: Text -> Text -> [HarchWeb.HtmlAttribute] -> [HarchWeb.HtmlAttribute]
+ensureAttribute name value attributes =
+  if any ((== name) . HarchWeb.attributeName) attributes
+    then attributes
+    else
+      attributes
+        <> [ HarchWeb.HtmlAttribute
+               { HarchWeb.attributeName = name,
+                 HarchWeb.attributeValue = value
+               }
+           ]
+
+appendUnique :: (Eq a) => a -> [a] -> [a]
+appendUnique value values =
+  if value `elem` values
+    then values
+    else values <> [value]
 
 emptyStaticAssetsConfig :: StaticAssetsConfig
 emptyStaticAssetsConfig =

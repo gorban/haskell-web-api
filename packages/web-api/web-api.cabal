@@ -65,7 +65,6 @@ library
   exposed-modules:
     WebApi
     WebApi.App
-    WebApi.App.Assets
     WebApi.App.Enhancements
     WebApi.App.Shell
     WebApi.Config

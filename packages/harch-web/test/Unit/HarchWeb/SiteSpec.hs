@@ -69,6 +69,8 @@ spec = do
       HarchWeb.staticAssetRoots (siteStaticAssets sampleSite) `shouldBe` []
       HarchWeb.staticAssetContentTypes (siteStaticAssets sampleSite) `shouldBe` HarchWeb.defaultStaticAssetContentTypes
       HarchWeb.staticCacheControlSeconds (siteStaticAssets sampleSite) `shouldBe` Nothing
+      fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js"
+      siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` ""
       HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing
       HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
@@ -86,7 +88,7 @@ spec = do
       case response of
         PageResponse page ->
           HarchWeb.pageShell siteApplication page
-            `shouldBe` "<html><head><title>Home</title></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" aria-current=\"page\">Home</a><a href=\"/app/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/app/second\">Browse second</a></p></main></body></html>"
+            `shouldBe` "<html><head><title>Home</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/app/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/app/second\">Browse second</a></p></main></body></html>"
         PageResponseWithMetadata _ _ ->
           expectationFailure "expected pageSiteRoute to render a plain page response"
         BodyResponse _ ->
@@ -96,13 +98,60 @@ spec = do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
       readResponseBody response
-        `shouldReturn` "<html><head><title>Not Found</title></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\">Home</a><a href=\"/second\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Not Found</h1><p><a href=\"/\">Return home</a></p></main></body></html>"
+        `shouldReturn` "<html><head><title>Not Found</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Not Found</h1><p><a href=\"/\">Return home</a></p></main></body></html>"
 
     it "preserves body responses for unlabeled non-page routes" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["api", "status"])
       Wai.responseStatus response `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json"
       readResponseBody response `shouldReturn` "{\"status\":\"ok\"}"
+
+    it "adds missing navigation shell markers and can disable the built-in runtime" $ do
+      let bareShellSite =
+            sampleSite
+              { siteNavigationRuntime = Nothing,
+                sitePageShell =
+                  const
+                    PageShell
+                      { shellBodyAttributes = [],
+                        shellNavigationAttributes = [],
+                        shellNavigationItems = [],
+                        shellMainId = "app-main",
+                        shellMainAttributes = [],
+                        shellScriptSources = []
+                      }
+              }
+          siteApplication = buildSiteApplication bareShellSite
+          request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
+      PageResponse page <- HarchWeb.renderResponse siteApplication request
+      HarchWeb.pageShell siteApplication page
+        `shouldBe` "<html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
+
+    it "does not duplicate a runtime script source already supplied by the app shell" $ do
+      let duplicatedRuntimeSite =
+            sampleSite
+              { sitePageShell =
+                  \page ->
+                    (samplePageShell page)
+                      { shellScriptSources = ["/assets/navigation.js"]
+                      }
+              }
+          siteApplication = buildSiteApplication duplicatedRuntimeSite
+          request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
+      PageResponse page <- HarchWeb.renderResponse siteApplication request
+      HarchWeb.pageShell siteApplication page
+        `shouldBe` "<html><head><title>Home</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
+
+    it "renders the framework runtime script source from page context" $ do
+      let prefixedRuntimeSite =
+            sampleSite
+              { siteNavigationRuntimePathPrefix = pathPrefix
+              }
+          siteApplication = buildSiteApplication prefixedRuntimeSite
+          request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext "/app"}
+      PageResponse page <- HarchWeb.renderResponse siteApplication request
+      HarchWeb.pageShell siteApplication page
+        `shouldBe` "<html><head><title>Home</title><script src=\"/app/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/app/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/app/second\">Browse second</a></p></main></body></html>"
 
     it "fails loudly when the matched not-found route has not been configured" $ do
       let brokenSite =
@@ -218,19 +267,19 @@ samplePageShell page =
 sampleRouteCodec :: RouteCodec SampleRoute SampleContext
 sampleRouteCodec =
   RouteCodec
-    { parseRoute = \context path ->
+    { parseRoute = \requestContextValue path ->
         case path of
-          "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = context}
-          "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = context}
-          "/api/status" -> Just RouteRequest {requestRoute = StatusApiRoute, requestContext = context}
+          "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = requestContextValue}
+          "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = requestContextValue}
+          "/api/status" -> Just RouteRequest {requestRoute = StatusApiRoute, requestContext = requestContextValue}
           _ -> Nothing,
       renderRoute = \routeRequest -> renderRouteHref (requestContext routeRequest) (requestRoute routeRequest),
-      notFoundRequest = \context -> RouteRequest {requestRoute = NotFoundRoute, requestContext = context}
+      notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue}
     }
 
 renderRouteHref :: SampleContext -> SampleRoute -> Text
-renderRouteHref context route =
-  applyPrefix (pathPrefix context) $
+renderRouteHref requestContextValue route =
+  applyPrefix (pathPrefix requestContextValue) $
     case route of
       HomeRoute -> "/"
       SecondRoute -> "/second"

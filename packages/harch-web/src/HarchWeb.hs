@@ -30,6 +30,7 @@ module HarchWeb
     LocalTestServer (..),
     ManualTlsBindPlan (..),
     NavigationItem (..),
+    NavigationRuntime (..),
     ObservabilityConfig (..),
     ObservabilityStartupPlan (..),
     OtlpExporter (..),
@@ -76,6 +77,8 @@ module HarchWeb
     decodeAcmeJsonResponse,
     defaultContentSecurityPolicy,
     defaultCorsPolicyConfig,
+    defaultNavigationRuntime,
+    defaultNavigationRuntimeScript,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     escapeJsonCharacter,
@@ -106,6 +109,8 @@ module HarchWeb
     loadAcmeJwk,
     mailtoAcmeContact,
     matchRoute,
+    navigationRuntimeResponse,
+    navigationRuntimeScriptSource,
     matchesRuntimeAcmeChallenge,
     openSslSha256,
     parseAcmeAuthorizationResponse,
@@ -473,6 +478,12 @@ data NavigationItem route = NavigationItem
   }
   deriving (Eq, Show)
 
+data NavigationRuntime = NavigationRuntime
+  { navigationRuntimePath :: Text,
+    navigationRuntimeScript :: Text
+  }
+  deriving (Eq, Show)
+
 data ResolvedNavigationItem route = ResolvedNavigationItem
   { navigationLabel :: Text,
     navigationRoute :: route,
@@ -529,6 +540,7 @@ data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
     requestContextFromRequest :: Wai.Request -> context -> context,
+    applicationNavigationRuntime :: Maybe NavigationRuntime,
     applicationStaticAssets :: StaticAssetsConfig,
     applicationRequestPolicy :: RequestPolicyConfig,
     routeCodec :: RouteCodec route context,
@@ -577,6 +589,150 @@ staticAssetHrefWithPrefix pathPrefix staticRoot assetPath =
                 normalizedAssetPath
               ]
    in applyRequestPathPrefix pathPrefix assetHref
+
+defaultNavigationRuntime :: NavigationRuntime
+defaultNavigationRuntime =
+  NavigationRuntime
+    { navigationRuntimePath = "/assets/navigation.js",
+      navigationRuntimeScript = defaultNavigationRuntimeScript
+    }
+
+navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
+navigationRuntimeScriptSource pathPrefix runtime =
+  applyRequestPathPrefix pathPrefix (navigationRuntimePath runtime)
+
+navigationRuntimeResponse :: NavigationRuntime -> Text -> Maybe ResponseBody
+navigationRuntimeResponse runtime requestPath =
+  if requestPath == navigationRuntimePath runtime
+    then
+      Just
+        ResponseBody
+          { responseStatus = 200,
+            responseContentType = "application/javascript; charset=utf-8",
+            responseBody = navigationRuntimeScript runtime,
+            responseObservabilityAttributes = [],
+            responseLogEntries = []
+          }
+    else Nothing
+
+defaultNavigationRuntimeScript :: Text
+defaultNavigationRuntimeScript =
+  Text.unlines
+    [ "(() => {",
+      "  const pageLinkSelector = 'a[data-page-link=\"true\"]';",
+      "  const navigationRegionSelector = 'nav[data-navigation-region=\"primary\"]';",
+      "  const navigationContentSelector = 'main[data-navigation-content=\"true\"]';",
+      "  let navigationInFlight = false;",
+      "",
+      "  function isPlainLeftClick(event) {",
+      "    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;",
+      "  }",
+      "",
+      "  function toAbsoluteUrl(targetUrl) {",
+      "    return new URL(targetUrl, window.location.href);",
+      "  }",
+      "",
+      "  function isSameOriginNavigationLink(anchor) {",
+      "    if (!anchor || anchor.target || anchor.hasAttribute('download')) {",
+      "      return false;",
+      "    }",
+      "",
+      "    const absoluteUrl = toAbsoluteUrl(anchor.href);",
+      "    return absoluteUrl.origin === window.location.origin;",
+      "  }",
+      "",
+      "  function syncBodyAttributes(nextBody) {",
+      "    const currentBody = document.body;",
+      "    const nextAttributes = new Map(Array.from(nextBody.attributes, (attribute) => [attribute.name, attribute.value]));",
+      "",
+      "    Array.from(currentBody.attributes).forEach((attribute) => {",
+      "      if (!nextAttributes.has(attribute.name)) {",
+      "        currentBody.removeAttribute(attribute.name);",
+      "      }",
+      "    });",
+      "",
+      "    nextAttributes.forEach((value, name) => {",
+      "      currentBody.setAttribute(name, value);",
+      "    });",
+      "  }",
+      "",
+      "  function applyFetchedDocument(responseText, targetUrl, shouldPushState) {",
+      "    const parsedDocument = new DOMParser().parseFromString(responseText, 'text/html');",
+      "    const nextTitle = parsedDocument.querySelector('title');",
+      "    const nextNavigationRegion = parsedDocument.querySelector(navigationRegionSelector);",
+      "    const nextNavigationContent = parsedDocument.querySelector(navigationContentSelector);",
+      "    const currentNavigationRegion = document.querySelector(navigationRegionSelector);",
+      "    const currentNavigationContent = document.querySelector(navigationContentSelector);",
+      "",
+      "    if (!nextTitle || !nextNavigationRegion || !nextNavigationContent || !currentNavigationRegion || !currentNavigationContent) {",
+      "      return false;",
+      "    }",
+      "",
+      "    document.title = nextTitle.textContent || document.title;",
+      "    currentNavigationRegion.replaceWith(nextNavigationRegion);",
+      "    currentNavigationContent.replaceWith(nextNavigationContent);",
+      "    syncBodyAttributes(parsedDocument.body);",
+      "",
+      "    if (shouldPushState) {",
+      "      window.history.pushState({ path: targetUrl }, '', targetUrl);",
+      "    }",
+      "",
+      "    return true;",
+      "  }",
+      "",
+      "  async function navigateTo(targetUrl, shouldPushState) {",
+      "    if (navigationInFlight) {",
+      "      return;",
+      "    }",
+      "",
+      "    navigationInFlight = true;",
+      "",
+      "    try {",
+      "      const response = await window.fetch(targetUrl, {",
+      "        credentials: 'same-origin',",
+      "        headers: {",
+      "          'X-Requested-With': 'tiny-navigation',",
+      "        },",
+      "      });",
+      "",
+      "      if (!response.ok) {",
+      "        window.location.assign(targetUrl);",
+      "        return;",
+      "      }",
+      "",
+      "      const responseText = await response.text();",
+      "      if (!applyFetchedDocument(responseText, targetUrl, shouldPushState)) {",
+      "        window.location.assign(targetUrl);",
+      "      }",
+      "    } catch (_error) {",
+      "      window.location.assign(targetUrl);",
+      "    } finally {",
+      "      navigationInFlight = false;",
+      "    }",
+      "  }",
+      "",
+      "  function handleDocumentClick(event) {",
+      "    if (event.defaultPrevented || !isPlainLeftClick(event)) {",
+      "      return;",
+      "    }",
+      "",
+      "    const anchor = event.target.closest(pageLinkSelector);",
+      "    if (!isSameOriginNavigationLink(anchor)) {",
+      "      return;",
+      "    }",
+      "",
+      "    event.preventDefault();",
+      "    void navigateTo(anchor.href, true);",
+      "  }",
+      "",
+      "  function handlePopState() {",
+      "    void navigateTo(window.location.href, false);",
+      "  }",
+      "",
+      "  document.addEventListener('click', handleDocumentClick);",
+      "  window.addEventListener('popstate', handlePopState);",
+      "})();"
+    ]
 
 buildNavigation :: (Eq route) => RouteCodec route context -> Page route context -> [NavigationItem route] -> [ResolvedNavigationItem route]
 buildNavigation codec page =
@@ -666,97 +822,115 @@ toWaiApplication webApplication request respond = do
             redirectResponse
           respond redirectResponse
         Nothing -> do
-          maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) (waiRequestPath requestPolicyConfig request)
-          case maybeStaticResponse of
-            Just (staticRoutePath, staticResponse) -> do
-              staticResponseReportedAt <- getMonotonicTimeNSec
+          let requestPath = waiRequestPath requestPolicyConfig request
+              maybeRuntimeResponse =
+                applicationNavigationRuntime webApplication
+                  >>= (`navigationRuntimeResponse` requestPath)
+          case maybeRuntimeResponse of
+            Just runtimeResponseBody -> do
+              runtimeResponseReportedAt <- getMonotonicTimeNSec
+              let runtimeResponse = toWaiBodyResponse [] runtimeResponseBody
               reportEarlyRequestObservability
                 webApplication
                 request
                 requestStartedAt
-                staticResponseReportedAt
-                (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath)
-                staticResponse
+                runtimeResponseReportedAt
+                requestPath
+                runtimeResponse
               respond
-                (applyResponseHeaders policyResponseHeaders staticResponse)
+                (applyResponseHeaders policyResponseHeaders runtimeResponse)
             Nothing -> do
-              routeMatchingStartedAt <- getMonotonicTimeNSec
-              let requestContext =
-                    requestContextFromRequest
-                      webApplication
-                      request
-                      (defaultRequestContext webApplication)
-                  routeRequest =
-                    matchRoute
-                      (routeCodec webApplication)
-                      requestContext
-                      (waiRequestPath requestPolicyConfig request)
-              routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
-              renderStartedAt <- getMonotonicTimeNSec
-              response <- renderResponse webApplication routeRequest
-              responseRenderedAt <- response `seq` getMonotonicTimeNSec
-              let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
-                  requestLogFields = requestLogContextFields requestPolicyConfig request
-                  extraObservabilityAttributes =
-                    requestContextAttributes
-                      <> case response of
-                        PageResponse _ -> []
-                        PageResponseWithMetadata pageResponseBodyValue _ ->
-                          responseObservabilityAttributes pageResponseBodyValue
-                        BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-                  contextualizedResponseLogEntries =
-                    case response of
-                      PageResponse _ -> []
-                      PageResponseWithMetadata pageResponseBodyValue _ ->
-                        map
-                          (prependRequestLogContext requestLogFields)
-                          (responseLogEntries pageResponseBodyValue)
-                      BodyResponse responseBodyValue ->
-                        map
-                          (prependRequestLogContext requestLogFields)
-                          (responseLogEntries responseBodyValue)
-                  requestObservability =
-                    maybe
-                      id
-                      Observability.withRequestTraceContext
-                      (requestTraceContext request)
-                      ( Observability.buildRequestObservability
-                          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                          (requestScheme requestPolicyConfig request)
-                          (waiRequestPath requestPolicyConfig request)
-                          (renderRoute (routeCodec webApplication) routeRequest)
-                          ( case response of
-                              PageResponse page ->
-                                if isNotFoundPage webApplication page
-                                  then 404
-                                  else 200
-                              PageResponseWithMetadata pageResponseBodyValue _ ->
-                                responseStatus pageResponseBodyValue
-                              BodyResponse responseBodyValue -> responseStatus responseBodyValue
+              maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath
+              case maybeStaticResponse of
+                Just (staticRoutePath, staticResponse) -> do
+                  staticResponseReportedAt <- getMonotonicTimeNSec
+                  reportEarlyRequestObservability
+                    webApplication
+                    request
+                    requestStartedAt
+                    staticResponseReportedAt
+                    (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath)
+                    staticResponse
+                  respond
+                    (applyResponseHeaders policyResponseHeaders staticResponse)
+                Nothing -> do
+                  routeMatchingStartedAt <- getMonotonicTimeNSec
+                  let requestContext =
+                        requestContextFromRequest
+                          webApplication
+                          request
+                          (defaultRequestContext webApplication)
+                      routeRequest =
+                        matchRoute
+                          (routeCodec webApplication)
+                          requestContext
+                          requestPath
+                  routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
+                  renderStartedAt <- getMonotonicTimeNSec
+                  response <- renderResponse webApplication routeRequest
+                  responseRenderedAt <- response `seq` getMonotonicTimeNSec
+                  let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
+                      requestLogFields = requestLogContextFields requestPolicyConfig request
+                      extraObservabilityAttributes =
+                        requestContextAttributes
+                          <> case response of
+                            PageResponse _ -> []
+                            PageResponseWithMetadata pageResponseBodyValue _ ->
+                              responseObservabilityAttributes pageResponseBodyValue
+                            BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+                      contextualizedResponseLogEntries =
+                        case response of
+                          PageResponse _ -> []
+                          PageResponseWithMetadata pageResponseBodyValue _ ->
+                            map
+                              (prependRequestLogContext requestLogFields)
+                              (responseLogEntries pageResponseBodyValue)
+                          BodyResponse responseBodyValue ->
+                            map
+                              (prependRequestLogContext requestLogFields)
+                              (responseLogEntries responseBodyValue)
+                      requestObservability =
+                        maybe
+                          id
+                          Observability.withRequestTraceContext
+                          (requestTraceContext request)
+                          ( Observability.buildRequestObservability
+                              (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+                              (requestScheme requestPolicyConfig request)
+                              requestPath
+                              (renderRoute (routeCodec webApplication) routeRequest)
+                              ( case response of
+                                  PageResponse page ->
+                                    if isNotFoundPage webApplication page
+                                      then 404
+                                      else 200
+                                  PageResponseWithMetadata pageResponseBodyValue _ ->
+                                    responseStatus pageResponseBodyValue
+                                  BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                              )
+                              ( case response of
+                                  PageResponse _ -> Observability.PageResponseKind
+                                  PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+                                  BodyResponse _ -> Observability.BodyResponseKind
+                              )
+                              ( extraObservabilityAttributes
+                                  <> requestTimingObservabilityAttributes
+                                    requestStartedAt
+                                    responseRenderedAt
+                                    [ ("request-policy", requestStartedAt, policyEvaluatedAt),
+                                      ("route-match", routeMatchingStartedAt, routeMatchedAt),
+                                      ("render-response", renderStartedAt, responseRenderedAt)
+                                    ]
+                              )
                           )
-                          ( case response of
-                              PageResponse _ -> Observability.PageResponseKind
-                              PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-                              BodyResponse _ -> Observability.BodyResponseKind
-                          )
-                          ( extraObservabilityAttributes
-                              <> requestTimingObservabilityAttributes
-                                requestStartedAt
-                                responseRenderedAt
-                                [ ("request-policy", requestStartedAt, policyEvaluatedAt),
-                                  ("route-match", routeMatchingStartedAt, routeMatchedAt),
-                                  ("render-response", renderStartedAt, responseRenderedAt)
-                                ]
-                          )
-                      )
-              Observability.forceRequestObservability requestObservability `seq`
-                reportRequestObservability webApplication requestObservability
-                  >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-                  >> respond
-                    ( applyResponseHeaders
-                        policyResponseHeaders
-                        (toWaiResponse [] webApplication response)
-                    )
+                  Observability.forceRequestObservability requestObservability `seq`
+                    reportRequestObservability webApplication requestObservability
+                      >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
+                      >> respond
+                        ( applyResponseHeaders
+                            policyResponseHeaders
+                            (toWaiResponse [] webApplication response)
+                        )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -2581,6 +2755,7 @@ renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, naviga
     [ "<a href=\"",
       itemHref,
       "\"",
+      " data-page-link=\"true\"",
       if itemIsActive then " aria-current=\"page\"" else Text.empty,
       ">",
       itemLabel,
@@ -2616,10 +2791,14 @@ toWaiResponse additionalHeaders webApplication response =
             (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
     BodyResponse responseBodyValue ->
-      Wai.responseLBS
-        (Http.mkStatus (responseStatus responseBodyValue) mempty)
-        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+      toWaiBodyResponse additionalHeaders responseBodyValue
+
+toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
+toWaiBodyResponse additionalHeaders responseBodyValue =
+  Wai.responseLBS
+    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
+    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
 
 applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
 applyResponseHeaders additionalHeaders =

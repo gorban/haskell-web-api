@@ -56,7 +56,7 @@ spec =
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
         siteName twoPageSite `shouldBe` "two-pages-example"
-        length (siteRoutes twoPageSite) `shouldBe` 4
+        length (siteRoutes twoPageSite) `shouldBe` 3
         staticAssetRoots (siteStaticAssets twoPageSite) `shouldBe` []
         staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes
         staticCacheControlSeconds (siteStaticAssets twoPageSite) `shouldBe` Nothing
@@ -93,11 +93,9 @@ spec =
       it "parses and renders the supported two-page routes" $ do
         eqViaDictionary HomeRoute HomeRoute `shouldBe` True
         eqViaDictionary HomeRoute SecondRoute `shouldBe` False
-        eqViaDictionary NavigationScriptRoute NavigationScriptRoute `shouldBe` True
         neqViaDictionary HomeRoute SecondRoute `shouldBe` True
         showViaDictionary HomeRoute `shouldBe` "HomeRoute"
         showViaDictionary SecondRoute `shouldBe` "SecondRoute"
-        showViaDictionary NavigationScriptRoute `shouldBe` "NavigationScriptRoute"
         showViaDictionary NotFoundRoute `shouldBe` "NotFoundRoute"
         showsPrecViaDictionary 0 HomeRoute "" `shouldBe` "HomeRoute"
         showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]"
@@ -107,14 +105,12 @@ spec =
         parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/"
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second"
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NavigationScriptRoute, requestContext = ()} `shouldBe` "/assets/navigation.js"
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NotFoundRoute, requestContext = ()} `shouldBe` "/404"
         routeHref HomeRoute `shouldBe` "/"
         routeHref SecondRoute `shouldBe` "/second"
-        routeHref NavigationScriptRoute `shouldBe` "/assets/navigation.js"
         routeHref NotFoundRoute `shouldBe` "/404"
         notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Just RouteRequest {requestRoute = NavigationScriptRoute, requestContext = ()}
+        parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
 
     describe "buildApplication" $ do
       it "renders the home page with shared navigation and the enhancement runtime" $ do
@@ -125,7 +121,7 @@ spec =
         Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
         Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
-        Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" aria-current=\"page\">Home</a><a href=\"/second\">Second</a></nav>" responseBody `shouldBe` True
+        Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav>" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
         Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
 
@@ -143,7 +139,7 @@ spec =
         responseBody <- readResponseBody response
         Text.isInfixOf "<title>Not Found</title>" responseBody `shouldBe` True
         Text.isInfixOf "<section data-page=\"not-found\">" responseBody `shouldBe` True
-        Text.isInfixOf "<a href=\"/\">Home</a><a href=\"/second\">Second</a>" responseBody `shouldBe` True
+        Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a>" responseBody `shouldBe` True
 
       it "serves the navigation runtime through an unlabeled site route" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "navigation.js"])

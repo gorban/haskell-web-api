@@ -1,12 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell #-}
 
 {-# E2E_SPEC #-}
 
 import qualified Data.Text as Text
 import qualified HarchWeb
-import qualified Language.Haskell.TH.Syntax as TH
-import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi (buildApp)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
@@ -53,7 +50,6 @@ spec =
 withE2EAppConfig :: (AppConfig -> IO a) -> IO a
 withE2EAppConfig action =
   withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory -> do
-    writeFile (assetDirectory </> "navigation.js") embeddedNavigationRuntimeSource
     let appConfig =
           defaultAppConfig
             { staticAssets =
@@ -69,15 +65,6 @@ withE2EAppConfig action =
                   }
             }
     action appConfig
-
-embeddedNavigationRuntimeSource :: String
-embeddedNavigationRuntimeSource =
-  $( do
-       navigationPath <- TH.makeRelativeToProject "public/navigation.js"
-       TH.addDependentFile navigationPath
-       navigationSource <- TH.runIO (readFile navigationPath)
-       TH.lift navigationSource
-   )
 
 withNodeBrowserRunner :: (BrowserConfig -> IO a) -> IO a
 withNodeBrowserRunner action =

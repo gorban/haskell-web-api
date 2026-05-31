@@ -1,21 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module App.Components.Layout
-  ( navigationScriptSource,
-    twoPageShell,
+  ( twoPageShell,
   )
 where
 
 import App.Routes (TwoPageRoute)
-import Data.Text (Text)
 import HarchWeb
   ( HtmlAttribute (..),
     Page,
     PageShell (..),
   )
-
-navigationScriptSource :: Text
-navigationScriptSource = "/assets/navigation.js"
 
 twoPageShell :: Page TwoPageRoute () -> PageShell TwoPageRoute ()
 twoPageShell _ =
@@ -40,5 +35,5 @@ twoPageShell _ =
               attributeValue = "true"
             }
         ],
-      shellScriptSources = [navigationScriptSource]
+      shellScriptSources = []
     }
