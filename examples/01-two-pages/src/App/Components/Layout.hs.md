@@ -1,19 +1,23 @@
 # src/App/Components/Layout.hs
 
+Desired layout/component shape:
+
 ```hs
 module App.Components.Layout where
 
-siteLayout :: Html -> Html
-siteLayout bodyContent =
-  htmlDocument "my-site" $ do
-    header_ $ do
-      h1_ "my-site"
-      nav_ $ do
-        pageLink homeRoute "Home"
-        pageLink secondRoute "Second"
-    main_ bodyContent
-    script_ [src_ "/assets/app.js", defer_ "true"] ""
+import App.Routes (Route (..))
+import Harch.Layout
+
+twoPageLayout :: Layout Route
+twoPageLayout =
+  layout do
+    bodyAttr "data-app" "two-pages-example"
+    nav do
+      routeLink_ HomeRoute "Home"
+      routeLink_ SecondRoute "Second"
+    main_ [id_ "app-main"] pageBody
 ```
 
-The important part is not the exact DSL surface. The point is that layout stays a reusable
-component, while route-aware link helpers stay framework-owned.
+The important part is not the exact module names. The direction is that layout stays a reusable
+component, navigation remains typed, and HarchWeb owns framework conventions such as active links,
+navigation shell markers, and the shared same-origin navigation runtime.

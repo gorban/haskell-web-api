@@ -1,19 +1,25 @@
 # src/App/Pages/Second.hs
 
+Desired page-authoring shape:
+
 ```hs
 module App.Pages.Second where
 
-secondPage :: Page
+import App.Routes (Route (..))
+import Harch.Page
+
+secondPage :: Page Route
 secondPage =
-  page "/second"
-    { title = "Second"
-    , body =
-        section_ $ do
-          h2_ "Second page"
-          p_ "This route should also work with JavaScript disabled."
-          pageLink homeRoute "Back home"
-    }
+  page SecondRoute do
+    title "Second"
+    bootstrapHook "second-page"
+    body do
+      section_ [data_ "page" "second"] do
+        h1_ "Second"
+        p_ "This page also returns full HTML when loaded directly."
+        p_ do
+          routeLink_ HomeRoute "Back home"
 ```
 
-Both pages should stay valid SSR endpoints. Progressive enhancement is an optimization, not a
-separate rendering mode.
+Both pages should stay valid SSR endpoints. Progressive enhancement is an optimization layered on
+the same route and page definitions, not a separate rendering mode.
