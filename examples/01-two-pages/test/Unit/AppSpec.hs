@@ -151,7 +151,9 @@ spec =
         lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8"
         responseBody <- readResponseBody response
         Text.isInfixOf "navigateTo" responseBody `shouldBe` True
+        Text.isInfixOf "handlePopState" responseBody `shouldBe` True
         Text.isInfixOf "data-page-link=\"true\"" responseBody `shouldBe` True
+        Text.isInfixOf "window.location.assign" responseBody `shouldBe` True
 
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =
