@@ -112,16 +112,24 @@ import HarchWeb
 newtype PostSlug = PostSlug Text
   deriving stock (Eq, Show)
 
+newtype SearchQuery = SearchQuery Text
+  deriving stock (Eq, Show)
+
 data AppRoute
   = HomeR
   | BlogPostR PostSlug
+  | SearchR SearchQuery
+  | SearchEmptyR
   | StatusApiR
   deriving stock (Eq, Show)
 
 appRoutes :: Routes AppRoute
 appRoutes =
   pagesTreeRoutes @AppRoute
-    <> [ get "/api/status" StatusApiR statusApi
+    <> [ get "/posts/#{slug}" (BlogPostR slug) blogPostPage
+       , get "/search?q=#{query}" (SearchR query) searchPage
+       , get "/search" SearchEmptyR searchPageEmpty
+       , get "/api/status" StatusApiR statusApi
        ]
 ```
 
@@ -144,7 +152,7 @@ module App.Pages.Home
 
 import App.Components.Hero (heroCard, HeroCardProps(..))
 import App.Components.Layout (siteLayout, SiteLayoutProps(..))
-import App.Routes (AppRoute(..), PostSlug(..))
+import App.Routes (AppRoute(..), PostSlug(..), SearchQuery(..))
 import HarchWeb
 
 homePage :: Page AppRoute
@@ -161,6 +169,12 @@ homePage =
               <p>Server-rendered on direct load, progressively enhanced in-app.
               <a .primary-link href=@{BlogPostR (PostSlug "hello-world")}>
                 Read the first post
+              <a href=@{SearchR (SearchQuery "server rendering")}>
+                Search examples
+              <form method=get action=@{SearchEmptyR}>
+                <label for=site-search>Search
+                <input #site-search name=#{queryParam SearchR.query} type=search>
+                <button type=submit>Search
               ^{heroCard HeroCardProps
                   { title = "Second page"
                   , body = "Components stay typed and reusable."
@@ -192,6 +206,10 @@ homePage =
 This sample captures the intended direction:
 
 - links are rendered from typed routes like `@{BlogPostR (PostSlug "hello-world")}`,
+- path parameters and query-string parameters are both values in typed routes rather than
+  fragments of hand-built URLs,
+- GET forms can target typed query routes, with input names generated from the route contract when
+  possible,
 - path prefixes and similar URL base concerns stay framework-owned through the route renderer,
 - components are plain typed functions with explicit input records,
 - page-local markup, styles, and client behavior stay colocated and strongly typed.
