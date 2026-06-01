@@ -90,6 +90,8 @@ spec = do
             browserKeepOpenOnFailure = True
           }
         [ VisitUrl "http://localhost:8080/",
+          VisitUrlWithoutScripts "http://localhost:8080/no-js",
+          ReloadPage,
           ClickLinkWithText "Browse the second page",
           NavigateHistoryBack,
           NavigateHistoryForward,
@@ -101,6 +103,8 @@ spec = do
           [ "headless\tfalse",
             "keep-open-on-failure\ttrue",
             "action\tvisit-url\thttp://localhost:8080/",
+            "action\tvisit-url-without-scripts\thttp://localhost:8080/no-js",
+            "action\treload-page",
             "action\tclick-link-with-text\tBrowse the second page",
             "action\thistory-back",
             "action\thistory-forward",
@@ -133,6 +137,8 @@ spec = do
 
     it "covers the remaining equality and show branches for browser actions and errors" $ do
       let visitAction = VisitUrl "http://localhost:8080/"
+          noScriptVisitAction = VisitUrlWithoutScripts "http://localhost:8080/no-js"
+          reloadAction = ReloadPage
           backAction = NavigateHistoryBack
           forwardAction = NavigateHistoryForward
           assertAction = AssertTextEquals "[data-page-title=\"true\"]" "Second"
@@ -142,6 +148,8 @@ spec = do
           assertionError = BrowserAssertionFailed "Expected the second page to load"
       defaultBrowserConfig `shouldBe` defaultBrowserConfig
       visitAction `shouldBe` VisitUrl "http://localhost:8080/"
+      noScriptVisitAction `shouldBe` VisitUrlWithoutScripts "http://localhost:8080/no-js"
+      reloadAction `shouldBe` ReloadPage
       backAction `shouldBe` NavigateHistoryBack
       forwardAction `shouldBe` NavigateHistoryForward
       assertAction `shouldBe` AssertTextEquals "[data-page-title=\"true\"]" "Second"
@@ -150,6 +158,8 @@ spec = do
       protocolError `shouldBe` BrowserRunnerProtocolError "unexpected response"
       assertionError `shouldBe` BrowserAssertionFailed "Expected the second page to load"
       show visitAction `shouldBe` "VisitUrl \"http://localhost:8080/\""
+      show noScriptVisitAction `shouldBe` "VisitUrlWithoutScripts \"http://localhost:8080/no-js\""
+      show reloadAction `shouldBe` "ReloadPage"
       show backAction `shouldBe` "NavigateHistoryBack"
       show forwardAction `shouldBe` "NavigateHistoryForward"
       show assertAction `shouldBe` "AssertTextEquals \"[data-page-title=\\\"true\\\"]\" \"Second\""
@@ -164,6 +174,8 @@ spec = do
               { browserRunnerCommand = "node"
               }
           visitAction = VisitUrl "http://localhost:8080/"
+          noScriptVisitAction = VisitUrlWithoutScripts "http://localhost:8080/no-js"
+          reloadAction = ReloadPage
           clickAction = ClickLinkWithText "Browse the second page"
           backAction = NavigateHistoryBack
           forwardAction = NavigateHistoryForward
@@ -173,6 +185,8 @@ spec = do
       defaultBrowserConfig /= otherBrowserConfig `shouldBe` True
       EnhancedFetchCount /= HardNavigationCount `shouldBe` True
       visitAction /= clickAction `shouldBe` True
+      noScriptVisitAction /= visitAction `shouldBe` True
+      reloadAction /= visitAction `shouldBe` True
       backAction /= forwardAction `shouldBe` True
       metricAction /= backAction `shouldBe` True
       launchError /= protocolError `shouldBe` True
@@ -180,8 +194,8 @@ spec = do
         `shouldBe` "[BrowserConfig {browserRunnerCommand = \"playwright-e2e-runner\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False},BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False}]"
       show [EnhancedFetchCount, HardNavigationCount]
         `shouldBe` "[EnhancedFetchCount,HardNavigationCount]"
-      show [visitAction, clickAction, backAction, forwardAction, metricAction]
-        `shouldBe` "[VisitUrl \"http://localhost:8080/\",ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward,AssertNavigationMetricEquals EnhancedFetchCount 1]"
+      show [visitAction, noScriptVisitAction, reloadAction, clickAction, backAction, forwardAction, metricAction]
+        `shouldBe` "[VisitUrl \"http://localhost:8080/\",VisitUrlWithoutScripts \"http://localhost:8080/no-js\",ReloadPage,ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward,AssertNavigationMetricEquals EnhancedFetchCount 1]"
       show [launchError, protocolError]
         `shouldBe` "[BrowserRunnerLaunchError \"missing-browser-runner\",BrowserRunnerProtocolError \"unexpected response\"]"
 

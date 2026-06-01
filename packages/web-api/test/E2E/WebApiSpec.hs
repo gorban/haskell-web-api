@@ -35,6 +35,13 @@ spec =
             runBrowserScript browserConfig (sameOriginBackForwardActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
               `shouldReturn` Right ()
 
+    it "keeps reloads and no-JavaScript fallback equivalent to ordinary SSR navigation" $
+      withNodeBrowserRunner $ \browserConfig ->
+        withE2EAppConfig $ \appConfig ->
+          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
+            runBrowserScript browserConfig (reloadAndNoScriptFallbackActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
+              `shouldReturn` Right ()
+
     it "loads the second page directly through a real local HTTP listener and asserts SSR content" $
       withNodeBrowserRunner $ \browserConfig ->
         withE2EAppConfig $ \appConfig ->
@@ -100,6 +107,20 @@ sameOriginBackForwardActions baseUrl =
     AssertTextEquals "[data-page-title=\"true\"]" "Second"
   ]
 
+reloadAndNoScriptFallbackActions :: String -> [BrowserAction]
+reloadAndNoScriptFallbackActions baseUrl =
+  [ VisitUrl (baseUrl <> "/second"),
+    ReloadPage,
+    AssertTextEquals "title" "web-api: Second",
+    AssertTextEquals "[data-page-title=\"true\"]" "Second",
+    VisitUrlWithoutScripts (baseUrl <> "/"),
+    ClickLinkWithText "Browse the second page",
+    AssertTextEquals "title" "web-api: Second",
+    AssertTextEquals "[data-page-title=\"true\"]" "Second",
+    AssertNavigationMetricEquals EnhancedFetchCount 0,
+    AssertNavigationMetricEquals HardNavigationCount 1
+  ]
+
 nodeBrowserRunnerSource :: String
 nodeBrowserRunnerSource =
   unlines
@@ -127,6 +148,15 @@ nodeBrowserRunnerSource =
       "    switch (action) {",
       "      case 'visit-url':",
       "        currentSession = await BrowserSession.visit(parts[2]);",
+      "        break;",
+      "      case 'visit-url-without-scripts':",
+      "        currentSession = await BrowserSession.visit(parts[2], false);",
+      "        break;",
+      "      case 'reload-page':",
+      "        if (currentSession === null) {",
+      "          return writeError(responsePath, 'No page has been loaded yet.');",
+      "        }",
+      "        await currentSession.reload();",
       "        break;",
       "      case 'click-link-with-text':",
       "        if (currentSession === null) {",
@@ -179,16 +209,19 @@ nodeBrowserRunnerSource =
       "}",
       "",
       "class BrowserSession {",
-      "  static async visit(targetUrl) {",
+      "  static async visit(targetUrl, scriptsEnabled = true) {",
       "    const response = await fetchResponse(targetUrl);",
-      "    const session = new BrowserSession(targetUrl, parseHtml(response.body, `visit ${targetUrl}`));",
-      "    await session.loadExternalScripts();",
+      "    const session = new BrowserSession(targetUrl, parseHtml(response.body, `visit ${targetUrl}`), scriptsEnabled);",
+      "    if (session.scriptsEnabled) {",
+      "      await session.loadExternalScripts();",
+      "    }",
       "    return session;",
       "  }",
       "",
-      "  constructor(targetUrl, page) {",
+      "  constructor(targetUrl, page, scriptsEnabled) {",
       "    this.currentUrl = targetUrl;",
       "    this.page = page;",
+      "    this.scriptsEnabled = scriptsEnabled;",
       "    this.documentListeners = { click: [] };",
       "    this.windowListeners = { popstate: [] };",
       "    this.pendingPromises = new Set();",
@@ -386,6 +419,16 @@ nodeBrowserRunnerSource =
       "    await this.waitForSettled();",
       "  }",
       "",
+      "  async reload() {",
+      "    const response = await fetchResponse(this.currentUrl);",
+      "    this.page = parseHtml(response.body, `reload ${this.currentUrl}`);",
+      "    this.documentListeners = { click: [] };",
+      "    this.windowListeners = { popstate: [] };",
+      "    if (this.scriptsEnabled) {",
+      "      await this.loadExternalScripts();",
+      "    }",
+      "  }",
+      "",
       "  async hardNavigate(targetUrl) {",
       "    this.navigationMetrics['hard-navigation-count'] += 1;",
       "    const resolvedTargetUrl = resolveUrl(targetUrl, this.currentUrl);",
@@ -393,7 +436,11 @@ nodeBrowserRunnerSource =
       "    this.pushHistory(resolvedTargetUrl);",
       "    this.page = parseHtml(response.body, `hard-navigate ${targetUrl}`);",
       "    this.assignedUrl = null;",
-      "    await this.loadExternalScripts();",
+      "    this.documentListeners = { click: [] };",
+      "    this.windowListeners = { popstate: [] };",
+      "    if (this.scriptsEnabled) {",
+      "      await this.loadExternalScripts();",
+      "    }",
       "  }",
       "",
       "  assertNavigationMetricEquals(metricName, expectedCount) {",

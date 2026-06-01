@@ -45,6 +45,8 @@ data NavigationMetric
 
 data BrowserAction
   = VisitUrl String
+  | VisitUrlWithoutScripts String
+  | ReloadPage
   | ClickLinkWithText String
   | NavigateHistoryBack
   | NavigateHistoryForward
@@ -154,6 +156,8 @@ renderBrowserAction :: BrowserAction -> String
 renderBrowserAction browserAction =
   case browserAction of
     VisitUrl url -> "action\tvisit-url\t" ++ url
+    VisitUrlWithoutScripts url -> "action\tvisit-url-without-scripts\t" ++ url
+    ReloadPage -> "action\treload-page"
     ClickLinkWithText linkText -> "action\tclick-link-with-text\t" ++ linkText
     NavigateHistoryBack -> "action\thistory-back"
     NavigateHistoryForward -> "action\thistory-forward"
