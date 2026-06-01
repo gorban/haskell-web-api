@@ -8,6 +8,7 @@ module App.Routes
 where
 
 import Data.Text (Text)
+import qualified Data.Text as Text
 import HarchWeb
   ( RouteCodec (..),
     RouteRequest (..),
@@ -47,7 +48,7 @@ routeCodec :: RouteCodec TwoPageRoute ()
 routeCodec =
   RouteCodec
     { parseRoute = \() path ->
-        case path of
+        case routePath path of
           "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
           "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
           _ -> Nothing,
@@ -61,3 +62,7 @@ routeHref route =
     HomeRoute -> "/"
     SecondRoute -> "/second"
     NotFoundRoute -> "/404"
+
+routePath :: Text -> Text
+routePath =
+  Text.takeWhile (/= '?')

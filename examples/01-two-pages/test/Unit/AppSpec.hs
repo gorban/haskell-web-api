@@ -102,6 +102,7 @@ spec =
         showListViaDictionary [HomeRoute, SecondRoute] "" `shouldBe` "[HomeRoute, SecondRoute]"
         parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
+        parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/"
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second"

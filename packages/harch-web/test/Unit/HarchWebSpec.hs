@@ -49,6 +49,7 @@ data CapturedCollectorRequest = CapturedCollectorRequest
 
 data TestRoute
   = KnownRoute
+  | QueryRoute Text
   | DataRoute
   | MissingRoute
   deriving (Eq, Show)
@@ -73,6 +74,8 @@ parseSampleRoute routeContext path
       Just RouteRequest {requestRoute = KnownRoute, requestContext = routeContext}
   | path == "/es/known" =
       Just RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
+  | Just queryString <- Text.stripPrefix "/query?" path =
+      Just RouteRequest {requestRoute = QueryRoute queryString, requestContext = routeContext}
   | path == "/data" =
       Just RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
   | otherwise = Nothing
@@ -85,6 +88,7 @@ renderSampleRoute request =
         (language, KnownRoute)
           | language == "es" -> "/es/known"
           | otherwise -> "/known"
+        (_, QueryRoute queryString) -> "/query?" <> queryString
         (_, DataRoute) -> "/data"
         (_, MissingRoute) -> "/404"
     )
@@ -447,6 +451,7 @@ rootPathCodec =
       renderRoute = \request ->
         case requestRoute request of
           KnownRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/"
+          QueryRoute queryString -> applyTestPathPrefix (requestPathPrefix (requestContext request)) ("/query?" <> queryString)
           DataRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/data"
           MissingRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
@@ -456,6 +461,15 @@ renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute
 renderSampleResponse request =
   case requestRoute request of
     KnownRoute -> PageResponse (samplePage request)
+    QueryRoute queryString ->
+      BodyResponse
+        ResponseBody
+          { responseStatus = 200,
+            responseContentType = "text/plain; charset=utf-8",
+            responseBody = queryString,
+            responseObservabilityAttributes = [],
+            responseLogEntries = []
+          }
     DataRoute ->
       BodyResponse
         ResponseBody
@@ -1250,6 +1264,34 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       readResponseBody response
         `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+
+    it "passes raw query strings to the stored route parser while keeping request paths path-only" $ do
+      requestObservabilityReference <- newIORef Nothing
+      let queryApplication =
+            sampleApplication
+              { reportRequestObservability = writeIORef requestObservabilityReference . Just
+              }
+          queryRequest =
+            (waiRequest ["query"])
+              { Wai.rawQueryString = "?q=server%20rendering"
+              }
+      response <- performWaiRequest (toWaiApplication queryApplication) queryRequest
+      Wai.responseStatus response `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+      readResponseBody response `shouldReturn` "q=server%20rendering"
+      maybeRequestObservability <- readIORef requestObservabilityReference
+      fmap
+        ( filter ((== "url.path") . Observability.attributeName)
+            . Observability.requestSpanAttributes
+            . Observability.observabilityRequestSpan
+        )
+        maybeRequestObservability
+        `shouldBe` Just
+          [ Observability.ObservabilityAttribute
+              { Observability.attributeName = "url.path",
+                Observability.attributeValue = Observability.TextAttribute "/query"
+              }
+          ]
 
     it "treats an empty raw path as the root path" $ do
       response <- performWaiRequest (toWaiApplication rootPathApplication) Wai.defaultRequest

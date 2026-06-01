@@ -72,11 +72,12 @@ routeCodec =
     }
 
 parseRoute :: AppRequestContext -> Text -> Maybe (HarchWeb.RouteRequest AppRoute AppRequestContext)
-parseRoute requestContext path =
-  either (const Nothing) Just (selectRoute requestContext path)
+parseRoute requestContext target =
+  either (const Nothing) Just (selectRoute requestContext target)
 
 selectRoute :: AppRequestContext -> Text -> Either RouteSelectionError (HarchWeb.RouteRequest AppRoute AppRequestContext)
-selectRoute requestContext path = do
+selectRoute requestContext target = do
+  let path = routePath target
   (pathLocale, pathSurface, route) <- parseRoutePath path
   pure
     HarchWeb.RouteRequest
@@ -97,6 +98,10 @@ renderRoutePath routeRequest =
 
 matchRoute :: AppRequestContext -> Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
 matchRoute = HarchWeb.matchRoute routeCodec
+
+routePath :: Text -> Text
+routePath =
+  Text.takeWhile (/= '?')
 
 mergeRequestContext :: AppRequestContext -> Maybe AppLocale -> RequestSurface -> AppRequestContext
 mergeRequestContext requestContext maybeLocale pathSurface =

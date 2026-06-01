@@ -5339,6 +5339,7 @@ spec = do
 
     it "parses API routes with the API response surface" $ do
       parseRoute defaultRequestContext "/api/status" `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext "/api/status?fresh=1" `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
@@ -5347,6 +5348,9 @@ spec = do
 
     it "parses the second page path" $
       parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
+
+    it "keeps supported path routes available when raw query strings are present" $
+      parseRoute defaultRequestContext "/second?utm=demo" `shouldBe` Just secondRequest
 
     it "lets explicit locale prefixes override the incoming request context" $ do
       parseRoute defaultRequestContext "/fr/second" `shouldBe` Just frenchSecondRequest
@@ -5367,6 +5371,9 @@ spec = do
 
     it "rejects unsupported single-segment non-locale paths" $
       selectRoute defaultRequestContext "/missing" `shouldBe` Left (UnsupportedPath "/missing")
+
+    it "rejects unsupported query-bearing paths after separating the route path" $
+      selectRoute defaultRequestContext "/missing?utm=demo" `shouldBe` Left (UnsupportedPath "/missing")
 
     it "rejects locale-prefixed paths whose trailing segment is unsupported" $ do
       selectRoute defaultRequestContext "/fr/missing" `shouldBe` Left (UnsupportedPath "/fr/missing")

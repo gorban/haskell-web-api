@@ -855,7 +855,8 @@ toWaiApplication webApplication request respond = do
                     (applyResponseHeaders policyResponseHeaders staticResponse)
                 Nothing -> do
                   routeMatchingStartedAt <- getMonotonicTimeNSec
-                  let requestContext =
+                  let requestRouteTarget = waiRequestRouteTarget requestPolicyConfig request
+                      requestContext =
                         requestContextFromRequest
                           webApplication
                           request
@@ -864,7 +865,7 @@ toWaiApplication webApplication request respond = do
                         matchRoute
                           (routeCodec webApplication)
                           requestContext
-                          requestPath
+                          requestRouteTarget
                   routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
                   renderStartedAt <- getMonotonicTimeNSec
                   response <- renderResponse webApplication routeRequest
@@ -3271,6 +3272,18 @@ rawRequestPath request =
   if ByteString.null (Wai.rawPathInfo request)
     then "/"
     else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+
+waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> Text
+waiRequestRouteTarget requestPolicyConfig request =
+  appendRawQueryString
+    (waiRequestPath requestPolicyConfig request)
+    (Wai.rawQueryString request)
+
+appendRawQueryString :: Text -> ByteString.ByteString -> Text
+appendRawQueryString path rawQueryString =
+  if ByteString.null rawQueryString
+    then path
+    else path <> TextEncoding.decodeUtf8 rawQueryString
 
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request =
