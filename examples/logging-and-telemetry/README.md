@@ -1,4 +1,4 @@
-# 04-logging-and-telemetry
+# logging-and-telemetry
 
 **Status:** Current
 

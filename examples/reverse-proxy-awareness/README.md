@@ -1,4 +1,4 @@
-# 14-reverse-proxy-awareness
+# reverse-proxy-awareness
 
 **Status:** Current
 

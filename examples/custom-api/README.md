@@ -1,4 +1,4 @@
-# 12-custom-api
+# custom-api
 
 **Status:** Iterative
 

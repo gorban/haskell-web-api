@@ -79,7 +79,7 @@ app.
 
 - The desired usage model and the current-repo alignment analysis live in
   [docs/design-guidance.md](docs/design-guidance.md).
-- The first example to copy is [examples/01-two-pages](examples/01-two-pages/README.md): a minimal
+- The first example to copy is [examples/two-pages](examples/two-pages/README.md): a minimal
   two-page SSR app with same-origin progressive enhancement, no database, no telemetry, and no HTTPS
   yet.
 - The remaining example folders layer in isolated features such as PostgreSQL effects, telemetry,
@@ -119,7 +119,7 @@ main =
 That is the target authoring model: a tiny composition root, two SSR pages, and a small browser
 layer that only enhances same-origin navigation. Today, the closest grounded equivalent remains the
 combined example app in `packages/web-api`, while the fuller starter walkthrough lives in
-[`examples/01-two-pages`](examples/01-two-pages/README.md).
+[`examples/two-pages`](examples/two-pages/README.md).
 
 ### Build Status
 

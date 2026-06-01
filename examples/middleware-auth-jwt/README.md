@@ -1,4 +1,4 @@
-# 10-middleware-auth-jwt
+# middleware-auth-jwt
 
 **Status:** Aspirational
 

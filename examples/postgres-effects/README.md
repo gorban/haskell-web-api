@@ -1,4 +1,4 @@
-# 02-postgres-effects
+# postgres-effects
 
 **Status:** Current
 

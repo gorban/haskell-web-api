@@ -1,4 +1,4 @@
-# 03-custom-db-adapter
+# custom-db-adapter
 
 **Status:** Iterative
 

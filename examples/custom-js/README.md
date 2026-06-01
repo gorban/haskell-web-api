@@ -1,4 +1,4 @@
-# 11-custom-js
+# custom-js
 
 **Status:** Iterative
 

@@ -1,4 +1,4 @@
-# 06-https-provided-certificate
+# https-provided-certificate
 
 **Status:** Current
 
