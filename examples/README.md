@@ -35,6 +35,13 @@ The design target and alignment analysis live in [../docs/design-guidance.md](..
 | [13-multilanguage-routing](13-multilanguage-routing/README.md) | Iterative | Document the target path-based i18n routing story. |
 | [14-reverse-proxy-awareness](14-reverse-proxy-awareness/README.md) | Current | Run behind nginx with trusted forwarding and optional subpath mounting. |
 
+## Next Priority
+
+Before continuing the numbered ladder, define the route-template example shape in
+[route-templates](route-templates/README.md). It should cover both path parameters such as
+`/posts/:slug` and query-string parameters such as `/search?q=...`, including how `harch` anchors
+and GET forms parameterize those routes without hand-built URLs.
+
 ## Notes
 
 - `packages/web-api` remains the combined, full-featured example app.
