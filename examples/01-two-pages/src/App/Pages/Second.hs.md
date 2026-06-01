@@ -3,6 +3,8 @@
 Desired page-authoring shape:
 
 ```hs
+{-# LANGUAGE QuasiQuotes #-}
+
 module App.Pages.Second where
 
 import App.Routes (Route (..))
@@ -13,18 +15,32 @@ secondPage =
   page SecondRoute do
     title "Second"
     bootstrapHook "second-page"
-    styles do
-      lucius do
-        ".second-page-note { font-weight: 600; }"
-    client do
-      julius do
-        "document.documentElement.dataset.secondPageReady = 'true';"
-    body do
-      section_ [data_ "page" "second"] do
-        h1_ "Second"
-        p_ [class_ "second-page-note"] "This page also returns full HTML when loaded directly."
-        p_ do
-          routeLink_ HomeRoute "Back home"
+
+    markup [harch|
+      <section class=#{second.summary} data-page="second">
+        <h1>Second</h1>
+        <p class=#{second.note}>
+          This page also returns full HTML when loaded directly.
+        </p>
+        <p>
+          <a href=@{HomeRoute}>Back home</a>
+        </p>
+      </section>
+    |]
+
+    styles [lucius|
+      .#{second.summary} {
+        max-width: 40rem;
+      }
+
+      .#{second.note} {
+        font-weight: 600;
+      }
+    |]
+
+    client [julius|
+      document.documentElement.dataset.secondPageReady = "true";
+    |]
 ```
 
 Both pages should stay valid SSR endpoints. Progressive enhancement is an optimization layered on
