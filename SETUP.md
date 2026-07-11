@@ -1460,6 +1460,17 @@ Verify a new installation the same way:
 3. Make the same valid whitespace-only change again, save, and confirm format-on-save applies Ormolu.
 4. Confirm the saved file matches CI's formatter with `ormolu -m check FILE`.
 
+The extension source is guarded by a matching local/CI check:
+
+```bash
+tools/check-vscode-ormolu-formatter.sh
+```
+
+It installs the lockfile-pinned lint dependencies, runs ESLint and syntax checks, executes
+process-boundary unit tests, packages a VSIX with the pinned `@vscode/vsce` version, and verifies the
+packaged runtime contents. The tracked pre-commit hook and GitHub Actions run the same check, so a formatter
+source change cannot bypass local or CI validation.
+
 If `Format Document` / format-on-save integration is required, install the `sjurmillidahl.ormolu-vscode`
 extension **in the attached Dev Container**, then set it as the Haskell default formatter in Remote Settings:
 

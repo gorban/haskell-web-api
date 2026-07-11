@@ -203,6 +203,12 @@ jobs:
         run: |
           .github/scripts/formatting-checks.sh
 
+      - name: VS Code Ormolu formatter checks
+        if: steps.formatting_checks.outcome == 'success'
+        id: vscode_ormolu_formatter_checks
+        run: |
+          tools/check-vscode-ormolu-formatter.sh
+
       - name: Run integration and E2E tests
         if: steps.coverage.outcome == 'success'
         id: run_tests_skip_unit
@@ -233,6 +239,7 @@ jobs:
             steps.upload_coverage_artifact.outcome == 'failure' ||
             steps.deployment.outcome == 'failure' ||
             steps.formatting_checks.outcome == 'failure' ||
+            steps.vscode_ormolu_formatter_checks.outcome == 'failure' ||
             steps.run_tests_skip_unit.outcome == 'failure' ||
             steps.check_coverage_result.outcome == 'failure'
           )

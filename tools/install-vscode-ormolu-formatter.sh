@@ -20,7 +20,7 @@ fi
 
 vsix="$output_dir/haskell-web-api-ormolu-formatter.vsix"
 cd "$extension_dir"
-npx --yes @vscode/vsce package --out "$vsix"
+npx --yes @vscode/vsce@3.9.2 package --allow-missing-repository --out "$vsix"
 "$code_cli" --install-extension "$vsix" --force
 
 echo 'Installed haskell-web-api Ormolu Formatter in the attached VS Code server.'

@@ -1,29 +1,5 @@
-const childProcess = require("child_process");
 const vscode = require("vscode");
-
-function runOrmolu(executable, fileName, source) {
-  return new Promise((resolve, reject) => {
-    const child = childProcess.spawn(executable, ["--stdin-input-file", fileName], {
-      stdio: ["pipe", "pipe", "pipe"]
-    });
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk) => { stdout += chunk; });
-    child.stderr.on("data", (chunk) => { stderr += chunk; });
-    child.on("error", (error) => reject(error));
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve(stdout);
-      } else {
-        reject(new Error(stderr || `${executable} exited with status ${code}`));
-      }
-    });
-    child.stdin.end(source);
-  });
-}
+const { runOrmolu } = require("./ormolu");
 
 function activate(context) {
   const provider = vscode.languages.registerDocumentFormattingEditProvider(

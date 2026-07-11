@@ -5,12 +5,21 @@
   "version": "0.1.0",
   "publisher": "gorban",
   "private": true,
+  "license": "BSD-2-Clause-Patent",
+  "repository": "https://github.com/gorban/haskell-web-api.git",
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": ["Formatters"],
   "activationEvents": ["onLanguage:haskell"],
   "main": "extension.js",
+  "scripts": {
+    "lint": "eslint extension.js ormolu.js test/*.test.js",
+    "check": "node --check extension.js && node --check ormolu.js && node --test"
+  },
+  "devDependencies": {
+    "eslint": "9.39.2"
+  },
   "contributes": {
     "configuration": {
       "title": "haskell-web-api Ormolu Formatter",
