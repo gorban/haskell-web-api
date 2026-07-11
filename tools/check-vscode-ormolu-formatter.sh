@@ -7,6 +7,18 @@ extension_dir="$repo_root/tools/vscode-ormolu-formatter"
 output_dir="$(mktemp -d)"
 trap 'rm -rf "$output_dir"' EXIT
 
+if ! command -v ormolu >/dev/null 2>&1; then
+  echo 'Ormolu is required for the VS Code formatter integration check.' >&2
+  exit 1
+fi
+
+actual_format="$(printf 'module Example where\nanswer::Int\nanswer=42\n' | ormolu --stdin-input-file Example.hs)"
+expected_format="$(printf 'module Example where\n\nanswer :: Int\nanswer = 42')"
+if [ "$actual_format" != "$expected_format" ]; then
+  echo 'The installed Ormolu executable did not produce the expected formatting.' >&2
+  exit 1
+fi
+
 npm ci --prefix "$extension_dir" --ignore-scripts
 npm run lint --prefix "$extension_dir"
 npm run check --prefix "$extension_dir"

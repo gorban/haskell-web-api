@@ -191,7 +191,7 @@ jobs:
         id: deployment
         uses: actions/deploy-pages@v4
 
-      - name: Install formatting tools
+      - name: Install formatting and Ormolu test tools
         if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
         id: install_formatting_tools
         run: |

@@ -1466,10 +1466,12 @@ The extension source is guarded by a matching local/CI check:
 tools/check-vscode-ormolu-formatter.sh
 ```
 
-It installs the lockfile-pinned lint dependencies, runs ESLint and syntax checks, executes
-process-boundary unit tests, packages a VSIX with the pinned `@vscode/vsce` version, and verifies the
-packaged runtime contents. The tracked pre-commit hook and GitHub Actions run the same check, so a formatter
-source change cannot bypass local or CI validation.
+It first proves the installed Ormolu executable formats a representative Haskell module as expected, then
+installs the lockfile-pinned lint dependencies, runs ESLint and syntax checks, executes process-boundary unit
+tests, packages a VSIX with the pinned `@vscode/vsce` version, and verifies the packaged runtime contents.
+The tracked pre-commit hook and GitHub Actions run the same check. In CI, the preceding `Install formatting
+and Ormolu test tools` step supplies the pinned Ormolu binary, so a formatter source change cannot bypass
+local or CI validation.
 
 If `Format Document` / format-on-save integration is required, install the `sjurmillidahl.ormolu-vscode`
 extension **in the attached Dev Container**, then set it as the Haskell default formatter in Remote Settings:
