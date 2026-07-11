@@ -1391,6 +1391,91 @@ the running container.
   Then, close the attached VS Code window and re-attach to the container again. Finally `whoami` in the
   attached VS Code terminal should show the correct non-root user.
 
+### HLS formatter-plugin verification and rebuild
+
+The Haskell extension normally delegates Haskell document formatting to an HLS formatter plugin. Before
+assuming the extension can format with the `ormolu` executable on `PATH`, verify that the HLS binary selected
+for this project actually contains that plugin:
+
+```bash
+haskell-language-server-wrapper --probe-tools
+haskell-language-server-wrapper --list-plugins | rg '^(ormolu|fourmolu):'
+```
+
+For this repository, the probe must report project GHC `9.14.1`. A missing `ormolu:` / `fourmolu:` line
+means that the active HLS bindist cannot handle VS Code's `textDocument/formatting` request for Haskell
+files, even when `ormolu` itself is installed and works from the terminal. In that situation,
+`haskell.plugin.ormolu.config.external=true` is not a workaround: `external` only tells an already-loaded
+HLS Ormolu plugin to invoke the external executable; it cannot add a plugin that is absent from the binary.
+
+For the current GHC `9.14.1` toolchain, rebuilding HLS `2.14.0.0` does **not** resolve this: the official
+HLS source explicitly marks both `hls-ormolu-plugin` and `hls-fourmolu-plugin` unbuildable for GHC 9.14 and
+newer because their `ghc-lib-parser` dependency does not support that GHC version. Do not spend time on
+`ghcup compile hls` for this formatter issue. When choosing a future GHC/HLS combination, consult the
+official HLS plugin-support table and run the plugin check above before assuming editor formatting is
+available.
+
+When the plugin is present for a supported future toolchain, reload the attached VS Code window and configure
+the HLS Ormolu plugin in Remote Settings only:
+
+```jsonc
+{
+  "haskell.manageHLS": "PATH",
+  "haskell.formattingProvider": "ormolu",
+  "haskell.plugin.ormolu.config.external": true
+}
+```
+
+For the current toolchain, the Haskell extension cannot provide document formatting. The repository includes
+a small VS Code formatter provider at `tools/vscode-ormolu-formatter/` that invokes the same `ormolu` on
+the attached container's `PATH`; it is not a third-party formatter extension. Install it from a Dev
+Containers integrated terminal:
+
+```bash
+tools/install-vscode-ormolu-formatter.sh
+```
+
+Then select `gorban.haskell-web-api-ormolu-formatter` through `Format Document With...`, or make it the
+Remote default formatter and enable format-on-save:
+
+```jsonc
+{
+  "[haskell]": {
+    "editor.defaultFormatter": "gorban.haskell-web-api-ormolu-formatter",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+The extension formats the in-memory editor content through `ormolu --stdin-input-file`, so a failed parse
+leaves the file unchanged and reports the Ormolu error in VS Code. It can be reinstalled after source changes
+by rerunning the install script. This workaround was verified in the rootless Fedora Distrobox setup with
+GHC `9.14.1`: after `Developer: Reload Window`, both `Format Document` and format-on-save reformatted a
+deliberately mis-spaced `Config.hs` expression through the repo-owned extension.
+
+Verify a new installation the same way:
+
+1. Run `Developer: Reload Window` after installing the extension or changing Remote Settings.
+2. Open a `.hs` file, add extra whitespace to a valid expression, and run `Format Document`.
+3. Make the same valid whitespace-only change again, save, and confirm format-on-save applies Ormolu.
+4. Confirm the saved file matches CI's formatter with `ormolu -m check FILE`.
+
+If `Format Document` / format-on-save integration is required, install the `sjurmillidahl.ormolu-vscode`
+extension **in the attached Dev Container**, then set it as the Haskell default formatter in Remote Settings:
+
+```jsonc
+{
+  "[haskell]": {
+    "editor.defaultFormatter": "sjurmillidahl.ormolu-vscode",
+    "editor.formatOnSave": true
+  }
+}
+```
+
+Use `Format Document` on a deliberately mis-spaced expression, then confirm the same file is clean with
+`ormolu -m check FILE`. The separate semantic-token warning can be enabled away, if desired, with
+`"haskell.plugin.semanticTokens.globalOn": true`.
+
 ### Recommended VS Code Extensions
 
 - Haskell by the Haskell Foundation

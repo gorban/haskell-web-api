@@ -1,0 +1,26 @@
+{
+  "name": "haskell-web-api-ormolu-formatter",
+  "displayName": "haskell-web-api Ormolu Formatter",
+  "description": "Formats Haskell documents with the repository's Ormolu executable.",
+  "version": "0.1.0",
+  "publisher": "gorban",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Formatters"],
+  "activationEvents": ["onLanguage:haskell"],
+  "main": "extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "haskell-web-api Ormolu Formatter",
+      "properties": {
+        "haskellWebApiOrmolu.executable": {
+          "type": "string",
+          "default": "ormolu",
+          "description": "Ormolu executable to invoke in the attached development container."
+        }
+      }
+    }
+  }
+}
