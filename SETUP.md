@@ -48,7 +48,7 @@ box you can handle that explicitly with `distrobox-host-exec sudo podman` when n
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote postgresql"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote postgresql17 postgresql17-private-devel postgresql17-server-devel nodejs python3-pip"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -64,8 +64,10 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
   optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
-  built-in `vimdiff` tool inside the container, and `postgresql` keeps the `psql` CLI available without a
-  separate install step.
+  built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI available
+  without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel` are also needed on current Fedora to provide a working
+  `pg_config` and the `libpq` development link used by local source builds; `nodejs` is required by the
+  browser-harness e2e spec.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
   symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
@@ -108,6 +110,10 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
   `init_hooks` without permission to write `/var/run` or `/usr/local/bin`; in that case those lines now
   quietly skip instead of aborting `distrobox enter`. If they are skipped, host-container control from
   inside the box may still need separate manual setup.
+- Git's `git difftool --tool-help` can still list `bc` as unavailable because it only probes locally
+  installed GUI binaries. The bridge is working when `git difftool --no-prompt --tool=bc -- FILE` opens
+  host Beyond Compare through `/var/tmp/distrobox-git/bin/bcompare`; close Beyond Compare to let Git
+  continue.
 
 Then to assemble and run the container:
 ```bash
@@ -144,13 +150,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
     "channel".
 4.  Answer 'N' to disable the pre-releases channel.
 5.  Answer 'Y' to enable the cross channel (GHCJS, WASM, etc.).
-6.  Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc" (or
+6.  Answer 'Y' to enable the 3rdparty channel (hlint, dhall, ormulu).
+7.  Answer 'P' to automatically add (prepend) the required PATH variable to "$HOME/.bashrc" (or
     "$HOME/zshrc" on MacOS).
-7.  Answer 'Y' to install HLS (Haskell Language Server), we need it for IDE support.
-8.  Answer 'Y' to install stack (we might be able to build our project with Cabal alone, but other
+8.  Answer 'Y' to install HLS (Haskell Language Server), we need it for IDE support.
+9.  Answer 'Y' to install stack (we might be able to build our project with Cabal alone, but other
     projects might need stack).
-9.  Answer 'Y' to enable better integration of stack with GHCup (so stack uses GHCup's own GHC versions).
-10. MacOS only: look for security warnings installing with GHCup. They may appear as popups like "llc" Not
+10. Answer 'Y' to enable better integration of stack with GHCup (so stack uses GHCup's own GHC versions).
+11. MacOS only: look for security warnings installing with GHCup. They may appear as popups like "llc" Not
     Opened - Apple could not verify "llc" ...
     1. Select "Done" to not move each file to the Trash.
     2. After clicking "Done" before addressing any subsequent popup that appears (if any), you'll have to
@@ -164,7 +171,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://get-ghcup.haskell.org | sh
        executables.
     5. On rerun you may get popups again for the same executables like Open "llc"? This time, click Open
        Anyway for each. It may also ask for your password to allow the installation to proceed.
-11. For the new PATH variable to take effect:
+12. For the new PATH variable to take effect:
     1. You can immediately get `ghcup` on the system PATH by running command:
        ```bash
        . "$HOME/.ghcup/env"
@@ -183,8 +190,8 @@ version set segfaulted on specific operating systems. So we maintain a list of k
 here:
 - GHC 9.14.1
 - Cabal 3.16.1.0
-- Stack 3.9.1
-- HLS 2.13.0.0
+- Stack 3.11.1
+- HLS 2.14.0.0
 
 Run `ghcup tui` to manage installed versions of GHC, Cabal, Stack, HLS, etc.
 1. Immediately change GHC to the latest version that is "hls-powered" (compatible with Haskell Language
@@ -256,7 +263,9 @@ commands are also available on your `PATH`:
   No Playwright install is required yet; the current e2e path only needs a basic Node.js runtime. When a
   Playwright-backed runner is introduced, the intended handoff is `TEST_CORE_BROWSER_RUNNER=node` plus
   `TEST_CORE_BROWSER_RUNNER_ARGUMENTS=path/to/playwright-runner.js[,extra,args]`.
-- PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or `postgresql-devel` on Fedora) so local
+- PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or the `postgresql17-private-devel` plus
+  `postgresql17-server-devel` pair on Fedora)
+  so local
   source builds can compile the in-process runtime PostgreSQL adapter.
 - `psql` plus a local PostgreSQL server if you want to exercise migrations, seed data, or direct manual SQL
   checks locally.
@@ -275,7 +284,7 @@ sudo apt install -y nodejs postgresql postgresql-client libpq-dev
 ### Fedora
 
 ```bash
-sudo dnf install -y nodejs postgresql-server postgresql postgresql-devel
+sudo dnf install -y nodejs postgresql17 postgresql17-private-devel postgresql17-server-devel
 ```
 
 ### MacOS
@@ -581,6 +590,16 @@ were created inside it. The built image `localhost/haskell-web-api:dev` is left 
 store so you can restart the stack quickly.
 
 ## Reverse-Proxy Compose Example
+
+This optional example requires a Compose provider in addition to Podman itself. On a fresh Fedora
+Distrobox, install one before running `podman compose`:
+
+```bash
+python3 -m pip install --user podman-compose
+```
+
+The earlier rootless Podman-pod example does not require Compose and is the preferred first end-to-end
+verification of a new box.
 
 The repository now includes a canonical reverse-proxy container example under
 `examples/reverse-proxy/`:
@@ -1263,6 +1282,28 @@ outside normal WAI request middleware.
 
 If the request does not appear, re-check the firewall and router steps above first, then confirm the test
 device is really off the LAN (for example, disable Wi-Fi on the phone before retrying).
+
+#### Fresh Distrobox Verification Checklist
+
+After setup, verify the active shell and container bridge before treating the box as ready:
+
+```bash
+ghc --version
+cabal --version
+haskell-language-server-wrapper --version
+stack --version
+hspec-discover --help
+node --version
+pg_config --version
+podman info --format 'rootless={{.Host.Security.Rootless}} socket={{.Host.RemoteSocket.Path}}'
+test -S /var/run/docker.sock && echo docker-socket-bridge-ready
+```
+
+Install the CI formatting tools, then run `.github/scripts/formatting-checks.sh`. With PostgreSQL 17 and
+Jaeger available through rootless Podman, run `./generate-code-coverage.sh`, then
+`cabal build all -O2 --ghc-options=-Werror` and `cabal test all -O2 --test-options="--skip Unit"`.
+Finally, follow the rootless Podman end-to-end bring-up/tear-down example above to verify the runtime
+image, database migration, app endpoints, and cleanup.
 
 #### Additional Build Prerequisites for CI Builds
 
