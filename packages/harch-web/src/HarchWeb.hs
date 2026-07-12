@@ -157,7 +157,7 @@ where
 import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
-import Control.Monad (forever, replicateM, unless, void)
+import Control.Monad (replicateM, unless, void)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
@@ -195,6 +195,7 @@ import System.IO (Handle, hFlush, hPutStrLn)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Process (proc, readCreateProcessWithExitCode)
+import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import Text.ParserCombinators.ReadP (ReadP, char, choice, eof, get, manyTill, pfail, readP_to_S, sepBy, skipSpaces, string, (<++))
 import Text.Read (readMaybe)
 
@@ -2621,8 +2622,17 @@ listenerSchemePrefix listenerScheme =
     Https -> "HTTPS Server listening at https://"
 
 waitForShutdownSignal :: IO ()
-waitForShutdownSignal =
-  forever (threadDelay maxBound)
+waitForShutdownSignal = do
+  shutdownSignal <- newEmptyMVar
+  let noSignalMask = Nothing
+      installShutdownHandler signal handler = noSignalMask `seq` installHandler signal handler $! noSignalMask
+      requestShutdown = void (tryPutMVar shutdownSignal ())
+  previousInterruptHandler <- installShutdownHandler sigINT (Catch requestShutdown)
+  previousTerminationHandler <- installShutdownHandler sigTERM (Catch requestShutdown)
+  takeMVar shutdownSignal
+    `finally` do
+      _ <- installShutdownHandler sigINT previousInterruptHandler
+      installShutdownHandler sigTERM previousTerminationHandler
 
 runtimeStartupValidationError :: ServerStartupPlan -> Maybe String
 runtimeStartupValidationError startupPlan =
@@ -3779,6 +3789,9 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           (timedOtlpChildSpan startTimeUnixNano rootDurationNanoseconds)
           childSpanIds
           childSpans
+      rootSpan =
+        withoutDatabaseOperationAttributes
+          (Observability.observabilityRequestSpan requestObservability)
   let requestBody =
         otlpTraceBodyFromSpan
           serviceName
@@ -3788,7 +3801,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           traceState
           startTimeUnixNano
           endTimeUnixNano
-          (Observability.observabilityRequestSpan requestObservability)
+          rootSpan
           "SPAN_KIND_SERVER"
           (otlpRequestSpanStatusFields requestObservability)
           timedChildSpans
@@ -4069,6 +4082,25 @@ requestDatabaseChildSpans requestObservability =
     rootAttributes = Observability.requestSpanAttributes rootSpan
     requestStartMonotonicNanoseconds =
       requestSpanIntAttribute "harch.request.start_monotonic_ns" rootSpan
+
+withoutDatabaseOperationAttributes :: Observability.RequestSpan -> Observability.RequestSpan
+withoutDatabaseOperationAttributes requestSpan =
+  requestSpan
+    { Observability.requestSpanAttributes =
+        filter
+          (not . isDatabaseOperationAttribute)
+          (Observability.requestSpanAttributes requestSpan)
+    }
+
+isDatabaseOperationAttribute :: Observability.ObservabilityAttribute -> Bool
+isDatabaseOperationAttribute attribute =
+  Observability.attributeName attribute
+    `elem` [ "db.system",
+             "db.operation.name",
+             "db.query.template",
+             "db.operation.start_monotonic_ns",
+             "db.operation.duration_ns"
+           ]
 
 databaseChildSpansFromAttributes :: Maybe Word64 -> [Observability.ObservabilityAttribute] -> [(Text, Observability.RequestSpan)]
 databaseChildSpansFromAttributes requestStartMonotonicNanoseconds =

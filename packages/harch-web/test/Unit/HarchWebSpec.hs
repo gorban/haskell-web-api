@@ -30,6 +30,7 @@ import System.FilePath ((</>))
 import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
+import System.Posix.Signals (raiseSignal, sigINT, sigTERM)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec
 import Text.Read (readMaybe)
@@ -3640,6 +3641,9 @@ spec = do
         Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1
         Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1
+        Text.count "\"key\":\"db.system\"" requestBodyText `shouldBe` 3
+        Text.count "\"key\":\"db.operation.name\"" requestBodyText `shouldBe` 3
+        Text.count "\"key\":\"db.query.template\"" requestBodyText `shouldBe` 3
         Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1
         Text.count "\"kind\":\"SPAN_KIND_INTERNAL\"" requestBodyText `shouldBe` 3
         Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 3
@@ -3985,6 +3989,60 @@ spec = do
           waitForServerExit completionReference
           hClose outputHandle
           readFile outputPath `shouldReturn` ("HTTP Server listening at http://127.0.0.1:" <> show unusedPort <> "\n")
+
+    it "stops listeners and returns normally when it receives SIGTERM" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-sigterm-output.txt" $ \_ outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = unusedPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing,
+                        listenerAcme = Nothing
+                      }
+                  ]
+          _ <- forkIO $ do
+            result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          _ <- waitForServerResponse completionReference unusedPort "/known"
+          raiseSignal sigTERM
+          waitForServerExit completionReference
+          completionResult <- readIORef completionReference
+          case completionResult of
+            Just (Right ()) -> pure ()
+            Just (Left exception) -> expectationFailure ("expected SIGTERM shutdown to succeed, but got: " <> displayException exception)
+            Nothing -> expectationFailure "expected SIGTERM shutdown to complete"
+          hClose outputHandle
+
+    it "stops listeners and returns normally when it receives SIGINT" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-sigint-output.txt" $ \_ outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = unusedPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing,
+                        listenerAcme = Nothing
+                      }
+                  ]
+          _ <- forkIO $ do
+            result <- try (runServer outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          _ <- waitForServerResponse completionReference unusedPort "/known"
+          raiseSignal sigINT
+          waitForServerExit completionReference
+          completionResult <- readIORef completionReference
+          case completionResult of
+            Just (Right ()) -> pure ()
+            Just (Left exception) -> expectationFailure ("expected SIGINT shutdown to succeed, but got: " <> displayException exception)
+            Nothing -> expectationFailure "expected SIGINT shutdown to complete"
+          hClose outputHandle
 
     it "fails before startup when the listener plan is invalid" $
       withSystemTempFile "harch-web-output.txt" $ \_ outputHandle -> do

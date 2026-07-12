@@ -62,6 +62,7 @@ WORKDIR /app
 
 # Copy cabal files first for better layer caching
 COPY cabal.project ./
+COPY examples/two-pages/two-pages-example.cabal examples/two-pages/
 COPY packages/core/core.cabal packages/core/
 COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
