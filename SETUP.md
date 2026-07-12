@@ -64,10 +64,10 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
 - In that Fedora package list, `ncurses-devel` and `zlib-ng-compat-devel` are specifically needed for the
   optional Haskell Debugger. They are bundled into the example container definition so debugger setup works
   without an extra system package step later. `vim-enhanced` is included so git can always fall back to the
-  built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI available
-  without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel` are also needed on current Fedora to provide a working
-  `pg_config` and the `libpq` development link used by local source builds; `nodejs` is required by the
-  browser-harness e2e spec.
+  built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI
+  available without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel`
+  are also needed on current Fedora to provide a working `pg_config` and the `libpq` development link used
+  by local source builds; `nodejs` is required by the browser-harness e2e spec.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
   symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
@@ -682,8 +682,8 @@ xdg-open http://127.0.0.1:16686
 Expected results:
 
 - plain HTTP on port `80` redirects to HTTPS because the app sees `X-Forwarded-Proto: http`,
-- HTTPS on port `443` succeeds with the local certificate chain from `tls/local-root-ca.pem`, and the app sees
-  `X-Forwarded-Proto: https`,
+- HTTPS on port `443` succeeds with the local certificate chain from `tls/local-root-ca.pem`, and the app
+  sees `X-Forwarded-Proto: https`,
 - Jaeger stays available on `127.0.0.1:16686`.
 
 6. Tear the stack down when finished:
