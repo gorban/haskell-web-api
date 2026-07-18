@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWebSpec (spec) where
@@ -9,7 +10,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (isHexDigit)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
@@ -222,6 +223,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationRequestPolicy = requestPolicyConfig,
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
+      handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
       reportConnectionObservability = const (pure ()),
@@ -436,6 +438,7 @@ rootPathApplication =
       applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
+      handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),
       reportConnectionObservability = const (pure ()),
@@ -488,6 +491,12 @@ performWaiRequest webApplication request = do
   _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
   maybeResponse <- readIORef responseReference
   pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
+
+nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
+nextRequestBodyChunk chunksReference =
+  atomicModifyIORef' chunksReference $ \case
+    [] -> ([], ByteString.empty)
+    chunk : remainingChunks -> (remainingChunks, chunk)
 
 readResponseBody :: Wai.Response -> IO Text
 readResponseBody response = do
@@ -936,6 +945,9 @@ spec = do
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+          clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
+          regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -996,6 +1008,16 @@ spec = do
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
       responseObservabilityAttributes responseBodyValue `shouldBe` []
       responseLogEntries responseBodyValue `shouldBe` []
+      clientActionMethod clientActionRequest `shouldBe` "POST"
+      clientActionPath clientActionRequest `shouldBe` "/actions/subscribe"
+      clientActionFields clientActionRequest `shouldBe` [("email", "ada@example.com")]
+      clientActionCsrfToken clientActionRequest `shouldBe` Nothing
+      clientActionContext clientActionRequest `shouldBe` defaultContext
+      regionPatchId regionPatch `shouldBe` "status-region"
+      regionPatchHtml regionPatch `shouldBe` "<p>Ready</p>"
+      clientActionStatus clientActionResponse `shouldBe` 200
+      clientActionPatches clientActionResponse `shouldBe` [regionPatch]
+      clientActionFocusId clientActionResponse `shouldBe` Nothing
 
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -1040,6 +1062,12 @@ spec = do
           bodyResponseValue = BodyResponse body
           otherBodyResponseValue :: Response TestRoute TestContext
           otherBodyResponseValue = BodyResponse otherBody
+          clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Just "csrf-token", clientActionContext = defaultContext}
+          otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
+          regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
+          otherRegionPatch = RegionPatch {regionPatchId = "other-region", regionPatchHtml = "<p>Other</p>"}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email"}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing}
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
@@ -1098,6 +1126,18 @@ spec = do
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      (clientActionRequest == clientActionRequest) `shouldBe` True
+      (clientActionRequest /= otherClientActionRequest) `shouldBe` True
+      show clientActionRequest `shouldBe` "ClientActionRequest {clientActionMethod = \"POST\", clientActionPath = \"/actions/subscribe\", clientActionFields = [(\"email\",\"ada@example.com\")], clientActionCsrfToken = Just \"csrf-token\", clientActionContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}"
+      show [clientActionRequest] `shouldContain` "ClientActionRequest {clientActionMethod = \"POST\""
+      (regionPatch == regionPatch) `shouldBe` True
+      (regionPatch /= otherRegionPatch) `shouldBe` True
+      show regionPatch `shouldBe` "RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}"
+      show [regionPatch] `shouldContain` "RegionPatch {regionPatchId = \"status-region\""
+      (clientActionResponse == clientActionResponse) `shouldBe` True
+      (clientActionResponse /= otherClientActionResponse) `shouldBe` True
+      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\"}"
+      show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = 200"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -1107,6 +1147,8 @@ spec = do
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
+      handleClientAction sampleApplication ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
+        `shouldReturn` Nothing
       parseRoute codec defaultContext "/known" `shouldBe` Just request
       parseRoute codec defaultContext "/data" `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
       renderRoute codec request `shouldBe` "/known"
@@ -1288,6 +1330,76 @@ spec = do
       responseBody <- readResponseBody response
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+
+    it "decodes captured form fields and returns typed region patches without rendering a page" $ do
+      actionRequestReference <- newIORef Nothing
+      let actionApplication =
+            sampleApplication
+              { handleClientAction = \actionRequest -> do
+                  writeIORef actionRequestReference (Just actionRequest)
+                  pure
+                    ( Just
+                        ClientActionResponse
+                          { clientActionStatus = 422,
+                            clientActionPatches = [RegionPatch "status-region" "<p id=\"status-region\">Enter a valid email address.</p>"],
+                            clientActionFocusId = Just "email"
+                          }
+                    )
+              }
+      actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&intent=subscribe&blank&invalid=%FF"]
+      let capturedActionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["actions", "subscribe"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication actionApplication) capturedActionRequest
+      maybeCapturedActionRequest <- readIORef actionRequestReference
+      maybeCapturedActionRequest
+        `shouldBe` Just
+          ClientActionRequest
+            { clientActionMethod = "POST",
+              clientActionPath = "/actions/subscribe",
+              clientActionFields = [("email", "ada@example.com"), ("_csrf", "csrf-token"), ("intent", "subscribe"), ("blank", ""), ("invalid", "�")],
+              clientActionCsrfToken = Just "csrf-token",
+              clientActionContext = defaultContext
+            }
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 422
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
+      readResponseBody response
+        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
+
+    it "falls back to the SSR response when an action is not handled" $ do
+      actionBodyChunks <- newIORef []
+      let actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestHeaders = [("X-Harch-Action", "1")]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
+      Wai.responseStatus response `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
+
+    it "serializes action responses with no patches or focus target" $ do
+      let actionApplication =
+            sampleApplication
+              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing}))
+              }
+      actionBodyChunks <- newIORef []
+      let actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["actions", "empty"])
+                  { Wai.requestHeaders = [("X-Harch-Action", "1")]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
+      Wai.responseStatus response `shouldBe` Http.status204
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
 
     it "adds the page nonce to custom CSP script sources, including policies without script-src" $ do
       let applicationWithPolicy policy =

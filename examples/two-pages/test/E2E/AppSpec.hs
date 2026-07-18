@@ -40,6 +40,32 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "captures a submitted control before the deferred module loads, then patches its SSR region" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            fill emailField "ada@example"
+            submit subscriptionForm
+            assertUrl (`shouldBe` homeUrl)
+            assertValue emailField (`shouldBe` "ada@example")
+            assertMetrics $ \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 0}|])
+            releaseRequestsMatching "**/assets/navigation.js"
+            assertText (css "#subscription-result") (`shouldBe` "Enter a valid email address.")
+            assertFocused emailField (`shouldBe` True)
+            assertValue emailField (`shouldBe` "ada@example")
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            assertText (css "#subscription-result") (`shouldBe` "Thanks. Your subscription request is ready.")
+            assertMetrics $ \metrics ->
+              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 2}|])
+          )
+          `shouldReturn` Right ()
+
     it "keeps reload and script-disabled navigation fully server rendered" $
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"

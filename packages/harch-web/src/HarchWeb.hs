@@ -17,6 +17,8 @@ module HarchWeb
     ActiveAcmeChallenge (..),
     Application (..),
     CertbotConfig (..),
+    ClientActionRequest (..),
+    ClientActionResponse (..),
     CorsPolicyConfig (..),
     Document (..),
     HasServerConfig (..),
@@ -43,6 +45,7 @@ module HarchWeb
     Response (..),
     ResponseBody (..),
     ResponseSecurityHeadersConfig (..),
+    RegionPatch (..),
     ResolvedNavigationItem (..),
     RuntimeDescriptor (..),
     RuntimeNonce (..),
@@ -164,6 +167,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (replicateM, unless, void)
+import Data.Bifunctor (bimap)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
@@ -181,6 +185,7 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
@@ -189,6 +194,7 @@ import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
+import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Socket qualified as Socket
 import Network.TLS qualified as TLS
 import Network.Wai qualified as Wai
@@ -549,6 +555,32 @@ data ResponseBody = ResponseBody
   }
   deriving (Eq, Show)
 
+-- | A same-origin form action captured before deferred behavior modules load.
+-- Form fields preserve their authored order, including the successful submitter.
+data ClientActionRequest context = ClientActionRequest
+  { clientActionMethod :: Text,
+    clientActionPath :: Text,
+    clientActionFields :: [(Text, Text)],
+    clientActionCsrfToken :: Maybe Text,
+    clientActionContext :: context
+  }
+  deriving (Eq, Show)
+
+-- | A named SSR region replacement returned by a client action. The replacement
+-- must include the region element itself, preserving its id for later patches.
+data RegionPatch = RegionPatch
+  { regionPatchId :: Text,
+    regionPatchHtml :: Text
+  }
+  deriving (Eq, Show)
+
+data ClientActionResponse = ClientActionResponse
+  { clientActionStatus :: Int,
+    clientActionPatches :: [RegionPatch],
+    clientActionFocusId :: Maybe Text
+  }
+  deriving (Eq, Show)
+
 data Response route context
   = PageResponse (Page route context)
   | PageResponseWithMetadata ResponseBody (Page route context)
@@ -570,6 +602,7 @@ data Application route context = Application
     applicationRequestPolicy :: RequestPolicyConfig,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
+    handleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
@@ -638,10 +671,24 @@ defaultCaptureKernelScript =
     [ "(() => {",
       "  const queuedEvents = [];",
       "  const controlSelector = '[data-harch-control]';",
+      "  const actionSelector = 'form[data-harch-action=\"true\"]';",
       "  const capture = (event) => {",
       "    const target = event.target instanceof Element ? event.target.closest(controlSelector) : null;",
       "    if (target) {",
-      "      queuedEvents.push({ event, target });",
+      "      if (event.type === 'submit' && target.matches(actionSelector)) {",
+      "        const submitter = event.submitter instanceof HTMLElement ? event.submitter : undefined;",
+      "        const fields = [];",
+      "        new FormData(target, submitter).forEach((value, name) => {",
+      "          if (typeof value === 'string') {",
+      "            fields.push([name, value]);",
+      "          }",
+      "        });",
+      "        queuedEvents.push({ type: 'submit', action: target.action, method: target.method, fields });",
+      "        event.preventDefault();",
+      "      } else {",
+      "        queuedEvents.push({ event, target });",
+      "      }",
+      "      window.dispatchEvent(new Event('harch:capture'));",
       "    }",
       "  };",
       "  ['click', 'input', 'change', 'keydown', 'submit'].forEach((eventName) => {",
@@ -688,6 +735,58 @@ defaultNavigationRuntimeScript =
       "  const navigationRegionSelector = 'nav[data-navigation-region=\"primary\"]';",
       "  const navigationContentSelector = 'main[data-navigation-content=\"true\"]';",
       "  let navigationInFlight = false;",
+      "",
+      "  function applyActionResponse(actionResponse) {",
+      "    (actionResponse.patches || []).forEach((patch) => {",
+      "      const currentRegion = document.getElementById(patch.id);",
+      "      if (!currentRegion || typeof patch.html !== 'string') {",
+      "        return;",
+      "      }",
+      "      const replacementTemplate = document.createElement('template');",
+      "      replacementTemplate.innerHTML = patch.html;",
+      "      const replacementRegion = replacementTemplate.content.firstElementChild;",
+      "      if (replacementRegion) {",
+      "        currentRegion.replaceWith(replacementRegion);",
+      "      }",
+      "    });",
+      "    if (actionResponse.focusId) {",
+      "      document.getElementById(actionResponse.focusId)?.focus();",
+      "    }",
+      "  }",
+      "",
+      "  async function dispatchCapturedAction(capturedAction) {",
+      "    const actionUrl = new URL(capturedAction.action, window.location.href);",
+      "    if (actionUrl.origin !== window.location.origin) {",
+      "      return;",
+      "    }",
+      "    const body = new URLSearchParams(capturedAction.fields || []).toString();",
+      "    const response = await window.fetch(actionUrl, {",
+      "      method: capturedAction.method || 'POST',",
+      "      credentials: 'same-origin',",
+      "      headers: {",
+      "        'Accept': 'application/json',",
+      "        'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',",
+      "        'X-Harch-Action': '1',",
+      "      },",
+      "      body,",
+      "    });",
+      "    if (!response.ok && response.status >= 500) {",
+      "      return;",
+      "    }",
+      "    applyActionResponse(await response.json());",
+      "  }",
+      "",
+      "  function drainCapturedActions() {",
+      "    const captureKernel = window.__harchCaptureKernel;",
+      "    if (!captureKernel) {",
+      "      return;",
+      "    }",
+      "    captureKernel.drain().forEach((capturedEvent) => {",
+      "      if (capturedEvent.type === 'submit') {",
+      "        void dispatchCapturedAction(capturedEvent);",
+      "      }",
+      "    });",
+      "  }",
       "",
       "  function isPlainLeftClick(event) {",
       "    return event.button === 0 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey;",
@@ -796,6 +895,8 @@ defaultNavigationRuntimeScript =
       "",
       "  document.addEventListener('click', handleDocumentClick);",
       "  window.addEventListener('popstate', handlePopState);",
+      "  window.addEventListener('harch:capture', drainCapturedActions);",
+      "  drainCapturedActions();",
       "})();"
     ]
 
@@ -936,7 +1037,26 @@ toWaiApplication webApplication request respond = do
                           requestRouteTarget
                   routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
                   renderStartedAt <- getMonotonicTimeNSec
-                  response <- renderResponse webApplication routeRequest
+                  response <-
+                    if isClientActionRequest request
+                      then do
+                        requestBody <- Wai.strictRequestBody request
+                        let actionFields = parseClientActionFields requestBody
+                        maybeActionResponse <-
+                          handleClientAction
+                            webApplication
+                            ClientActionRequest
+                              { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
+                                clientActionPath = requestPath,
+                                clientActionFields = actionFields,
+                                clientActionCsrfToken = lookup "_csrf" actionFields,
+                                clientActionContext = requestContext
+                              }
+                        maybe
+                          (renderResponse webApplication routeRequest)
+                          (pure . BodyResponse . clientActionResponseBody)
+                          maybeActionResponse
+                      else renderResponse webApplication routeRequest
                   responseRenderedAt <- response `seq` getMonotonicTimeNSec
                   runtimeNonce <-
                     case response of
@@ -2892,6 +3012,49 @@ toWaiBodyResponse additionalHeaders responseBodyValue =
     (Http.mkStatus (responseStatus responseBodyValue) mempty)
     (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
     (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+isClientActionRequest :: Wai.Request -> Bool
+isClientActionRequest request =
+  lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
+
+parseClientActionFields :: LazyByteString.ByteString -> [(Text, Text)]
+parseClientActionFields requestBody =
+  map
+    (bimap decodeActionField (maybe "" decodeActionField))
+    (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
+
+decodeActionField :: ByteString.ByteString -> Text
+decodeActionField =
+  TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
+
+clientActionResponseBody :: ClientActionResponse -> ResponseBody
+clientActionResponseBody actionResponse =
+  ResponseBody
+    { responseStatus = clientActionStatus actionResponse,
+      responseContentType = "application/json; charset=utf-8",
+      responseBody =
+        TextEncoding.decodeUtf8
+          ( LazyByteString.toStrict
+              ( jsonObjectBytes
+                  [ ( "patches",
+                      jsonArrayBytes
+                        ( map
+                            ( \RegionPatch {regionPatchId = patchId, regionPatchHtml = patchHtml} ->
+                                jsonObjectBytes
+                                  [ ("id", jsonStringBytes patchId),
+                                    ("html", jsonStringBytes patchHtml)
+                                  ]
+                            )
+                            (clientActionPatches actionResponse)
+                        )
+                    ),
+                    ("focusId", maybe "null" jsonStringBytes (clientActionFocusId actionResponse))
+                  ]
+              )
+          ),
+      responseObservabilityAttributes = [],
+      responseLogEntries = []
+    }
 
 applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
 applyResponseHeaders additionalHeaders =

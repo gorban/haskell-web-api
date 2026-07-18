@@ -14,6 +14,8 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
   ( Application (..),
+    ClientActionRequest,
+    ClientActionResponse,
     Document,
     NavigationItem (..),
     NavigationRuntime,
@@ -54,6 +56,7 @@ data Site route context = Site
     siteRequestPolicy :: RequestPolicyConfig,
     siteRouteCodec :: RouteCodec route context,
     siteRoutes :: [SiteRoute route context],
+    siteHandleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
     siteReportConnectionObservability :: Observability.ConnectionObservability -> IO (),
@@ -78,6 +81,7 @@ simpleSite name defaultContext codec shellBuilder routeDefinitions =
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRouteCodec = codec,
       siteRoutes = routeDefinitions,
+      siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
       siteReportRequestObservability = \requestObservability ->
         Observability.forceRequestObservability requestObservability `seq` pure (),
@@ -111,6 +115,7 @@ buildSiteApplication site =
         applicationRequestPolicy = siteRequestPolicy site,
         routeCodec = siteRouteCodec site,
         renderResponse = renderSiteResponse site,
+        handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
         reportRequestObservability = siteReportRequestObservability site,
         reportConnectionObservability = siteReportConnectionObservability site,

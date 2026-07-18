@@ -138,7 +138,6 @@ async function releaseRequestsMatching(pattern) {
   const blocked = state.blockedRequests.get(pattern);
   if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
   state.blockedRequests.delete(pattern);
-  await state.context.unroute(pattern, blocked.handler);
   await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
     try {
       await route.continue();
@@ -147,6 +146,7 @@ async function releaseRequestsMatching(pattern) {
       reject(error);
     }
   }));
+  await state.context.unroute(pattern, blocked.handler);
   return null;
 }
 

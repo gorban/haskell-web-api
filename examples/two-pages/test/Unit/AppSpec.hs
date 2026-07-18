@@ -5,13 +5,15 @@ module Unit.AppSpec (spec) where
 import App.App (buildApplication, twoPageServerConfig, twoPageSite)
 import App.Routes (TwoPageRoute (..), routeHref)
 import qualified App.Routes as ExampleRoutes
+import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Lazy as LazyByteString
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import HarchWeb
-  ( ListenerConfig (..),
+  ( ClientActionRequest (..),
+    ListenerConfig (..),
     RouteRequest (..),
     applicationStaticAssets,
     appName,
@@ -124,7 +126,11 @@ spec =
         Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
         Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav>" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
+        Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True
+        Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True
         Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
+        Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True
+        Text.isInfixOf "event.preventDefault()" responseBody `shouldBe` True
         Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
 
       it "renders the second page as full SSR HTML with bootstrap hooks" $ do
@@ -152,6 +158,66 @@ spec =
         Text.isInfixOf "handlePopState" responseBody `shouldBe` True
         Text.isInfixOf "data-page-link=\"true\"" responseBody `shouldBe` True
         Text.isInfixOf "window.location.assign" responseBody `shouldBe` True
+        Text.isInfixOf "X-Harch-Action" responseBody `shouldBe` True
+        Text.isInfixOf "actionUrl.origin !== window.location.origin" responseBody `shouldBe` True
+        Text.isInfixOf "drainCapturedActions" responseBody `shouldBe` True
+
+      it "returns validation patches for captured subscription actions" $ do
+        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example"]
+        let actionRequest =
+              Wai.setRequestBodyChunks
+                (nextRequestBodyChunk actionBodyChunks)
+                ( (waiRequest ["actions", "subscribe"])
+                    { Wai.requestMethod = "POST",
+                      Wai.requestHeaders = [("X-Harch-Action", "1")]
+                    }
+                )
+        response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
+        Wai.responseStatus response `shouldBe` Http.status422
+        responseBody <- readResponseBody response
+        Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True
+        Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True
+
+      it "returns a success patch for valid captured subscription actions" $ do
+        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example.com"]
+        let actionRequest =
+              Wai.setRequestBodyChunks
+                (nextRequestBodyChunk actionBodyChunks)
+                ( (waiRequest ["actions", "subscribe"])
+                    { Wai.requestMethod = "POST",
+                      Wai.requestHeaders = [("X-Harch-Action", "1")]
+                    }
+                )
+        response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
+        Wai.responseStatus response `shouldBe` Http.status200
+        responseBody <- readResponseBody response
+        Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True
+        Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True
+
+      it "leaves unrelated client actions for other app routes" $
+        HarchWeb.handleClientAction
+          buildApplication
+          ClientActionRequest
+            { clientActionMethod = "POST",
+              clientActionPath = "/actions/other",
+              clientActionFields = [],
+              clientActionCsrfToken = Nothing,
+              clientActionContext = ()
+            }
+          `shouldReturn` Nothing
+
+      it "rejects an address that does not contain an at sign" $ do
+        invalidAction <-
+          HarchWeb.handleClientAction
+            buildApplication
+            ClientActionRequest
+              { clientActionMethod = "POST",
+                clientActionPath = "/actions/subscribe",
+                clientActionFields = [("email", "invalid")],
+                clientActionCsrfToken = Nothing,
+                clientActionContext = ()
+              }
+        fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just 422
 
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =
@@ -178,6 +244,13 @@ performWaiRequest webApplication request = do
 readResponseBody :: Wai.Response -> IO Text.Text
 readResponseBody response =
   decodeUtf8Response <$> readResponseBytes response
+
+nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
+nextRequestBodyChunk chunksReference =
+  atomicModifyIORef' chunksReference $ \chunks ->
+    case chunks of
+      [] -> ([], ByteString.empty)
+      chunk : remainingChunks -> (remainingChunks, chunk)
 
 readResponseBytes :: Wai.Response -> IO LazyByteString.ByteString
 readResponseBytes response = do

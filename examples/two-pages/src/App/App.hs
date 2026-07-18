@@ -11,14 +11,18 @@ import App.Pages.Home (homePage)
 import App.Pages.NotFound (notFoundPage)
 import App.Pages.Second (secondPage)
 import App.Routes (TwoPageRoute (..), routeCodec)
+import Data.Text qualified as Text
 import HarchWeb
   ( Application,
+    ClientActionRequest (..),
+    ClientActionResponse (..),
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
     RequestPolicyConfig (..),
     ServerConfig (..),
     StaticAssetsConfig (..),
+    RegionPatch (..),
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
@@ -46,8 +50,33 @@ twoPageSite =
       ]
   )
     { siteStaticAssets = twoPageStaticAssets,
-      siteRequestPolicy = twoPageRequestPolicy
+      siteRequestPolicy = twoPageRequestPolicy,
+      siteHandleClientAction = twoPageClientAction
     }
+
+twoPageClientAction :: ClientActionRequest () -> IO (Maybe ClientActionResponse)
+twoPageClientAction actionRequest =
+  pure $
+    case (clientActionMethod actionRequest, clientActionPath actionRequest) of
+      ("POST", "/actions/subscribe") ->
+        Just
+          ( case lookup "email" (clientActionFields actionRequest) of
+              Just emailAddress
+                | "@" `Text.isInfixOf` emailAddress,
+                  "." `Text.isInfixOf` emailAddress ->
+                ClientActionResponse
+                  { clientActionStatus = 200,
+                    clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Thanks. Your subscription request is ready.</p>"],
+                    clientActionFocusId = Nothing
+                  }
+              _ ->
+                ClientActionResponse
+                  { clientActionStatus = 422,
+                    clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"alert\">Enter a valid email address.</p>"],
+                    clientActionFocusId = Just "subscription-email"
+                  }
+          )
+      _ -> Nothing
 
 twoPageServerConfig :: ServerConfig
 twoPageServerConfig =

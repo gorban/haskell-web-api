@@ -12,7 +12,8 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-  ( HtmlAttribute (..),
+  ( ClientActionRequest (..),
+    HtmlAttribute (..),
     Page (..),
     PageShell (..),
     Response (..),
@@ -75,6 +76,10 @@ spec = do
       HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing
       HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
+      siteHandleClientAction sampleSite ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
+        `shouldReturn` Nothing
+      HarchWeb.handleClientAction siteApplication ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
+        `shouldReturn` Nothing
       siteReportRequestObservability sampleSite requestObservability `shouldReturn` ()
       siteReportConnectionObservability sampleSite connectionObservability `shouldReturn` ()
       siteReportApplicationLog sampleSite "sample-log" `shouldReturn` ()

@@ -24,6 +24,12 @@ homePage routeRequest =
               "<p><a href=\"",
               routeHref SecondRoute,
               "\" data-page-link=\"true\">Go to the second page</a></p>",
+              "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">",
+              "<label for=\"subscription-email\">Email address</label>",
+              "<input id=\"subscription-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required>",
+              "<button name=\"intent\" value=\"subscribe\" type=\"submit\">Subscribe</button>",
+              "</form>",
+              "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>",
               "</section>"
             ],
         pageBootstrapHooks = []
