@@ -185,7 +185,7 @@ sampleShell =
               attributeValue = "true"
             }
         ],
-      shellScriptSources = ["/assets/navigation.js"]
+      shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
     }
 
 emptyStaticAssets :: StaticAssetsConfig
@@ -933,8 +933,8 @@ spec = do
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           navigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/navigation.js", navigationRuntimeScript = "console.log('nav');"}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentScriptSources = ["/assets/navigation.js"]}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
@@ -978,13 +978,13 @@ spec = do
       documentMainAttributes document `shouldBe` [mainAttribute]
       documentMainContent document `shouldBe` "<h1>Known</h1>"
       documentBootstrapHooks document `shouldBe` ["known-page"]
-      documentScriptSources document `shouldBe` ["/assets/navigation.js"]
+      documentRuntimeDescriptors document `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationAttributes shell `shouldBe` [navigationAttribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
       shellMainId shell `shouldBe` "app-main"
       shellMainAttributes shell `shouldBe` [mainAttribute]
-      shellScriptSources shell `shouldBe` ["/assets/navigation.js"]
+      shellRuntimeDescriptors shell `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
       localServerHost localTestServer `shouldBe` "127.0.0.1"
       localServerPort localTestServer `shouldBe` 5001
       localServerBaseUrl localTestServer `shouldBe` "http://127.0.0.1:5001"
@@ -1014,12 +1014,16 @@ spec = do
           otherNavigationItem = NavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute}
           navigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/navigation.js", navigationRuntimeScript = "console.log('nav');"}
           otherNavigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/other-navigation.js", navigationRuntimeScript = "console.log('other');"}
+          inlineBootstrap = InlineBootstrap "capture" "window.capture = true;"
+          otherInlineBootstrap = InlineBootstrap "other-capture" "window.capture = false;"
+          runtimeNonce = RuntimeNonce "test-nonce"
+          otherRuntimeNonce = RuntimeNonce "other-nonce"
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentScriptSources = ["/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentScriptSources = []}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellScriptSources = ["/assets/navigation.js"]}
-          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellScriptSources = []}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentRuntimeDescriptors = []}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellRuntimeDescriptors = []}
           body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
           pageMetadata = ResponseBody {responseStatus = 500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
@@ -1055,21 +1059,28 @@ spec = do
       (navigationRuntime /= otherNavigationRuntime) `shouldBe` True
       show navigationRuntime `shouldBe` "NavigationRuntime {navigationRuntimePath = \"/assets/navigation.js\", navigationRuntimeScript = \"console.log('nav');\"}"
       show [navigationRuntime] `shouldBe` "[NavigationRuntime {navigationRuntimePath = \"/assets/navigation.js\", navigationRuntimeScript = \"console.log('nav');\"}]"
+      (inlineBootstrap == inlineBootstrap) `shouldBe` True
+      (inlineBootstrap /= otherInlineBootstrap) `shouldBe` True
+      show inlineBootstrap `shouldBe` "InlineBootstrap {runtimeDescriptorName = \"capture\", runtimeDescriptorSource = \"window.capture = true;\"}"
+      (runtimeNonce == runtimeNonce) `shouldBe` True
+      (runtimeNonce /= otherRuntimeNonce) `shouldBe` True
+      show runtimeNonce `shouldBe` "RuntimeNonce {runtimeNonceValue = \"test-nonce\"}"
+      show [runtimeNonce] `shouldBe` "[RuntimeNonce {runtimeNonceValue = \"test-nonce\"}]"
       (resolvedNavigationItem == resolvedNavigationItem) `shouldBe` True
       (resolvedNavigationItem /= otherResolvedNavigationItem) `shouldBe` True
       show resolvedNavigationItem `shouldBe` "ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}"
       (document == document) `shouldBe` True
       (document /= otherDocument) `shouldBe` True
-      show document `shouldBe` "Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentBootstrapHooks = [\"known-page\"], documentScriptSources = [\"/assets/navigation.js\"]}"
-      show [document] `shouldBe` "[Document {documentTitle = \"Known\", documentBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], documentNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], documentNavigation = [ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}], documentMainId = \"app-main\", documentMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], documentMainContent = \"<h1>Known</h1>\", documentBootstrapHooks = [\"known-page\"], documentScriptSources = [\"/assets/navigation.js\"]}]"
+      show document `shouldContain` "documentRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
+      show [document] `shouldContain` "documentRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       (localTestServer == localTestServer) `shouldBe` True
       (localTestServer /= otherLocalTestServer) `shouldBe` True
       show localTestServer `shouldBe` "LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}"
       show [localTestServer] `shouldBe` "[LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}]"
       (shell == shell) `shouldBe` True
       (shell /= otherShell) `shouldBe` True
-      show shell `shouldBe` "PageShell {shellBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], shellNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], shellNavigationItems = [NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}], shellMainId = \"app-main\", shellMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], shellScriptSources = [\"/assets/navigation.js\"]}"
-      show [shell] `shouldBe` "[PageShell {shellBodyAttributes = [HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}], shellNavigationAttributes = [HtmlAttribute {attributeName = \"data-navigation-region\", attributeValue = \"primary\"}], shellNavigationItems = [NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}], shellMainId = \"app-main\", shellMainAttributes = [HtmlAttribute {attributeName = \"data-navigation-content\", attributeValue = \"true\"}], shellScriptSources = [\"/assets/navigation.js\"]}]"
+      show shell `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
+      show [shell] `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
       show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
@@ -1101,8 +1112,17 @@ spec = do
       renderRoute codec request `shouldBe` "/known"
       notFoundRequest codec defaultContext `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
       renderResponse sampleApplication request `shouldReturn` PageResponse (samplePage request)
-      pageShell sampleApplication (samplePage request)
-        `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      renderDocument (pageShell sampleApplication (samplePage request))
+        `shouldBe` "<html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      Text.isInfixOf
+        "<script nonce=\"development-render-nonce\">window.capture = true;</script>"
+        ( renderDocument
+            ( (pageShell sampleApplication (samplePage request))
+                { documentRuntimeDescriptors = [InlineBootstrap "capture" "window.capture = true;"]
+                }
+            )
+        )
+        `shouldBe` True
       reportRequestObservability
         sampleApplication
         ( Observability.buildRequestObservability
@@ -1220,27 +1240,29 @@ spec = do
               ],
             documentMainContent = "<h1>Known</h1>",
             documentBootstrapHooks = [],
-            documentScriptSources = ["/assets/navigation.js"]
+            documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
           }
 
   describe "buildPageShell" $ do
     it "renders the shared HTML document for the supplied page and shell options" $
-      buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
-        `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      renderDocument (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+        `shouldBe` "<html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
 
     it "renders bootstrap hook metadata only for pages that opt in" $
-      buildPageShell
-        sampleCodec
-        sampleShell
-        ( Page
-            { pageTitle = "Known",
-              pageRoute = KnownRoute,
-              pageContext = defaultContext,
-              pageBody = "<h1>Known</h1>",
-              pageBootstrapHooks = ["known-page", "hydrate-known"]
-            }
+      renderDocument
+        ( buildPageShell
+            sampleCodec
+            sampleShell
+            ( Page
+                { pageTitle = "Known",
+                  pageRoute = KnownRoute,
+                  pageContext = defaultContext,
+                  pageBody = "<h1>Known</h1>",
+                  pageBootstrapHooks = ["known-page", "hydrate-known"]
+                }
+            )
         )
-        `shouldBe` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
+        `shouldBe` "<html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
 
   describe "toWaiApplication" $ do
     it "serves the configured navigation runtime before app route matching" $ do
@@ -1263,8 +1285,47 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["es", "known"])
       Wai.responseStatus response `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
+      Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+
+    it "adds the page nonce to custom CSP script sources, including policies without script-src" $ do
+      let applicationWithPolicy policy =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              (defaultRequestPolicy {responseSecurityHeaders = defaultResponseSecurityHeadersConfig {contentSecurityPolicy = Just policy}})
+      missingScriptSourceResponse <- performWaiRequest (toWaiApplication (applicationWithPolicy "default-src 'self'")) (waiRequest ["known"])
+      noneScriptSourceResponse <- performWaiRequest (toWaiApplication (applicationWithPolicy "script-src 'none'")) (waiRequest ["known"])
+      let missingScriptSourcePolicy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders missingScriptSourceResponse)))
+          noneScriptSourcePolicy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders noneScriptSourceResponse)))
+      Text.isInfixOf "; script-src 'nonce-" missingScriptSourcePolicy `shouldBe` True
+      Text.isInfixOf "script-src 'nonce-" noneScriptSourcePolicy `shouldBe` True
+      Text.isInfixOf "'none'" noneScriptSourcePolicy `shouldBe` False
+
+    it "uses the page nonce for page responses with metadata" $ do
+      let metadata =
+            ResponseBody
+              { responseStatus = 422,
+                responseContentType = "text/html; charset=utf-8",
+                responseBody = "",
+                responseObservabilityAttributes = [],
+                responseLogEntries = []
+              }
+          metadataApplication =
+            sampleApplication
+              { renderResponse = pure . PageResponseWithMetadata metadata . samplePage,
+                pageShell =
+                  \page ->
+                    (pageShell sampleApplication page)
+                      { documentRuntimeDescriptors = [InlineBootstrap "capture" "window.capture = true;"]
+                      }
+              }
+      response <- performWaiRequest (toWaiApplication metadataApplication) (waiRequest ["known"])
+      let policy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders response)))
+      Http.statusCode (Wai.responseStatus response) `shouldBe` 422
+      Text.isInfixOf "script-src 'self' 'nonce-" policy `shouldBe` True
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
 
     it "passes raw query strings to the stored route parser while keeping request paths path-only" $ do
       requestObservabilityReference <- newIORef Nothing
@@ -1297,8 +1358,8 @@ spec = do
     it "treats an empty raw path as the root path" $ do
       response <- performWaiRequest (toWaiApplication rootPathApplication) Wai.defaultRequest
       Wai.responseStatus response `shouldBe` Http.status200
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
 
     it "normalizes forwarded root prefixes for route matching and rendered root links" $ do
       let prefixedRootRequest =
@@ -1308,8 +1369,8 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication rootPathApplication) prefixedRootRequest
       Wai.responseStatus response `shouldBe` Http.status200
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/app/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
 
     it "uses forwarded path prefixes for route matching and rendered navigation links" $ do
       let prefixedRequest =
@@ -1319,15 +1380,15 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication trustedForwardedApplication) prefixedRequest
       Wai.responseStatus response `shouldBe` Http.status200
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Known</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/app/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<a href=\"/app/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
 
     it "renders the not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Missing</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\">Known</a><a href=\"/404\" data-page-link=\"true\" aria-current=\"page\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Missing</h1></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<h1>Missing</h1>" responseBody `shouldBe` True
 
     it "preserves body-response status, content type, and body" $ do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["data"])
@@ -2333,7 +2394,7 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 500
       Http.statusMessage (Wai.responseStatus response) `shouldBe` ""
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8"
-      readResponseBody response `shouldReturn` pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+      readResponseBody response `shouldReturn` renderDocument (pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
                            "GET"

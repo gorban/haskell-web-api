@@ -184,7 +184,7 @@ understands the following values:
 | `CORS_ALLOWED_METHODS` | Comma-delimited methods returned on allowed CORS preflight requests. | (`GET,HEAD,OPTIONS`) |
 | `CORS_ALLOWED_HEADERS` | Comma-delimited request headers returned on allowed CORS preflight requests. | (`Content-Type,X-Requested-With`) |
 | `CORS_MAX_AGE_SECONDS` | Optional `Access-Control-Max-Age` for allowed CORS preflight responses. | (`unset`) |
-| `CONTENT_SECURITY_POLICY` | Content-Security-Policy header. The default permits only same-origin scripts/styles/fonts/connects, same-origin plus `data:` images, and denies object embedding and frame ancestors. | strict same-origin policy |
+| `CONTENT_SECURITY_POLICY` | Content-Security-Policy header. The default permits only same-origin scripts/styles/fonts/connects, same-origin plus `data:` images, and denies object embedding and frame ancestors. Full HTML pages receive one fresh `script-src` nonce for HarchWeb's inline capture kernel. | strict same-origin policy |
 | `X_CONTENT_TYPE_OPTIONS_NOSNIFF` | Whether to emit `X-Content-Type-Options: nosniff`. Supported values use the shared boolean parser. | (`true`) |
 | `X_XSS_PROTECTION` | Compatibility `X-XSS-Protection` header value. | (`1; mode=block`) |
 | `REFERRER_POLICY` | Referrer-Policy header value. | (`strict-origin-when-cross-origin`) |
@@ -215,7 +215,9 @@ roots. Extensionless files are disabled by default; add an empty-extension conte
 specific deployment needs them.
 
 Runtime responses emit default hardening headers for CSP, nosniff, XSS-protection compatibility, referrer
-policy, permissions policy, and frame denial. CORS stays same-origin by default: configure
+policy, permissions policy, and frame denial. Each full SSR document gets a distinct CSP nonce for its
+declared inline bootstrap, without enabling `unsafe-inline`; deferred runtime modules remain external.
+CORS stays same-origin by default: configure
 `CORS_ALLOWED_ORIGINS` only for explicit browser clients that must read this app from another origin.
 
 The `SETUP_AUTOSTART_*` values are part of the setup/prerequisite configuration seam rather than the

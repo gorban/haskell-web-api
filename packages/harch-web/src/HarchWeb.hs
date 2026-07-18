@@ -44,6 +44,8 @@ module HarchWeb
     ResponseBody (..),
     ResponseSecurityHeadersConfig (..),
     ResolvedNavigationItem (..),
+    RuntimeDescriptor (..),
+    RuntimeNonce (..),
     RouteCodec (..),
     RouteRequest (..),
     RuntimeAcmeBindPlan (..),
@@ -76,6 +78,8 @@ module HarchWeb
     createAcmeOrder,
     decodeAcmeJsonResponse,
     defaultContentSecurityPolicy,
+    defaultCaptureKernel,
+    defaultCaptureKernelScript,
     defaultCorsPolicyConfig,
     defaultNavigationRuntime,
     defaultNavigationRuntimeScript,
@@ -131,6 +135,7 @@ module HarchWeb
     registerAcmeChallenges,
     renderAcmeResponseBody,
     renderDocument,
+    renderDocumentWithNonce,
     responseHeaderText,
     requestHostWithoutPort,
     routeHref,
@@ -151,6 +156,7 @@ module HarchWeb
     unicodeJsonCharacterParser,
     unregisterAcmeChallenges,
     withLocalTestServer,
+    generateRuntimeNonce,
   )
 where
 
@@ -191,7 +197,7 @@ import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
-import System.IO (Handle, hFlush, hPutStrLn)
+import System.IO (Handle, IOMode (ReadMode), hFlush, hPutStrLn, withBinaryFile)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
@@ -485,6 +491,24 @@ data NavigationRuntime = NavigationRuntime
   }
   deriving (Eq, Show)
 
+-- | Runtime assets are declared before document rendering so the server can
+-- apply the correct CSP policy without inspecting rendered HTML.
+data RuntimeDescriptor
+  = InlineBootstrap
+      { runtimeDescriptorName :: Text,
+        runtimeDescriptorSource :: Text
+      }
+  | DeferredModule
+      { runtimeDescriptorName :: Text,
+        runtimeDescriptorSource :: Text
+      }
+  deriving (Eq, Show)
+
+newtype RuntimeNonce = RuntimeNonce
+  { runtimeNonceValue :: Text
+  }
+  deriving (Eq, Show)
+
 data ResolvedNavigationItem route = ResolvedNavigationItem
   { navigationLabel :: Text,
     navigationRoute :: route,
@@ -502,7 +526,7 @@ data Document route = Document
     documentMainAttributes :: [HtmlAttribute],
     documentMainContent :: Text,
     documentBootstrapHooks :: [Text],
-    documentScriptSources :: [Text]
+    documentRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
 
@@ -512,7 +536,7 @@ data PageShell route context = PageShell
     shellNavigationItems :: [NavigationItem route],
     shellMainId :: Text,
     shellMainAttributes :: [HtmlAttribute],
-    shellScriptSources :: [Text]
+    shellRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
 
@@ -546,7 +570,7 @@ data Application route context = Application
     applicationRequestPolicy :: RequestPolicyConfig,
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
-    pageShell :: Page route context -> Text,
+    pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
     reportApplicationLog :: Text -> IO ()
@@ -597,6 +621,46 @@ defaultNavigationRuntime =
     { navigationRuntimePath = "/assets/navigation.js",
       navigationRuntimeScript = defaultNavigationRuntimeScript
     }
+
+-- | This tiny capture-phase kernel is deliberately inline in the head. It is
+-- installed before any framework control in the body can become interactive;
+-- larger behavior modules consume its queue after they load.
+defaultCaptureKernel :: RuntimeDescriptor
+defaultCaptureKernel =
+  InlineBootstrap
+    { runtimeDescriptorName = "harch-capture-kernel",
+      runtimeDescriptorSource = defaultCaptureKernelScript
+    }
+
+defaultCaptureKernelScript :: Text
+defaultCaptureKernelScript =
+  Text.unlines
+    [ "(() => {",
+      "  const queuedEvents = [];",
+      "  const controlSelector = '[data-harch-control]';",
+      "  const capture = (event) => {",
+      "    const target = event.target instanceof Element ? event.target.closest(controlSelector) : null;",
+      "    if (target) {",
+      "      queuedEvents.push({ event, target });",
+      "    }",
+      "  };",
+      "  ['click', 'input', 'change', 'keydown', 'submit'].forEach((eventName) => {",
+      "    document.addEventListener(eventName, capture, true);",
+      "  });",
+      "  window.__harchCaptureKernel = {",
+      "    drain: () => queuedEvents.splice(0),",
+      "  };",
+      "})();"
+    ]
+
+generateRuntimeNonce :: IO RuntimeNonce
+generateRuntimeNonce =
+  withBinaryFile "/dev/urandom" ReadMode $ \randomHandle -> do
+    randomBytes <- ByteString.hGet randomHandle 32
+    pure
+      ( RuntimeNonce
+          (TextEncoding.decodeUtf8 (Base64Url.encode randomBytes))
+      )
 
 navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
 navigationRuntimeScriptSource pathPrefix runtime =
@@ -758,16 +822,19 @@ buildDocument codec shell page =
       documentMainAttributes = shellMainAttributes shell,
       documentMainContent = pageBody page,
       documentBootstrapHooks = pageBootstrapHooks page,
-      documentScriptSources = shellScriptSources shell
+      documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }
 
 renderDocument :: Document route -> Text
-renderDocument document =
+renderDocument = renderDocumentWithNonce (RuntimeNonce "development-render-nonce")
+
+renderDocumentWithNonce :: RuntimeNonce -> Document route -> Text
+renderDocumentWithNonce runtimeNonce document =
   Text.concat
     [ "<html><head><title>",
       documentTitle document,
       "</title>",
-      renderScriptSources (documentScriptSources document),
+      renderRuntimeDescriptors runtimeNonce (documentRuntimeDescriptors document),
       "</head><body",
       renderAttributes (documentBodyAttributes document),
       "><nav",
@@ -783,8 +850,8 @@ renderDocument document =
       "</main></body></html>"
     ]
 
-buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Text
-buildPageShell codec shell = renderDocument . buildDocument codec shell
+buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
+buildPageShell = buildDocument
 
 matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route context
 matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
@@ -871,6 +938,11 @@ toWaiApplication webApplication request respond = do
                   renderStartedAt <- getMonotonicTimeNSec
                   response <- renderResponse webApplication routeRequest
                   responseRenderedAt <- response `seq` getMonotonicTimeNSec
+                  runtimeNonce <-
+                    case response of
+                      PageResponse _ -> generateRuntimeNonce
+                      PageResponseWithMetadata _ _ -> generateRuntimeNonce
+                      BodyResponse _ -> pure $! RuntimeNonce ""
                   let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
                       requestLogFields = requestLogContextFields requestPolicyConfig request
                       extraObservabilityAttributes =
@@ -930,8 +1002,8 @@ toWaiApplication webApplication request respond = do
                       >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
                       >> respond
                         ( applyResponseHeaders
-                            policyResponseHeaders
-                            (toWaiResponse [] webApplication response)
+                            (responsePolicyHeaders requestPolicyConfig request runtimeNonce response)
+                            (toWaiResponse [] runtimeNonce webApplication response)
                         )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
@@ -2773,26 +2845,36 @@ renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, naviga
       "</a>"
     ]
 
-renderScriptSources :: [Text] -> Text
-renderScriptSources =
-  Text.concat . map renderScriptSource
+renderRuntimeDescriptors :: RuntimeNonce -> [RuntimeDescriptor] -> Text
+renderRuntimeDescriptors runtimeNonce =
+  Text.concat . map (renderRuntimeDescriptor runtimeNonce)
 
-renderScriptSource :: Text -> Text
-renderScriptSource scriptSource =
-  Text.concat
-    [ "<script src=\"",
-      scriptSource,
-      "\" defer></script>"
-    ]
+renderRuntimeDescriptor :: RuntimeNonce -> RuntimeDescriptor -> Text
+renderRuntimeDescriptor runtimeNonce descriptor =
+  case descriptor of
+    InlineBootstrap {runtimeDescriptorSource = source} ->
+      Text.concat
+        [ "<script nonce=\"",
+          runtimeNonceValue runtimeNonce,
+          "\">",
+          source,
+          "</script>"
+        ]
+    DeferredModule {runtimeDescriptorSource = source} ->
+      Text.concat
+        [ "<script type=\"module\" src=\"",
+          source,
+          "\" defer></script>"
+        ]
 
-toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Application route context -> Response route context -> Wai.Response
-toWaiResponse additionalHeaders webApplication response =
+toWaiResponse :: (Eq route) => Http.ResponseHeaders -> RuntimeNonce -> Application route context -> Response route context -> Wai.Response
+toWaiResponse additionalHeaders runtimeNonce webApplication response =
   case response of
     PageResponse page ->
       Wai.responseLBS
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
         (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
+        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     PageResponseWithMetadata pageResponseBodyValue page ->
       let !pageStatusMessage = ByteString.empty
           !pageStatusMessageLength = ByteString.length pageStatusMessage
@@ -2800,7 +2882,7 @@ toWaiResponse additionalHeaders webApplication response =
        in Wai.responseLBS
             pageStatus
             (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     BodyResponse responseBodyValue ->
       toWaiBodyResponse additionalHeaders responseBodyValue
 
@@ -2882,11 +2964,27 @@ requestPolicyResponseHeaders requestPolicyConfig request =
     <> strictTransportSecurityHeaders requestPolicyConfig request
     <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request
 
+responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> RuntimeNonce -> Response route context -> Http.ResponseHeaders
+responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
+  responseSecurityHeaderValuesWithNonce
+    (responseSecurityHeaders requestPolicyConfig)
+    ( case response of
+        PageResponse _ -> Just runtimeNonce
+        PageResponseWithMetadata _ _ -> Just runtimeNonce
+        BodyResponse _ -> Nothing
+    )
+    <> strictTransportSecurityHeaders requestPolicyConfig request
+    <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request
+
 responseSecurityHeaderValues :: ResponseSecurityHeadersConfig -> Http.ResponseHeaders
 responseSecurityHeaderValues responseSecurityHeadersConfig =
+  responseSecurityHeaderValuesWithNonce responseSecurityHeadersConfig Nothing
+
+responseSecurityHeaderValuesWithNonce :: ResponseSecurityHeadersConfig -> Maybe RuntimeNonce -> Http.ResponseHeaders
+responseSecurityHeaderValuesWithNonce responseSecurityHeadersConfig maybeRuntimeNonce =
   catMaybes
     [ ("Content-Security-Policy",) . TextEncoding.encodeUtf8
-        <$> contentSecurityPolicy responseSecurityHeadersConfig,
+        <$> contentSecurityPolicyWithRuntimeNonce maybeRuntimeNonce (contentSecurityPolicy responseSecurityHeadersConfig),
       if contentTypeOptionsNoSniff responseSecurityHeadersConfig
         then Just ("X-Content-Type-Options", "nosniff")
         else Nothing,
@@ -2899,6 +2997,38 @@ responseSecurityHeaderValues responseSecurityHeadersConfig =
       ("X-Frame-Options",) . TextEncoding.encodeUtf8
         <$> frameOptions responseSecurityHeadersConfig
     ]
+
+contentSecurityPolicyWithRuntimeNonce :: Maybe RuntimeNonce -> Maybe Text -> Maybe Text
+contentSecurityPolicyWithRuntimeNonce maybeRuntimeNonce maybeContentSecurityPolicy =
+  case (maybeRuntimeNonce, maybeContentSecurityPolicy) of
+    (Just runtimeNonce, Just contentSecurityPolicy) -> Just (addRuntimeNonceToContentSecurityPolicy runtimeNonce contentSecurityPolicy)
+    (_, contentSecurityPolicy) -> contentSecurityPolicy
+
+addRuntimeNonceToContentSecurityPolicy :: RuntimeNonce -> Text -> Text
+addRuntimeNonceToContentSecurityPolicy runtimeNonce policy =
+  Text.intercalate
+    "; "
+    ( if any isScriptSourceDirective directives
+        then map addNonceToDirective directives
+        else directives <> ["script-src " <> nonceSource]
+    )
+  where
+    nonceSource = "'nonce-" <> runtimeNonceValue runtimeNonce <> "'"
+    directives = filter (not . Text.null) (map Text.strip (Text.splitOn ";" policy))
+    isScriptSourceDirective directive =
+      case Text.words directive of
+        "script-src" : _ -> True
+        _ -> False
+    addNonceToDirective directive =
+      case Text.words directive of
+        "script-src" : sources ->
+          Text.unwords
+            ( "script-src"
+                : if "'none'" `elem` sources
+                  then [nonceSource]
+                  else sources <> [nonceSource]
+            )
+        _ -> Text.strip directive
 
 strictTransportSecurityHeaders :: RequestPolicyConfig -> Wai.Request -> Http.ResponseHeaders
 strictTransportSecurityHeaders requestPolicyConfig request =

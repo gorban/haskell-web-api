@@ -14,6 +14,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
   ( Application (..),
+    Document,
     NavigationItem (..),
     NavigationRuntime,
     Page,
@@ -22,10 +23,12 @@ import HarchWeb
     Response (..),
     RouteCodec,
     RouteRequest,
+    RuntimeDescriptor (..),
     StaticAssetRoot,
     StaticAssetsConfig (..),
     StrictTransportSecurityConfig,
     buildPageShell,
+    defaultCaptureKernel,
     defaultCorsPolicyConfig,
     defaultNavigationRuntime,
     defaultResponseSecurityHeadersConfig,
@@ -127,7 +130,7 @@ renderSiteResponse site routeRequest =
             )
         )
 
-renderSitePageShell :: (Eq route) => Site route context -> Page route context -> Text
+renderSitePageShell :: (Eq route) => Site route context -> Page route context -> Document route
 renderSitePageShell site page =
   buildPageShell
     (siteRouteCodec site)
@@ -174,13 +177,19 @@ addFrameworkShellConventions site page shell =
         ensureAttribute "data-navigation-region" "primary" (shellNavigationAttributes shell),
       shellMainAttributes =
         ensureAttribute "data-navigation-content" "true" (shellMainAttributes shell),
-      shellScriptSources =
+      shellRuntimeDescriptors =
         maybe
-          (shellScriptSources shell)
+          (shellRuntimeDescriptors shell)
           ( \runtime ->
-              appendUnique
-                (navigationRuntimeScriptSource (siteNavigationRuntimePathPrefix site (HarchWeb.pageContext page)) runtime)
-                (shellScriptSources shell)
+              prependUnique
+                defaultCaptureKernel
+                ( appendUnique
+                    DeferredModule
+                      { runtimeDescriptorName = "harch-navigation",
+                        runtimeDescriptorSource = navigationRuntimeScriptSource (siteNavigationRuntimePathPrefix site (HarchWeb.pageContext page)) runtime
+                      }
+                    (shellRuntimeDescriptors shell)
+                )
           )
           (siteNavigationRuntime site)
     }
@@ -202,6 +211,12 @@ appendUnique value values =
   if value `elem` values
     then values
     else values <> [value]
+
+prependUnique :: (Eq a) => a -> [a] -> [a]
+prependUnique value values =
+  if value `elem` values
+    then values
+    else value : values
 
 emptyStaticAssetsConfig :: StaticAssetsConfig
 emptyStaticAssetsConfig =

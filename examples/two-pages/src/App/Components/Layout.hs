@@ -35,5 +35,5 @@ twoPageShell _ =
               attributeValue = "true"
             }
         ],
-      shellScriptSources = []
+      shellRuntimeDescriptors = []
     }

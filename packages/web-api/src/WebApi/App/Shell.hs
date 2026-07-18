@@ -6,7 +6,6 @@ module WebApi.App.Shell
   )
 where
 
-import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.Config (AppConfig (..))
 import WebApi.Route
@@ -15,7 +14,7 @@ import WebApi.Route
     routeCodec,
   )
 
-buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> Text
+buildAppPageShell :: AppConfig -> HarchWeb.Page AppRoute AppRequestContext -> HarchWeb.Document AppRoute
 buildAppPageShell config page =
   HarchWeb.pageTitle page `seq`
     HarchWeb.buildPageShell routeCodec (addAppNavigationItems (buildAppPageShellConfig config page)) page
@@ -44,7 +43,7 @@ buildAppPageShellConfig config page =
                 HarchWeb.attributeValue = "true"
               }
           ],
-        HarchWeb.shellScriptSources = []
+        HarchWeb.shellRuntimeDescriptors = []
       }
 
 addAppNavigationItems :: HarchWeb.PageShell AppRoute AppRequestContext -> HarchWeb.PageShell AppRoute AppRequestContext

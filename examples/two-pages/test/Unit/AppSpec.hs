@@ -124,7 +124,8 @@ spec =
         Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
         Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav>" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
-        Text.isInfixOf "<script src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+        Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
+        Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
 
       it "renders the second page as full SSR HTML with bootstrap hooks" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["second"])

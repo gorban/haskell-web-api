@@ -7,6 +7,7 @@ import Control.Exception (SomeException, displayException, try)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -86,9 +87,12 @@ spec = do
           homeRequest = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext "/app"}
       response <- HarchWeb.renderResponse siteApplication homeRequest
       case response of
-        PageResponse page ->
-          HarchWeb.pageShell siteApplication page
-            `shouldBe` "<html><head><title>Home</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/app/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/app/second\">Browse second</a></p></main></body></html>"
+        PageResponse page -> do
+          let document = HarchWeb.pageShell siteApplication page
+          HarchWeb.documentRuntimeDescriptors document
+            `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/assets/navigation.js"]
+          Text.isInfixOf "<script nonce=\"test-nonce\">" (HarchWeb.renderDocumentWithNonce (HarchWeb.RuntimeNonce "test-nonce") document)
+            `shouldBe` True
         PageResponseWithMetadata _ _ ->
           expectationFailure "expected pageSiteRoute to render a plain page response"
         BodyResponse _ ->
@@ -97,8 +101,27 @@ spec = do
     it "renders the configured not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["missing"])
       Wai.responseStatus response `shouldBe` Http.status404
-      readResponseBody response
-        `shouldReturn` "<html><head><title>Not Found</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Not Found</h1><p><a href=\"/\">Return home</a></p></main></body></html>"
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<h1>Not Found</h1>" responseBody `shouldBe` True
+      Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
+
+    it "binds each full HTML response to a fresh CSP nonce before body controls parse" $ do
+      let application = buildSiteApplication sampleSite
+      firstResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
+      secondResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
+      firstBody <- readResponseBody firstResponse
+      secondBody <- readResponseBody secondResponse
+      let firstPolicy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders firstResponse)))
+          secondPolicy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders secondResponse)))
+          firstNonce = nonceFromHtml firstBody
+          secondNonce = nonceFromHtml secondBody
+      firstNonce `shouldSatisfy` (/= Nothing)
+      secondNonce `shouldSatisfy` (/= Nothing)
+      Text.isInfixOf ("'nonce-" <> fromMaybe "" firstNonce) firstPolicy `shouldBe` True
+      Text.isInfixOf ("'nonce-" <> fromMaybe "" secondNonce) secondPolicy `shouldBe` True
+      Text.isInfixOf "unsafe-inline" firstPolicy `shouldBe` False
+      Text.isInfixOf "unsafe-inline" secondPolicy `shouldBe` False
+      firstNonce `shouldNotBe` secondNonce
 
     it "preserves body responses for unlabeled non-page routes" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["api", "status"])
@@ -118,29 +141,44 @@ spec = do
                         shellNavigationItems = [],
                         shellMainId = "app-main",
                         shellMainAttributes = [],
-                        shellScriptSources = []
+                        shellRuntimeDescriptors = []
                       }
               }
           siteApplication = buildSiteApplication bareShellSite
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
       PageResponse page <- HarchWeb.renderResponse siteApplication request
-      HarchWeb.pageShell siteApplication page
+      HarchWeb.renderDocument (HarchWeb.pageShell siteApplication page)
         `shouldBe` "<html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
 
-    it "does not duplicate a runtime script source already supplied by the app shell" $ do
+    it "does not duplicate a runtime module already supplied by the app shell" $ do
       let duplicatedRuntimeSite =
             sampleSite
               { sitePageShell =
                   \page ->
                     (samplePageShell page)
-                      { shellScriptSources = ["/assets/navigation.js"]
+                      { shellRuntimeDescriptors = [HarchWeb.DeferredModule "harch-navigation" "/assets/navigation.js"]
                       }
               }
           siteApplication = buildSiteApplication duplicatedRuntimeSite
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
       PageResponse page <- HarchWeb.renderResponse siteApplication request
-      HarchWeb.pageShell siteApplication page
-        `shouldBe` "<html><head><title>Home</title><script src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
+      HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
+        `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/assets/navigation.js"]
+
+    it "does not duplicate a capture kernel already supplied by the app shell" $ do
+      let duplicatedKernelSite =
+            sampleSite
+              { sitePageShell =
+                  \page ->
+                    (samplePageShell page)
+                      { shellRuntimeDescriptors = [HarchWeb.defaultCaptureKernel]
+                      }
+              }
+          siteApplication = buildSiteApplication duplicatedKernelSite
+          request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
+      PageResponse page <- HarchWeb.renderResponse siteApplication request
+      HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
+        `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/assets/navigation.js"]
 
     it "renders the framework runtime script source from page context" $ do
       let prefixedRuntimeSite =
@@ -150,8 +188,8 @@ spec = do
           siteApplication = buildSiteApplication prefixedRuntimeSite
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext "/app"}
       PageResponse page <- HarchWeb.renderResponse siteApplication request
-      HarchWeb.pageShell siteApplication page
-        `shouldBe` "<html><head><title>Home</title><script src=\"/app/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/app\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/app/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/app/second\">Browse second</a></p></main></body></html>"
+      HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
+        `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/app/assets/navigation.js"]
 
     it "fails loudly when the matched not-found route has not been configured" $ do
       let brokenSite =
@@ -261,7 +299,7 @@ samplePageShell page =
                 attributeValue = "true"
               }
           ],
-        shellScriptSources = []
+        shellRuntimeDescriptors = []
       }
 
 sampleRouteCodec :: RouteCodec SampleRoute SampleContext
@@ -329,3 +367,8 @@ readResponseBody response = do
       (pure ())
   chunks <- readIORef chunksReference
   pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
+
+nonceFromHtml :: Text -> Maybe Text
+nonceFromHtml html =
+  Text.stripPrefix "<script nonce=\"" (snd (Text.breakOn "<script nonce=\"" html))
+    >>= Just . Text.takeWhile (/= '"')

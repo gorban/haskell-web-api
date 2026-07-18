@@ -1163,6 +1163,9 @@ Application and static responses now include a strict default security header se
 `Referrer-Policy: strict-origin-when-cross-origin`, `Permissions-Policy`, and `X-Frame-Options: DENY`.
 The default CSP is same-origin oriented (`default-src 'self'`, `script-src 'self'`,
 `style-src 'self'`, `connect-src 'self'`) and denies framing with `frame-ancestors 'none'`.
+For every full HTML page response, the runtime adds a fresh script nonce to that page's
+`script-src` directive. HarchWeb uses it only for the small head capture kernel; declared deferred
+modules remain ordinary same-origin external scripts. This keeps the policy free of `unsafe-inline`.
 
 CORS is disabled by default in the browser sense: without `CORS_ALLOWED_ORIGINS`, responses do not emit
 `Access-Control-Allow-Origin`. For an explicit cross-origin browser client, configure exact origins and
