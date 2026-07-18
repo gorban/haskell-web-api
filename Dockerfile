@@ -83,9 +83,17 @@ COPY . .
 # =============================================================================
 FROM builder AS build-and-test
 
+# Install the test-only browser in this stage; release images remain browser-free.
+RUN <<EOF
+cd packages/test-core/playwright-runner
+npm ci
+npx playwright install chromium --with-deps
+EOF
+
 # Run coverage script (builds with -O0 for accurate coverage) then rebuild with -O2 for release
 RUN <<EOF
 ./generate-code-coverage.sh # Runs Unit tests and ensures 100% coverage
+cabal test two-pages-example-tests --test-show-details=direct --test-options="--match real-browser"
 cabal build all -O2
 cp dist-newstyle/build/x86_64-linux/ghc-*/haskell-web-api-*/opt/build/haskell-web-api/haskell-web-api /app/haskell-web-api-bin
 EOF

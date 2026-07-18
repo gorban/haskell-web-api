@@ -1,644 +1,72 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 {-# E2E_SPEC #-}
 
-import qualified Data.Text as Text
 import qualified HarchWeb
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi (buildApp)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
 
 spec =
-  describe "browser e2e" $ do
-    it "loads the home page through a real local HTTP listener and asserts SSR content" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript
-              browserConfig
-              [ VisitUrl (Text.unpack (HarchWeb.localServerBaseUrl localTestServer) <> "/"),
-                AssertTextEquals "[data-page-title=\"true\"]" "Home"
-              ]
-              `shouldReturn` Right ()
+  describe "stacked application real-browser smoke coverage" $ do
+    it "serves complete SSR and enhances same-origin navigation" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+          runBrowserScenario
+            browser
+            ( do
+                visit homeUrl
+                assertText (byRole Heading) (`shouldBe` "Home")
+                click (byRole Link `named` "Browse the second page")
+                assertUrl (`shouldBe` secondUrl)
+                assertText (byRole Heading) (`shouldBe` "Second")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            )
+            `shouldReturn` Right ()
 
-    it "fetches same-origin HTML through the tiny runtime without a hard document navigation" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript browserConfig (sameOriginNavigationActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
-              `shouldReturn` Right ()
+    it "keeps direct second-page loads and script-disabled navigation usable" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                assertText (byRole Heading) (`shouldBe` "Second")
+                visitWithoutScripts homeUrl
+                click (byRole Link `named` "Browse the second page")
+                assertUrl (`shouldBe` secondUrl)
+                assertText (byRole Heading) (`shouldBe` "Second")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+            )
+            `shouldReturn` Right ()
 
-    it "uses the enhanced navigation path for browser Back and Forward" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript browserConfig (sameOriginBackForwardActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
-              `shouldReturn` Right ()
-
-    it "keeps reloads and no-JavaScript fallback equivalent to ordinary SSR navigation" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript browserConfig (reloadAndNoScriptFallbackActions (Text.unpack (HarchWeb.localServerBaseUrl localTestServer)))
-              `shouldReturn` Right ()
-
-    it "loads the second page directly through a real local HTTP listener and asserts SSR content" $
-      withNodeBrowserRunner $ \browserConfig ->
-        withE2EAppConfig $ \appConfig ->
-          HarchWeb.withLocalTestServer (buildApp appConfig) $ \localTestServer ->
-            runBrowserScript
-              browserConfig
-              [ VisitUrl (Text.unpack (HarchWeb.localServerBaseUrl localTestServer) <> "/second"),
-                AssertTextEquals "title" "web-api: Second",
-                AssertTextEquals "[data-page-title=\"true\"]" "Second"
-              ]
-              `shouldReturn` Right ()
-
-withE2EAppConfig :: (AppConfig -> IO a) -> IO a
-withE2EAppConfig action =
-  withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory -> do
-    let appConfig =
-          defaultAppConfig
-            { staticAssets =
-                StaticAssetsConfig
-                  { staticAssetRoots =
-                      [ StaticAssetRoot
-                          { staticUrlPrefix = "/assets",
-                            staticDirectory = assetDirectory
-                          }
-                      ],
-                    staticAssetContentTypes = defaultStaticAssetContentTypes,
-                    staticCacheControlSeconds = Nothing
-                  }
-            }
-    action appConfig
-
-withNodeBrowserRunner :: (BrowserConfig -> IO a) -> IO a
-withNodeBrowserRunner action =
-  withSystemTempDirectory "web-api-browser-runner" $ \tempDirectory -> do
-    let scriptPath = tempDirectory <> "/web-api-browser-runner.js"
-        browserConfig =
-          defaultBrowserConfig
-            { browserRunnerCommand = "node",
-              browserRunnerArguments = [scriptPath]
-            }
-    writeFile scriptPath nodeBrowserRunnerSource
-    action browserConfig
-
-sameOriginNavigationActions :: String -> [BrowserAction]
-sameOriginNavigationActions baseUrl =
-  [ VisitUrl (baseUrl <> "/"),
-    ClickLinkWithText "Browse the second page",
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second",
-    AssertNavigationMetricEquals EnhancedFetchCount 1,
-    AssertNavigationMetricEquals HardNavigationCount 0
-  ]
-
-sameOriginBackForwardActions :: String -> [BrowserAction]
-sameOriginBackForwardActions baseUrl =
-  [ VisitUrl (baseUrl <> "/"),
-    ClickLinkWithText "Browse the second page",
-    NavigateHistoryBack,
-    AssertTextEquals "title" "web-api: Home",
-    AssertTextEquals "[data-page-title=\"true\"]" "Home",
-    NavigateHistoryForward,
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second"
-  ]
-
-reloadAndNoScriptFallbackActions :: String -> [BrowserAction]
-reloadAndNoScriptFallbackActions baseUrl =
-  [ VisitUrl (baseUrl <> "/second"),
-    ReloadPage,
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second",
-    VisitUrlWithoutScripts (baseUrl <> "/"),
-    ClickLinkWithText "Browse the second page",
-    AssertTextEquals "title" "web-api: Second",
-    AssertTextEquals "[data-page-title=\"true\"]" "Second",
-    AssertNavigationMetricEquals EnhancedFetchCount 0,
-    AssertNavigationMetricEquals HardNavigationCount 1
-  ]
-
-nodeBrowserRunnerSource :: String
-nodeBrowserRunnerSource =
-  unlines
-    [ "const fs = require('fs');",
-      "const http = require('http');",
-      "const https = require('https');",
-      "const vm = require('vm');",
-      "const { URL } = require('url');",
-      "",
-      "async function main() {",
-      "  const [requestPath, responsePath] = process.argv.slice(2);",
-      "  const requestLines = fs.readFileSync(requestPath, 'utf8').split(/\\r?\\n/).filter(Boolean);",
-      "  let currentSession = null;",
-      "",
-      "  for (const line of requestLines) {",
-      "    const parts = line.split('\\t');",
-      "    if (parts[0] === 'headless' || parts[0] === 'keep-open-on-failure') {",
-      "      continue;",
-      "    }",
-      "    if (parts[0] !== 'action') {",
-      "      return writeError(responsePath, `Unexpected request line: ${line}`);",
-      "    }",
-      "",
-      "    const action = parts[1];",
-      "    switch (action) {",
-      "      case 'visit-url':",
-      "        currentSession = await BrowserSession.visit(parts[2]);",
-      "        break;",
-      "      case 'visit-url-without-scripts':",
-      "        currentSession = await BrowserSession.visit(parts[2], false);",
-      "        break;",
-      "      case 'reload-page':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.reload();",
-      "        break;",
-      "      case 'click-link-with-text':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.clickLinkWithText(parts.slice(2).join('\\t'));",
-      "        break;",
-      "      case 'history-back':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.window.history.back();",
-      "        break;",
-      "      case 'history-forward':",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        await currentSession.window.history.forward();",
-      "        break;",
-      "      case 'assert-text-equals': {",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        const selector = parts[2];",
-      "        const expected = parts.slice(3).join('\\t');",
-      "        const actual = currentSession.extractSelectorText(selector);",
-      "        if (actual !== expected) {",
-      "          return writeError(responsePath, `Expected ${selector} to equal ${expected}, but found ${actual}`);",
-      "        }",
-      "        break;",
-      "      }",
-      "      case 'assert-navigation-metric-equals': {",
-      "        if (currentSession === null) {",
-      "          return writeError(responsePath, 'No page has been loaded yet.');",
-      "        }",
-      "        const metricName = parts[2];",
-      "        const expectedCount = Number(parts[3]);",
-      "        if (!Number.isInteger(expectedCount)) {",
-      "          return writeError(responsePath, `Expected an integer navigation metric count for ${metricName}, but found ${parts[3]}`);",
-      "        }",
-      "        currentSession.assertNavigationMetricEquals(metricName, expectedCount);",
-      "        break;",
-      "      }",
-      "      default:",
-      "        return writeError(responsePath, `Unsupported action: ${action}`);",
-      "    }",
-      "  }",
-      "",
-      "  fs.writeFileSync(responsePath, 'ok\\n');",
-      "}",
-      "",
-      "class BrowserSession {",
-      "  static async visit(targetUrl, scriptsEnabled = true) {",
-      "    const response = await fetchResponse(targetUrl);",
-      "    const session = new BrowserSession(targetUrl, parseHtml(response.body, `visit ${targetUrl}`), scriptsEnabled);",
-      "    if (session.scriptsEnabled) {",
-      "      await session.loadExternalScripts();",
-      "    }",
-      "    return session;",
-      "  }",
-      "",
-      "  constructor(targetUrl, page, scriptsEnabled) {",
-      "    this.currentUrl = targetUrl;",
-      "    this.page = page;",
-      "    this.scriptsEnabled = scriptsEnabled;",
-      "    this.documentListeners = { click: [] };",
-      "    this.windowListeners = { popstate: [] };",
-      "    this.pendingPromises = new Set();",
-      "    this.historyEntries = [targetUrl];",
-      "    this.historyIndex = 0;",
-      "    this.navigationMetrics = {",
-      "      'enhanced-fetch-count': 0,",
-      "      'hard-navigation-count': 0,",
-      "    };",
-      "    this.assignedUrl = null;",
-      "    this.document = this.buildDocument();",
-      "    this.window = this.buildWindow();",
-      "  }",
-      "",
-      "  async loadExternalScripts() {",
-      "    for (const scriptSource of this.page.scriptSources) {",
-      "      const scriptResponse = await fetchResponse(resolveUrl(scriptSource, this.currentUrl));",
-      "      const context = {",
-      "        window: this.window,",
-      "        document: this.document,",
-      "        DOMParser: this.window.DOMParser,",
-      "        URL,",
-      "        Map,",
-      "        Array,",
-      "        console,",
-      "      };",
-      "      this.window.window = this.window;",
-      "      this.window.document = this.document;",
-      "      vm.runInNewContext(scriptResponse.body, context, { filename: scriptSource });",
-      "    }",
-      "  }",
-      "",
-      "  buildDocument() {",
-      "    const session = this;",
-      "    return {",
-      "      get title() {",
-      "        return session.page.title;",
-      "      },",
-      "      set title(value) {",
-      "        session.page.title = value;",
-      "      },",
-      "      get body() {",
-      "        return session.liveBodyElement();",
-      "      },",
-      "      addEventListener(eventName, listener) {",
-      "        if (!session.documentListeners[eventName]) {",
-      "          session.documentListeners[eventName] = [];",
-      "        }",
-      "        session.documentListeners[eventName].push(listener);",
-      "      },",
-      "      querySelector(selector) {",
-      "        return session.currentDocumentElement(selector);",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  buildWindow() {",
-      "    const session = this;",
-      "    class SimpleDOMParser {",
-      "      parseFromString(html) {",
-      "        return session.parsedDocument(parseHtml(html, `dom-parser ${session.currentUrl}`));",
-      "      }",
-      "    }",
-      "",
-      "    return {",
-      "      get location() {",
-      "        return {",
-      "          get href() {",
-      "            return session.currentUrl;",
-      "          },",
-      "          get origin() {",
-      "            return new URL(session.currentUrl).origin;",
-      "          },",
-      "          assign(targetUrl) {",
-      "            session.assignedUrl = resolveUrl(targetUrl, session.currentUrl);",
-      "            session.trackPromise(session.hardNavigate(session.assignedUrl));",
-      "          },",
-      "        };",
-      "      },",
-      "      history: {",
-      "        pushState(_state, _title, targetUrl) {",
-      "          session.pushHistory(resolveUrl(targetUrl, session.currentUrl));",
-      "        },",
-      "        back() {",
-      "          return session.navigateHistoryDelta(-1);",
-      "        },",
-      "        forward() {",
-      "          return session.navigateHistoryDelta(1);",
-      "        },",
-      "      },",
-      "      addEventListener(eventName, listener) {",
-      "        if (!session.windowListeners[eventName]) {",
-      "          session.windowListeners[eventName] = [];",
-      "        }",
-      "        session.windowListeners[eventName].push(listener);",
-      "      },",
-      "      fetch(targetUrl) {",
-      "        session.navigationMetrics['enhanced-fetch-count'] += 1;",
-      "        return session.trackPromise(",
-      "          fetchResponse(resolveUrl(targetUrl, session.currentUrl)).then((response) => ({",
-      "            ok: response.statusCode >= 200 && response.statusCode < 300,",
-      "            text: () => session.trackPromise(Promise.resolve(response.body)),",
-      "          }))",
-      "        );",
-      "      },",
-      "      DOMParser: SimpleDOMParser,",
-      "    };",
-      "  }",
-      "",
-      "  liveBodyElement() {",
-      "    const session = this;",
-      "    return {",
-      "      get attributes() {",
-      "        return attributeEntries(session.page.bodyAttributes);",
-      "      },",
-      "      removeAttribute(name) {",
-      "        delete session.page.bodyAttributes[name];",
-      "      },",
-      "      setAttribute(name, value) {",
-      "        session.page.bodyAttributes[name] = value;",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  parsedDocument(page) {",
-      "    return {",
-      "      body: {",
-      "        attributes: attributeEntries(page.bodyAttributes),",
-      "      },",
-      "      querySelector(selector) {",
-      "        switch (selector) {",
-      "          case 'title':",
-      "            return { textContent: page.title };",
-      "          case 'nav[data-navigation-region=\"primary\"]':",
-      "            return parsedRegionElement('nav', page);",
-      "          case 'main[data-navigation-content=\"true\"]':",
-      "            return parsedRegionElement('main', page);",
-      "          default:",
-      "            return null;",
-      "        }",
-      "      },",
-      "    };",
-      "  }",
-      "",
-      "  currentDocumentElement(selector) {",
-      "    switch (selector) {",
-      "      case 'nav[data-navigation-region=\"primary\"]':",
-      "        return currentRegionElement(this, 'nav');",
-      "      case 'main[data-navigation-content=\"true\"]':",
-      "        return currentRegionElement(this, 'main');",
-      "      default:",
-      "        return null;",
-      "    }",
-      "  }",
-      "",
-      "  extractSelectorText(selector) {",
-      "    switch (selector) {",
-      "      case '[data-page-title=\"true\"]':",
-      "        return this.page.pageTitle;",
-      "      case 'title':",
-      "        return this.page.title;",
-      "      default:",
-      "        throw new Error(`Unsupported selector: ${selector}`);",
-      "    }",
-      "  }",
-      "",
-      "  async clickLinkWithText(linkText) {",
-      "    const link = this.page.links.find((candidate) => candidate.text === linkText);",
-      "    if (!link) {",
-      "      throw new Error(`Could not find link with text: ${linkText}`);",
-      "    }",
-      "",
-      "    const event = {",
-      "      defaultPrevented: false,",
-      "      button: 0,",
-      "      metaKey: false,",
-      "      ctrlKey: false,",
-      "      shiftKey: false,",
-      "      altKey: false,",
-      "      target: anchorElement(link),",
-      "      preventDefault() {",
-      "        this.defaultPrevented = true;",
-      "      },",
-      "    };",
-      "",
-      "    for (const listener of this.documentListeners.click || []) {",
-      "      listener(event);",
-      "    }",
-      "",
-      "    if (!event.defaultPrevented) {",
-      "      await this.hardNavigate(link.href);",
-      "      return;",
-      "    }",
-      "",
-      "    await this.waitForSettled();",
-      "  }",
-      "",
-      "  async reload() {",
-      "    const response = await fetchResponse(this.currentUrl);",
-      "    this.page = parseHtml(response.body, `reload ${this.currentUrl}`);",
-      "    this.documentListeners = { click: [] };",
-      "    this.windowListeners = { popstate: [] };",
-      "    if (this.scriptsEnabled) {",
-      "      await this.loadExternalScripts();",
-      "    }",
-      "  }",
-      "",
-      "  async hardNavigate(targetUrl) {",
-      "    this.navigationMetrics['hard-navigation-count'] += 1;",
-      "    const resolvedTargetUrl = resolveUrl(targetUrl, this.currentUrl);",
-      "    const response = await fetchResponse(resolvedTargetUrl);",
-      "    this.pushHistory(resolvedTargetUrl);",
-      "    this.page = parseHtml(response.body, `hard-navigate ${targetUrl}`);",
-      "    this.assignedUrl = null;",
-      "    this.documentListeners = { click: [] };",
-      "    this.windowListeners = { popstate: [] };",
-      "    if (this.scriptsEnabled) {",
-      "      await this.loadExternalScripts();",
-      "    }",
-      "  }",
-      "",
-      "  assertNavigationMetricEquals(metricName, expectedCount) {",
-      "    const actualCount = this.navigationMetrics[metricName];",
-      "    if (typeof actualCount !== 'number') {",
-      "      throw new Error(`Unsupported navigation metric: ${metricName}`);",
-      "    }",
-      "    if (actualCount !== expectedCount) {",
-      "      throw new Error(`Expected navigation metric ${metricName} to equal ${expectedCount}, but found ${actualCount}`);",
-      "    }",
-      "  }",
-      "",
-      "  pushHistory(targetUrl) {",
-      "    if (this.historyIndex < this.historyEntries.length - 1) {",
-      "      this.historyEntries = this.historyEntries.slice(0, this.historyIndex + 1);",
-      "    }",
-      "    this.historyEntries.push(targetUrl);",
-      "    this.historyIndex = this.historyEntries.length - 1;",
-      "    this.currentUrl = targetUrl;",
-      "  }",
-      "",
-      "  async navigateHistoryDelta(delta) {",
-      "    const nextIndex = this.historyIndex + delta;",
-      "    if (nextIndex < 0 || nextIndex >= this.historyEntries.length) {",
-      "      return;",
-      "    }",
-      "    this.historyIndex = nextIndex;",
-      "    this.currentUrl = this.historyEntries[this.historyIndex];",
-      "    for (const listener of this.windowListeners.popstate || []) {",
-      "      listener({});",
-      "    }",
-      "    await this.waitForSettled();",
-      "  }",
-      "",
-      "  trackPromise(promise) {",
-      "    const trackedPromise = Promise.resolve(promise).finally(() => {",
-      "      this.pendingPromises.delete(trackedPromise);",
-      "    });",
-      "    this.pendingPromises.add(trackedPromise);",
-      "    return trackedPromise;",
-      "  }",
-      "",
-      "  async waitForSettled() {",
-      "    while (this.pendingPromises.size > 0) {",
-      "      await Promise.all(Array.from(this.pendingPromises));",
-      "      await new Promise((resolve) => setImmediate(resolve));",
-      "    }",
-      "  }",
-      "}",
-      "",
-      "function writeError(responsePath, message) {",
-      "  fs.writeFileSync(responsePath, `error\\t${message}\\n`);",
-      "}",
-      "",
-      "function resolveUrl(targetUrl, baseUrl) {",
-      "  return new URL(targetUrl, baseUrl).href;",
-      "}",
-      "",
-      "function fetchResponse(targetUrl) {",
-      "  const parsedUrl = new URL(targetUrl);",
-      "  const client = parsedUrl.protocol === 'https:' ? https : http;",
-      "  return new Promise((resolve, reject) => {",
-      "    const request = client.get(parsedUrl, (response) => {",
-      "      let responseBody = '';",
-      "      response.setEncoding('utf8');",
-      "      response.on('data', (chunk) => {",
-      "        responseBody += chunk;",
-      "      });",
-      "      response.on('end', () => {",
-      "        resolve({",
-      "          statusCode: response.statusCode || 0,",
-      "          body: responseBody,",
-      "        });",
-      "      });",
-      "    });",
-      "    request.on('error', reject);",
-      "  });",
-      "}",
-      "",
-      "function parseHtml(html, sourceLabel) {",
-      "  return {",
-      "    title: extractElementText(html, /<title>([\\s\\S]*?)<\\/title>/i, sourceLabel),",
-      "    pageTitle: extractElementText(html, /<[^>]*data-page-title=\"true\"[^>]*>([\\s\\S]*?)<\\/[^>]+>/i, sourceLabel),",
-      "    navHtml: extractRequiredMatch(html, /<nav\\b[^>]*data-navigation-region=\"primary\"[^>]*>[\\s\\S]*?<\\/nav>/i, sourceLabel),",
-      "    mainHtml: extractRequiredMatch(html, /<main\\b[^>]*data-navigation-content=\"true\"[^>]*>[\\s\\S]*?<\\/main>/i, sourceLabel),",
-      "    bodyAttributes: extractBodyAttributes(html),",
-      "    links: extractLinks(html),",
-      "    scriptSources: extractScriptSources(html),",
-      "  };",
-      "}",
-      "",
-      "function currentRegionElement(session, kind) {",
-      "  return {",
-      "    replaceWith(nextElement) {",
-      "      if (kind === 'nav') {",
-      "        session.page.navHtml = nextElement.outerHTML;",
-      "        session.page.links = nextElement.page.links;",
-      "      } else {",
-      "        session.page.mainHtml = nextElement.outerHTML;",
-      "        session.page.pageTitle = nextElement.page.pageTitle;",
-      "      }",
-      "    },",
-      "  };",
-      "}",
-      "",
-      "function parsedRegionElement(kind, page) {",
-      "  return {",
-      "    outerHTML: kind === 'nav' ? page.navHtml : page.mainHtml,",
-      "    page,",
-      "  };",
-      "}",
-      "",
-      "function anchorElement(link) {",
-      "  return {",
-      "    href: link.href,",
-      "    target: link.target,",
-      "    hasAttribute(name) {",
-      "      return name === 'download' ? link.download : false;",
-      "    },",
-      "    closest(selector) {",
-      "      return selector === 'a[data-page-link=\"true\"]' && link.pageLink ? this : null;",
-      "    },",
-      "  };",
-      "}",
-      "",
-      "function extractLinks(html) {",
-      "  const linkPattern = /<a\\b([^>]*)>([\\s\\S]*?)<\\/a>/gi;",
-      "  const links = [];",
-      "  let match;",
-      "  while ((match = linkPattern.exec(html)) !== null) {",
-      "    const attributes = parseAttributes(match[1]);",
-      "    links.push({",
-      "      href: attributes.href || '',",
-      "      target: attributes.target || '',",
-      "      download: Object.prototype.hasOwnProperty.call(attributes, 'download'),",
-      "      pageLink: attributes['data-page-link'] === 'true',",
-      "      text: normalizeText(match[2]),",
-      "    });",
-      "  }",
-      "  return links;",
-      "}",
-      "",
-      "function extractScriptSources(html) {",
-      "  const scriptPattern = /<script\\b[^>]*src=\"([^\"]+)\"[^>]*><\\/script>/gi;",
-      "  const sources = [];",
-      "  let match;",
-      "  while ((match = scriptPattern.exec(html)) !== null) {",
-      "    sources.push(match[1]);",
-      "  }",
-      "  return sources;",
-      "}",
-      "",
-      "function extractBodyAttributes(html) {",
-      "  const match = html.match(/<body\\b([^>]*)>/i);",
-      "  return match ? parseAttributes(match[1]) : {};",
-      "}",
-      "",
-      "function parseAttributes(attributeSource) {",
-      "  const attributes = {};",
-      "  const attributePattern = /([^\\s=]+)(?:=\"([^\"]*)\")?/g;",
-      "  let match;",
-      "  while ((match = attributePattern.exec(attributeSource)) !== null) {",
-      "    attributes[match[1]] = match[2] || '';",
-      "  }",
-      "  return attributes;",
-      "}",
-      "",
-      "function attributeEntries(attributes) {",
-      "  return Object.entries(attributes).map(([name, value]) => ({ name, value }));",
-      "}",
-      "",
-      "function extractRequiredMatch(html, pattern, sourceLabel) {",
-      "  const match = html.match(pattern);",
-      "  if (!match) {",
-      "    throw new Error(`Expected selector to match rendered HTML for pattern ${pattern} from ${sourceLabel}. HTML prefix: ${html.slice(0, 200)}`);",
-      "  }",
-      "  return match[0];",
-      "}",
-      "",
-      "function extractElementText(html, pattern, sourceLabel) {",
-      "  const match = html.match(pattern);",
-      "  if (!match) {",
-      "    throw new Error(`Expected selector to match rendered HTML for pattern ${pattern} from ${sourceLabel}. HTML prefix: ${html.slice(0, 200)}`);",
-      "  }",
-      "  return normalizeText(match[1]);",
-      "}",
-      "",
-      "function normalizeText(htmlFragment) {",
-      "  return htmlFragment.replace(/<[^>]+>/g, '').replace(/\\s+/g, ' ').trim();",
-      "}",
-      "",
-      "main().catch((error) => {",
-      "  const [, responsePath] = process.argv.slice(2);",
-      "  if (responsePath) {",
-      "    writeError(responsePath, error.message);",
-      "    process.exit(0);",
-      "  }",
-      "  console.error(error);",
-      "  process.exit(1);",
-      "});"
-    ]
+withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
+withBrowserApp action = do
+  loadedConfig <- loadPlaywrightBrowserConfig
+  browser <-
+    case loadedConfig of
+      Left loadError -> expectationFailure loadError >> fail "unreachable"
+      Right config -> pure config
+  withSystemTempDirectory "web-api-e2e-assets" $ \assetDirectory ->
+    action
+      browser
+      defaultAppConfig
+        { staticAssets =
+            StaticAssetsConfig
+              { staticAssetRoots =
+                  [ StaticAssetRoot
+                      { staticUrlPrefix = "/assets",
+                        staticDirectory = assetDirectory
+                      }
+                  ],
+                staticAssetContentTypes = defaultStaticAssetContentTypes,
+                staticCacheControlSeconds = Nothing
+              }
+        }

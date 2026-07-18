@@ -47,9 +47,9 @@ category: Web
 build-type: Custom
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
-
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 extra-source-files:
+  playwright-runner/package-lock.json
   playwright-runner/package.json
   playwright-runner/runner.cjs
 
@@ -80,12 +80,15 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    aeson,
     base ^>=4.22.0.0,
+    bytestring,
     core,
     directory,
     filepath,
     hspec,
     hspec-expectations-match,
+    HUnit,
     mtl,
     process,
     text,
@@ -152,7 +155,9 @@ test-suite test-core-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
+    aeson,
     base ^>=4.22.0.0,
+    bytestring,
     core,
     directory,
     filepath,
@@ -163,3 +168,4 @@ test-suite test-core-tests
     process,
     temporary,
     test-core,
+    text,

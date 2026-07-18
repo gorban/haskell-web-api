@@ -1491,10 +1491,6 @@ spec = do
       lookup "X-Frame-Options" headers `shouldBe` Just "DENY"
       lookup "Access-Control-Allow-Origin" headers `shouldBe` Nothing
 
-    it "defines a capture kernel for declarative action controls" $ do
-      defaultInteractionCaptureKernel `shouldSatisfy` ("window.__harchCapture" `Text.isInfixOf`)
-      defaultInteractionCaptureKernel `shouldSatisfy` ("document.addEventListener('submit'" `Text.isInfixOf`)
-
     it "allows response security headers to be disabled explicitly" $ do
       let requestPolicyConfig =
             defaultRequestPolicy

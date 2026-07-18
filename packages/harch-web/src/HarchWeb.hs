@@ -79,7 +79,6 @@ module HarchWeb
     defaultCorsPolicyConfig,
     defaultNavigationRuntime,
     defaultNavigationRuntimeScript,
-    defaultInteractionCaptureKernel,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     escapeJsonCharacter,
@@ -192,11 +191,11 @@ import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
 import System.FilePath (splitDirectories, takeExtension, (</>))
-import System.IO (Handle, IOMode (ReadMode), hFlush, hPutStrLn, withBinaryFile)
+import System.IO (Handle, hFlush, hPutStrLn)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.IO.Unsafe (unsafePerformIO)
-import System.Process (proc, readCreateProcessWithExitCode)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
+import System.Process (proc, readCreateProcessWithExitCode)
 import Text.ParserCombinators.ReadP (ReadP, char, choice, eof, get, manyTill, pfail, readP_to_S, sepBy, skipSpaces, string, (<++))
 import Text.Read (readMaybe)
 
@@ -736,62 +735,6 @@ defaultNavigationRuntimeScript =
       "})();"
     ]
 
--- | This deliberately small, inline runtime is installed while the browser parses the document
--- head, before it can parse any framework-owned controls in the body.  It turns declarative
--- @data-harch-action@ forms into same-origin mutations and exposes a capture-event stream for
--- later component modules.  It must stay dependency-free and parser-safe.
-defaultInteractionCaptureKernel :: Text
-defaultInteractionCaptureKernel =
-  Text.unlines
-    [ "(() => {",
-      "  const capturedEvents = [];",
-      "  const actionFormSelector = 'form[data-harch-action=\"true\"]';",
-      "  window.__harchCapture = { events: capturedEvents };",
-      "",
-      "  function capture(event) {",
-      "    capturedEvents.push({ type: event.type, target: event.target && event.target.name || null });",
-      "    document.dispatchEvent(new CustomEvent('harch:captured', { detail: capturedEvents[capturedEvents.length - 1] }));",
-      "  }",
-      "",
-      "  async function submitAction(form, submitter) {",
-      "    const targetSelector = form.dataset.harchTarget;",
-      "    const target = targetSelector ? document.querySelector(targetSelector) : form;",
-      "    const formData = new FormData(form, submitter || undefined);",
-      "    form.setAttribute('aria-busy', 'true');",
-      "    try {",
-      "      const response = await fetch(form.action || window.location.href, {",
-      "        method: (form.method || 'POST').toUpperCase(),",
-      "        credentials: 'same-origin',",
-      "        body: formData,",
-      "        headers: { 'X-Harch-Action': form.dataset.harchAction || 'form' },",
-      "      });",
-      "      const responseText = await response.text();",
-      "      if (target && response.headers.get('content-type') && response.headers.get('content-type').includes('text/html')) {",
-      "        target.innerHTML = responseText;",
-      "      }",
-      "      form.dispatchEvent(new CustomEvent('harch:action-complete', { bubbles: true, detail: { ok: response.ok, status: response.status } }));",
-      "    } catch (error) {",
-      "      form.dispatchEvent(new CustomEvent('harch:action-complete', { bubbles: true, detail: { ok: false, error } }));",
-      "    } finally {",
-      "      form.removeAttribute('aria-busy');",
-      "    }",
-      "  }",
-      "",
-      "  document.addEventListener('input', capture, true);",
-      "  document.addEventListener('change', capture, true);",
-      "  document.addEventListener('keydown', capture, true);",
-      "  document.addEventListener('click', capture, true);",
-      "  document.addEventListener('submit', (event) => {",
-      "    capture(event);",
-      "    const form = event.target && event.target.closest(actionFormSelector);",
-      "    if (!form) return;",
-      "    event.preventDefault();",
-      "    const submitter = event.submitter || null;",
-      "    void submitAction(form, submitter);",
-      "  }, true);",
-      "})();"
-    ]
-
 buildNavigation :: (Eq route) => RouteCodec route context -> Page route context -> [NavigationItem route] -> [ResolvedNavigationItem route]
 buildNavigation codec page =
   map
@@ -985,27 +928,11 @@ toWaiApplication webApplication request respond = do
                   Observability.forceRequestObservability requestObservability `seq`
                     reportRequestObservability webApplication requestObservability
                       >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-                      >> do
-                        (pageResponseHeaders, waiResponse) <-
-                          case response of
-                            PageResponse page | pageNeedsInteractionCaptureKernel page -> do
-                              nonce <- generateCspNonce
-                              pure
-                                ( addCspNonce nonce policyResponseHeaders,
-                                  toWaiPageResponseWithCaptureKernel [] webApplication nonce response
-                                )
-                            PageResponseWithMetadata _ page | pageNeedsInteractionCaptureKernel page -> do
-                              nonce <- generateCspNonce
-                              pure
-                                ( addCspNonce nonce policyResponseHeaders,
-                                  toWaiPageResponseWithCaptureKernel [] webApplication nonce response
-                                )
-                            _ ->
-                              pure
-                                ( policyResponseHeaders,
-                                  toWaiResponse [] webApplication response
-                                )
-                        respond (applyResponseHeaders pageResponseHeaders waiResponse)
+                      >> respond
+                        ( applyResponseHeaders
+                            policyResponseHeaders
+                            (toWaiResponse [] webApplication response)
+                        )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -2858,47 +2785,6 @@ renderScriptSource scriptSource =
       "\" defer></script>"
     ]
 
-withInteractionCaptureKernel :: Text -> Text -> Text
-withInteractionCaptureKernel nonce documentHtml =
-  Text.replace
-    "</head>"
-    ( "<script nonce=\""
-        <> nonce
-        <> "\">"
-        <> defaultInteractionCaptureKernel
-        <> "</script></head>"
-    )
-    documentHtml
-
-generateCspNonce :: IO Text
-generateCspNonce =
-  withBinaryFile "/dev/urandom" ReadMode $ \randomHandle ->
-    base64urlText <$> ByteString.hGet randomHandle 32
-
-addCspNonce :: Text -> Http.ResponseHeaders -> Http.ResponseHeaders
-addCspNonce nonce =
-  map
-    ( \(headerName, headerValue) ->
-        if headerName == "Content-Security-Policy"
-          then
-            ( headerName,
-              TextEncoding.encodeUtf8 (addNonceToContentSecurityPolicy nonce (TextEncoding.decodeUtf8 headerValue))
-            )
-          else (headerName, headerValue)
-    )
-
-addNonceToContentSecurityPolicy :: Text -> Text -> Text
-addNonceToContentSecurityPolicy nonce policy =
-  let (beforeScriptSource, scriptSourceAndAfter) = Text.breakOn "script-src " policy
-      nonceSource = "'nonce-" <> nonce <> "'"
-   in if Text.null scriptSourceAndAfter
-        then policy <> "; script-src " <> nonceSource
-        else
-          let scriptSourcePrefix = "script-src "
-              remainingSource = Text.drop (Text.length scriptSourcePrefix) scriptSourceAndAfter
-              (sources, afterSources) = Text.breakOn ";" remainingSource
-           in beforeScriptSource <> scriptSourcePrefix <> nonceSource <> " " <> sources <> afterSources
-
 toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Application route context -> Response route context -> Wai.Response
 toWaiResponse additionalHeaders webApplication response =
   case response of
@@ -2917,29 +2803,6 @@ toWaiResponse additionalHeaders webApplication response =
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (pageShell webApplication page)))
     BodyResponse responseBodyValue ->
       toWaiBodyResponse additionalHeaders responseBodyValue
-
-toWaiPageResponseWithCaptureKernel :: (Eq route) => Http.ResponseHeaders -> Application route context -> Text -> Response route context -> Wai.Response
-toWaiPageResponseWithCaptureKernel additionalHeaders webApplication nonce response =
-  case response of
-    PageResponse page ->
-      Wai.responseLBS
-        (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (withInteractionCaptureKernel nonce (pageShell webApplication page))))
-    PageResponseWithMetadata pageResponseBodyValue page ->
-      let !pageStatusMessage = ByteString.empty
-          !pageStatusMessageLength = ByteString.length pageStatusMessage
-          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
-       in Wai.responseLBS
-            pageStatus
-            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (withInteractionCaptureKernel nonce (pageShell webApplication page))))
-    BodyResponse _ ->
-      error "toWaiPageResponseWithCaptureKernel requires a page response"
-
-pageNeedsInteractionCaptureKernel :: Page route context -> Bool
-pageNeedsInteractionCaptureKernel page =
-  "data-harch-action=\"true\"" `Text.isInfixOf` pageBody page
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =

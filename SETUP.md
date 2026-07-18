@@ -257,12 +257,18 @@ cabal build all
 In addition to the Haskell toolchain, the current repository is easiest to work with when the following
 commands are also available on your `PATH`:
 
-- `node` for the current browser-harness-backed e2e spec. The long-term Playwright direction is to keep
-  Haskell-authored specs talking to an external runner process and let that runner use Playwright's
-  official Node client, rather than implementing Playwright's server/MCP protocol directly in Haskell.
-  No Playwright install is required yet; the current e2e path only needs a basic Node.js runtime. When a
-  Playwright-backed runner is introduced, the intended handoff is `TEST_CORE_BROWSER_RUNNER=node` plus
-  `TEST_CORE_BROWSER_RUNNER_ARGUMENTS=path/to/playwright-runner.js[,extra,args]`.
+- Node.js 22, 24, or 26 for the real Playwright e2e harness. Scenarios remain Haskell-authored; the
+  bundled Node process is only a streaming adapter to Playwright's official Chromium client. Install
+  its locked dependencies and browser once from the repository root:
+  ```bash
+  npm ci --prefix packages/test-core/playwright-runner
+  cd packages/test-core/playwright-runner
+  npx playwright install chromium
+  cd ../../..
+  ```
+  On supported Debian/Ubuntu CI hosts, use `npx playwright install chromium --with-deps` to install the
+  browser's system libraries too. Failed scenarios retain a trace, screenshot, and HTML under the
+  package's `test-results/playwright/` directory.
 - PostgreSQL client libraries (for example `libpq-dev` on Ubuntu or the `postgresql17-private-devel` plus
   `postgresql17-server-devel` pair on Fedora)
   so local

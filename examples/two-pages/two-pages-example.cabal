@@ -1,11 +1,11 @@
 cabal-version: 3.14
-
 name: two-pages-example
 version: 0.1.0.0
 synopsis: Minimal two-page HarchWeb example
 description:
   Buildable SSR-first example with two pages, a shared shell, and tiny
   same-origin navigation enhancement.
+
 homepage: https://github.com/gorban/haskell-web-api
 license: BSD-2-Clause-Patent
 license-file: LICENSE
@@ -16,6 +16,7 @@ category: Web
 build-type: Simple
 extra-doc-files:
   README.md
+
 common common
   ghc-options: -Wall
   default-language: GHC2024
@@ -29,11 +30,12 @@ library
     App.Pages.NotFound
     App.Pages.Second
     App.Routes
+
   hs-source-dirs: src
   build-depends:
     base ^>=4.22.0.0,
     harch-web,
-    text
+    text,
 
 executable two-pages-example
   import: common
@@ -43,7 +45,7 @@ executable two-pages-example
     base ^>=4.22.0.0,
     harch-web,
     text,
-    two-pages-example
+    two-pages-example,
 
 test-suite two-pages-example-tests
   import: common
@@ -51,16 +53,23 @@ test-suite two-pages-example-tests
   main-is: Main.hs
   hs-source-dirs: test
   ghc-options:
+    -F
+    -pgmF=spec-preprocessor
     -Wno-missing-home-modules
     -rtsopts
     -threaded
     -with-rtsopts=-N
+
   build-depends:
     base ^>=4.22.0.0,
     bytestring,
     harch-web,
     hspec,
     http-types,
+    test-core,
     text,
     two-pages-example,
-    wai
+    wai,
+
+  build-tool-depends:
+    test-core:spec-preprocessor

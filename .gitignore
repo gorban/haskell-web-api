@@ -1,5 +1,6 @@
 /dist-newstyle/
 /packages/test-core/playwright-runner/node_modules/
+**/test-results/playwright/
 /.vscode/*
 !/.vscode/settings.json
 !/.vscode/launch.json

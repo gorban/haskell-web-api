@@ -74,6 +74,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: packages/test-core/playwright-runner/package-lock.json
 
       - name: Install system tools
         if: steps.setup_node.outcome == 'success'
@@ -82,8 +84,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y dos2unix postgresql-client
 
-      - name: Wait for prerequisite services
+      - name: Install Playwright Chromium
         if: steps.dos2unix.outcome == 'success'
+        id: playwright
+        run: |
+          npm ci --prefix packages/test-core/playwright-runner
+          cd packages/test-core/playwright-runner
+          npx playwright install chromium --with-deps
+
+      - name: Wait for prerequisite services
+        if: steps.playwright.outcome == 'success'
         id: prerequisite_services
         shell: bash
         run: |
@@ -100,7 +110,7 @@ jobs:
           node --version
 
       - name: Restore Cabal cache
-        if: steps.dos2unix.outcome == 'success'
+        if: steps.playwright.outcome == 'success'
         id: cabal_cache
         uses: actions/cache/restore@v5
         with:
@@ -215,6 +225,14 @@ jobs:
         run: |
           cabal build all -O2 --ghc-options=-Werror
           cabal test all -O2 --test-options="--skip Unit"
+
+      - name: Upload Playwright failure artifacts
+        if: failure() && steps.run_tests_skip_unit.outcome == 'failure'
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-failures
+          path: '**/test-results/playwright/'
+          if-no-files-found: ignore
 
       - name: Check coverage result
         if: steps.coverage.outcome == 'success'

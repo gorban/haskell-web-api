@@ -6,6 +6,13 @@ module Test.Hspec.Expectations.MatchSpec (spec) where
 import Test.Hspec
 import Test.Hspec.Expectations.Match
 
+data BrowserMetrics = BrowserMetrics
+  { enhancedNavigationFetchCount :: Int,
+    hardNavigationCount :: Int,
+    mutationRequestCount :: Int
+  }
+  deriving (Eq, Show)
+
 spec :: Spec
 spec = do
   describe "shouldMatch" $ do
@@ -30,6 +37,14 @@ spec = do
       b `shouldBe` 'x'
       c `shouldBe` 'y'
 
+    it "matches multiple named record fields while leaving omitted fields unconstrained" $ do
+      let metrics = BrowserMetrics 1 0 27
+      $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+      $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = mutationCount}|])
+        `shouldReturn` 27
+      $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 1}|])
+        `shouldThrow` anyException
+
   describe "shouldReturnAndMatch" $
     it "matches the result of an action against a pattern" $ do
       $([|pure (Just True)|] `shouldReturnAndMatch` [p|Just _|])
@@ -41,14 +56,27 @@ spec = do
 
   describe "assertDo" $
     it "automatically annotates pattern binds with shouldReturnAndMatch" $ do
-      $(assertDo [|do
-        () <- pure ()
-        pure ()|])
+      $( assertDo
+           [|
+             do
+               () <- pure ()
+               pure ()
+             |]
+       )
 
-      $(assertDo [|do
-        Just x <- pure $ Just True
-        x `shouldBe` True|])
+      $( assertDo
+           [|
+             do
+               Just x <- pure $ Just True
+               x `shouldBe` True
+             |]
+       )
 
-      $(assertDo [|do
-        Just x <- pure Nothing
-        x `shouldBe` True|]) `shouldThrow` anyException
+      $( assertDo
+           [|
+             do
+               Just x <- pure Nothing
+               x `shouldBe` True
+             |]
+       )
+        `shouldThrow` anyException

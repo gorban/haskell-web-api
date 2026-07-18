@@ -1,308 +1,343 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Encoding as AesonEncoding
+import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Foldable (traverse_)
+import qualified Data.Text as Text
+import System.Directory (withCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import TestCore.Browser
 
+data FieldState = FieldState
+  { fieldStateValue :: Text.Text,
+    fieldStateFocused :: Bool
+  }
+  deriving (Eq, Show)
+
 spec = do
-  describe "parseBrowserConfig" $ do
-    it "uses deterministic defaults when no overrides are present" $
-      parseBrowserConfig []
-        `shouldBe` Right defaultBrowserConfig
+  describe "browser configuration" $ do
+    it "uses the bundled Playwright runner defaults" $ do
+      browserRunnerCommand defaultPlaywrightBrowserConfig `shouldBe` "node"
+      browserRunnerArguments defaultPlaywrightBrowserConfig `shouldBe` ["packages/test-core/playwright-runner/runner.cjs"]
+      browserHeadless defaultPlaywrightBrowserConfig `shouldBe` True
+      browserPauseOnFailure defaultPlaywrightBrowserConfig `shouldBe` False
+      browserTimeoutMilliseconds defaultPlaywrightBrowserConfig `shouldBe` 10000
+      browserArtifactDirectory defaultPlaywrightBrowserConfig `shouldBe` "test-results/playwright"
 
-    it "provides the bundled Node Playwright runner without changing the Haskell DSL" $
-      defaultPlaywrightBrowserConfig
-        `shouldBe` defaultBrowserConfig
-          { browserRunnerCommand = "node",
-            browserRunnerArguments = ["packages/test-core/playwright-runner/runner.cjs"]
-          }
-
-    it "applies environment overrides for runner and browser behavior" $
+    it "parses runner, timeout, artifact, and browser overrides" $
       parseBrowserConfig
-        [ ("TEST_CORE_BROWSER_RUNNER", "node"),
-          ("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", "playwright-runner.js, --browser, chromium"),
+        [ ("TEST_CORE_BROWSER_RUNNER", "custom-node"),
+          ("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", "runner.cjs, --debug"),
           ("TEST_CORE_BROWSER_HEADLESS", "false"),
-          ("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", "yes")
+          ("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "yes"),
+          ("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "2500"),
+          ("TEST_CORE_BROWSER_ARTIFACT_DIRECTORY", "artifacts/browser")
         ]
         `shouldBe` Right
-          defaultBrowserConfig
-            { browserRunnerCommand = "node",
-              browserRunnerArguments = ["playwright-runner.js", "--browser", "chromium"],
+          BrowserConfig
+            { browserRunnerCommand = "custom-node",
+              browserRunnerArguments = ["runner.cjs", "--debug"],
               browserHeadless = False,
-              browserKeepOpenOnFailure = True
+              browserPauseOnFailure = True,
+              browserTimeoutMilliseconds = 2500,
+              browserArtifactDirectory = "artifacts/browser"
             }
 
-    it "accepts numeric boolean overrides" $
-      parseBrowserConfig
-        [ ("TEST_CORE_BROWSER_HEADLESS", "1"),
-          ("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", "0")
-        ]
-        `shouldBe` Right
-          defaultBrowserConfig
-            { browserHeadless = True,
-              browserKeepOpenOnFailure = False
-            }
-
-    it "accepts no as a false-like keep-open override" $
-      parseBrowserConfig [("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", "no")]
-        `shouldBe` Right
-          defaultBrowserConfig
-            { browserKeepOpenOnFailure = False
-            }
-
-    it "treats blank runner arguments as an empty list" $
-      parseBrowserConfig [("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", " , ")]
-        `shouldBe` Right
-          defaultBrowserConfig
-            { browserRunnerArguments = []
-            }
-
-    it "rejects invalid headless values explicitly" $
+    it "accepts the supported boolean aliases and rejects invalid overrides" $ do
+      parseBrowserConfig [] `shouldBe` Right defaultPlaywrightBrowserConfig
+      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "true")]) `shouldBe` Right True
+      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "1")]) `shouldBe` Right True
+      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "0")]) `shouldBe` Right False
+      fmap browserPauseOnFailure (parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "no")]) `shouldBe` Right False
+      browserRunnerArguments <$> parseBrowserConfig [("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", " , ")] `shouldBe` Right []
       parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "maybe")]
         `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_HEADLESS: maybe"
+      parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "sometimes")]
+        `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_PAUSE_ON_FAILURE: sometimes"
+      parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "0")]
+        `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: 0"
+      parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "later")]
+        `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: later"
 
-    it "rejects invalid keep-open values explicitly" $
-      parseBrowserConfig [("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", "sometimes")]
-        `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE: sometimes"
-
-  describe "loadBrowserConfig"
-    $ it "reads the same environment overrides through IO"
-    $ withEnvironment
-      [ ("TEST_CORE_BROWSER_RUNNER", Just "node"),
-        ("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", Just "playwright-runner.js, --headed"),
-        ("TEST_CORE_BROWSER_HEADLESS", Just "false"),
-        ("TEST_CORE_BROWSER_KEEP_OPEN_ON_FAILURE", Just "true")
-      ]
-    $ do
-      loadBrowserConfig
-        `shouldReturn` Right
-          defaultBrowserConfig
-            { browserRunnerCommand = "node",
-              browserRunnerArguments = ["playwright-runner.js", "--headed"],
-              browserHeadless = False,
-              browserKeepOpenOnFailure = True
-            }
-
-  describe "renderBrowserRequest" $ do
-    it "renders config flags and all supported browser actions predictably" $
-      renderBrowserRequest
-        defaultBrowserConfig
-          { browserHeadless = False,
-            browserKeepOpenOnFailure = True
-          }
-        [ VisitUrl "http://localhost:8080/",
-          VisitUrlWithoutScripts "http://localhost:8080/no-js",
-          ReloadPage,
-          ClickLinkWithText "Browse the second page",
-          ClickSelector "button[type=submit]",
-          FillField "input[name=query]" "server rendering",
-          SubmitForm "form[data-harch-action=true]",
-          NavigateHistoryBack,
-          NavigateHistoryForward,
-          AssertTextEquals "[data-page-title=\"true\"]" "Second",
-          AssertFieldValue "input[name=query]" "server rendering",
-          AssertFocusedSelector "input[name=query]",
-          AssertMutationCount 1,
-          AssertNavigationMetricEquals EnhancedFetchCount 1,
-          AssertNavigationMetricEquals HardNavigationCount 0
+    it "resolves the bundled runner and applies environment overrides"
+      $ withEnvironment
+        [ ("TEST_CORE_BROWSER_HEADLESS", Just "false"),
+          ("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", Just "3210")
         ]
-        `shouldBe` unlines
-          [ "headless\tfalse",
-            "keep-open-on-failure\ttrue",
-            "action\tvisit-url\thttp://localhost:8080/",
-            "action\tvisit-url-without-scripts\thttp://localhost:8080/no-js",
-            "action\treload-page",
-            "action\tclick-link-with-text\tBrowse the second page",
-            "action\tclick-selector\tbutton[type=submit]",
-            "action\tfill-field\tinput[name=query]\tserver rendering",
-            "action\tsubmit-form\tform[data-harch-action=true]",
-            "action\thistory-back",
-            "action\thistory-forward",
-            "action\tassert-text-equals\t[data-page-title=\"true\"]\tSecond",
-            "action\tassert-field-value\tinput[name=query]\tserver rendering",
-            "action\tassert-focused-selector\tinput[name=query]",
-            "action\tassert-mutation-count\t1",
-            "action\tassert-navigation-metric-equals\tenhanced-fetch-count\t1",
-            "action\tassert-navigation-metric-equals\thard-navigation-count\t0"
-          ]
+      $ do
+        loaded <- loadPlaywrightBrowserConfig
+        config <-
+          case loaded of
+            Left loadError -> expectationFailure loadError >> fail "unreachable"
+            Right loadedConfig -> pure loadedConfig
+        browserRunnerCommand config `shouldBe` "node"
+        browserRunnerArguments config `shouldSatisfy` \case
+          [runnerArgument] -> "runner.cjs" `Text.isSuffixOf` Text.pack runnerArgument
+          _ -> False
+        browserHeadless config `shouldBe` False
+        browserTimeoutMilliseconds config `shouldBe` 3210
 
-    it "covers selectors and derived instances for the public browser types" $ do
-      let browserConfig =
-            BrowserConfig
-              { browserRunnerCommand = "node",
-                browserRunnerArguments = ["runner.js"],
-                browserHeadless = False,
-                browserKeepOpenOnFailure = True
-              }
-          navigationMetric = HardNavigationCount
-          browserAction = AssertMutationCount 0
-          browserError = BrowserRunnerProcessError (ExitFailure 3) "stdout" "stderr"
-      browserRunnerCommand browserConfig `shouldBe` "node"
-      browserRunnerArguments browserConfig `shouldBe` ["runner.js"]
-      browserHeadless browserConfig `shouldBe` False
-      browserKeepOpenOnFailure browserConfig `shouldBe` True
-      navigationMetric `shouldBe` HardNavigationCount
-      show navigationMetric `shouldBe` "HardNavigationCount"
-      browserAction `shouldBe` AssertMutationCount 0
-      show browserAction `shouldBe` "AssertMutationCount 0"
-      show browserConfig `shouldBe` "BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [\"runner.js\"], browserHeadless = False, browserKeepOpenOnFailure = True}"
-      show browserError `shouldBe` "BrowserRunnerProcessError (ExitFailure 3) \"stdout\" \"stderr\""
+    it "reports a missing bundled runner when no repository ancestor contains it" $
+      withSystemTempDirectory "browser-config" $ \tempDirectory ->
+        withCurrentDirectory tempDirectory $ do
+          result <- loadPlaywrightBrowserConfig
+          result `shouldSatisfy` \case
+            Left message -> "Could not find bundled Playwright runner" `Text.isInfixOf` Text.pack message
+            Right _ -> False
 
-    it "covers the remaining equality and show branches for browser actions and errors" $ do
-      let visitAction = VisitUrl "http://localhost:8080/"
-          noScriptVisitAction = VisitUrlWithoutScripts "http://localhost:8080/no-js"
-          reloadAction = ReloadPage
-          backAction = NavigateHistoryBack
-          forwardAction = NavigateHistoryForward
-          assertAction = AssertTextEquals "[data-page-title=\"true\"]" "Second"
-          clickSelectorAction = ClickSelector "button[type=submit]"
-          fillAction = FillField "input[name=query]" "server rendering"
-          submitAction = SubmitForm "form[data-harch-action=true]"
-          fieldValueAction = AssertFieldValue "input[name=query]" "server rendering"
-          focusedAction = AssertFocusedSelector "input[name=query]"
-          mutationAction = AssertMutationCount 1
-          metricAction = AssertNavigationMetricEquals EnhancedFetchCount 1
-          launchError = BrowserRunnerLaunchError "missing-browser-runner"
-          protocolError = BrowserRunnerProtocolError "unexpected response"
-          assertionError = BrowserAssertionFailed "Expected the second page to load"
-      defaultBrowserConfig `shouldBe` defaultBrowserConfig
-      visitAction `shouldBe` VisitUrl "http://localhost:8080/"
-      noScriptVisitAction `shouldBe` VisitUrlWithoutScripts "http://localhost:8080/no-js"
-      reloadAction `shouldBe` ReloadPage
-      backAction `shouldBe` NavigateHistoryBack
-      forwardAction `shouldBe` NavigateHistoryForward
-      assertAction `shouldBe` AssertTextEquals "[data-page-title=\"true\"]" "Second"
-      clickSelectorAction `shouldBe` ClickSelector "button[type=submit]"
-      fillAction `shouldBe` FillField "input[name=query]" "server rendering"
-      submitAction `shouldBe` SubmitForm "form[data-harch-action=true]"
-      fieldValueAction `shouldBe` AssertFieldValue "input[name=query]" "server rendering"
-      focusedAction `shouldBe` AssertFocusedSelector "input[name=query]"
-      mutationAction `shouldBe` AssertMutationCount 1
-      metricAction `shouldBe` AssertNavigationMetricEquals EnhancedFetchCount 1
-      launchError `shouldBe` BrowserRunnerLaunchError "missing-browser-runner"
-      protocolError `shouldBe` BrowserRunnerProtocolError "unexpected response"
-      assertionError `shouldBe` BrowserAssertionFailed "Expected the second page to load"
-      show visitAction `shouldBe` "VisitUrl \"http://localhost:8080/\""
-      show noScriptVisitAction `shouldBe` "VisitUrlWithoutScripts \"http://localhost:8080/no-js\""
-      show reloadAction `shouldBe` "ReloadPage"
-      show backAction `shouldBe` "NavigateHistoryBack"
-      show forwardAction `shouldBe` "NavigateHistoryForward"
-      show assertAction `shouldBe` "AssertTextEquals \"[data-page-title=\\\"true\\\"]\" \"Second\""
-      show clickSelectorAction `shouldBe` "ClickSelector \"button[type=submit]\""
-      show fillAction `shouldBe` "FillField \"input[name=query]\" \"server rendering\""
-      show submitAction `shouldBe` "SubmitForm \"form[data-harch-action=true]\""
-      show fieldValueAction `shouldBe` "AssertFieldValue \"input[name=query]\" \"server rendering\""
-      show focusedAction `shouldBe` "AssertFocusedSelector \"input[name=query]\""
-      show mutationAction `shouldBe` "AssertMutationCount 1"
-      show metricAction `shouldBe` "AssertNavigationMetricEquals EnhancedFetchCount 1"
-      show launchError `shouldBe` "BrowserRunnerLaunchError \"missing-browser-runner\""
-      show protocolError `shouldBe` "BrowserRunnerProtocolError \"unexpected response\""
-      show assertionError `shouldBe` "BrowserAssertionFailed \"Expected the second page to load\""
-
-    it "covers the derived /= and showList methods for browser types" $ do
-      let otherBrowserConfig =
-            defaultBrowserConfig
-              { browserRunnerCommand = "node"
-              }
-          visitAction = VisitUrl "http://localhost:8080/"
-          noScriptVisitAction = VisitUrlWithoutScripts "http://localhost:8080/no-js"
-          reloadAction = ReloadPage
-          clickAction = ClickLinkWithText "Browse the second page"
-          backAction = NavigateHistoryBack
-          forwardAction = NavigateHistoryForward
-          metricAction = AssertNavigationMetricEquals EnhancedFetchCount 1
-          launchError = BrowserRunnerLaunchError "missing-browser-runner"
-          protocolError = BrowserRunnerProtocolError "unexpected response"
-      defaultBrowserConfig /= otherBrowserConfig `shouldBe` True
-      EnhancedFetchCount /= HardNavigationCount `shouldBe` True
-      visitAction /= clickAction `shouldBe` True
-      noScriptVisitAction /= visitAction `shouldBe` True
-      reloadAction /= visitAction `shouldBe` True
-      backAction /= forwardAction `shouldBe` True
-      metricAction /= backAction `shouldBe` True
-      launchError /= protocolError `shouldBe` True
-      show [defaultBrowserConfig, otherBrowserConfig]
-        `shouldBe` "[BrowserConfig {browserRunnerCommand = \"playwright-e2e-runner\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False},BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [], browserHeadless = True, browserKeepOpenOnFailure = False}]"
-      show [EnhancedFetchCount, HardNavigationCount]
-        `shouldBe` "[EnhancedFetchCount,HardNavigationCount]"
-      show [visitAction, noScriptVisitAction, reloadAction, clickAction, backAction, forwardAction, metricAction]
-        `shouldBe` "[VisitUrl \"http://localhost:8080/\",VisitUrlWithoutScripts \"http://localhost:8080/no-js\",ReloadPage,ClickLinkWithText \"Browse the second page\",NavigateHistoryBack,NavigateHistoryForward,AssertNavigationMetricEquals EnhancedFetchCount 1]"
-      show [launchError, protocolError]
-        `shouldBe` "[BrowserRunnerLaunchError \"missing-browser-runner\",BrowserRunnerProtocolError \"unexpected response\"]"
-
-  describe "runBrowserScript" $ do
-    it "runs the configured browser runner and accepts an ok response" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "ok"],
-                  browserHeadless = False
-                }
-        runBrowserScript browserConfig [VisitUrl "http://localhost:8080/"]
+  describe "runBrowserScenario" $ do
+    it "uses semantic locators and batches only composed observations" $
+      withFakeRunner "normal" $ \config -> do
+        let emailField = byLabel "Email address"
+            fieldState = FieldState <$> inputValue emailField <*> isFocused emailField
+        runBrowserScenario
+          config
+          ( do
+              visit "http://localhost/"
+              click (byRole Link `named` "Continue")
+              fill emailField "person@example.com"
+              submit (byRole Form `named` "Registration")
+              blockRequestsMatching "**/enhancements.js"
+              releaseRequestsMatching "**/enhancements.js"
+              assertEventually fieldState $ \actual ->
+                actual `shouldBe` FieldState "person@example.com" True
+              assertAttribute emailField "aria-busy" (`shouldBe` Just "false")
+              assertVisible (within (byRole Navigation) (byRole Link `named` "Home")) (`shouldBe` True)
+              assertUrl (`shouldBe` "http://localhost/")
+              assertMetrics (`shouldBe` BrowserMetrics 1 0 1)
+              historyBack
+              historyForward
+              reload
+              visitWithoutScripts "http://localhost/no-js"
+          )
           `shouldReturn` Right ()
 
-    it "surfaces explicit assertion failures from the runner protocol" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "assertion-failure"]
-                }
-        runBrowserScript browserConfig [ClickLinkWithText "Browse the second page"]
-          `shouldReturn` Left (BrowserAssertionFailed "Expected the second page to load")
+    it "encodes every semantic locator and role while exercising both applicative APIs" $
+      withFakeRunner "normal" $ \config -> do
+        let roles = [Button, Checkbox, Form, Heading, Link, List, ListItem, Navigation, Radio, Status, Textbox]
+            locators =
+              [ byRole Button,
+                byLabel "Label" `named` "Named label",
+                byText "Text",
+                byPlaceholder "Placeholder",
+                byAltText "Alternative",
+                byTitle "Title",
+                byTestId "identifier",
+                css "h1",
+                containingText (byRole ListItem) "Product",
+                within (byRole Navigation) (byRole Link)
+              ]
+            combinedObservation =
+              (\email focused visible url -> (email, focused, visible, url))
+                <$> keepLeftObservation (inputValue (byLabel "Email")) (pure ())
+                <*> keepRightObservation (pure ()) (isFocused (byLabel "Email"))
+                <*> combineObservation (&&) (isVisible (byRole Form)) (isVisible (byRole Heading))
+                <*> currentUrl
+            appliedScenario = applyScenario (mapScenario (+) (pure 1)) (pure 2)
+            scenarioValue = combineScenario (+) appliedScenario (pure 0) :: BrowserScenario Int
+        Aeson.toJSONList locators `shouldSatisfy` (not . null . show)
+        Aeson.omitField (byRole Button) `shouldBe` False
+        LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncoding (byRole Button))) `shouldSatisfy` (> 0)
+        LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncodingList locators)) `shouldSatisfy` (> 0)
+        runBrowserScenario
+          config
+          ( do
+              traverse_ (click . byRole) roles
+              traverse_ click locators
+              applicativeValue <- keepLeftScenario (keepLeftScenario scenarioValue (pure ())) (keepRightScenario (pure ()) (pure ()))
+              monadicValue <- bindScenario (scenarioReturn applicativeValue) pure
+              assertEventually (pure ("constant" :: Text.Text)) (`shouldBe` "constant")
+              assertEventually combinedObservation (`shouldBe` ("person@example.com", True, True, "http://localhost/"))
+              pure monadicValue
+          )
+          `shouldReturn` Right 3
 
-    it "surfaces malformed runner responses explicitly" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "invalid-response"]
-                }
-        runBrowserScript browserConfig [VisitUrl "http://localhost:8080/"]
-          `shouldReturn` Left (BrowserRunnerProtocolError "Unexpected browser runner response: maybe")
+    it "retries Hspec callback failures against fresh observations" $
+      withFakeRunner "retry" $ \config ->
+        runBrowserScenario
+          config
+          ( do
+              assertText (byRole Heading) (`shouldBe` "Home")
+              assertValue (css "input[name=email]") (`shouldBe` "person@example.com")
+              assertFocused (byTestId "email") (`shouldBe` True)
+          )
+          `shouldReturn` Right ()
 
-    it "surfaces empty runner responses explicitly" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "empty-response"]
-                }
-        runBrowserScript browserConfig [VisitUrl "http://localhost:8080/"]
-          `shouldReturn` Left (BrowserRunnerProtocolError "browser runner returned an empty response")
+    it "times out with the last callback failure instead of sleeping indefinitely" $
+      withFakeRunner "never-match" $ \config -> do
+        result <- runBrowserScenario config (assertText (byRole Heading) (`shouldBe` "Home"))
+        result `shouldSatisfy` \case
+          Left (BrowserAssertionFailed message _) -> "timed out after 250ms" `Text.isInfixOf` Text.pack message
+          _ -> False
 
-    it "surfaces missing response files explicitly" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "missing-response"]
-                }
-        runBrowserScript browserConfig [VisitUrl "http://localhost:8080/"]
-          `shouldReturn` Left (BrowserRunnerProtocolError "browser runner completed without writing a response file")
+    it "uses the first failure when a slow initial callback already exceeds the timeout" $
+      withFakeRunner "never-match-artifacts" $ \config -> do
+        let shortConfig = config {browserTimeoutMilliseconds = 1}
+        result <-
+          runBrowserScenario shortConfig $
+            assertText (byRole Heading) $ \actual -> do
+              threadDelay 5000
+              actual `shouldBe` "Home"
+        result `shouldSatisfy` \case
+          Left (BrowserAssertionFailed message artifacts) ->
+            "timed out after 1ms" `Text.isInfixOf` Text.pack message
+              && artifacts == ["test-results/failure/assertion-trace.zip"]
+          _ -> False
 
-    it "surfaces non-zero runner exits with stdout and stderr" $
-      withFakeBrowserScript $ \scriptPath -> do
-        let browserConfig =
-              defaultBrowserConfig
-                { browserRunnerCommand = "node",
-                  browserRunnerArguments = [scriptPath, "process-failure"]
-                }
-        runBrowserScript browserConfig [VisitUrl "http://localhost:8080/"]
-          `shouldReturn` Left (BrowserRunnerProcessError (ExitFailure 4) "runner stdout\n" "runner stderr\n")
+    it "does not retry unexpected callback exceptions" $
+      withFakeRunner "normal" $ \config -> do
+        result <- runBrowserScenario config (assertText (byRole Heading) (\_ -> ioError (userError "callback exploded")))
+        result `shouldSatisfy` \case
+          Left (BrowserRunnerProtocolError message) -> "callback exploded" `Text.isInfixOf` Text.pack message
+          _ -> False
 
-    it "surfaces missing runner executables as launch errors" $ do
-      result <- runBrowserScript defaultBrowserConfig {browserRunnerCommand = "missing-browser-runner"} [VisitUrl "http://localhost:8080/"]
-      errorMessage <- $([|result|] `shouldMatch` [p|Left (BrowserRunnerLaunchError errorMessage)|])
-      errorMessage `shouldContain'` "missing-browser-runner"
+    it "reports command errors and retained artifact paths" $
+      withFakeRunner "command-error" $ \config ->
+        runBrowserScenario config (click (byText "Missing"))
+          `shouldReturn` Left (BrowserCommandFailed 2 "missing element" ["test-results/failure/trace.zip"])
+
+    it "reports malformed protocol responses" $
+      withFakeRunner "malformed" $ \config -> do
+        result <- runBrowserScenario config (visit "http://localhost/")
+        result `shouldSatisfy` \case
+          Left (BrowserRunnerProtocolError message) -> "not enough input" `Text.isInfixOf` Text.pack message || "invalid" `Text.isInfixOf` Text.toLower (Text.pack message)
+          _ -> False
+
+    it "validates correlation, version, status, and required response fields" $ do
+      let protocolFailure mode expected =
+            withFakeRunner mode $ \config -> do
+              result <- runBrowserScenario config (visit "http://localhost/")
+              result `shouldSatisfy` \case
+                Left (BrowserRunnerProtocolError message) -> expected `Text.isInfixOf` Text.pack message
+                _ -> False
+      protocolFailure "wrong-protocol" "Unsupported browser protocol version"
+      protocolFailure "wrong-id" "Expected command response"
+      protocolFailure "unknown-status" "Unknown browser response status"
+      protocolFailure "missing-fields" "key"
+      protocolFailure "response-array" "browser command response"
+
+    it "validates observation result shape, count, and leaf types" $ do
+      let observationFailure mode observation expected =
+            withFakeRunner mode $ \config -> do
+              result <- runBrowserScenario config (assertEventually observation (const (pure ())))
+              result `shouldSatisfy` \case
+                Left (BrowserRunnerProtocolError message) -> expected `Text.isInfixOf` Text.toLower (Text.pack message)
+                _ -> False
+      observationFailure "observe-not-array" (textContent (byRole Heading)) "array"
+      observationFailure "observe-missing" (textContent (byRole Heading)) "omitted"
+      observationFailure "observe-extra" (textContent (byRole Heading)) "unexpected observation values"
+      observationFailure "observe-bad-type" (textContent (byRole Heading)) "text"
+      observationFailure "metrics-invalid" browserMetrics "enhancednavigationfetchcount"
+      observationFailure "observe-no-value" (textContent (byRole Heading)) "array"
+
+    it "keeps scenario errors when cleanup also fails and otherwise reports cleanup failures" $ do
+      withFakeRunner "scenario-and-finish-error" $ \config ->
+        runBrowserScenario config (visit "http://localhost/")
+          `shouldReturn` Left (BrowserCommandFailed 2 "scenario failed" [])
+      withFakeRunner "finish-error" $ \config ->
+        runBrowserScenario config (pure ())
+          `shouldReturn` Left (BrowserCommandFailed 2 "finish failed" [])
+      withFakeRunner "finish-invalid" $ \config -> do
+        result <- runBrowserScenario config (pure ())
+        result `shouldSatisfy` \case
+          Left (BrowserRunnerProtocolError message) -> "finish response" `Text.isInfixOf` Text.pack message
+          _ -> False
+      withFakeRunner "exit-failure" $ \config ->
+        runBrowserScenario config (pure ())
+          `shouldReturn` Left (BrowserRunnerProcessError (ExitFailure 3) "" "browser runner exited unsuccessfully")
+
+    it "handles initialization failures, closed adapters, null values, and omitted optional fields" $ do
+      withFakeRunner "init-error" $ \config ->
+        runBrowserScenario config (pure ())
+          `shouldReturn` Left (BrowserCommandFailed 1 "initialization failed" [])
+      withFakeRunner "closed" $ \config -> do
+        result <- runBrowserScenario config (visit "http://localhost/")
+        result `shouldSatisfy` \case
+          Left (BrowserRunnerProtocolError _) -> True
+          _ -> False
+      withFakeRunner "no-value" $ \config ->
+        runBrowserScenario config (visit "http://localhost/") `shouldReturn` Right ()
+      withFakeRunner "command-error-no-artifacts" $ \config ->
+        runBrowserScenario config (click (byText "Missing"))
+          `shouldReturn` Left (BrowserCommandFailed 2 "missing element" [])
+      withFakeRunner "finish-no-artifacts" $ \config ->
+        runBrowserScenario config (pure ()) `shouldReturn` Right ()
+      withFakeRunner "scenario-error-finish-no-artifacts" $ \config ->
+        runBrowserScenario config (click (byText "Missing"))
+          `shouldReturn` Left (BrowserCommandFailed 2 "missing element" [])
+
+    it "surfaces missing runner executables" $ do
+      result <- runBrowserScenario defaultPlaywrightBrowserConfig {browserRunnerCommand = "missing-browser-runner"} (pure ())
+      result `shouldSatisfy` \case
+        Left (BrowserRunnerLaunchError message) -> "missing-browser-runner" `Text.isInfixOf` Text.pack message
+        _ -> False
+
+    it "covers public metric, config, and error instances" $ do
+      let metrics = BrowserMetrics 1 2 3
+          otherMetrics = BrowserMetrics 9 8 7
+          config = defaultPlaywrightBrowserConfig
+          processError = BrowserRunnerProcessError (ExitFailure 4) "out" "err"
+          assertionError = BrowserAssertionFailed "failed" ["trace.zip"]
+      enhancedNavigationFetchCount metrics `shouldBe` 1
+      hardNavigationCount metrics `shouldBe` 2
+      mutationRequestCount metrics `shouldBe` 3
+      metrics `shouldNotBe` otherMetrics
+      show [metrics] `shouldContain'` "BrowserMetrics"
+      (Aeson.eitherDecode "[{\"enhancedNavigationFetchCount\":1,\"hardNavigationCount\":2,\"mutationRequestCount\":3}]" :: Either String [BrowserMetrics]) `shouldBe` Right [metrics]
+      (Aeson.eitherDecode "null" :: Either String BrowserMetrics) `shouldSatisfy` \case
+        Left message -> "BrowserMetrics" `Text.isInfixOf` Text.pack message
+        Right _ -> False
+      show metrics `shouldBe` "BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 2, mutationRequestCount = 3}"
+      (Aeson.omittedField :: Maybe BrowserMetrics) `shouldBe` Nothing
+      config `shouldNotBe` config {browserHeadless = False}
+      show config `shouldContain'` "BrowserConfig"
+      show [config] `shouldContain'` "BrowserConfig"
+      processError `shouldBe` BrowserRunnerProcessError (ExitFailure 4) "out" "err"
+      assertionError `shouldBe` BrowserAssertionFailed "failed" ["trace.zip"]
+      let errors =
+            [ BrowserRunnerLaunchError "launch",
+              processError,
+              BrowserRunnerProtocolError "protocol",
+              BrowserCommandFailed 4 "command" ["trace.zip"],
+              assertionError
+            ]
+      errors `shouldBe` errors
+      BrowserRunnerLaunchError "one" `shouldNotBe` BrowserRunnerLaunchError "two"
+      BrowserRunnerProcessError ExitSuccess "out" "err" `shouldNotBe` processError
+      BrowserRunnerProtocolError "one" `shouldNotBe` BrowserRunnerProtocolError "two"
+      BrowserCommandFailed 1 "one" [] `shouldNotBe` BrowserCommandFailed 2 "two" []
+      BrowserAssertionFailed "one" [] `shouldNotBe` BrowserAssertionFailed "two" []
+      show errors `shouldContain'` "BrowserRunnerLaunchError"
   where
+    combineObservation :: (a -> b -> c) -> BrowserObservation a -> BrowserObservation b -> BrowserObservation c
+    combineObservation = liftA2
+    keepLeftObservation :: BrowserObservation a -> BrowserObservation b -> BrowserObservation a
+    keepLeftObservation = (<*)
+    keepRightObservation :: BrowserObservation a -> BrowserObservation b -> BrowserObservation b
+    keepRightObservation = (*>)
+    combineScenario :: (a -> b -> c) -> BrowserScenario a -> BrowserScenario b -> BrowserScenario c
+    combineScenario = liftA2
+    applyScenario :: BrowserScenario (a -> b) -> BrowserScenario a -> BrowserScenario b
+    applyScenario = (<*>)
+    mapScenario :: (a -> b) -> BrowserScenario a -> BrowserScenario b
+    mapScenario = fmap
+    keepLeftScenario :: BrowserScenario a -> BrowserScenario b -> BrowserScenario a
+    keepLeftScenario = (<*)
+    keepRightScenario :: BrowserScenario a -> BrowserScenario b -> BrowserScenario b
+    keepRightScenario = (*>)
+    scenarioReturn :: a -> BrowserScenario a
+    scenarioReturn = return
+    bindScenario :: BrowserScenario a -> (a -> BrowserScenario b) -> BrowserScenario b
+    bindScenario = (>>=)
+
     withEnvironment overrides action = do
       originalValues <- traverse capture overrides
       apply overrides
@@ -316,41 +351,75 @@ spec = do
       case maybeValue of
         Just value -> setEnv name value
         Nothing -> unsetEnv name
-    withFakeBrowserScript action =
+
+    withFakeRunner mode action =
       withSystemTempDirectory "browser-runner" $ \tempDirectory -> do
-        let scriptPath = tempDirectory </> "fake-browser-runner.js"
-        writeFile scriptPath fakeBrowserRunnerSource
-        action scriptPath
-    fakeBrowserRunnerSource =
+        let runnerPath = tempDirectory </> "runner.js"
+            config =
+              defaultPlaywrightBrowserConfig
+                { browserRunnerArguments = [runnerPath, mode],
+                  browserTimeoutMilliseconds = 250
+                }
+        writeFile runnerPath fakeRunnerSource
+        action config
+
+    fakeRunnerSource =
       unlines
-        [ "const fs = require('fs');",
-          "const [mode, requestPath, responsePath] = process.argv.slice(2);",
-          "const request = fs.readFileSync(requestPath, 'utf8');",
-          "if (!request.includes('headless\\t') || !request.includes('action\\t')) {",
-          "  fs.writeFileSync(responsePath, 'error\\tMissing request content\\n');",
-          "  process.exit(0);",
+        [ "const readline = require('node:readline');",
+          "const mode = process.argv[2];",
+          "let textAttempts = 0;",
+          "const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
+          "function reply(id, status, value, message, artifacts = []) {",
+          "  process.stdout.write(JSON.stringify({ protocol: 1, id, status, value, message, artifacts }) + '\\n');",
           "}",
-          "switch (mode) {",
-          "  case 'ok':",
-          "    fs.writeFileSync(responsePath, 'ok\\n');",
-          "    process.exit(0);",
-          "  case 'assertion-failure':",
-          "    fs.writeFileSync(responsePath, 'error\\tExpected the second page to load\\n');",
-          "    process.exit(0);",
-          "  case 'invalid-response':",
-          "    fs.writeFileSync(responsePath, 'maybe\\n');",
-          "    process.exit(0);",
-          "  case 'empty-response':",
-          "    fs.writeFileSync(responsePath, '');",
-          "    process.exit(0);",
-          "  case 'missing-response':",
-          "    process.exit(0);",
-          "  case 'process-failure':",
-          "    process.stdout.write('runner stdout\\n');",
-          "    process.stderr.write('runner stderr\\n');",
-          "    process.exit(4);",
-          "  default:",
-          "    fs.writeFileSync(responsePath, 'error\\tUnknown fake mode\\n');",
-          "    process.exit(0);",
-          "}"
+          "function rawReply(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }",
+          "(async () => {",
+          "  for await (const line of lines) {",
+          "    const request = JSON.parse(line);",
+          "    if (mode === 'init-error' && request.command === 'initialize') { reply(request.id, 'error', null, 'initialization failed'); continue; }",
+          "    if (mode === 'malformed' && request.command === 'visit') { process.stdout.write('{invalid\\n'); continue; }",
+          "    if (mode === 'wrong-protocol' && request.command === 'visit') { rawReply({ protocol: 2, id: request.id, status: 'ok', value: null }); continue; }",
+          "    if (mode === 'wrong-id' && request.command === 'visit') { rawReply({ protocol: 1, id: request.id + 1, status: 'ok', value: null }); continue; }",
+          "    if (mode === 'unknown-status' && request.command === 'visit') { rawReply({ protocol: 1, id: request.id, status: 'mystery', value: null }); continue; }",
+          "    if (mode === 'missing-fields' && request.command === 'visit') { rawReply({ protocol: 1, id: request.id }); continue; }",
+          "    if (mode === 'response-array' && request.command === 'visit') { rawReply([]); continue; }",
+          "    if (mode === 'closed' && request.command === 'visit') { process.exit(0); }",
+          "    if (mode === 'no-value' && request.command === 'visit') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
+          "    if (mode === 'scenario-and-finish-error' && request.command === 'visit') { reply(request.id, 'error', null, 'scenario failed'); continue; }",
+          "    if (mode === 'command-error' && request.command === 'click') { reply(request.id, 'error', null, 'missing element'); continue; }",
+          "    if (mode === 'scenario-error-finish-no-artifacts' && request.command === 'click') { reply(request.id, 'error', null, 'missing element'); continue; }",
+          "    if (mode === 'command-error-no-artifacts' && request.command === 'click') { rawReply({ protocol: 1, id: request.id, status: 'error', message: 'missing element' }); continue; }",
+          "    if (request.command === 'observeMany') {",
+          "      if (mode === 'observe-not-array') { reply(request.id, 'ok', { value: 'Home' }); continue; }",
+          "      if (mode === 'observe-no-value') { rawReply({ protocol: 1, id: request.id, status: 'ok' }); continue; }",
+          "      if (mode === 'observe-missing') { reply(request.id, 'ok', []); continue; }",
+          "      if (mode === 'observe-extra') { reply(request.id, 'ok', ['Home', 'extra']); continue; }",
+          "      if (mode === 'observe-bad-type') { reply(request.id, 'ok', [123]); continue; }",
+          "      if (mode === 'metrics-invalid') { reply(request.id, 'ok', [{ invalid: true }]); continue; }",
+          "      const values = request.observations.map((observation) => {",
+          "        switch (observation.kind) {",
+          "          case 'textContent': return mode === 'never-match' || mode === 'never-match-artifacts' || (mode === 'retry' && textAttempts++ === 0) ? 'Loading' : 'Home';",
+          "          case 'inputValue': return 'person@example.com';",
+          "          case 'attributeValue': return 'false';",
+          "          case 'focused': case 'visible': return true;",
+          "          case 'currentUrl': return 'http://localhost/';",
+          "          case 'browserMetrics': return { enhancedNavigationFetchCount: 1, hardNavigationCount: 0, mutationRequestCount: 1 };",
+          "          default: return null;",
+          "        }",
+          "      });",
+          "      reply(request.id, 'ok', values);",
+          "      continue;",
+          "    }",
+          "    if (request.command === 'finish') {",
+          "      if (mode === 'scenario-and-finish-error' || mode === 'finish-error') { reply(request.id, 'error', null, 'finish failed'); return; }",
+          "      if (mode === 'finish-invalid') { reply(request.id, 'ok', 'invalid finish value'); return; }",
+          "      if (mode === 'finish-no-artifacts' || mode === 'scenario-error-finish-no-artifacts') { reply(request.id, 'ok', {}); return; }",
+          "      const artifacts = mode === 'command-error' ? ['test-results/failure/trace.zip'] : mode === 'never-match-artifacts' ? ['test-results/failure/assertion-trace.zip'] : [];",
+          "      reply(request.id, 'ok', { artifacts });",
+          "      if (mode === 'exit-failure') process.exitCode = 3;",
+          "      return;",
+          "    }",
+          "    reply(request.id, 'ok', null);",
+          "  }",
+          "})();"
         ]

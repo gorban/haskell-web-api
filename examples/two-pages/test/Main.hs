@@ -1,7 +1,10 @@
 module Main (main) where
 
+import E2E.AppSpec qualified
 import Test.Hspec (hspec)
-import qualified Unit.AppSpec
+import Unit.AppSpec qualified
 
 main :: IO ()
-main = hspec Unit.AppSpec.spec
+main = hspec $ do
+  E2E.AppSpec.spec
+  Unit.AppSpec.spec

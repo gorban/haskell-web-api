@@ -21,6 +21,7 @@ This example now builds with the current framework seam:
 - [src/App/Pages/Second.hs](src/App/Pages/Second.hs)
 - [public/navigation.js](public/navigation.js)
 - [test/Unit/AppSpec.hs](test/Unit/AppSpec.hs)
+- [test/E2E/AppSpec.hs](test/E2E/AppSpec.hs)
 
 Run it from the repository root with:
 
@@ -96,6 +97,40 @@ examples.
    browser reload.
 4. Using Back and Forward keeps the app navigable.
 5. Disabling JavaScript still leaves both pages fully usable through normal links.
+
+## Real-browser tests
+
+Install the locked Playwright dependency and Chromium as described in the repository `SETUP.md`, then
+run the Haskell-authored browser scenarios with:
+
+```bash
+cabal test two-pages-example-tests --test-show-details=direct --test-options='--match real-browser'
+```
+
+Prefer semantic locators and callback assertions. CSS remains an explicit structural escape hatch:
+
+```hs
+runBrowserScenario browser $ do
+  visit homeUrl
+  assertText (byRole Heading) (`shouldBe` "Home")
+  click (byRole Link `named` "Go to the second page")
+  assertMetrics $ \metrics ->
+    $([|metrics|] `shouldMatch`
+      [p|BrowserMetrics
+           { enhancedNavigationFetchCount = 1
+           , hardNavigationCount = 0
+           }|])
+```
+
+Potentially expensive properties stay demand-driven. Compose only the observations needed by a test;
+the harness batches those leaves into one browser request:
+
+```hs
+data FieldState = FieldState Text Bool
+
+fieldState target =
+  FieldState <$> inputValue target <*> isFocused target
+```
 
 ## What this example is trying to standardize
 

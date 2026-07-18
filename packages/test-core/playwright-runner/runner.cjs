@@ -1,88 +1,252 @@
 #!/usr/bin/env node
-// Haskell owns the scenario DSL. This process is deliberately only a thin protocol adapter to
-// Playwright's official Node client.
+// Haskell owns scenarios and assertions. This process only adapts a small,
+// versioned command protocol to Playwright's official Node API.
 const fs = require('node:fs');
+const path = require('node:path');
+const readline = require('node:readline');
+const { chromium } = require('@playwright/test');
+
+const state = {
+  browser: null,
+  context: null,
+  page: null,
+  config: null,
+  scriptsEnabled: null,
+  countHardNavigations: false,
+  metrics: emptyMetrics(),
+  blockedRequests: new Map(),
+};
+
+function emptyMetrics() {
+  return {
+    enhancedNavigationFetchCount: 0,
+    hardNavigationCount: 0,
+    mutationRequestCount: 0,
+  };
+}
 
 async function main() {
-  const [requestPath, responsePath] = process.argv.slice(2);
-  if (!requestPath || !responsePath) throw new Error('expected request and response paths');
-  const requestLines = fs.readFileSync(requestPath, 'utf8').split(/\r?\n/).filter(Boolean);
-  const configuration = Object.fromEntries(requestLines
-    .filter((line) => line.startsWith('headless\t') || line.startsWith('keep-open-on-failure\t'))
-    .map((line) => line.split('\t'))
-    .map((parts) => [parts[0], parts[1]]));
-  const actions = requestLines.filter((line) => line.startsWith('action\t')).map((line) => line.split('\t'));
-  let chromium;
-  try {
-    ({ chromium } = require('playwright'));
-  } catch (error) {
-    return writeError(responsePath, `Playwright is unavailable: ${error.message}`);
+  const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const line of lines) {
+    if (!line.trim()) continue;
+    let request;
+    try {
+      request = JSON.parse(line);
+      validateEnvelope(request);
+      const value = await execute(request);
+      writeResponse({ protocol: 1, id: request.id, status: 'ok', value });
+      if (request.command === 'finish') return;
+    } catch (error) {
+      const id = request && Number.isInteger(request.id) ? request.id : -1;
+      writeResponse({
+        protocol: 1,
+        id,
+        status: 'error',
+        message: error && error.message ? error.message : String(error),
+        artifacts: [],
+      });
+      if (request && request.command === 'finish') return;
+    }
   }
-  const browser = await chromium.launch({ headless: configuration.headless !== 'false' });
-  let context = await browser.newContext();
-  let page = await context.newPage();
-  let mutationCount = 0;
-  const observe = (targetPage) => targetPage.on('request', (request) => {
-    if (request.headers()['x-harch-action']) mutationCount += 1;
+  await closeBrowser(false, null);
+}
+
+function validateEnvelope(request) {
+  if (!request || request.protocol !== 1) throw new Error('unsupported or missing browser protocol version');
+  if (!Number.isInteger(request.id)) throw new Error('browser command id must be an integer');
+  if (typeof request.command !== 'string') throw new Error('browser command name must be a string');
+}
+
+async function execute(request) {
+  switch (request.command) {
+    case 'initialize': return initialize(request);
+    case 'visit': return visit(request.url, true);
+    case 'visitWithoutScripts': return visit(request.url, false);
+    case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
+    case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
+    case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
+    case 'submit': return resolveLocator(request.locator).evaluate((form) => {
+      if (!(form instanceof HTMLFormElement)) throw new Error('submit locator must resolve to a form');
+      form.requestSubmit();
+    });
+    case 'historyBack': return requirePage().goBack({ waitUntil: 'commit', timeout: timeout() });
+    case 'historyForward': return requirePage().goForward({ waitUntil: 'commit', timeout: timeout() });
+    case 'blockRequestsMatching': return blockRequestsMatching(requireString(request.pattern, 'request pattern'));
+    case 'releaseRequestsMatching': return releaseRequestsMatching(requireString(request.pattern, 'request pattern'));
+    case 'observeMany': return observeMany(request.observations);
+    case 'finish': return finish(request.failure);
+    default: throw new Error(`unsupported browser command: ${request.command}`);
+  }
+}
+
+async function initialize(request) {
+  if (state.browser) throw new Error('browser runner is already initialized');
+  state.config = {
+    headless: request.headless !== false,
+    pauseOnFailure: request.pauseOnFailure === true,
+    timeoutMilliseconds: positiveInteger(request.timeoutMilliseconds, 'timeoutMilliseconds'),
+    artifactDirectory: requireString(request.artifactDirectory, 'artifactDirectory'),
+  };
+  state.browser = await chromium.launch({ headless: state.config.headless });
+  await createContext(true);
+  return null;
+}
+
+async function createContext(scriptsEnabled) {
+  if (state.context) {
+    await state.context.tracing.stop().catch(() => {});
+    await state.context.close();
+  }
+  state.context = await state.browser.newContext({ javaScriptEnabled: scriptsEnabled });
+  state.scriptsEnabled = scriptsEnabled;
+  await state.context.tracing.start({ screenshots: true, snapshots: true, sources: true });
+  state.page = await state.context.newPage();
+  state.countHardNavigations = false;
+  state.metrics = emptyMetrics();
+  state.blockedRequests = new Map();
+
+  state.page.on('request', (request) => {
+    const headers = request.headers();
+    if (headers['x-requested-with'] === 'tiny-navigation') state.metrics.enhancedNavigationFetchCount += 1;
+    if (headers['x-harch-action']) state.metrics.mutationRequestCount += 1;
+    if (state.countHardNavigations && request.isNavigationRequest() && request.frame() === state.page.mainFrame()) {
+      state.metrics.hardNavigationCount += 1;
+    }
   });
-  observe(page);
+}
+
+async function visit(url, scriptsEnabled) {
+  requireString(url, 'visit URL');
+  if (!state.context || state.scriptsEnabled !== scriptsEnabled) await createContext(scriptsEnabled);
+  state.countHardNavigations = false;
+  await requirePage().goto(url, { waitUntil: 'commit', timeout: timeout() });
+  state.metrics = emptyMetrics();
+  state.countHardNavigations = true;
+  return null;
+}
+
+async function blockRequestsMatching(pattern) {
+  if (state.blockedRequests.has(pattern)) throw new Error(`request pattern is already blocked: ${pattern}`);
+  const pendingRoutes = [];
+  const handler = (route) => new Promise((resolve, reject) => pendingRoutes.push({ route, resolve, reject }));
+  state.blockedRequests.set(pattern, { handler, pendingRoutes });
+  await state.context.route(pattern, handler);
+  return null;
+}
+
+async function releaseRequestsMatching(pattern) {
+  const blocked = state.blockedRequests.get(pattern);
+  if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
+  state.blockedRequests.delete(pattern);
+  await state.context.unroute(pattern, blocked.handler);
+  await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
+    try {
+      await route.continue();
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  }));
+  return null;
+}
+
+async function observeMany(observations) {
+  if (!Array.isArray(observations)) throw new Error('observeMany requires an observations array');
+  return Promise.all(observations.map(observe));
+}
+
+async function observe(observation) {
+  if (!observation || typeof observation.kind !== 'string') throw new Error('invalid browser observation');
+  switch (observation.kind) {
+    case 'textContent': return (await resolveLocator(observation.locator).textContent({ timeout: timeout() })) || '';
+    case 'inputValue': return resolveLocator(observation.locator).inputValue({ timeout: timeout() });
+    case 'attributeValue': return resolveLocator(observation.locator).getAttribute(requireString(observation.attribute, 'attribute name'), { timeout: timeout() });
+    case 'focused': return resolveLocator(observation.locator).evaluate((element) => document.activeElement === element);
+    case 'visible': return resolveLocator(observation.locator).isVisible({ timeout: timeout() });
+    case 'currentUrl': return requirePage().url();
+    case 'browserMetrics': return { ...state.metrics };
+    default: throw new Error(`unsupported browser observation: ${observation.kind}`);
+  }
+}
+
+function resolveLocator(spec, root = requirePage()) {
+  if (!spec || typeof spec.kind !== 'string') throw new Error('invalid locator');
+  switch (spec.kind) {
+    case 'role': return root.getByRole(requireString(spec.role, 'ARIA role'), spec.name == null ? {} : { name: spec.name, exact: true });
+    case 'label': return root.getByLabel(requireString(spec.text, 'label text'), { exact: true });
+    case 'text': return root.getByText(requireString(spec.text, 'visible text'), { exact: true });
+    case 'placeholder': return root.getByPlaceholder(requireString(spec.text, 'placeholder text'), { exact: true });
+    case 'altText': return root.getByAltText(requireString(spec.text, 'alternative text'), { exact: true });
+    case 'title': return root.getByTitle(requireString(spec.text, 'title text'), { exact: true });
+    case 'testId': return root.getByTestId(requireString(spec.text, 'test id'));
+    case 'css': return root.locator(requireString(spec.text, 'CSS selector'));
+    case 'within': return resolveLocator(spec.child, resolveLocator(spec.parent, root));
+    case 'containingText': return resolveLocator(spec.locator, root).filter({ hasText: requireString(spec.text, 'contained text') });
+    default: throw new Error(`unsupported locator kind: ${spec.kind}`);
+  }
+}
+
+async function finish(failure) {
+  const artifacts = await closeBrowser(failure != null, failure == null ? null : String(failure));
+  return { artifacts };
+}
+
+async function closeBrowser(failed, failureMessage) {
+  if (!state.browser) return [];
+  const artifacts = [];
   try {
-    for (const parts of actions) await applyAction(parts, { browser, get page() { return page; }, setPage: async (scriptsEnabled) => {
-      await context.close();
-      context = await browser.newContext({ javaScriptEnabled: scriptsEnabled });
-      page = await context.newPage();
-      observe(page);
-    }, mutationCount: () => mutationCount });
-    fs.writeFileSync(responsePath, 'ok\n');
-  } catch (error) {
-    writeError(responsePath, error && error.message ? error.message : String(error));
+    if (failed && state.page && state.config) {
+      if (state.config.pauseOnFailure && !state.config.headless) await state.page.pause();
+      const runDirectory = path.resolve(state.config.artifactDirectory, `failure-${Date.now()}-${process.pid}`);
+      fs.mkdirSync(runDirectory, { recursive: true });
+      const screenshotPath = path.join(runDirectory, 'page.png');
+      const htmlPath = path.join(runDirectory, 'page.html');
+      const tracePath = path.join(runDirectory, 'trace.zip');
+      await state.page.screenshot({ path: screenshotPath, fullPage: true }).catch(() => {});
+      fs.writeFileSync(htmlPath, await state.page.content(), 'utf8');
+      if (failureMessage) fs.writeFileSync(path.join(runDirectory, 'failure.txt'), failureMessage, 'utf8');
+      await state.context.tracing.stop({ path: tracePath }).catch(() => {});
+      for (const artifactPath of [screenshotPath, htmlPath, tracePath]) {
+        if (fs.existsSync(artifactPath)) artifacts.push(artifactPath);
+      }
+    } else if (state.context) {
+      await state.context.tracing.stop().catch(() => {});
+    }
   } finally {
-    if (configuration['keep-open-on-failure'] !== 'true') await browser.close();
+    await state.browser.close().catch(() => {});
+    state.browser = null;
+    state.context = null;
+    state.page = null;
   }
+  return artifacts;
 }
 
-async function applyAction(parts, state) {
-  const action = parts[1];
-  const value = () => parts.slice(2).join('\t');
-  switch (action) {
-    // The SSR document is actionable at commit: the inline capture kernel is already in the head,
-    // while deferred component modules may deliberately still be loading.
-    case 'visit-url': return state.page.goto(parts[2], { waitUntil: 'commit', timeout: 10000 });
-    case 'visit-url-without-scripts': await state.setPage(false); return state.page.goto(parts[2], { waitUntil: 'commit', timeout: 10000 });
-    case 'reload-page': return state.page.reload({ waitUntil: 'commit', timeout: 10000 });
-    case 'click-link-with-text': return state.page.getByRole('link', { name: value(), exact: true }).click();
-    case 'click-selector': return state.page.locator(value()).click();
-    case 'fill-field': return state.page.locator(parts[2]).fill(parts.slice(3).join('\t'));
-    case 'submit-form': return state.page.locator(value()).evaluate((form) => form.requestSubmit());
-    case 'history-back': return state.page.goBack({ waitUntil: 'domcontentloaded' });
-    case 'history-forward': return state.page.goForward({ waitUntil: 'domcontentloaded' });
-    case 'assert-text-equals': {
-      const actual = await state.page.locator(parts[2]).textContent();
-      return assertEqual(actual || '', parts.slice(3).join('\t'), parts[2]);
-    }
-    case 'assert-field-value': {
-      const actual = await state.page.locator(parts[2]).inputValue();
-      return assertEqual(actual, parts.slice(3).join('\t'), parts[2]);
-    }
-    case 'assert-focused-selector': {
-      const focused = await state.page.locator(value()).evaluate((element) => document.activeElement === element);
-      if (!focused) throw new Error(`Expected focus on ${value()}`);
-      return;
-    }
-    case 'assert-mutation-count': return assertEqual(String(state.mutationCount()), parts[2], 'mutation count');
-    default: throw new Error(`Unsupported action: ${action}`);
-  }
+function requirePage() {
+  if (!state.page) throw new Error('browser runner has not been initialized');
+  return state.page;
 }
 
-function assertEqual(actual, expected, subject) {
-  if (actual !== expected) throw new Error(`Expected ${subject} to equal ${expected}, but found ${actual}`);
+function timeout() {
+  if (!state.config) throw new Error('browser runner has not been initialized');
+  return state.config.timeoutMilliseconds;
 }
 
-function writeError(responsePath, message) {
-  fs.writeFileSync(responsePath, `error\t${String(message).replace(/[\r\n\t]/g, ' ')}\n`);
+function requireString(value, description) {
+  if (typeof value !== 'string' || value.length === 0) throw new Error(`${description} must be a non-empty string`);
+  return value;
 }
 
-main().catch((error) => {
-  const responsePath = process.argv[3];
-  if (responsePath) writeError(responsePath, error && error.message ? error.message : String(error));
+function positiveInteger(value, description) {
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${description} must be a positive integer`);
+  return value;
+}
+
+function writeResponse(response) {
+  process.stdout.write(`${JSON.stringify(response)}\n`);
+}
+
+main().catch(async (error) => {
+  await closeBrowser(true, error && error.message ? error.message : String(error)).catch(() => {});
+  process.stderr.write(`${error && error.stack ? error.stack : String(error)}\n`);
+  process.exitCode = 1;
 });
