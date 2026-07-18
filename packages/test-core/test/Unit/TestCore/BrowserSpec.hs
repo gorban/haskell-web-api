@@ -16,6 +16,13 @@ spec = do
       parseBrowserConfig []
         `shouldBe` Right defaultBrowserConfig
 
+    it "provides the bundled Node Playwright runner without changing the Haskell DSL" $
+      defaultPlaywrightBrowserConfig
+        `shouldBe` defaultBrowserConfig
+          { browserRunnerCommand = "node",
+            browserRunnerArguments = ["packages/test-core/playwright-runner/runner.cjs"]
+          }
+
     it "applies environment overrides for runner and browser behavior" $
       parseBrowserConfig
         [ ("TEST_CORE_BROWSER_RUNNER", "node"),
@@ -93,9 +100,15 @@ spec = do
           VisitUrlWithoutScripts "http://localhost:8080/no-js",
           ReloadPage,
           ClickLinkWithText "Browse the second page",
+          ClickSelector "button[type=submit]",
+          FillField "input[name=query]" "server rendering",
+          SubmitForm "form[data-harch-action=true]",
           NavigateHistoryBack,
           NavigateHistoryForward,
           AssertTextEquals "[data-page-title=\"true\"]" "Second",
+          AssertFieldValue "input[name=query]" "server rendering",
+          AssertFocusedSelector "input[name=query]",
+          AssertMutationCount 1,
           AssertNavigationMetricEquals EnhancedFetchCount 1,
           AssertNavigationMetricEquals HardNavigationCount 0
         ]
@@ -106,9 +119,15 @@ spec = do
             "action\tvisit-url-without-scripts\thttp://localhost:8080/no-js",
             "action\treload-page",
             "action\tclick-link-with-text\tBrowse the second page",
+            "action\tclick-selector\tbutton[type=submit]",
+            "action\tfill-field\tinput[name=query]\tserver rendering",
+            "action\tsubmit-form\tform[data-harch-action=true]",
             "action\thistory-back",
             "action\thistory-forward",
             "action\tassert-text-equals\t[data-page-title=\"true\"]\tSecond",
+            "action\tassert-field-value\tinput[name=query]\tserver rendering",
+            "action\tassert-focused-selector\tinput[name=query]",
+            "action\tassert-mutation-count\t1",
             "action\tassert-navigation-metric-equals\tenhanced-fetch-count\t1",
             "action\tassert-navigation-metric-equals\thard-navigation-count\t0"
           ]
@@ -122,7 +141,7 @@ spec = do
                 browserKeepOpenOnFailure = True
               }
           navigationMetric = HardNavigationCount
-          browserAction = AssertNavigationMetricEquals navigationMetric 0
+          browserAction = AssertMutationCount 0
           browserError = BrowserRunnerProcessError (ExitFailure 3) "stdout" "stderr"
       browserRunnerCommand browserConfig `shouldBe` "node"
       browserRunnerArguments browserConfig `shouldBe` ["runner.js"]
@@ -130,8 +149,8 @@ spec = do
       browserKeepOpenOnFailure browserConfig `shouldBe` True
       navigationMetric `shouldBe` HardNavigationCount
       show navigationMetric `shouldBe` "HardNavigationCount"
-      browserAction `shouldBe` AssertNavigationMetricEquals HardNavigationCount 0
-      show browserAction `shouldBe` "AssertNavigationMetricEquals HardNavigationCount 0"
+      browserAction `shouldBe` AssertMutationCount 0
+      show browserAction `shouldBe` "AssertMutationCount 0"
       show browserConfig `shouldBe` "BrowserConfig {browserRunnerCommand = \"node\", browserRunnerArguments = [\"runner.js\"], browserHeadless = False, browserKeepOpenOnFailure = True}"
       show browserError `shouldBe` "BrowserRunnerProcessError (ExitFailure 3) \"stdout\" \"stderr\""
 
@@ -142,6 +161,12 @@ spec = do
           backAction = NavigateHistoryBack
           forwardAction = NavigateHistoryForward
           assertAction = AssertTextEquals "[data-page-title=\"true\"]" "Second"
+          clickSelectorAction = ClickSelector "button[type=submit]"
+          fillAction = FillField "input[name=query]" "server rendering"
+          submitAction = SubmitForm "form[data-harch-action=true]"
+          fieldValueAction = AssertFieldValue "input[name=query]" "server rendering"
+          focusedAction = AssertFocusedSelector "input[name=query]"
+          mutationAction = AssertMutationCount 1
           metricAction = AssertNavigationMetricEquals EnhancedFetchCount 1
           launchError = BrowserRunnerLaunchError "missing-browser-runner"
           protocolError = BrowserRunnerProtocolError "unexpected response"
@@ -153,6 +178,12 @@ spec = do
       backAction `shouldBe` NavigateHistoryBack
       forwardAction `shouldBe` NavigateHistoryForward
       assertAction `shouldBe` AssertTextEquals "[data-page-title=\"true\"]" "Second"
+      clickSelectorAction `shouldBe` ClickSelector "button[type=submit]"
+      fillAction `shouldBe` FillField "input[name=query]" "server rendering"
+      submitAction `shouldBe` SubmitForm "form[data-harch-action=true]"
+      fieldValueAction `shouldBe` AssertFieldValue "input[name=query]" "server rendering"
+      focusedAction `shouldBe` AssertFocusedSelector "input[name=query]"
+      mutationAction `shouldBe` AssertMutationCount 1
       metricAction `shouldBe` AssertNavigationMetricEquals EnhancedFetchCount 1
       launchError `shouldBe` BrowserRunnerLaunchError "missing-browser-runner"
       protocolError `shouldBe` BrowserRunnerProtocolError "unexpected response"
@@ -163,6 +194,12 @@ spec = do
       show backAction `shouldBe` "NavigateHistoryBack"
       show forwardAction `shouldBe` "NavigateHistoryForward"
       show assertAction `shouldBe` "AssertTextEquals \"[data-page-title=\\\"true\\\"]\" \"Second\""
+      show clickSelectorAction `shouldBe` "ClickSelector \"button[type=submit]\""
+      show fillAction `shouldBe` "FillField \"input[name=query]\" \"server rendering\""
+      show submitAction `shouldBe` "SubmitForm \"form[data-harch-action=true]\""
+      show fieldValueAction `shouldBe` "AssertFieldValue \"input[name=query]\" \"server rendering\""
+      show focusedAction `shouldBe` "AssertFocusedSelector \"input[name=query]\""
+      show mutationAction `shouldBe` "AssertMutationCount 1"
       show metricAction `shouldBe` "AssertNavigationMetricEquals EnhancedFetchCount 1"
       show launchError `shouldBe` "BrowserRunnerLaunchError \"missing-browser-runner\""
       show protocolError `shouldBe` "BrowserRunnerProtocolError \"unexpected response\""

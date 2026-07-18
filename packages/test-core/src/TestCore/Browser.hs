@@ -10,6 +10,8 @@ module TestCore.Browser
     NavigationMetric (..),
     BrowserRunnerError (..),
     defaultBrowserConfig,
+    defaultPlaywrightBrowserConfig,
+    loadPlaywrightBrowserConfig,
     loadBrowserConfig,
     parseBrowserConfig,
     renderBrowserRequest,
@@ -24,10 +26,10 @@ import Data.Char (toLower)
 import Data.List (stripPrefix)
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
-import System.Directory (doesFileExist)
+import System.Directory (doesFileExist, getCurrentDirectory)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
+import System.FilePath ((</>), takeDirectory)
 import System.Process (proc, readCreateProcessWithExitCode)
 
 data BrowserConfig = BrowserConfig
@@ -48,9 +50,15 @@ data BrowserAction
   | VisitUrlWithoutScripts String
   | ReloadPage
   | ClickLinkWithText String
+  | ClickSelector String
+  | FillField String String
+  | SubmitForm String
   | NavigateHistoryBack
   | NavigateHistoryForward
   | AssertTextEquals String String
+  | AssertFieldValue String String
+  | AssertFocusedSelector String
+  | AssertMutationCount Int
   | AssertNavigationMetricEquals NavigationMetric Int
   deriving (Eq, Show)
 
@@ -69,6 +77,34 @@ defaultBrowserConfig =
       browserHeadless = True,
       browserKeepOpenOnFailure = False
     }
+
+-- | The real-browser runner remains behind the same Haskell action protocol.  The runner's
+-- package intentionally owns its Node dependency so application packages do not need Node test code.
+defaultPlaywrightBrowserConfig :: BrowserConfig
+defaultPlaywrightBrowserConfig =
+  defaultBrowserConfig
+    { browserRunnerCommand = "node",
+      browserRunnerArguments = ["packages/test-core/playwright-runner/runner.cjs"]
+    }
+
+-- | Resolve the bundled runner from any Cabal component working directory.
+loadPlaywrightBrowserConfig :: IO BrowserConfig
+loadPlaywrightBrowserConfig = do
+  workingDirectory <- getCurrentDirectory
+  runnerPath <- findRunner workingDirectory
+  pure defaultPlaywrightBrowserConfig {browserRunnerArguments = [runnerPath]}
+  where
+    runnerRelativePath = "packages" </> "test-core" </> "playwright-runner" </> "runner.cjs"
+    findRunner directory = do
+      let candidate = directory </> runnerRelativePath
+          parent = takeDirectory directory
+      candidateExists <- doesFileExist candidate
+      if candidateExists
+        then pure candidate
+        else
+          if parent == directory
+            then pure runnerRelativePath
+            else findRunner parent
 
 loadBrowserConfig :: IO (Either String BrowserConfig)
 loadBrowserConfig =
@@ -159,9 +195,15 @@ renderBrowserAction browserAction =
     VisitUrlWithoutScripts url -> "action\tvisit-url-without-scripts\t" ++ url
     ReloadPage -> "action\treload-page"
     ClickLinkWithText linkText -> "action\tclick-link-with-text\t" ++ linkText
+    ClickSelector selector -> "action\tclick-selector\t" ++ selector
+    FillField selector value -> "action\tfill-field\t" ++ selector ++ "\t" ++ value
+    SubmitForm selector -> "action\tsubmit-form\t" ++ selector
     NavigateHistoryBack -> "action\thistory-back"
     NavigateHistoryForward -> "action\thistory-forward"
     AssertTextEquals selector expectedText -> "action\tassert-text-equals\t" ++ selector ++ "\t" ++ expectedText
+    AssertFieldValue selector expectedValue -> "action\tassert-field-value\t" ++ selector ++ "\t" ++ expectedValue
+    AssertFocusedSelector selector -> "action\tassert-focused-selector\t" ++ selector
+    AssertMutationCount expectedCount -> "action\tassert-mutation-count\t" ++ show expectedCount
     AssertNavigationMetricEquals navigationMetric expectedCount ->
       "action\tassert-navigation-metric-equals\t"
         ++ renderNavigationMetric navigationMetric
