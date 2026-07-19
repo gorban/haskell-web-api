@@ -3,11 +3,13 @@
 
 module WebApi.App
   ( buildAppWithDatabase,
+    buildAppWithDatabaseAndAccountWorkflow,
     buildApp,
     buildRuntimeApp,
     buildRuntimeAppWithDatabaseBuilder,
     run,
     runWithConfig,
+    unavailableAccountWorkflow,
   )
 where
 
@@ -16,10 +18,13 @@ import Control.Monad (forM_)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import HarchWeb qualified
+import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
+import WebApi.Account (AccountStore (..), AccountStoreError (..))
+import WebApi.AccountPages (AccountWorkflow (..), handleAccountAction)
 import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.Config
   ( AppConfig (..),
@@ -43,16 +48,21 @@ import WebApi.Route
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabase config databaseEffect =
-  buildAppWithDatabaseAndReporters config databaseEffect ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
+  buildAppWithDatabaseAndAccountWorkflow config databaseEffect unavailableAccountWorkflow
+
+buildAppWithDatabaseAndAccountWorkflow :: AppConfig -> DatabaseEffect -> AccountWorkflow -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow =
+  buildAppWithDatabaseAndReporters config databaseEffect accountWorkflow ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
 
 buildAppWithDatabaseAndReporters ::
   AppConfig ->
   DatabaseEffect ->
+  AccountWorkflow ->
   (Observability.RequestObservability -> IO ()) ->
   (Observability.ConnectionObservability -> IO ()) ->
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
+buildAppWithDatabaseAndReporters config databaseEffect accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
       ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect))
@@ -63,7 +73,8 @@ buildAppWithDatabaseAndReporters config databaseEffect requestObservabilityRepor
             Site.siteRequestPolicy = requestPolicy config,
             Site.siteReportRequestObservability = requestObservabilityReporter,
             Site.siteReportConnectionObservability = connectionObservabilityReporter,
-            Site.siteReportApplicationLog = applicationLogReporter
+            Site.siteReportApplicationLog = applicationLogReporter,
+            Site.siteHandleClientAction = handleAccountAction accountWorkflow
           }
       )
 
@@ -82,6 +93,16 @@ buildAppSiteRoutes config databaseEffect =
         Site.SiteRoute
           { Site.siteRouteValue = SecondRoute,
             Site.siteRouteNavigationLabel = Just "Second",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = RegistrationRoute,
+            Site.siteRouteNavigationLabel = Just "Create account",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = EmailVerificationRoute,
+            Site.siteRouteNavigationLabel = Nothing,
             Site.siteRouteResponse = renderSelectedResponse
           },
         Site.SiteRoute
@@ -111,6 +132,7 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
         buildAppWithDatabaseAndReporters
           config
           databaseEffect
+          unavailableAccountWorkflow
           (runtimeRequestObservabilityReporter config)
           (runtimeConnectionObservabilityReporter config)
           runtimeApplicationLogReporter
@@ -214,3 +236,17 @@ ignoreApplicationLog :: Text.Text -> IO ()
 ignoreApplicationLog logEntry =
   let ignored = mempty :: ()
    in Text.length logEntry `seq` ignored `seq` evaluate ignored
+
+unavailableAccountWorkflow :: AccountWorkflow
+unavailableAccountWorkflow =
+  AccountWorkflow
+    { accountWorkflowStore =
+        AccountStore
+          { createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
+            findEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
+            consumeEmailVerification = \_ _ -> pure (Left (AccountStoreUnavailable "account persistence is not configured"))
+          },
+      accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
+      accountWorkflowClock = pure 0,
+      accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
+    }

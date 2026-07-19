@@ -13,5 +13,7 @@ pageEnhancementHooks route =
   case route of
     HomeRoute -> []
     SecondRoute -> ["second-page"]
+    RegistrationRoute -> []
+    EmailVerificationRoute -> []
     StatusApiRoute -> []
     NotFoundRoute -> []

@@ -139,9 +139,10 @@ confirmEmailVerificationAt accountStore now token = do
             case consumptionResult of
               Left storeError -> Left storeError
               Right Nothing -> Right EmailVerificationRejected
-              Right (Just consumedAccountId)
-                | consumedAccountId == accountId -> Right (EmailVerificationAccepted accountId emailAddress)
-                | otherwise -> Left (AccountStoreCorruptData "email verification was consumed for a different account")
+              Right (Just consumedAccountId) ->
+                if consumedAccountId == accountId
+                  then Right (EmailVerificationAccepted accountId emailAddress)
+                  else Left (AccountStoreCorruptData "email verification was consumed for a different account")
         validationResult -> pure (Right validationResult)
 
 addNanoseconds :: Word64 -> Word64 -> Maybe Word64

@@ -13,7 +13,7 @@ import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (toLower)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
-import Data.List (find, isPrefixOf)
+import Data.List (find, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -41,7 +41,8 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
+import WebApi.AccountPages (AccountWorkflow (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
@@ -274,6 +275,18 @@ assertRegistrationResult action matchesResult = do
   if matchesResult result
     then pure ()
     else expectationFailure "unexpected registration result"
+
+actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe HarchWeb.ClientActionResponse -> Bool
+actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
+  Just actionResponse ->
+    HarchWeb.clientActionStatus actionResponse == expectedStatus
+      && HarchWeb.clientActionFocusId actionResponse == expectedFocus
+      && case HarchWeb.clientActionPatches actionResponse of
+        [HarchWeb.RegionPatch patchId html] ->
+          patchId `elem` ["registration-region", "verification-region"]
+            && expectedMessage `Text.isInfixOf` html
+        _ -> False
+  Nothing -> False
 
 migrationPostgresTestConfig :: DatabaseConfig
 migrationPostgresTestConfig =
@@ -2650,6 +2663,227 @@ spec = do
         (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Right (Just otherAccountId))) 499 token)
         (\case Left storeError -> isCorrupt "email verification was consumed for a different account" storeError; _ -> False)
 
+  describe "WebApi.AccountPages" $ do
+    it "keeps account routes fully server-rendered and query-aware" $ do
+      let registrationRequest = HarchWeb.RouteRequest RegistrationRoute defaultRequestContext
+          verificationRequest = HarchWeb.RouteRequest EmailVerificationRoute (defaultRequestContext {requestQueryParameters = [("token", "prefilled-token")]})
+      selectRouteData registrationRequest `shouldReturn` RegistrationRouteDataResult
+      selectRouteData verificationRequest `shouldReturn` EmailVerificationRouteDataResult
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect registrationRequest
+        `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
+        `shouldReturn` RouteDataSelection EmailVerificationRouteDataResult []
+      buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
+        `shouldBe` RegistrationPage "/register" emptyRegistrationForm
+      buildPageModelFromRouteData verificationRequest EmailVerificationRouteDataResult
+        `shouldBe` EmailVerificationPage "/verify" (VerificationForm "prefilled-token" Nothing False)
+      buildPageModelFromRouteData (HarchWeb.RouteRequest EmailVerificationRoute defaultRequestContext) EmailVerificationRouteDataResult
+        `shouldBe` EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False)
+      renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Verify email"
+            && "data-page=\"email-verification\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "value=\"prefilled-token\"" `Text.isInfixOf` HarchWeb.pageBody page
+      renderPageFromRouteData defaultAppConfig registrationRequest RegistrationRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Create account"
+            && "data-page=\"registration\"" `Text.isInfixOf` HarchWeb.pageBody page
+      HarchWeb.renderResponse pureApplication registrationRequest
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
+          _ -> expectationFailure "expected a registration page response"
+      HarchWeb.renderResponse pureApplication verificationRequest
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
+          _ -> expectationFailure "expected an email-verification page response"
+      let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
+      HarchWeb.handleClientAction
+        runtimeApplication
+        HarchWeb.ClientActionRequest
+          { HarchWeb.clientActionMethod = "POST",
+            HarchWeb.clientActionPath = "/register",
+            HarchWeb.clientActionFields = [("email", "person@example.test"), ("password", "correct horse battery staple")],
+            HarchWeb.clientActionCsrfToken = Nothing,
+            HarchWeb.clientActionContext = defaultRequestContext
+          }
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
+
+    it "renders complete SSR registration and verification forms with escaped values" $ do
+      if emptyRegistrationForm == RegistrationForm Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
+      if RegistrationForm "person@example.test" Nothing False /= RegistrationForm "other@example.test" Nothing False then pure () else expectationFailure "registration forms must compare their email values"
+      if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
+      show (RegistrationPage "/register" (RegistrationForm "person@example.test" Nothing False))
+        `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormEmail = \"person@example.test\", registrationFormMessage = Nothing, registrationFormIsError = False})"
+      show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
+        `shouldBe` "EmailVerificationPage \"/verify\" (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
+      renderRegistrationPage "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+        `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Create your account</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Email address</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Password</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Create account</button></form></section></section>"
+      renderRegistrationRegion "/register" (RegistrationForm Text.empty (Just "No") True)
+        `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
+      renderVerificationPage "/verify" (VerificationForm "token&value" Nothing False)
+        `shouldSatisfy` \html ->
+          "<section data-page=\"email-verification\">" `Text.isPrefixOf` html
+            && "value=\"token&amp;value\"" `Text.isInfixOf` html
+      renderVerificationRegion "/verify" (VerificationForm Text.empty Nothing False)
+        `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
+      renderRegistrationRegion "/register" (RegistrationForm "'>&" Nothing False)
+        `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
+      pageEnhancementHooks RegistrationRoute `shouldBe` []
+      pageEnhancementHooks EmailVerificationRoute `shouldBe` []
+
+    it "captures registration actions before deferred behavior and patches the localized region" $ do
+      deliveredMessagesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
+          createdStore =
+            AccountStore
+              { createPendingAccount = \pendingAccount ->
+                  do
+                    pendingAccountEmail pendingAccount `shouldBe` emailAddress
+                    pure (Right True),
+                findEmailVerification = \_ -> pure (Right (Just storedVerification)),
+                consumeEmailVerification = \_ _ -> pure (Right (Just accountId))
+              }
+          workflow =
+            AccountWorkflow
+              { accountWorkflowStore = createdStore,
+                accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
+                accountWorkflowClock = pure 100,
+                accountWorkflowVerificationUrl = \requestContext verificationToken ->
+                  "https://account.example.test"
+                    <> renderRoutePath
+                      HarchWeb.RouteRequest
+                        { HarchWeb.requestRoute = EmailVerificationRoute,
+                          HarchWeb.requestContext = requestContext
+                        }
+                    <> "?token="
+                    <> Account.emailVerificationTokenText verificationToken
+              }
+          request method path fields locale =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = method,
+                HarchWeb.clientActionPath = path,
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = locale}
+              }
+      handleAccountAction workflow (request "GET" "/register" [] English) `shouldReturn` Nothing
+      handleAccountAction workflow (request "POST" "/missing" [] English) `shouldReturn` Nothing
+      invalidEmailResult <- handleAccountAction workflow (request "POST" "/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] English)
+      invalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Enter a valid email address."
+      spanishInvalidEmailResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] Spanish)
+      spanishInvalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Introduce una direccion"
+      invalidPasswordResult <- handleAccountAction workflow (request "POST" "/register" [("email", "person@example.test"), ("password", "short")] English)
+      invalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Use a password with at least 12 characters."
+      spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "person@example.test"), ("password", "short")] Spanish)
+      spanishInvalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Usa una contrasena"
+      createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "person@example.test"), ("password", "correct horse battery staple")] Spanish)
+      createdResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Revisa tu bandeja de entrada"
+      deliveredMessages <- readIORef deliveredMessagesReference
+      deliveredMessages `shouldSatisfy` \case
+        [message] -> "https://account.example.test/es/verify?token=" `Text.isInfixOf` Email.emailMessageBody message
+        _ -> False
+      unconfiguredAction <-
+        HarchWeb.handleClientAction
+          pureApplication
+          HarchWeb.ClientActionRequest
+            { HarchWeb.clientActionMethod = "POST",
+              HarchWeb.clientActionPath = "/register",
+              HarchWeb.clientActionFields = [("email", "person@example.test"), ("password", "correct horse battery staple")],
+              HarchWeb.clientActionCsrfToken = Nothing,
+              HarchWeb.clientActionContext = defaultRequestContext
+            }
+      unconfiguredAction `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      let unconfiguredStore = accountWorkflowStore unavailableAccountWorkflow
+      assertAccountStoreError
+        (createPendingAccount unconfiguredStore (error "the unavailable store must ignore pending-account input"))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (findEmailVerification unconfiguredStore (Account.emailVerificationTokenDigest token))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (consumeEmailVerification unconfiguredStore (Account.emailVerificationTokenDigest token) 0)
+        (isUnavailable "account persistence is not configured")
+      unavailableDelivery <-
+        try (Email.deliverEmail (accountWorkflowEmailDelivery unavailableAccountWorkflow) (error "the unavailable delivery must ignore messages")) :: IO (Either IOException ())
+      unavailableDelivery `shouldSatisfy` \case Left errorMessage -> "email delivery is not configured" `isInfixOf` displayException errorMessage; Right _ -> False
+      accountWorkflowVerificationUrl unavailableAccountWorkflow defaultRequestContext token `shouldBe` "https://invalid.example.test/verify"
+
+    it "returns opaque registration failures and accepts, rejects, or expires verification actions" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
+          request path fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = path,
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+          workflowFor accountStore now emailDelivery =
+            AccountWorkflow
+              { accountWorkflowStore = accountStore,
+                accountWorkflowEmailDelivery = emailDelivery,
+                accountWorkflowClock = pure now,
+                accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
+              }
+          store createResult lookupResult consumeResult =
+            AccountStore
+              { createPendingAccount = \_ -> pure createResult,
+                findEmailVerification = \_ -> pure lookupResult,
+                consumeEmailVerification = \_ _ -> pure consumeResult
+              }
+          validRegistration = [("email", "person@example.test"), ("password", "correct horse battery staple")]
+          validToken = [("token", Account.emailVerificationTokenText token)]
+          delivery = Email.EmailDelivery (\message -> Email.emailMessageSubject message `shouldBe` "Verify your email address")
+          spanishAction path fields =
+            (request path fields)
+              { HarchWeb.clientActionPath = "/es" <> path,
+                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = Spanish}
+              }
+      alreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      alreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
+      spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
+      spanishAlreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion"
+      createdEnglish <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Check your inbox"
+      unavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      unavailableRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      corruptRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreCorruptData "bad")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      corruptRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "invalid data"
+      deliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
+      deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
+      spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
+      spanishDeliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "No pudimos enviar"
+      clockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (request "/register" validRegistration)
+      clockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      spanishClockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (spanishAction "/register" validRegistration)
+      spanishClockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
+      invalidVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [("token", "invalid")])
+      invalidVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "link is invalid"
+      spanishInvalidVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/verify" [("token", "invalid")])
+      spanishInvalidVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "enlace de verificacion no es valido"
+      missingVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [])
+      missingVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "link is invalid"
+      acceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (request "/verify" validToken)
+      acceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "email address is verified"
+      spanishAcceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (spanishAction "/verify" validToken)
+      spanishAcceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "direccion de correo esta verificada"
+      expiredVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (request "/verify" validToken)
+      expiredVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "has expired"
+      spanishExpiredVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (spanishAction "/verify" validToken)
+      spanishExpiredVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "ha caducado"
+      rejectedVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 499 delivery) (request "/verify" validToken)
+      rejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "invalid or has already been used"
+      spanishRejectedVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
+      spanishRejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "no es valido o ya se ha utilizado"
+      unavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
+      unavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "temporarily unavailable"
+
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do
       recordedQueriesReference <- newIORef []
@@ -4960,7 +5194,8 @@ spec = do
               { requestLocale = Spanish,
                 requestCorrelationId = Just "req-456",
                 requestSurface = PageSurface,
-                requestPathPrefix = ""
+                requestPathPrefix = "",
+                requestQueryParameters = []
               }
           callToAction =
             CallToAction
@@ -5196,10 +5431,11 @@ spec = do
             { requestLocale = Spanish,
               requestCorrelationId = Just "req-789",
               requestSurface = PageSurface,
-              requestPathPrefix = ""
+              requestPathPrefix = "",
+              requestQueryParameters = []
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\"}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -5328,7 +5564,8 @@ spec = do
               { requestLocale = Spanish,
                 requestCorrelationId = Just "req-123",
                 requestSurface = PageSurface,
-                requestPathPrefix = ""
+                requestPathPrefix = "",
+                requestQueryParameters = []
               }
           callToAction =
             CallToAction
@@ -5475,7 +5712,8 @@ spec = do
               { requestLocale = Spanish,
                 requestCorrelationId = Just "req-999",
                 requestSurface = PageSurface,
-                requestPathPrefix = ""
+                requestPathPrefix = "",
+                requestQueryParameters = []
               }
           callToAction =
             CallToAction
@@ -5597,7 +5835,8 @@ spec = do
               { requestLocale = Spanish,
                 requestCorrelationId = Just "req-list",
                 requestSurface = PageSurface,
-                requestPathPrefix = ""
+                requestPathPrefix = "",
+                requestQueryParameters = []
               }
           callToAction =
             CallToAction
@@ -5654,7 +5893,7 @@ spec = do
       show [English, Spanish] `shouldBe` "[English,Spanish]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\"}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -5667,7 +5906,7 @@ spec = do
         `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
-      show [HomeRoute, SecondRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,StatusApiRoute,NotFoundRoute]"
+      show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,StatusApiRoute,NotFoundRoute]"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
@@ -5677,7 +5916,8 @@ spec = do
 
     it "parses API routes with the API response surface" $ do
       parseRoute defaultRequestContext "/api/status" `shouldBe` Just apiStatusRequest
-      parseRoute defaultRequestContext "/api/status?fresh=1" `shouldBe` Just apiStatusRequest
+      parseRoute defaultRequestContext "/api/status?fresh=1"
+        `shouldBe` Just apiStatusRequest {HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface, requestQueryParameters = [("fresh", "1")]}}
       parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
@@ -5687,8 +5927,24 @@ spec = do
     it "parses the second page path" $
       parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
+    it "parses SSR account routes and preserves email-verification query values" $ do
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/register") `shouldBe` Just RegistrationRoute
+      parseRoute defaultRequestContext "/verify?token=opaque-token"
+        `shouldBe` Just
+          HarchWeb.RouteRequest
+            { HarchWeb.requestRoute = EmailVerificationRoute,
+              HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token")]}
+            }
+      parseRoute defaultRequestContext "/verify?=ignored&token=opaque-token&flag"
+        `shouldBe` Just
+          HarchWeb.RouteRequest
+            { HarchWeb.requestRoute = EmailVerificationRoute,
+              HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token"), ("flag", "")]}
+            }
+
     it "keeps supported path routes available when raw query strings are present" $
-      parseRoute defaultRequestContext "/second?utm=demo" `shouldBe` Just secondRequest
+      parseRoute defaultRequestContext "/second?utm=demo"
+        `shouldBe` Just secondRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("utm", "demo")]}}
 
     it "lets explicit locale prefixes override the incoming request context" $ do
       parseRoute defaultRequestContext "/es/second" `shouldBe` Just spanishSecondRequest
@@ -5745,6 +6001,8 @@ spec = do
       renderRoutePath spanishHomeRequest `shouldBe` "/es"
       renderRoutePath secondRequest `shouldBe` "/second"
       renderRoutePath spanishSecondRequest `shouldBe` "/es/second"
+      renderRoutePath (HarchWeb.RouteRequest RegistrationRoute defaultRequestContext) `shouldBe` "/register"
+      renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute spanishRequestContext) `shouldBe` "/es/verify"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
@@ -5859,9 +6117,9 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\"}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
@@ -6476,8 +6734,8 @@ spec = do
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       homePageModel <- buildPageModel homeRequest

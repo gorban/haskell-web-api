@@ -17,6 +17,7 @@ module WebApi.Route
 where
 
 import Data.Char (isAsciiLower)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -37,7 +38,8 @@ data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
     requestCorrelationId :: Maybe Text,
     requestSurface :: RequestSurface,
-    requestPathPrefix :: Text
+    requestPathPrefix :: Text,
+    requestQueryParameters :: [(Text, Text)]
   }
   deriving (Eq, Show)
 
@@ -49,6 +51,8 @@ data RouteSelectionError
 data AppRoute
   = HomeRoute
   | SecondRoute
+  | RegistrationRoute
+  | EmailVerificationRoute
   | StatusApiRoute
   | NotFoundRoute
   deriving (Eq, Show)
@@ -59,7 +63,8 @@ defaultRequestContext =
     { requestLocale = English,
       requestCorrelationId = Nothing,
       requestSurface = PageSurface,
-      requestPathPrefix = Text.empty
+      requestPathPrefix = Text.empty,
+      requestQueryParameters = []
     }
 
 routeCodec :: HarchWeb.RouteCodec AppRoute AppRequestContext
@@ -82,7 +87,7 @@ selectRoute requestContext target = do
   pure
     HarchWeb.RouteRequest
       { HarchWeb.requestRoute = route,
-        HarchWeb.requestContext = mergeRequestContext requestContext pathLocale pathSurface
+        HarchWeb.requestContext = (mergeRequestContext requestContext pathLocale pathSurface) {requestQueryParameters = routeQuery target}
       }
 
 renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
@@ -102,6 +107,21 @@ matchRoute = HarchWeb.matchRoute routeCodec
 routePath :: Text -> Text
 routePath =
   Text.takeWhile (/= '?')
+
+routeQuery :: Text -> [(Text, Text)]
+routeQuery target =
+  case Text.breakOn "?" target of
+    (_, queryText) ->
+      case Text.uncons queryText of
+        Nothing -> []
+        Just _ -> mapMaybe parsePair (Text.splitOn "&" (Text.drop 1 queryText))
+  where
+    parsePair pair =
+      case Text.breakOn "=" pair of
+        (key, value) ->
+          case Text.uncons key of
+            Nothing -> Nothing
+            Just _ -> Just (key, Text.drop 1 value)
 
 mergeRequestContext :: AppRequestContext -> Maybe AppLocale -> RequestSurface -> AppRequestContext
 mergeRequestContext requestContext maybeLocale pathSurface =
@@ -180,6 +200,8 @@ parseApiPath _ = Right (Nothing, ApiSurface, NotFoundRoute)
 routeFromSegment :: Text -> Maybe AppRoute
 routeFromSegment segment
   | segment == "second" = Just SecondRoute
+  | segment == "register" = Just RegistrationRoute
+  | segment == "verify" = Just EmailVerificationRoute
   | segment == "404" = Just NotFoundRoute
 routeFromSegment _ = Nothing
 
@@ -204,6 +226,8 @@ renderPageRouteSuffix route =
   case route of
     HomeRoute -> Text.empty
     SecondRoute -> "/second"
+    RegistrationRoute -> "/register"
+    EmailVerificationRoute -> "/verify"
     NotFoundRoute -> "/404"
     StatusApiRoute -> "/404"
 

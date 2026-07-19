@@ -16,9 +16,17 @@ module WebApi.Page
   )
 where
 
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
+import WebApi.AccountPages
+  ( RegistrationForm (..),
+    VerificationForm (..),
+    emptyRegistrationForm,
+    renderRegistrationPage,
+    renderVerificationPage,
+  )
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.Config (AppConfig (..))
 import WebApi.Database
@@ -72,8 +80,46 @@ data NotFoundPageModel = NotFoundPageModel
 data AppPageModel
   = HomePage HomePageModel
   | SecondPage SecondPageModel
+  | RegistrationPage Text RegistrationForm
+  | EmailVerificationPage Text VerificationForm
   | NotFoundPage NotFoundPageModel
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show AppPageModel where
+  showsPrec precedence (HomePage homePage) =
+    showParen (precedence > 10) (showString "HomePage " . showsPrec 11 homePage)
+  showsPrec precedence (SecondPage secondPage) =
+    showParen (precedence > 10) (showString "SecondPage " . showsPrec 11 secondPage)
+  showsPrec precedence (RegistrationPage registrationPath RegistrationForm {registrationFormEmail, registrationFormMessage, registrationFormIsError}) =
+    showParen
+      (precedence > 10)
+      ( showString "RegistrationPage "
+          . shows registrationPath
+          . showChar ' '
+          . showString "(RegistrationForm {registrationFormEmail = "
+          . shows registrationFormEmail
+          . showString ", registrationFormMessage = "
+          . shows registrationFormMessage
+          . showString ", registrationFormIsError = "
+          . shows registrationFormIsError
+          . showString "})"
+      )
+  showsPrec precedence (EmailVerificationPage verificationPath VerificationForm {verificationFormToken, verificationFormMessage, verificationFormIsError}) =
+    showParen
+      (precedence > 10)
+      ( showString "EmailVerificationPage "
+          . shows verificationPath
+          . showChar ' '
+          . showString "(VerificationForm {verificationFormToken = "
+          . shows verificationFormToken
+          . showString ", verificationFormMessage = "
+          . shows verificationFormMessage
+          . showString ", verificationFormIsError = "
+          . shows verificationFormIsError
+          . showString "})"
+      )
+  showsPrec precedence (NotFoundPage notFoundPage) =
+    showParen (precedence > 10) (showString "NotFoundPage " . showsPrec 11 notFoundPage)
 
 renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
 renderPage config =
@@ -101,6 +147,8 @@ routeTitle route =
   case route of
     HomeRoute -> "Home"
     SecondRoute -> "Second"
+    RegistrationRoute -> "Create account"
+    EmailVerificationRoute -> "Verify email"
     _ -> "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
@@ -119,6 +167,19 @@ buildPageModelFromRouteData routeRequest routeData =
       buildHomePageModel routeRequest homeRouteDataResult
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
+    RegistrationRouteDataResult ->
+      RegistrationPage
+        (renderRoutePath (HarchWeb.RouteRequest RegistrationRoute (HarchWeb.requestContext routeRequest)))
+        emptyRegistrationForm
+    EmailVerificationRouteDataResult ->
+      EmailVerificationPage
+        (renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute (HarchWeb.requestContext routeRequest)))
+        VerificationForm
+          { verificationFormToken =
+              fromMaybe Text.empty (lookup "token" (requestQueryParameters (HarchWeb.requestContext routeRequest))),
+            verificationFormMessage = Nothing,
+            verificationFormIsError = False
+          }
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -220,6 +281,10 @@ renderPageBody pageModel =
           renderCallToAction (secondPrimaryAction secondPage),
           "</section>"
         ]
+    RegistrationPage registrationPath registrationForm ->
+      renderRegistrationPage registrationPath registrationForm
+    EmailVerificationPage verificationPath verificationForm ->
+      renderVerificationPage verificationPath verificationForm
     NotFoundPage notFoundPage ->
       Text.concat
         [ "<section data-page=\"not-found\">",

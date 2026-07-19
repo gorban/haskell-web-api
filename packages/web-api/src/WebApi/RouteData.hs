@@ -51,6 +51,8 @@ newtype StatusApiData = StatusApiData
 data RouteDataResult
   = HomeRouteDataResult (Either DatabaseError HomeRouteData)
   | SecondRouteDataResult (Either DatabaseError SecondRouteData)
+  | RegistrationRouteDataResult
+  | EmailVerificationRouteDataResult
   | StatusApiDataResult StatusApiData
   | NotFoundRouteDataResult
   deriving (Eq, Show)
@@ -101,6 +103,10 @@ selectRouteDataSelectionWithDatabase databaseEffect routeRequest =
                 ),
             routeDataDatabaseOperations = databaseResultOperations secondPageDataResult
           }
+    RegistrationRoute ->
+      pure RouteDataSelection {routeDataResult = RegistrationRouteDataResult, routeDataDatabaseOperations = []}
+    EmailVerificationRoute ->
+      pure RouteDataSelection {routeDataResult = EmailVerificationRouteDataResult, routeDataDatabaseOperations = []}
     StatusApiRoute ->
       pure $
         RouteDataSelection

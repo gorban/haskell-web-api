@@ -65,6 +65,7 @@ library
   exposed-modules:
     WebApi
     WebApi.Account
+    WebApi.AccountPages
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Shell
