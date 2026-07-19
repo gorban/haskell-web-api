@@ -72,6 +72,7 @@ library
     WebApi.Config
     WebApi.Database
     WebApi.DatabaseSetup
+    WebApi.Login
     WebApi.Mfa
     WebApi.MfaEnrollment
     WebApi.Page

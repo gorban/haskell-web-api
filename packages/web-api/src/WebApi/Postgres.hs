@@ -8,6 +8,8 @@ module WebApi.Postgres
     buildPostgresDatabaseEffectWithRunner,
     buildRuntimePostgresAccountStore,
     buildRuntimePostgresAccountStoreWithRunner,
+    buildRuntimePostgresAccountCredentialStore,
+    buildRuntimePostgresAccountCredentialStoreWithRunner,
     buildRuntimePostgresMfaStore,
     buildRuntimePostgresMfaStoreWithRunner,
     buildRuntimePostgresDatabaseEffect,
@@ -50,7 +52,7 @@ import HarchWeb.Account
     storedVerificationTokenDigest,
   )
 import HarchWeb.Email (emailAddressText, mkEmailAddress)
-import HarchWeb.Password (passwordHashText)
+import HarchWeb.Password (passwordHashText, readPasswordHash)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
@@ -68,6 +70,11 @@ import WebApi.Database
     DatabaseResult (..),
     HomePageData (..),
     SecondPageData (..),
+  )
+import WebApi.Login
+  ( AccountCredential (..),
+    AccountCredentialStore (..),
+    AccountCredentialStoreError (..),
   )
 import WebApi.Mfa
   ( MfaStore (..),
@@ -160,6 +167,29 @@ buildRuntimePostgresDatabaseEffect =
 buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
 buildRuntimePostgresAccountStore !databaseConfig =
   buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+
+buildRuntimePostgresAccountCredentialStore :: DatabaseConfig -> AccountCredentialStore
+buildRuntimePostgresAccountCredentialStore !databaseConfig =
+  buildRuntimePostgresAccountCredentialStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+
+buildRuntimePostgresAccountCredentialStoreWithRunner ::
+  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  DatabaseConfig ->
+  AccountCredentialStore
+buildRuntimePostgresAccountCredentialStoreWithRunner runQuery databaseConfig =
+  AccountCredentialStore findCredential
+  where
+    findCredential emailAddress = do
+      queryResult <- runQuery databaseConfig findAccountCredentialByEmailQuery [emailAddressText emailAddress]
+      pure $
+        case queryResult of
+          Left queryError -> Left (AccountCredentialStoreUnavailable queryError)
+          Right [] -> Right Nothing
+          Right [[accountIdValue, passwordHashValue, verifiedAtValue]] -> do
+            accountId <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid account id")) Right (mkAccountId accountIdValue)
+            passwordHash <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid password hash")) Right (readPasswordHash passwordHashValue)
+            Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
+          Right rows -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
 
 buildRuntimePostgresAccountStoreWithRunner ::
   (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
@@ -704,6 +734,10 @@ findEmailVerificationQuery =
 consumeEmailVerificationQuery :: Text
 consumeEmailVerificationQuery =
   "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"
+
+findAccountCredentialByEmailQuery :: Text
+findAccountCredentialByEmailQuery =
+  "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;"
 
 saveUnconfirmedTotpEnrollmentQuery :: Text
 saveUnconfirmedTotpEnrollmentQuery =
