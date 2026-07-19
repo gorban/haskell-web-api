@@ -59,6 +59,7 @@ library
   exposed-modules:
     HarchWeb
     HarchWeb.Database
+    HarchWeb.LoginProtection
     HarchWeb.Observability
     HarchWeb.Password
     HarchWeb.Session

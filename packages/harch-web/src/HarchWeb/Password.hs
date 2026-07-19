@@ -65,20 +65,21 @@ hashPasswordWithSalt policy salt (Password password) =
   let hashValue = argon2Hash policy salt password
    in if ByteString.null hashValue
         then Nothing
-        else Just
-    ( PasswordHash
-        ( "$argon2id$v=19$m="
-            <> Text.pack (show (passwordHashMemoryKibibytes policy))
-            <> ",t="
-            <> Text.pack (show (passwordHashIterations policy))
-            <> ",p="
-            <> Text.pack (show (passwordHashParallelism policy))
-            <> "$"
-            <> encodeBase64Url (Base64Url.encodeUnpadded salt)
-            <> "$"
-            <> encodeBase64Url (Base64Url.encodeUnpadded hashValue)
-        )
-    )
+        else
+          Just
+            ( PasswordHash
+                ( "$argon2id$v=19$m="
+                    <> Text.pack (show (passwordHashMemoryKibibytes policy))
+                    <> ",t="
+                    <> Text.pack (show (passwordHashIterations policy))
+                    <> ",p="
+                    <> Text.pack (show (passwordHashParallelism policy))
+                    <> "$"
+                    <> encodeBase64Url (Base64Url.encodeUnpadded salt)
+                    <> "$"
+                    <> encodeBase64Url (Base64Url.encodeUnpadded hashValue)
+                )
+            )
 
 passwordHashText :: PasswordHash -> Text
 passwordHashText (PasswordHash hashValue) = hashValue
