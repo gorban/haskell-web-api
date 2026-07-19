@@ -17,6 +17,7 @@ module HarchWeb.Email
     mkEmailAddress,
     mkEmailMessage,
     mkSmtpConfig,
+    renderEmailMessage,
     verificationEmail,
   )
 where
@@ -191,11 +192,15 @@ writeSmtpBytes handle bytes = do
   hFlush handle
 
 renderSmtpMessage :: SmtpConfig -> EmailMessage -> ByteString.ByteString
-renderSmtpMessage config message =
+renderSmtpMessage config =
+  renderEmailMessage (smtpEnvelopeSender config)
+
+renderEmailMessage :: EmailAddress -> EmailMessage -> ByteString.ByteString
+renderEmailMessage sender message =
   TextEncoding.encodeUtf8
     ( Text.concat
         [ "From: <",
-          emailAddressText (smtpEnvelopeSender config),
+          emailAddressText sender,
           ">\r\nTo: <",
           emailAddressText (emailMessageRecipient message),
           ">\r\nSubject: ",

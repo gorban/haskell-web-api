@@ -60,6 +60,7 @@ library
     HarchWeb
     HarchWeb.Database
     HarchWeb.Email
+    HarchWeb.Gmail
     HarchWeb.LoginProtection
     HarchWeb.Observability
     HarchWeb.Password
@@ -73,6 +74,7 @@ library
     base ^>=4.22.0.0,
     base64-bytestring,
     bytestring,
+    case-insensitive,
     cryptonite,
     directory,
     filepath,
