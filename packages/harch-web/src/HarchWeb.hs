@@ -43,6 +43,8 @@ module HarchWeb
     Page (..),
     PageShell (..),
     PreparedAcmeChallenge (..),
+    RequestMiddleware (..),
+    MiddlewareResult (..),
     RequestPolicyConfig (..),
     ReloadingTlsCredentials,
     Response (..),
@@ -145,6 +147,7 @@ module HarchWeb
     renderAcmeResponseBody,
     renderDocument,
     renderDocumentWithNonce,
+    runRequestMiddlewarePipeline,
     responseHeaderText,
     requestHostWithoutPort,
     routeHref,
@@ -603,6 +606,21 @@ data ResponseBody = ResponseBody
   }
   deriving (Eq, Show)
 
+-- | A typed application-owned request middleware. Middleware runs after
+-- framework redirect and CORS policy handling, and before routing or action
+-- dispatch. Static assets remain public unless an app serves them as routes.
+newtype RequestMiddleware context = RequestMiddleware
+  { runRequestMiddleware :: Wai.Request -> context -> IO (MiddlewareResult context)
+  }
+
+-- | Middleware may carry an enriched request context onward or halt with a
+-- framework response body. A halted response still receives framework
+-- security headers, logging, and observability.
+data MiddlewareResult context
+  = ContinueMiddleware context
+  | HaltMiddleware context ResponseBody
+  deriving (Eq, Show)
+
 -- | A same-origin form action captured before deferred behavior modules load.
 -- Form fields preserve their authored order, including the successful submitter.
 data ClientActionRequest context = ClientActionRequest
@@ -648,6 +666,7 @@ data Application route context = Application
     applicationNavigationRuntime :: Maybe NavigationRuntime,
     applicationStaticAssets :: StaticAssetsConfig,
     applicationRequestPolicy :: RequestPolicyConfig,
+    applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
     handleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
@@ -672,6 +691,18 @@ data RunningLocalTestServer = RunningLocalTestServer
 
 application :: Application route context -> Application route context
 application = id
+
+-- | Run middleware in declaration order. The first middleware sees the
+-- request first; a halt short-circuits the remaining middleware.
+runRequestMiddlewarePipeline :: [RequestMiddleware context] -> Wai.Request -> context -> IO (MiddlewareResult context)
+runRequestMiddlewarePipeline middleware request = go middleware
+  where
+    go [] requestContext = pure (ContinueMiddleware requestContext)
+    go (RequestMiddleware runMiddleware : remainingMiddleware) requestContext = do
+      result <- runMiddleware request requestContext
+      case result of
+        ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
+        HaltMiddleware haltedRequestContext responseBody -> pure (HaltMiddleware haltedRequestContext responseBody)
 
 routeHref :: RouteCodec route context -> context -> route -> Text
 routeHref codec context route =
@@ -1081,13 +1112,27 @@ toWaiApplication webApplication request respond = do
                   respond
                     (applyResponseHeaders policyResponseHeaders staticResponse)
                 Nothing -> do
-                  routeMatchingStartedAt <- getMonotonicTimeNSec
-                  let requestRouteTarget = waiRequestRouteTarget requestPolicyConfig request
-                      requestContext =
-                        requestContextFromRequest
+                  middlewareStartedAt <- getMonotonicTimeNSec
+                  middlewareResult <-
+                    runRequestMiddlewarePipeline
+                      (applicationRequestMiddleware webApplication)
+                      request
+                      ( requestContextFromRequest
                           webApplication
                           request
                           (defaultRequestContext webApplication)
+                      )
+                  middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
+                  let requestContext =
+                        case middlewareResult of
+                          ContinueMiddleware nextRequestContext -> nextRequestContext
+                          HaltMiddleware haltedRequestContext _ -> haltedRequestContext
+                      middlewareTiming =
+                        case applicationRequestMiddleware webApplication of
+                          [] -> []
+                          _ -> [("middleware", middlewareStartedAt, middlewareCompletedAt)]
+                  routeMatchingStartedAt <- getMonotonicTimeNSec
+                  let requestRouteTarget = waiRequestRouteTarget requestPolicyConfig request
                       routeRequest =
                         matchRoute
                           (routeCodec webApplication)
@@ -1096,25 +1141,28 @@ toWaiApplication webApplication request respond = do
                   routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
                   renderStartedAt <- getMonotonicTimeNSec
                   response <-
-                    if isClientActionRequest request
-                      then do
-                        requestBody <- Wai.strictRequestBody request
-                        let actionFields = parseClientActionFields requestBody
-                        maybeActionResponse <-
-                          handleClientAction
-                            webApplication
-                            ClientActionRequest
-                              { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
-                                clientActionPath = requestPath,
-                                clientActionFields = actionFields,
-                                clientActionCsrfToken = lookup "_csrf" actionFields,
-                                clientActionContext = requestContext
-                              }
-                        maybe
-                          (renderResponse webApplication routeRequest)
-                          (pure . BodyResponse . clientActionResponseBody)
-                          maybeActionResponse
-                      else renderResponse webApplication routeRequest
+                    case middlewareResult of
+                      HaltMiddleware _ responseBody -> pure (BodyResponse responseBody)
+                      ContinueMiddleware _ ->
+                        if isClientActionRequest request
+                          then do
+                            requestBody <- Wai.strictRequestBody request
+                            let actionFields = parseClientActionFields requestBody
+                            maybeActionResponse <-
+                              handleClientAction
+                                webApplication
+                                ClientActionRequest
+                                  { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
+                                    clientActionPath = requestPath,
+                                    clientActionFields = actionFields,
+                                    clientActionCsrfToken = lookup "_csrf" actionFields,
+                                    clientActionContext = requestContext
+                                  }
+                            maybe
+                              (renderResponse webApplication routeRequest)
+                              (pure . BodyResponse . clientActionResponseBody)
+                              maybeActionResponse
+                          else renderResponse webApplication routeRequest
                   responseRenderedAt <- response `seq` getMonotonicTimeNSec
                   runtimeNonce <-
                     case response of
@@ -1169,10 +1217,12 @@ toWaiApplication webApplication request respond = do
                                   <> requestTimingObservabilityAttributes
                                     requestStartedAt
                                     responseRenderedAt
-                                    [ ("request-policy", requestStartedAt, policyEvaluatedAt),
-                                      ("route-match", routeMatchingStartedAt, routeMatchedAt),
-                                      ("render-response", renderStartedAt, responseRenderedAt)
-                                    ]
+                                    ( [("request-policy", requestStartedAt, policyEvaluatedAt)]
+                                        <> middlewareTiming
+                                        <> [ ("route-match", routeMatchingStartedAt, routeMatchedAt),
+                                             ("render-response", renderStartedAt, responseRenderedAt)
+                                           ]
+                                    )
                               )
                           )
                   Observability.forceRequestObservability requestObservability `seq`

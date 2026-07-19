@@ -75,11 +75,13 @@ spec = do
       siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` ""
       HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing
       HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig
+      length (siteRequestMiddleware sampleSite) `shouldBe` 0
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
       siteHandleClientAction sampleSite ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
         `shouldReturn` Nothing
       HarchWeb.handleClientAction siteApplication ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
         `shouldReturn` Nothing
+      length (HarchWeb.applicationRequestMiddleware siteApplication) `shouldBe` 0
       siteReportRequestObservability sampleSite requestObservability `shouldReturn` ()
       siteReportConnectionObservability sampleSite connectionObservability `shouldReturn` ()
       siteReportApplicationLog sampleSite "sample-log" `shouldReturn` ()

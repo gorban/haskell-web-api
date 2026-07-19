@@ -222,6 +222,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = staticAssetsConfig,
       applicationRequestPolicy = requestPolicyConfig,
+      applicationRequestMiddleware = [],
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
       handleClientAction = const (pure Nothing),
@@ -437,6 +438,7 @@ rootPathApplication =
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = emptyStaticAssets,
       applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
+      applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
       handleClientAction = const (pure Nothing),
@@ -1016,6 +1018,7 @@ spec = do
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       applicationNavigationRuntime sampleApplication `shouldBe` Nothing
+      length (applicationRequestMiddleware sampleApplication) `shouldBe` 0
       responseStatus responseBodyValue `shouldBe` 202
       responseContentType responseBodyValue `shouldBe` "application/json"
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
@@ -1359,7 +1362,83 @@ spec = do
         )
         `shouldBe` "<html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
 
+  describe "runRequestMiddlewarePipeline" $ do
+    it "runs in declaration order, carries context forward, and stops after a halt" $ do
+      visitedMiddleware <- newIORef ([] :: [Text])
+      let responseBodyValue = ResponseBody {responseStatus = 401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+          continuedResult = ContinueMiddleware spanishContext
+          haltedResult = HaltMiddleware spanishContext responseBodyValue
+          enrichMiddleware =
+            RequestMiddleware $ \request requestContext -> do
+              Wai.pathInfo request `shouldBe` []
+              modifyIORef' visitedMiddleware (<> ["enrich"])
+              pure (ContinueMiddleware requestContext {requestLanguage = "es"})
+          haltMiddleware =
+            RequestMiddleware $ \_ requestContext -> do
+              modifyIORef' visitedMiddleware (<> ["halt"])
+              pure (HaltMiddleware requestContext responseBodyValue)
+          skippedMiddleware =
+            RequestMiddleware $ \_ requestContext -> do
+              modifyIORef' visitedMiddleware (<> ["skipped"])
+              pure (ContinueMiddleware requestContext)
+      runRequestMiddleware enrichMiddleware Wai.defaultRequest defaultContext
+        `shouldReturn` continuedResult
+      runRequestMiddlewarePipeline [] Wai.defaultRequest defaultContext
+        `shouldReturn` ContinueMiddleware defaultContext
+      runRequestMiddlewarePipeline [enrichMiddleware, haltMiddleware, skippedMiddleware] Wai.defaultRequest defaultContext
+        `shouldReturn` haltedResult
+      readIORef visitedMiddleware `shouldReturn` ["enrich", "enrich", "halt"]
+      continuedResult == continuedResult `shouldBe` True
+      continuedResult == haltedResult `shouldBe` False
+      continuedResult /= haltedResult `shouldBe` True
+      show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"})"
+      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+
   describe "toWaiApplication" $ do
+    it "runs app middleware for dynamic routes while preserving transformed context" $ do
+      let middlewareApplication =
+            sampleApplication
+              { applicationRequestMiddleware =
+                  [ RequestMiddleware $ \request requestContext -> do
+                      Wai.pathInfo request `shouldBe` ["known"]
+                      pure (ContinueMiddleware requestContext {requestLanguage = "es"})
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication middlewareApplication) (waiRequest ["known"])
+      Wai.responseStatus response `shouldBe` Http.status200
+      responseBody <- readResponseBody response
+      Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
+
+    it "halts dynamic requests without bypassing framework response headers" $ do
+      let responseBodyValue = ResponseBody {responseStatus = 401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+          middlewareApplication =
+            sampleApplication
+              { applicationRequestMiddleware =
+                  [RequestMiddleware $ \_ requestContext -> pure (HaltMiddleware requestContext responseBodyValue)]
+              }
+      response <- performWaiRequest (toWaiApplication middlewareApplication) (waiRequest ["data"])
+      Wai.responseStatus response `shouldBe` Http.status401
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
+      lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldSatisfy` (/= Nothing)
+      readResponseBody response `shouldReturn` "Sign in required"
+
+    it "does not run app middleware for framework static responses" $ do
+      middlewareRan <- newIORef False
+      let middlewareApplication =
+            sampleApplication
+              { applicationNavigationRuntime = Just defaultNavigationRuntime,
+                applicationRequestMiddleware =
+                  [ RequestMiddleware $ \_ requestContext -> do
+                      writeIORef middlewareRan True
+                      pure (ContinueMiddleware requestContext)
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication middlewareApplication) (waiRequest ["assets", "navigation.js"])
+      Wai.responseStatus response `shouldBe` Http.status200
+      readIORef middlewareRan `shouldReturn` False
+
     it "serves the configured navigation runtime before app route matching" $ do
       requestObservabilityReference <- newIORef Nothing
       let runtimeApplication =
