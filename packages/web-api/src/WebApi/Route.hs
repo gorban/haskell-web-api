@@ -36,6 +36,7 @@ data RequestSurface
 
 data AppRequestContext = AppRequestContext
   { requestLocale :: AppLocale,
+    requestLocaleIsExplicit :: Bool,
     requestCorrelationId :: Maybe Text,
     requestSurface :: RequestSurface,
     requestPathPrefix :: Text,
@@ -62,6 +63,7 @@ defaultRequestContext :: AppRequestContext
 defaultRequestContext =
   AppRequestContext
     { requestLocale = English,
+      requestLocaleIsExplicit = False,
       requestCorrelationId = Nothing,
       requestSurface = PageSurface,
       requestPathPrefix = Text.empty,
@@ -98,7 +100,8 @@ renderRoutePath routeRequest =
     ( case requestSurface (HarchWeb.requestContext routeRequest) of
         ApiSurface -> renderApiRoutePath (HarchWeb.requestRoute routeRequest)
         PageSurface ->
-          let renderedPath = Text.concat [renderLocalePrefix (requestLocale (HarchWeb.requestContext routeRequest)), renderPageRouteSuffix (HarchWeb.requestRoute routeRequest)]
+          let requestContext = HarchWeb.requestContext routeRequest
+              renderedPath = Text.concat [renderLocalePrefix (requestLocale requestContext) (requestLocaleIsExplicit requestContext), renderPageRouteSuffix (HarchWeb.requestRoute routeRequest)]
            in if Text.null renderedPath then "/" else renderedPath
     )
 
@@ -131,6 +134,10 @@ mergeRequestContext requestContext maybeLocale pathSurface =
         case maybeLocale of
           Just locale -> locale
           Nothing -> requestLocale requestContext,
+      requestLocaleIsExplicit =
+        case maybeLocale of
+          Just _ -> True
+          Nothing -> requestLocaleIsExplicit requestContext,
       requestSurface = pathSurface
     }
 
@@ -217,10 +224,10 @@ looksLikeLocalePrefix :: Text -> Bool
 looksLikeLocalePrefix prefix =
   Text.length prefix == 2 && Text.all isAsciiLower prefix
 
-renderLocalePrefix :: AppLocale -> Text
-renderLocalePrefix locale =
+renderLocalePrefix :: AppLocale -> Bool -> Text
+renderLocalePrefix locale isExplicit =
   case locale of
-    English -> Text.empty
+    English -> if isExplicit then "/en" else Text.empty
     Spanish -> "/es"
 
 renderPageRouteSuffix :: AppRoute -> Text

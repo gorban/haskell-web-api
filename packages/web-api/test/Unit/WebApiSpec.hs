@@ -94,7 +94,10 @@ secondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = defaultRequestContext}
 
 spanishRequestContext :: AppRequestContext
-spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
+spanishRequestContext = defaultRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = True}
+
+explicitEnglishRequestContext :: AppRequestContext
+explicitEnglishRequestContext = defaultRequestContext {requestLocaleIsExplicit = True}
 
 prefixedRequestContext :: AppRequestContext
 prefixedRequestContext = defaultRequestContext {requestPathPrefix = "/app"}
@@ -2996,15 +2999,17 @@ spec = do
       let accountId = requiredAccountId "account_01"
           mfaStore =
             MfaStore
-              { saveUnconfirmedTotpEnrollment = \receivedAccountId encryptedSecret _ -> do
+              { saveUnconfirmedTotpEnrollment = \receivedAccountId encryptedSecret receivedNow -> do
                   receivedAccountId `shouldBe` accountId
+                  receivedNow `shouldBe` 500
                   writeIORef encryptedSecretReference (Just encryptedSecret)
                   pure (Right True),
                 loadTotpEnrollment = \receivedAccountId -> do
                   receivedAccountId `shouldBe` accountId
                   fmap (Right . fmap (`StoredTotpEnrollment` Nothing)) (readIORef encryptedSecretReference),
-                confirmTotpEnrollment = \receivedAccountId hashes _ -> do
+                confirmTotpEnrollment = \receivedAccountId hashes receivedNow -> do
                   receivedAccountId `shouldBe` accountId
+                  receivedNow `shouldBe` 500
                   writeIORef confirmationHashesReference (toList hashes)
                   pure (Right True)
               }
@@ -3015,15 +3020,15 @@ spec = do
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
               }
-          request fields =
+          request path actionContext fields =
             HarchWeb.ClientActionRequest
               { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/mfa",
+                HarchWeb.clientActionPath = path,
                 HarchWeb.clientActionFields = ("account", Account.accountIdText accountId) : fields,
                 HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
+                HarchWeb.clientActionContext = actionContext
               }
-      started <- handleAccountAction workflow (request [("intent", "start")])
+      started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
       secret <-
         case started of
           Just response ->
@@ -3035,12 +3040,16 @@ spec = do
               _ -> expectationFailure "expected one enrollment patch" >> pure Text.empty
           Nothing -> expectationFailure "expected enrollment action" >> pure Text.empty
       totpSecret <- maybe (expectationFailure "expected a valid enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret secret)
-      confirmed <- handleAccountAction workflow (request [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
+      confirmed <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
       confirmed `shouldSatisfy` \case
         Just response -> HarchWeb.clientActionStatus response == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       confirmationHashes <- readIORef confirmationHashesReference
       length confirmationHashes `shouldBe` 8
+      spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
+      spanishStarted `shouldSatisfy` \case
+        Just response -> any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Nothing -> False
 
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do
@@ -5356,6 +5365,7 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = Spanish,
+                requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-456",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
@@ -5593,13 +5603,14 @@ spec = do
       show
         ( AppRequestContext
             { requestLocale = Spanish,
+              requestLocaleIsExplicit = False,
               requestCorrelationId = Just "req-789",
               requestSurface = PageSurface,
               requestPathPrefix = "",
               requestQueryParameters = []
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -5726,6 +5737,7 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = Spanish,
+                requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-123",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
@@ -5874,6 +5886,7 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = Spanish,
+                requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-999",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
@@ -5997,6 +6010,7 @@ spec = do
           requestContext =
             AppRequestContext
               { requestLocale = Spanish,
+                requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-list",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
@@ -6057,7 +6071,7 @@ spec = do
       show [English, Spanish] `shouldBe` "[English,Spanish]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -6112,7 +6126,7 @@ spec = do
 
     it "lets explicit locale prefixes override the incoming request context" $ do
       parseRoute defaultRequestContext "/es/second" `shouldBe` Just spanishSecondRequest
-      parseRoute spanishRequestContext "/en/second" `shouldBe` Just secondRequest
+      parseRoute spanishRequestContext "/en/second" `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
 
     it "returns an unsupported-route representation for unknown paths" $
       parseRoute defaultRequestContext "/missing" `shouldBe` Nothing
@@ -6144,7 +6158,7 @@ spec = do
                 requestCorrelationId = Just "req-123"
               }
       parseRoute middlewareContext "/es"
-        `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = Spanish}})
+        `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = Spanish, requestLocaleIsExplicit = True}})
 
     it "rejects invalid trailing slashes while keeping the root path valid" $ do
       parseRoute defaultRequestContext "/" `shouldBe` Just homeRequest
@@ -6156,15 +6170,18 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath spanishSecondRequest) `shouldBe` Just spanishSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
-    it "renders locale prefixes only for non-default locales" $ do
+    it "renders default and explicit locale prefixes" $ do
       renderRoutePath homeRequest `shouldBe` "/"
       renderRoutePath spanishHomeRequest `shouldBe` "/es"
       renderRoutePath secondRequest `shouldBe` "/second"
       renderRoutePath spanishSecondRequest `shouldBe` "/es/second"
+      renderRoutePath (HarchWeb.RouteRequest HomeRoute explicitEnglishRequestContext) `shouldBe` "/en"
+      renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext) `shouldBe` "/en/second"
       renderRoutePath (HarchWeb.RouteRequest RegistrationRoute defaultRequestContext) `shouldBe` "/register"
       renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute spanishRequestContext) `shouldBe` "/es/verify"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
@@ -6281,9 +6298,9 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
