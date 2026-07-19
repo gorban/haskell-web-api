@@ -60,6 +60,7 @@ library
     HarchWeb
     HarchWeb.Database
     HarchWeb.Observability
+    HarchWeb.Password
     HarchWeb.Session
     HarchWeb.Site
 
@@ -70,6 +71,7 @@ library
     base ^>=4.22.0.0,
     base64-bytestring,
     bytestring,
+    cryptonite,
     directory,
     filepath,
     http-client,
