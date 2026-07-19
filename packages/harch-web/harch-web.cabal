@@ -69,6 +69,7 @@ library
     HarchWeb.Password
     HarchWeb.Session
     HarchWeb.Site
+    HarchWeb.Totp
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
