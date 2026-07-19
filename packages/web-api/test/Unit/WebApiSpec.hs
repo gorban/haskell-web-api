@@ -5,7 +5,8 @@
 {-# SPEC #-}
 
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (IOException, SomeException, displayException, finally, try)
+import Control.Exception (IOException, SomeException, bracket, displayException, finally, try)
+import Control.Monad (forM_)
 import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
@@ -20,6 +21,7 @@ import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import qualified HarchWeb
 import qualified HarchWeb.Account as Account
+import qualified HarchWeb.DevSmtp as DevSmtp
 import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
 import qualified HarchWeb.Password as Password
@@ -42,10 +44,10 @@ import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
 import WebApi.AccountPages (AccountWorkflow (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -2096,20 +2098,99 @@ spec = do
                      ("DATABASE_PORT", "5432"),
                      ("DATABASE_NAME", "web_api_dev"),
                      ("DATABASE_USER", "web_api_runtime"),
-                     ("DATABASE_PASSWORD", "web_api")
+                     ("DATABASE_PASSWORD", "web_api"),
+                     ("SMTP_HOST", "127.0.0.1"),
+                     ("SMTP_PORT", "5025"),
+                     ("SMTP_HELO_NAME", "localhost"),
+                     ("SMTP_USER", "test@localhost"),
+                     ("SMTP_PASSWORD", "password"),
+                     ("EMAIL_FROM", "noreply@localhost"),
+                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
                    ]
-      defaultAppEnvironmentConfig
-        `shouldBe` AppEnvironmentConfig
-          { appMode = Development,
-            databaseConfig =
-              DatabaseConfig
-                { databaseHost = "127.0.0.1",
-                  databasePort = 5432,
-                  databaseName = "web_api_dev",
-                  databaseUser = "web_api_runtime",
-                  databasePassword = "web_api"
-                }
+      smtpDeliveryHost (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` "127.0.0.1"
+      smtpDeliveryPort (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` 5025
+      publicBaseUrl defaultAppEnvironmentConfig `shouldBe` "http://127.0.0.1:5001"
+      runtimeMarker <- lookupEnv "PATH"
+      let dynamicSmtpPort = if isNothing runtimeMarker then 2526 else 2527
+      smtpDeliveryConfig defaultAppEnvironmentConfig
+        /= (smtpDeliveryConfig defaultAppEnvironmentConfig)
+          { smtpDeliveryPort = dynamicSmtpPort
           }
+          `shouldBe` True
+      let dynamicSmtpConfig =
+            (smtpDeliveryConfig defaultAppEnvironmentConfig)
+              { smtpDeliveryPort = dynamicSmtpPort
+              }
+          dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
+      show dynamicEnvironmentConfig
+        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
+                       <> show dynamicSmtpPort
+                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}"
+                   )
+
+    it "builds localized verification URLs and delivers through the native loopback SMTP server" $
+      bracket DevSmtp.startDevSmtpServer DevSmtp.stopDevSmtpServer $ \server -> do
+        let environmentConfig =
+              defaultAppEnvironmentConfig
+                { publicBaseUrl = "https://accounts.example.test/",
+                  smtpDeliveryConfig =
+                    (smtpDeliveryConfig defaultAppEnvironmentConfig)
+                      { smtpDeliveryPort = fromIntegral (DevSmtp.devSmtpPort server)
+                      }
+                }
+            workflow = buildRuntimeAccountWorkflow environmentConfig
+            baseUrlWithoutTrailingSlash = "https://accounts.example.test:" <> Text.pack (show (DevSmtp.devSmtpPort server))
+            untrimmedWorkflow = buildRuntimeAccountWorkflow (environmentConfig {publicBaseUrl = baseUrlWithoutTrailingSlash})
+            token = requiredVerificationToken (Text.replicate 43 "a")
+            recipient = requiredEmailAddress "person@example.test"
+        accountWorkflowVerificationUrl workflow (defaultRequestContext {requestLocale = Spanish}) token
+          `shouldBe` "https://accounts.example.test/es/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        Text.unpack (accountWorkflowVerificationUrl workflow defaultRequestContext token)
+          `shouldBe` "https://accounts.example.test/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        accountWorkflowVerificationUrl untrimmedWorkflow defaultRequestContext token
+          `shouldBe` baseUrlWithoutTrailingSlash
+          <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        accountWorkflowStore workflow `seq` pure ()
+        accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
+        case Email.mkEmailMessage recipient "Verification test" "Hello" of
+          Nothing -> expectationFailure "expected a valid SMTP test message"
+          Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message
+        DevSmtp.takeLatestDevSmtpEmailTo server "person@example.test"
+          >>= \case
+            Just received ->
+              "Subject: Verification test"
+                `ByteString.isInfixOf` DevSmtp.devSmtpRawMessage received
+                `shouldBe` True
+            Nothing -> expectationFailure "expected the loopback SMTP server to receive the message"
+        let runtimeApplication = buildRuntimeApp defaultAppConfig environmentConfig
+        HarchWeb.renderResponse
+          runtimeApplication
+          (HarchWeb.RouteRequest StatusApiRoute (defaultRequestContext {requestSurface = ApiSurface}))
+          >>= (`shouldSatisfy` \case HarchWeb.BodyResponse _ -> True; _ -> False)
+        HarchWeb.reportConnectionObservability
+          runtimeApplication
+          (Observability.buildConnectionObservability "CONNECTION runtime-account-workflow-test" [])
+
+    it "rejects invalid SMTP runtime delivery configurations" $ do
+      let recipient = requiredEmailAddress "person@example.test"
+          invalidSenderWorkflow =
+            buildRuntimeAccountWorkflow
+              defaultAppEnvironmentConfig
+                { smtpDeliveryConfig = (smtpDeliveryConfig defaultAppEnvironmentConfig) {smtpDeliverySender = "not-an-email"}
+                }
+          invalidHeloWorkflow =
+            buildRuntimeAccountWorkflow
+              defaultAppEnvironmentConfig
+                { smtpDeliveryConfig = (smtpDeliveryConfig defaultAppEnvironmentConfig) {smtpDeliveryHeloName = "bad\nhelo"}
+                }
+      case Email.mkEmailMessage recipient "Verification test" "Hello" of
+        Nothing -> expectationFailure "expected a valid SMTP test message"
+        Just message ->
+          forM_ [invalidSenderWorkflow, invalidHeloWorkflow] $ \invalidWorkflow ->
+            (try (Email.deliverEmail (accountWorkflowEmailDelivery invalidWorkflow) message) :: IO (Either IOException ()))
+              >>= \case
+                Left errorValue -> displayException errorValue `shouldContain` "SMTP delivery configuration is invalid"
+                Right () -> expectationFailure "invalid SMTP configuration unexpectedly delivered email"
 
     it "covers the new app/database config selectors and derived instances" $ do
       let productionDatabaseConfig =
@@ -2121,7 +2202,7 @@ spec = do
                 databasePassword = "super-secret"
               }
           productionEnvironmentConfig =
-            AppEnvironmentConfig
+            defaultAppEnvironmentConfig
               { appMode = Production,
                 databaseConfig = productionDatabaseConfig
               }
@@ -2155,9 +2236,9 @@ spec = do
       show [productionDatabaseConfig]
         `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}]"
       show productionEnvironmentConfig
-        `shouldBe` "AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}"
       show [productionEnvironmentConfig]
-        `shouldBe` "[AppEnvironmentConfig {appMode = Production, databaseConfig = DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}}]"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}]"
       show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
       show [MissingConfigValue "DATABASE_PASSWORD", InvalidConfigValue "APP_MODE" "staging"]
@@ -3695,7 +3776,7 @@ spec = do
             ]
       parseAppEnvironmentConfig committedEnvDefaults localOverrides []
         `shouldBe` Right
-          AppEnvironmentConfig
+          defaultAppEnvironmentConfig
             { appMode = Production,
               databaseConfig =
                 DatabaseConfig
@@ -3723,7 +3804,7 @@ spec = do
             ]
       parseAppEnvironmentConfig committedEnvDefaults localOverrides environmentOverrides
         `shouldBe` Right
-          AppEnvironmentConfig
+          defaultAppEnvironmentConfig
             { appMode = Test,
               databaseConfig =
                 DatabaseConfig
@@ -3752,6 +3833,10 @@ spec = do
         `shouldBe` Left (InvalidConfigValue "APP_MODE" "staging")
       parseAppEnvironmentConfig committedEnvDefaults [] [("DATABASE_PORT", "0")]
         `shouldBe` Left (InvalidConfigValue "DATABASE_PORT" "0")
+      parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "65536")]
+        `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "65536")
+      parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "not-a-port")]
+        `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $
@@ -3763,7 +3848,7 @@ spec = do
           writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
           loadAppEnvironmentConfigWithFiles envPath envLocalPath
             `shouldReturn` Right
-              AppEnvironmentConfig
+              defaultAppEnvironmentConfig
                 { appMode = Test,
                   databaseConfig =
                     DatabaseConfig
@@ -3787,7 +3872,7 @@ spec = do
                 writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
                 loadAppEnvironmentConfigWithFiles envPath envLocalPath
                   `shouldReturn` Right
-                    AppEnvironmentConfig
+                    defaultAppEnvironmentConfig
                       { appMode = Production,
                         databaseConfig =
                           DatabaseConfig
@@ -3843,7 +3928,7 @@ spec = do
           withCurrentDirectory tempDirectory $
             loadAppEnvironmentConfig
               `shouldReturn` Right
-                AppEnvironmentConfig
+                defaultAppEnvironmentConfig
                   { appMode = Test,
                     databaseConfig =
                       DatabaseConfig
@@ -3891,7 +3976,7 @@ spec = do
               `shouldReturn` Right
                 AppStartupConfig
                   { startupEnvironmentConfig =
-                      AppEnvironmentConfig
+                      defaultAppEnvironmentConfig
                         { appMode = Production,
                           databaseConfig =
                             DatabaseConfig
@@ -3932,7 +4017,7 @@ spec = do
                     `shouldReturn` Right
                       AppStartupConfig
                         { startupEnvironmentConfig =
-                            AppEnvironmentConfig
+                            defaultAppEnvironmentConfig
                               { appMode = Production,
                                 databaseConfig =
                                   DatabaseConfig

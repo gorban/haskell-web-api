@@ -150,8 +150,8 @@ buildRuntimePostgresDatabaseEffect =
   buildRuntimePostgresDatabaseEffectWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
 
 buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
-buildRuntimePostgresAccountStore =
-  buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery
+buildRuntimePostgresAccountStore !databaseConfig =
+  buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
 
 buildRuntimePostgresAccountStoreWithRunner ::
   (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->

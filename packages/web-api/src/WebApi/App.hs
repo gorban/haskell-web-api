@@ -5,6 +5,7 @@ module WebApi.App
   ( buildAppWithDatabase,
     buildAppWithDatabaseAndAccountWorkflow,
     buildApp,
+    buildRuntimeAccountWorkflow,
     buildRuntimeApp,
     buildRuntimeAppWithDatabaseBuilder,
     run,
@@ -17,7 +18,9 @@ import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (forM_)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
+import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
+import HarchWeb.Account qualified as HarchAccount
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site qualified as Site
@@ -33,15 +36,17 @@ import WebApi.Config
     DatabaseConfig,
     ListenerConfig (..),
     ListenerScheme (..),
+    SmtpDeliveryConfig (..),
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
-import WebApi.Postgres (buildRuntimePostgresDatabaseEffect)
+import WebApi.Postgres (buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
     defaultRequestContext,
+    renderRoutePath,
     requestContextFromWaiRequest,
     routeCodec,
   )
@@ -62,7 +67,7 @@ buildAppWithDatabaseAndReporters ::
   (Observability.ConnectionObservability -> IO ()) ->
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabaseAndReporters config databaseEffect accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
+buildAppWithDatabaseAndReporters config databaseEffect !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
       ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect))
@@ -118,8 +123,19 @@ buildAppSiteRoutes config databaseEffect =
       ]
 
 buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext
-buildRuntimeApp config =
-  buildRuntimeAppWithDatabaseBuilder config buildRuntimePostgresDatabaseEffect
+buildRuntimeApp config environmentConfig =
+  let databaseConfiguration = databaseConfig environmentConfig
+      databaseEffect = buildRuntimePostgresDatabaseEffect databaseConfiguration
+      accountWorkflow = buildRuntimeAccountWorkflow environmentConfig
+   in databaseEffect `seq`
+        accountWorkflow `seq`
+          buildAppWithDatabaseAndReporters
+            config
+            databaseEffect
+            accountWorkflow
+            (runtimeRequestObservabilityReporter config)
+            (runtimeConnectionObservabilityReporter config)
+            runtimeApplicationLogReporter
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
@@ -136,6 +152,47 @@ buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig 
           (runtimeRequestObservabilityReporter config)
           (runtimeConnectionObservabilityReporter config)
           runtimeApplicationLogReporter
+
+buildRuntimeAccountWorkflow :: AppEnvironmentConfig -> AccountWorkflow
+buildRuntimeAccountWorkflow !environmentConfig =
+  let databaseConfiguration = databaseConfig environmentConfig
+   in databaseConfiguration `seq`
+        AccountWorkflow
+          { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
+            accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
+            accountWorkflowClock = getMonotonicTimeNSec,
+            accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
+          }
+
+runtimeEmailDelivery :: SmtpDeliveryConfig -> Email.EmailDelivery
+runtimeEmailDelivery smtpConfig =
+  case Email.mkEmailAddress (smtpDeliverySender smtpConfig) of
+    Just sender ->
+      case Email.mkAuthenticatedSmtpConfig
+        (smtpDeliveryHost smtpConfig)
+        (fromIntegral (smtpDeliveryPort smtpConfig))
+        (smtpDeliveryHeloName smtpConfig)
+        sender
+        (smtpDeliveryUsername smtpConfig)
+        (smtpDeliveryPassword smtpConfig) of
+        Just configuredSmtp -> Email.EmailDelivery (Email.deliverSmtpEmail configuredSmtp)
+        Nothing -> unavailableEmailDelivery
+    Nothing -> unavailableEmailDelivery
+  where
+    unavailableEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP delivery configuration is invalid"))
+
+runtimeVerificationUrl :: Text.Text -> AppRequestContext -> HarchAccount.EmailVerificationToken -> Text.Text
+runtimeVerificationUrl baseUrl requestContext verificationToken =
+  trimTrailingSlash baseUrl
+    <> renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute requestContext)
+    <> "?token="
+    <> HarchAccount.emailVerificationTokenText verificationToken
+
+trimTrailingSlash :: Text.Text -> Text.Text
+trimTrailingSlash value =
+  case Text.unsnoc value of
+    Just (prefix, '/') -> prefix
+    _ -> value
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig !environmentConfig = do

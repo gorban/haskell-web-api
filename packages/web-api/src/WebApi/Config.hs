@@ -20,6 +20,7 @@ module WebApi.Config
     OtlpExporter (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
+    SmtpDeliveryConfig (..),
     StaticAssetsConfig (..),
     StaticAssetRoot (..),
     StrictTransportSecurityConfig (..),
@@ -109,9 +110,49 @@ data DatabaseConfig = DatabaseConfig
 
 data AppEnvironmentConfig = AppEnvironmentConfig
   { appMode :: AppMode,
-    databaseConfig :: DatabaseConfig
+    databaseConfig :: DatabaseConfig,
+    smtpDeliveryConfig :: SmtpDeliveryConfig,
+    publicBaseUrl :: Text
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+instance Show AppEnvironmentConfig where
+  show AppEnvironmentConfig {appMode, databaseConfig, smtpDeliveryConfig, publicBaseUrl} =
+    "AppEnvironmentConfig {appMode = "
+      <> show appMode
+      <> ", databaseConfig = "
+      <> show databaseConfig
+      <> ", smtpDeliveryConfig = "
+      <> renderSmtpDeliveryConfig smtpDeliveryConfig
+      <> ", publicBaseUrl = "
+      <> show publicBaseUrl
+      <> "}"
+
+data SmtpDeliveryConfig = SmtpDeliveryConfig
+  { smtpDeliveryHost :: Text,
+    smtpDeliveryPort :: Int,
+    smtpDeliveryHeloName :: Text,
+    smtpDeliverySender :: Text,
+    smtpDeliveryUsername :: Text,
+    smtpDeliveryPassword :: Text
+  }
+  deriving (Eq)
+
+renderSmtpDeliveryConfig :: SmtpDeliveryConfig -> String
+renderSmtpDeliveryConfig SmtpDeliveryConfig {smtpDeliveryHost, smtpDeliveryPort, smtpDeliveryHeloName, smtpDeliverySender, smtpDeliveryUsername, smtpDeliveryPassword} =
+  "SmtpDeliveryConfig {smtpDeliveryHost = "
+    <> show smtpDeliveryHost
+    <> ", smtpDeliveryPort = "
+    <> show smtpDeliveryPort
+    <> ", smtpDeliveryHeloName = "
+    <> show smtpDeliveryHeloName
+    <> ", smtpDeliverySender = "
+    <> show smtpDeliverySender
+    <> ", smtpDeliveryUsername = "
+    <> show smtpDeliveryUsername
+    <> ", smtpDeliveryPassword = "
+    <> show smtpDeliveryPassword
+    <> "}"
 
 data AppEnvironmentConfigLoadError
   = AppEnvironmentOverridesFileError FilePath ConfigOverridesFileError
@@ -154,7 +195,14 @@ committedEnvDefaults =
     ("DATABASE_PORT", "5432"),
     ("DATABASE_NAME", "web_api_dev"),
     ("DATABASE_USER", "web_api_runtime"),
-    ("DATABASE_PASSWORD", "web_api")
+    ("DATABASE_PASSWORD", "web_api"),
+    ("SMTP_HOST", "127.0.0.1"),
+    ("SMTP_PORT", "5025"),
+    ("SMTP_HELO_NAME", "localhost"),
+    ("SMTP_USER", "test@localhost"),
+    ("SMTP_PASSWORD", "password"),
+    ("EMAIL_FROM", "noreply@localhost"),
+    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
   ]
 
 committedRuntimeDefaults :: [(Text, Text)]
@@ -188,7 +236,17 @@ defaultAppEnvironmentConfig =
             databaseName = "web_api_dev",
             databaseUser = "web_api_runtime",
             databasePassword = "web_api"
-          }
+          },
+      smtpDeliveryConfig =
+        SmtpDeliveryConfig
+          { smtpDeliveryHost = "127.0.0.1",
+            smtpDeliveryPort = 5025,
+            smtpDeliveryHeloName = "localhost",
+            smtpDeliverySender = "noreply@localhost",
+            smtpDeliveryUsername = "test@localhost",
+            smtpDeliveryPassword = "password"
+          },
+      publicBaseUrl = "http://127.0.0.1:5001"
     }
 
 defaultAppConfig :: AppConfig
@@ -295,6 +353,13 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedDatabaseName <- requiredConfigValue "DATABASE_NAME"
   parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
   parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
+  parsedSmtpHost <- requiredConfigValue "SMTP_HOST"
+  parsedSmtpPort <- parseSmtpPort =<< requiredConfigValue "SMTP_PORT"
+  parsedSmtpHeloName <- requiredConfigValue "SMTP_HELO_NAME"
+  parsedSmtpSender <- requiredConfigValue "EMAIL_FROM"
+  parsedSmtpUsername <- requiredConfigValue "SMTP_USER"
+  parsedSmtpPassword <- requiredConfigValue "SMTP_PASSWORD"
+  parsedPublicBaseUrl <- requiredConfigValue "PUBLIC_BASE_URL"
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
@@ -305,7 +370,17 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
               databaseName = parsedDatabaseName,
               databaseUser = parsedDatabaseUser,
               databasePassword = parsedDatabasePassword
-            }
+            },
+        smtpDeliveryConfig =
+          SmtpDeliveryConfig
+            { smtpDeliveryHost = parsedSmtpHost,
+              smtpDeliveryPort = parsedSmtpPort,
+              smtpDeliveryHeloName = parsedSmtpHeloName,
+              smtpDeliverySender = parsedSmtpSender,
+              smtpDeliveryUsername = parsedSmtpUsername,
+              smtpDeliveryPassword = parsedSmtpPassword
+            },
+        publicBaseUrl = parsedPublicBaseUrl
       }
   where
     requiredConfigValue key =
@@ -328,6 +403,13 @@ parseMode value =
 
 parsePort :: Text -> Either ConfigParseError Int
 parsePort = parsePositiveInt "DATABASE_PORT"
+
+parseSmtpPort :: Text -> Either ConfigParseError Int
+parseSmtpPort value = do
+  parsedPort <- parsePositiveInt "SMTP_PORT" value
+  if parsedPort <= 65535
+    then Right parsedPort
+    else Left (InvalidConfigValue "SMTP_PORT" value)
 
 parseAppStartupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppStartupConfig
 parseAppStartupConfig committedDefaults localOverrides environmentOverrides =
