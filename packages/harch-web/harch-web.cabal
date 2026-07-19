@@ -58,6 +58,7 @@ library
   -- Modules included in this library.
   exposed-modules:
     HarchWeb
+    HarchWeb.Account
     HarchWeb.Database
     HarchWeb.DevSmtp
     HarchWeb.Email
@@ -84,6 +85,7 @@ library
     http-client,
     http-client-tls,
     http-types,
+    memory,
     network,
     pem,
     process,
