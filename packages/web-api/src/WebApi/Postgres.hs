@@ -8,6 +8,8 @@ module WebApi.Postgres
     buildPostgresDatabaseEffectWithRunner,
     buildRuntimePostgresAccountStore,
     buildRuntimePostgresAccountStoreWithRunner,
+    buildRuntimePostgresMfaStore,
+    buildRuntimePostgresMfaStoreWithRunner,
     buildRuntimePostgresDatabaseEffect,
     buildRuntimePostgresDatabaseEffectWithRunner,
     decodeRuntimeQueryValue,
@@ -30,6 +32,7 @@ where
 import Control.Exception (bracket, evaluate)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -65,6 +68,11 @@ import WebApi.Database
     DatabaseResult (..),
     HomePageData (..),
     SecondPageData (..),
+  )
+import WebApi.Mfa
+  ( MfaStore (..),
+    MfaStoreError (..),
+    StoredTotpEnrollment (..),
   )
 import WebApi.Route
   ( AppLocale (..),
@@ -221,6 +229,57 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
               (Right . Just)
               (mkAccountId accountIdValue)
           Right rows -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
+
+buildRuntimePostgresMfaStore :: DatabaseConfig -> MfaStore
+buildRuntimePostgresMfaStore !databaseConfig =
+  buildRuntimePostgresMfaStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+
+buildRuntimePostgresMfaStoreWithRunner ::
+  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  DatabaseConfig ->
+  MfaStore
+buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
+  MfaStore
+    { saveUnconfirmedTotpEnrollment = saveEnrollment,
+      loadTotpEnrollment = loadEnrollment,
+      confirmTotpEnrollment = confirmEnrollment
+    }
+  where
+    saveEnrollment accountId encryptedSecret now = do
+      queryResult <- runQuery databaseConfig saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)]
+      pure $
+        case queryResult of
+          Left queryError -> Left (MfaStoreUnavailable queryError)
+          Right [] -> Right False
+          Right [[savedAccountId]]
+            | savedAccountId == accountIdText accountId -> Right True
+          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment result: " <> Text.pack (show rows)))
+
+    loadEnrollment accountId = do
+      queryResult <- runQuery databaseConfig loadTotpEnrollmentQuery [accountIdText accountId]
+      pure $
+        case queryResult of
+          Left queryError -> Left (MfaStoreUnavailable queryError)
+          Right [] -> Right Nothing
+          Right [[encryptedSecret, confirmedAtValue]] ->
+            case confirmedAtValue of
+              "" -> Right (Just (StoredTotpEnrollment encryptedSecret Nothing))
+              _ ->
+                maybe
+                  (Left (MfaStoreCorruptData "TOTP enrollment has an invalid confirmation timestamp"))
+                  (Right . Just . StoredTotpEnrollment encryptedSecret . Just)
+                  (readMaybe (Text.unpack confirmedAtValue))
+          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
+
+    confirmEnrollment accountId recoveryCodeHashes now = do
+      queryResult <- runQuery databaseConfig (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes)
+      pure $
+        case queryResult of
+          Left queryError -> Left (MfaStoreUnavailable queryError)
+          Right [] -> Right False
+          Right [[confirmedAccountId]]
+            | confirmedAccountId == accountIdText accountId -> Right True
+          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP confirmation result: " <> Text.pack (show rows)))
 
 buildRuntimePostgresDatabaseEffectWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->
@@ -645,6 +704,20 @@ findEmailVerificationQuery =
 consumeEmailVerificationQuery :: Text
 consumeEmailVerificationQuery =
   "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"
+
+saveUnconfirmedTotpEnrollmentQuery :: Text
+saveUnconfirmedTotpEnrollmentQuery =
+  "INSERT INTO web_api.account_totp (account_id, encrypted_secret, created_at_nanoseconds) SELECT $1, convert_to($2, 'UTF8'), $3 WHERE EXISTS (SELECT 1 FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NOT NULL) ON CONFLICT (account_id) DO UPDATE SET encrypted_secret = EXCLUDED.encrypted_secret, confirmed_at_nanoseconds = NULL, created_at_nanoseconds = EXCLUDED.created_at_nanoseconds RETURNING account_id;"
+
+loadTotpEnrollmentQuery :: Text
+loadTotpEnrollmentQuery =
+  "SELECT convert_from(encrypted_secret, 'UTF8'), COALESCE(confirmed_at_nanoseconds::TEXT, '') FROM web_api.account_totp WHERE account_id = $1;"
+
+confirmTotpEnrollmentQuery :: NonEmpty.NonEmpty Text -> Text
+confirmTotpEnrollmentQuery recoveryCodeHashes =
+  "WITH confirmed AS (UPDATE web_api.account_totp SET confirmed_at_nanoseconds = $2 WHERE account_id = $1 AND confirmed_at_nanoseconds IS NULL RETURNING account_id), removed_codes AS (DELETE FROM web_api.account_recovery_codes WHERE account_id IN (SELECT account_id FROM confirmed)), issued_codes AS (INSERT INTO web_api.account_recovery_codes (account_id, code_hash, created_at_nanoseconds) SELECT confirmed.account_id, recovery_codes.code_hash, $2 FROM confirmed CROSS JOIN (VALUES "
+    <> Text.intercalate ", " ["($" <> Text.pack (show parameterIndex) <> ")" | parameterIndex <- [3 .. 2 + length (NonEmpty.toList recoveryCodeHashes)]]
+    <> ") AS recovery_codes(code_hash)) SELECT account_id FROM confirmed;"
 
 homeSummaryOperation :: DatabaseOperation
 homeSummaryOperation =
