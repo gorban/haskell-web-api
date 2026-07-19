@@ -67,8 +67,9 @@ library
     HarchWeb.LoginProtection
     HarchWeb.Observability
     HarchWeb.Password
-    HarchWeb.Session
+    HarchWeb.RecoveryCode
     HarchWeb.Secret
+    HarchWeb.Session
     HarchWeb.Site
     HarchWeb.Totp
 
