@@ -25,7 +25,7 @@ import Network.Wai qualified as Wai
 
 data AppLocale
   = English
-  | French
+  | Spanish
   deriving (Eq, Show)
 
 data RequestSurface
@@ -186,7 +186,7 @@ routeFromSegment _ = Nothing
 localeFromPrefix :: Text -> Maybe AppLocale
 localeFromPrefix prefix
   | prefix == "en" = Just English
-  | prefix == "fr" = Just French
+  | prefix == "es" = Just Spanish
 localeFromPrefix _ = Nothing
 
 looksLikeLocalePrefix :: Text -> Bool
@@ -197,7 +197,7 @@ renderLocalePrefix :: AppLocale -> Text
 renderLocalePrefix locale =
   case locale of
     English -> Text.empty
-    French -> "/fr"
+    Spanish -> "/es"
 
 renderPageRouteSuffix :: AppRoute -> Text
 renderPageRouteSuffix route =

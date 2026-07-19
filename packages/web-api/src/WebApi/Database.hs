@@ -73,9 +73,9 @@ data DatabaseResult a = DatabaseResult
 
 data DatabaseSeed = DatabaseSeed
   { englishHomePageData :: Either DatabaseError HomePageData,
-    frenchHomePageData :: Either DatabaseError HomePageData,
+    spanishHomePageData :: Either DatabaseError HomePageData,
     englishSecondPageData :: Either DatabaseError SecondPageData,
-    frenchSecondPageData :: Either DatabaseError SecondPageData
+    spanishSecondPageData :: Either DatabaseError SecondPageData
   }
   deriving (Eq, Show)
 
@@ -94,10 +94,10 @@ defaultDatabaseSeed =
           HomePageData
             { homePageDataSummary = "Server-rendered home page with stubbed content."
             },
-      frenchHomePageData =
+      spanishHomePageData =
         Right
           HomePageData
-            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             },
       englishSecondPageData =
         Right
@@ -105,7 +105,7 @@ defaultDatabaseSeed =
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             },
-      frenchSecondPageData =
+      spanishSecondPageData =
         Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -131,7 +131,7 @@ buildSeededDatabaseEffect seed =
           { databaseResultValue =
               case requestLocale requestContext of
                 English -> englishHomePageData seed
-                French -> frenchHomePageData seed,
+                Spanish -> spanishHomePageData seed,
             databaseResultOperations = []
           }
     loadSeededSecondPageData requestContext =
@@ -140,6 +140,6 @@ buildSeededDatabaseEffect seed =
           { databaseResultValue =
               case requestLocale requestContext of
                 English -> englishSecondPageData seed
-                French -> frenchSecondPageData seed,
+                Spanish -> spanishSecondPageData seed,
             databaseResultOperations = []
           }

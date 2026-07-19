@@ -126,7 +126,7 @@ renderLocale :: AppLocale -> Text
 renderLocale locale =
   case locale of
     English -> "en"
-    French -> "fr"
+    Spanish -> "es"
 
 jsonResponseBodyWithOperations :: Int -> Text -> [DatabaseOperation] -> HarchWeb.ResponseBody
 jsonResponseBodyWithOperations statusCode bodyText databaseOperations =

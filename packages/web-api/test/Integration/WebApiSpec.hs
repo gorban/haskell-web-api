@@ -24,7 +24,7 @@ import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresCo
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), HomePageData (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresDatabaseEffect, buildRuntimePostgresDatabaseEffect)
-import WebApi.Route (AppLocale (French), AppRequestContext (..), defaultRequestContext)
+import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
 
 spec = do
   describe "main" $ do
@@ -201,7 +201,7 @@ spec = do
             `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
 
           let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
-              frenchRequestContext = defaultRequestContext {requestLocale = French}
+              spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
           loadHomePageData postgresEffect defaultRequestContext
             `shouldReturn` Right
               HomePageData
@@ -213,12 +213,12 @@ spec = do
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                   secondPageDataHighlights = []
                 }
-          loadHomePageData postgresEffect frenchRequestContext
+          loadHomePageData postgresEffect spanishRequestContext
             `shouldReturn` Right
               HomePageData
-                { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                 }
-          loadSecondPageData postgresEffect frenchRequestContext
+          loadSecondPageData postgresEffect spanishRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -232,7 +232,7 @@ spec = do
                 HomePageData
                   { homePageDataSummary = "Server-rendered home page with stubbed content."
                   }
-            loadSecondPageData runtimePostgresEffect frenchRequestContext
+            loadSecondPageData runtimePostgresEffect spanishRequestContext
               `shouldReturn` Right
                 SecondPageData
                   { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",

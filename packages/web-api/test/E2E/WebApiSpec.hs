@@ -47,6 +47,22 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "serves Spanish SSR content and preserves its typed locale while scripts are disabled" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
+              spanishSecondUrl = HarchWeb.localServerBaseUrl server <> "/es/second"
+          runBrowserScenario
+            browser
+            ( do
+                visitWithoutScripts spanishHomeUrl
+                assertText (byText "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.") (`shouldBe` "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.")
+                click (byRole Link `named` "Ver la segunda página")
+                assertUrl (`shouldBe` spanishSecondUrl)
+                assertText (byRole Link `named` "Volver al inicio") (`shouldBe` "Volver al inicio")
+            )
+            `shouldReturn` Right ()
+
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
   loadedConfig <- loadPlaywrightBrowserConfig

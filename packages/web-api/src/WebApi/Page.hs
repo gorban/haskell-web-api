@@ -26,7 +26,8 @@ import WebApi.Database
     defaultDatabaseEffect,
   )
 import WebApi.Route
-  ( AppRequestContext,
+  ( AppLocale (..),
+    AppRequestContext (..),
     AppRoute (..),
     renderRoutePath,
   )
@@ -128,7 +129,7 @@ buildPageModelFromRouteData routeRequest routeData =
 
 buildHomePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError HomeRouteData -> AppPageModel
 buildHomePageModel routeRequest homeRouteDataResult =
-  let browseSecond = buildCallToAction routeRequest SecondRoute "Browse the second page"
+  let browseSecond = buildCallToAction routeRequest SecondRoute (localizedText routeRequest "Browse the second page" "Ver la segunda página")
    in case homeRouteDataResult of
         Right homeRouteData ->
           HomePage
@@ -149,7 +150,7 @@ buildHomePageModel routeRequest homeRouteDataResult =
 
 buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
 buildSecondPageModel routeRequest secondRouteDataResult =
-  let returnHome = buildCallToAction routeRequest HomeRoute "Return home"
+  let returnHome = buildCallToAction routeRequest HomeRoute (localizedText routeRequest "Return home" "Volver al inicio")
    in case secondRouteDataResult of
         Right secondRouteData ->
           SecondPage
@@ -182,6 +183,12 @@ buildCallToAction routeRequest route label =
               HarchWeb.requestContext = HarchWeb.requestContext routeRequest
             }
     }
+
+localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text -> Text -> Text
+localizedText routeRequest englishText spanishText =
+  case requestLocale (HarchWeb.requestContext routeRequest) of
+    English -> englishText
+    Spanish -> spanishText
 
 renderPageBody :: AppPageModel -> Text
 renderPageBody pageModel =

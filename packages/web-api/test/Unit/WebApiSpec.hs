@@ -83,20 +83,20 @@ homeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb
 secondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = defaultRequestContext}
 
-frenchRequestContext :: AppRequestContext
-frenchRequestContext = defaultRequestContext {requestLocale = French}
+spanishRequestContext :: AppRequestContext
+spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
 
 prefixedRequestContext :: AppRequestContext
 prefixedRequestContext = defaultRequestContext {requestPathPrefix = "/app"}
 
-prefixedFrenchRequestContext :: AppRequestContext
-prefixedFrenchRequestContext = frenchRequestContext {requestPathPrefix = "/app"}
+prefixedSpanishRequestContext :: AppRequestContext
+prefixedSpanishRequestContext = spanishRequestContext {requestPathPrefix = "/app"}
 
-frenchHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-frenchHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = frenchRequestContext}
+spanishHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = spanishRequestContext}
 
-frenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-frenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = frenchRequestContext}
+spanishSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = spanishRequestContext}
 
 prefixedHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = prefixedRequestContext}
@@ -104,8 +104,8 @@ prefixedHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, 
 prefixedSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = prefixedRequestContext}
 
-prefixedFrenchSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-prefixedFrenchSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = prefixedFrenchRequestContext}
+prefixedSpanishSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+prefixedSpanishSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = prefixedSpanishRequestContext}
 
 prefixedApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedApiStatusRequest =
@@ -114,18 +114,18 @@ prefixedApiStatusRequest =
       HarchWeb.requestContext = prefixedRequestContext {requestSurface = ApiSurface}
     }
 
-frenchApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-frenchApiStatusRequest =
+spanishApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishApiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
-      HarchWeb.requestContext = frenchRequestContext {requestSurface = ApiSurface}
+      HarchWeb.requestContext = spanishRequestContext {requestSurface = ApiSurface}
     }
 
-frenchApiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-frenchApiSecondRequest =
+spanishApiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishApiSecondRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = SecondRoute,
-      HarchWeb.requestContext = frenchRequestContext {requestSurface = ApiSurface}
+      HarchWeb.requestContext = spanishRequestContext {requestSurface = ApiSurface}
     }
 
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -2101,10 +2101,10 @@ spec = do
                 HomePageData
                   { homePageDataSummary = "Server-rendered home page with stubbed content."
                   },
-            frenchHomePageData =
+            spanishHomePageData =
               Right
                 HomePageData
-                  { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                  { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                   },
             englishSecondPageData =
               Right
@@ -2112,7 +2112,7 @@ spec = do
                   { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                     secondPageDataHighlights = []
                   },
-            frenchSecondPageData =
+            spanishSecondPageData =
               Right
                 SecondPageData
                   { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -2150,9 +2150,9 @@ spec = do
           seededDatabase =
             DatabaseSeed
               { englishHomePageData = Right homePageData,
-                frenchHomePageData = Left homeError,
+                spanishHomePageData = Left homeError,
                 englishSecondPageData = Right secondPageData,
-                frenchSecondPageData = Left secondError
+                spanishSecondPageData = Left secondError
               }
       homePageData `shouldBe` homePageData
       homePageData `shouldNotBe` otherHomePageData
@@ -2170,7 +2170,7 @@ spec = do
       seededDatabase `shouldBe` seededDatabase
       seededDatabase
         `shouldNotBe` seededDatabase
-          { frenchSecondPageData = Right otherSecondPageData
+          { spanishSecondPageData = Right otherSecondPageData
           }
       show (HomePageData {homePageDataSummary = "Seeded home"})
         `shouldBe` "HomePageData {homePageDataSummary = \"Seeded home\"}"
@@ -2185,7 +2185,7 @@ spec = do
       show databaseResult
         `shouldBe` "DatabaseResult {databaseResultValue = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}"
       show seededDatabase
-        `shouldBe` "DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}"
+        `shouldBe` "DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), spanishHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), spanishSecondPageData = Left (SecondPageDataError \"second unavailable\")}"
       show [HomePageData {homePageDataSummary = "Seeded home"}]
         `shouldBe` "[HomePageData {homePageDataSummary = \"Seeded home\"}]"
       show [homeError, secondError]
@@ -2202,10 +2202,10 @@ spec = do
         ]
         `shouldBe` "[SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}]"
       show [seededDatabase]
-        `shouldBe` "[DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), frenchHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), frenchSecondPageData = Left (SecondPageDataError \"second unavailable\")}]"
+        `shouldBe` "[DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), spanishHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), spanishSecondPageData = Left (SecondPageDataError \"second unavailable\")}]"
 
   describe "buildSeededDatabaseEffect" $ do
-    it "loads page-oriented seeded data for both English and French requests" $ do
+    it "loads page-oriented seeded data for both English and Spanish requests" $ do
       let englishEffect = buildSeededDatabaseEffect defaultDatabaseSeed
       loadHomePageDataWithObservability englishEffect defaultRequestContext
         `shouldReturn` DatabaseResult
@@ -2227,18 +2227,18 @@ spec = do
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
-      loadHomePageData englishEffect frenchRequestContext
+      loadHomePageData englishEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageData englishEffect frenchRequestContext
+      loadSecondPageData englishEffect spanishRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
-      loadSecondPageDataWithObservability englishEffect frenchRequestContext
+      loadSecondPageDataWithObservability englishEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -2254,10 +2254,10 @@ spec = do
             buildSeededDatabaseEffect
               DatabaseSeed
                 { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                  frenchHomePageData =
+                  spanishHomePageData =
                     Right
                       HomePageData
-                        { homePageDataSummary = "Accueil seede"
+                        { homePageDataSummary = "Inicio sembrado"
                         },
                   englishSecondPageData =
                     Right
@@ -2265,13 +2265,13 @@ spec = do
                         { secondPageDataSummary = "Second seed",
                           secondPageDataHighlights = ["Known branch"]
                         },
-                  frenchSecondPageData = Left (SecondPageDataError "second seed unavailable")
+                  spanishSecondPageData = Left (SecondPageDataError "second seed unavailable")
                 }
       loadHomePageData seededEffect defaultRequestContext
         `shouldReturn` Left (HomePageDataError "home seed unavailable")
-      loadSecondPageData seededEffect frenchRequestContext
+      loadSecondPageData seededEffect spanishRequestContext
         `shouldReturn` Left (SecondPageDataError "second seed unavailable")
-      loadSecondPageDataWithObservability seededEffect frenchRequestContext
+      loadSecondPageDataWithObservability seededEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "second seed unavailable"),
             databaseResultOperations = []
@@ -2281,8 +2281,8 @@ spec = do
       firstHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
       secondHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
       firstHome `shouldBe` secondHome
-      firstSecond <- loadSecondPageData defaultDatabaseEffect frenchRequestContext
-      secondSecond <- loadSecondPageData defaultDatabaseEffect frenchRequestContext
+      firstSecond <- loadSecondPageData defaultDatabaseEffect spanishRequestContext
+      secondSecond <- loadSecondPageData defaultDatabaseEffect spanishRequestContext
       firstSecond `shouldBe` secondSecond
 
   describe "selectRouteData" $ do
@@ -2291,14 +2291,14 @@ spec = do
             buildSeededDatabaseEffect
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                   englishSecondPageData =
                     Right
                       SecondPageData
                         { secondPageDataSummary = "Shared domain summary.",
                           secondPageDataHighlights = ["Shared loader", "Shared renderer"]
                         },
-                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
       selectedRouteData <- selectRouteDataWithDatabase seededDatabaseEffect secondRequest
       selectedRouteData
@@ -2355,9 +2355,9 @@ spec = do
                       HomePageData
                         { homePageDataSummary = "Loaded from the seeded database effect."
                         },
-                  frenchHomePageData = Left (HomePageDataError "home seed unavailable"),
+                  spanishHomePageData = Left (HomePageDataError "home seed unavailable"),
                   englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
       selectRouteDataWithDatabase seededDatabaseEffect homeRequest
         `shouldReturn` HomeRouteDataResult
@@ -2366,7 +2366,7 @@ spec = do
                 { homeRouteSummary = "Loaded from the seeded database effect."
                 }
           )
-      selectRouteDataWithDatabase seededDatabaseEffect frenchHomeRequest
+      selectRouteDataWithDatabase seededDatabaseEffect spanishHomeRequest
         `shouldReturn` HomeRouteDataResult
           (Left (HomePageDataError "home seed unavailable"))
 
@@ -2386,13 +2386,13 @@ spec = do
               }
           statusApiData =
             StatusApiData
-              { statusApiLocale = French
+              { statusApiLocale = Spanish
               }
           routeDataResult = HomeRouteDataResult (Right homeRouteData)
       homeRouteSummary homeRouteData `shouldBe` "Stubbed home summary"
       secondRouteSummary secondRouteData `shouldBe` "Shared domain summary"
       secondRouteHighlights secondRouteData `shouldBe` ["Shared loader"]
-      statusApiLocale statusApiData `shouldBe` French
+      statusApiLocale statusApiData `shouldBe` Spanish
       homeRouteData `shouldBe` homeRouteData
       homeRouteData `shouldNotBe` otherHomeRouteData
       secondRouteData `shouldNotBe` secondRouteData {secondRouteHighlights = []}
@@ -2403,17 +2403,17 @@ spec = do
       show homeRouteData `shouldBe` "HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}"
       show secondRouteData
         `shouldBe` "SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}"
-      show statusApiData `shouldBe` "StatusApiData {statusApiLocale = French}"
+      show statusApiData `shouldBe` "StatusApiData {statusApiLocale = Spanish}"
       show routeDataResult
         `shouldBe` "HomeRouteDataResult (Right (HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}))"
       show (SecondRouteDataResult (Right secondRouteData))
         `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
       show (StatusApiDataResult statusApiData)
-        `shouldBe` "StatusApiDataResult (StatusApiData {statusApiLocale = French})"
+        `shouldBe` "StatusApiDataResult (StatusApiData {statusApiLocale = Spanish})"
       show [homeRouteData] `shouldBe` "[HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}]"
       show [secondRouteData]
         `shouldBe` "[SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}]"
-      show [statusApiData] `shouldBe` "[StatusApiData {statusApiLocale = French}]"
+      show [statusApiData] `shouldBe` "[StatusApiData {statusApiLocale = Spanish}]"
       show [NotFoundRouteDataResult] `shouldBe` "[NotFoundRouteDataResult]"
 
     it "selects default stubbed and status route data without extra wiring" $ do
@@ -2432,10 +2432,10 @@ spec = do
                   secondRouteHighlights = []
                 }
           )
-      selectRouteData frenchApiStatusRequest
+      selectRouteData spanishApiStatusRequest
         `shouldReturn` StatusApiDataResult
           StatusApiData
-            { statusApiLocale = French
+            { statusApiLocale = Spanish
             }
       selectRouteData apiNotFoundRequest `shouldReturn` NotFoundRouteDataResult
 
@@ -2449,18 +2449,18 @@ spec = do
                 sql
                   | Text.isInfixOf "route_slug = 'home'" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf "locale = 'fr'" sql
-                          then "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                        if Text.isInfixOf "locale = 'es'" sql
+                          then "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                           else "Server-rendered home page with stubbed content."
                   | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf "locale = 'fr'" sql
+                        if Text.isInfixOf "locale = 'es'" sql
                           then "Charge depuis PostgreSQL."
                           else "Loaded from PostgreSQL."
                   | Text.isInfixOf "SELECT highlight FROM web_api.page_highlights" sql ->
                       successfulPostgresResult $
-                        if Text.isInfixOf "locale = 'fr'" sql
-                          then "SSR rapide\nDonnees partagees"
+                        if Text.isInfixOf "locale = 'es'" sql
+                          then "SSR rápido\nDatos compartidos"
                           else "Fast SSR\nShared route data"
                   | otherwise ->
                       failingPostgresResult "unexpected query"
@@ -2492,24 +2492,24 @@ spec = do
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
             }
-      loadHomePageData postgresEffect frenchRequestContext
+      loadHomePageData postgresEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageData postgresEffect frenchRequestContext
+      loadSecondPageData postgresEffect spanishRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Charge depuis PostgreSQL.",
-              secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
+              secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
             }
-      loadSecondPageDataWithObservability postgresEffect frenchRequestContext
+      loadSecondPageDataWithObservability postgresEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
                 SecondPageData
                   { secondPageDataSummary = "Charge depuis PostgreSQL.",
-                    secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
+                    secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
                   },
             databaseResultOperations =
               [ DatabaseOperation
@@ -2557,11 +2557,11 @@ spec = do
             "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';",
-            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';",
-            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'es';",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;",
+            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
+            "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;"
           ]
 
     it "maps missing rows and command failures into database errors" $ do
@@ -2653,12 +2653,12 @@ spec = do
                 queryText
                   | Text.isInfixOf "route_slug = 'home'" queryText ->
                       Right $
-                        if Text.isInfixOf "locale = 'fr'" queryText
-                          then "Accueil cote serveur avec des donnees de developpement preconfigurees."
+                        if Text.isInfixOf "locale = 'es'" queryText
+                          then "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                           else "Server-rendered home page with stubbed content."
                   | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" queryText ->
                       Right $
-                        if Text.isInfixOf "locale = 'fr'" queryText
+                        if Text.isInfixOf "locale = 'es'" queryText
                           then "Charge depuis PostgreSQL."
                           else "Loaded from PostgreSQL."
                   | otherwise ->
@@ -2667,8 +2667,8 @@ spec = do
             databaseConfig `shouldBe` postgresTestConfig
             modifyIORef' recordedRowsQueriesReference (<> [sql])
             pure $
-              if Text.isInfixOf "locale = 'fr'" sql
-                then Right ["SSR rapide", "Donnees partagees"]
+              if Text.isInfixOf "locale = 'es'" sql
+                then Right ["SSR rápido", "Datos compartidos"]
                 else Right ["Fast SSR", "Shared route data"]
           postgresEffect =
             buildRuntimePostgresDatabaseEffectWithRunner
@@ -2697,18 +2697,18 @@ spec = do
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
             }
-      loadHomePageData postgresEffect frenchRequestContext
+      loadHomePageData postgresEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
-            { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageDataWithObservability postgresEffect frenchRequestContext
+      loadSecondPageDataWithObservability postgresEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
                 SecondPageData
                   { secondPageDataSummary = "Charge depuis PostgreSQL.",
-                    secondPageDataHighlights = ["SSR rapide", "Donnees partagees"]
+                    secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
                   },
             databaseResultOperations =
               [ DatabaseOperation
@@ -2728,12 +2728,12 @@ spec = do
       readIORef recordedScalarQueriesReference
         `shouldReturn` [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
                          "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
-                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'fr';",
-                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'fr';"
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'es';",
+                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';"
                        ]
       readIORef recordedRowsQueriesReference
         `shouldReturn` [ "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
-                         "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'fr' ORDER BY position ASC;"
+                         "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;"
                        ]
 
     it "maps runtime query failures into explicit database errors" $ do
@@ -3095,12 +3095,12 @@ spec = do
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                 secondPageDataHighlights = []
               }
-        loadHomePageData postgresEffect frenchRequestContext
+        loadHomePageData postgresEffect spanishRequestContext
           `shouldReturn` Right
             HomePageData
-              { homePageDataSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees."
+              { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
               }
-        loadSecondPageData postgresEffect frenchRequestContext
+        loadSecondPageData postgresEffect spanishRequestContext
           `shouldReturn` Right
             SecondPageData
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -4619,7 +4619,7 @@ spec = do
               }
           requestContext =
             AppRequestContext
-              { requestLocale = French,
+              { requestLocale = Spanish,
                 requestCorrelationId = Just "req-456",
                 requestSurface = PageSurface,
                 requestPathPrefix = ""
@@ -4628,7 +4628,7 @@ spec = do
             CallToAction
               { callToActionLabel = "Return home",
                 callToActionRoute = HomeRoute,
-                callToActionHref = "/fr"
+                callToActionHref = "/es"
               }
           notFoundPageModel =
             NotFoundPageModel
@@ -4645,7 +4645,7 @@ spec = do
                   CallToAction
                     { callToActionLabel = "Browse the second page",
                       callToActionRoute = SecondRoute,
-                      callToActionHref = "/fr/second"
+                      callToActionHref = "/es/second"
                     }
               }
           secondPageModel =
@@ -4695,18 +4695,18 @@ spec = do
       listenerConfigs appConfig `shouldBe` [listenerConfig]
       staticAssets appConfig `shouldBe` staticConfig
       observability appConfig `shouldBe` observabilityConfig
-      requestLocale requestContext `shouldBe` French
+      requestLocale requestContext `shouldBe` Spanish
       requestCorrelationId requestContext `shouldBe` Just "req-456"
       callToActionLabel callToAction `shouldBe` "Return home"
       callToActionRoute callToAction `shouldBe` HomeRoute
-      callToActionHref callToAction `shouldBe` "/fr"
+      callToActionHref callToAction `shouldBe` "/es"
       homeHeading homePageModel `shouldBe` "Home"
       homeSummary homePageModel `shouldBe` "Server-rendered home page with stubbed content."
       homePrimaryAction homePageModel
         `shouldBe` CallToAction
           { callToActionLabel = "Browse the second page",
             callToActionRoute = SecondRoute,
-            callToActionHref = "/fr/second"
+            callToActionHref = "/es/second"
           }
       secondHeading secondPageModel `shouldBe` "Second"
       secondSummary secondPageModel `shouldBe` "Second page content with stubbed data ready for future loaders."
@@ -4793,7 +4793,7 @@ spec = do
       acmeCertificateSource `shouldBe` acmeCertificateSource
       staticRoot `shouldBe` staticRoot
       English `shouldBe` English
-      French `shouldBe` French
+      Spanish `shouldBe` Spanish
       PageSurface `shouldBe` PageSurface
       ApiSurface `shouldBe` ApiSurface
       HomeRoute `shouldBe` HomeRoute
@@ -4855,13 +4855,13 @@ spec = do
         `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"x-api-key\",\"secret\")]}), metricsExporter = Nothing}"
       show
         ( AppRequestContext
-            { requestLocale = French,
+            { requestLocale = Spanish,
               requestCorrelationId = Just "req-789",
               requestSurface = PageSurface,
               requestPathPrefix = ""
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\"}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\"}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -4871,7 +4871,7 @@ spec = do
         )
         `shouldBe` "CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}"
       show English `shouldBe` "English"
-      show French `shouldBe` "French"
+      show Spanish `shouldBe` "Spanish"
       show PageSurface `shouldBe` "PageSurface"
       show ApiSurface `shouldBe` "ApiSurface"
       show (UnsupportedLocalePrefix "de") `shouldBe` "UnsupportedLocalePrefix \"de\""
@@ -4987,7 +4987,7 @@ spec = do
               }
           requestContext =
             AppRequestContext
-              { requestLocale = French,
+              { requestLocale = Spanish,
                 requestCorrelationId = Just "req-123",
                 requestSurface = PageSurface,
                 requestPathPrefix = ""
@@ -5048,13 +5048,13 @@ spec = do
       observabilityConfig `shouldNotBe` ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
       appConfig `shouldBe` appConfig
       appConfig `shouldNotBe` appConfig {listenerConfigs = [listenerConfig]}
-      English `shouldNotBe` French
+      English `shouldNotBe` Spanish
       requestContext `shouldBe` requestContext
       requestContext `shouldNotBe` defaultRequestContext
       callToAction `shouldBe` callToAction
-      callToAction `shouldNotBe` callToAction {callToActionHref = "/fr"}
+      callToAction `shouldNotBe` callToAction {callToActionHref = "/es"}
       homePageModel `shouldBe` homePageModel
-      homePageModel `shouldNotBe` homePageModel {homeHeading = "Accueil"}
+      homePageModel `shouldNotBe` homePageModel {homeHeading = "Inicio"}
       secondPageModel `shouldBe` secondPageModel
       secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
       notFoundPageModel `shouldBe` notFoundPageModel
@@ -5134,7 +5134,7 @@ spec = do
               }
           requestContext =
             AppRequestContext
-              { requestLocale = French,
+              { requestLocale = Spanish,
                 requestCorrelationId = Just "req-999",
                 requestSurface = PageSurface,
                 requestPathPrefix = ""
@@ -5256,7 +5256,7 @@ spec = do
               }
           requestContext =
             AppRequestContext
-              { requestLocale = French,
+              { requestLocale = Spanish,
                 requestCorrelationId = Just "req-list",
                 requestSurface = PageSurface,
                 requestPathPrefix = ""
@@ -5313,10 +5313,10 @@ spec = do
         `shouldBe` "[ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Just (OtlpExporter {otlpEndpoint = \"http://otel-collector:4318\", otlpHeaders = [(\"authorization\",\"Bearer token\")]})}]"
       show [appConfig]
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show [English, French] `shouldBe` "[English,French]"
+      show [English, Spanish] `shouldBe` "[English,Spanish]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = French, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\"}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\"}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -5353,8 +5353,8 @@ spec = do
       parseRoute defaultRequestContext "/second?utm=demo" `shouldBe` Just secondRequest
 
     it "lets explicit locale prefixes override the incoming request context" $ do
-      parseRoute defaultRequestContext "/fr/second" `shouldBe` Just frenchSecondRequest
-      parseRoute frenchRequestContext "/en/second" `shouldBe` Just secondRequest
+      parseRoute defaultRequestContext "/es/second" `shouldBe` Just spanishSecondRequest
+      parseRoute spanishRequestContext "/en/second" `shouldBe` Just secondRequest
 
     it "returns an unsupported-route representation for unknown paths" $
       parseRoute defaultRequestContext "/missing" `shouldBe` Nothing
@@ -5367,7 +5367,7 @@ spec = do
       selectRoute defaultRequestContext "second" `shouldBe` Left (UnsupportedPath "second")
 
     it "rejects unsupported multi-segment paths" $
-      selectRoute defaultRequestContext "/fr/second/extra" `shouldBe` Left (UnsupportedPath "/fr/second/extra")
+      selectRoute defaultRequestContext "/es/second/extra" `shouldBe` Left (UnsupportedPath "/es/second/extra")
 
     it "rejects unsupported single-segment non-locale paths" $
       selectRoute defaultRequestContext "/missing" `shouldBe` Left (UnsupportedPath "/missing")
@@ -5376,7 +5376,7 @@ spec = do
       selectRoute defaultRequestContext "/missing?utm=demo" `shouldBe` Left (UnsupportedPath "/missing")
 
     it "rejects locale-prefixed paths whose trailing segment is unsupported" $ do
-      selectRoute defaultRequestContext "/fr/missing" `shouldBe` Left (UnsupportedPath "/fr/missing")
+      selectRoute defaultRequestContext "/es/missing" `shouldBe` Left (UnsupportedPath "/es/missing")
       selectRoute defaultRequestContext "/other/second" `shouldBe` Left (UnsupportedPath "/other/second")
 
     it "merges middleware-supplied and path-derived request inputs deterministically" $ do
@@ -5385,8 +5385,8 @@ spec = do
               { requestLocale = English,
                 requestCorrelationId = Just "req-123"
               }
-      parseRoute middlewareContext "/fr"
-        `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = French}})
+      parseRoute middlewareContext "/es"
+        `shouldBe` Just (HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = middlewareContext {requestLocale = Spanish}})
 
     it "rejects invalid trailing slashes while keeping the root path valid" $ do
       parseRoute defaultRequestContext "/" `shouldBe` Just homeRequest
@@ -5397,16 +5397,16 @@ spec = do
     it "round-trips known routes through the parser" $ do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
-      parseRoute defaultRequestContext (renderRoutePath frenchSecondRequest) `shouldBe` Just frenchSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath spanishSecondRequest) `shouldBe` Just spanishSecondRequest
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext (renderRoutePath apiNotFoundRequest) `shouldBe` Just apiNotFoundRequest
 
     it "renders locale prefixes only for non-default locales" $ do
       renderRoutePath homeRequest `shouldBe` "/"
-      renderRoutePath frenchHomeRequest `shouldBe` "/fr"
+      renderRoutePath spanishHomeRequest `shouldBe` "/es"
       renderRoutePath secondRequest `shouldBe` "/second"
-      renderRoutePath frenchSecondRequest `shouldBe` "/fr/second"
+      renderRoutePath spanishSecondRequest `shouldBe` "/es/second"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
@@ -5415,7 +5415,7 @@ spec = do
 
     it "prepends the forwarded request path prefix to page and API routes" $ do
       renderRoutePath prefixedHomeRequest `shouldBe` "/app"
-      renderRoutePath prefixedFrenchSecondRequest `shouldBe` "/app/fr/second"
+      renderRoutePath prefixedSpanishSecondRequest `shouldBe` "/app/es/second"
       renderRoutePath prefixedApiStatusRequest `shouldBe` "/app/api/status"
 
   describe "matchRoute" $ do
@@ -5430,7 +5430,7 @@ spec = do
       pureRouteMatcher "/second" `shouldBe` secondRequest
 
     it "matches locale-prefixed paths with the merged request context" $
-      pureRouteMatcher "/fr" `shouldBe` frenchHomeRequest
+      pureRouteMatcher "/es" `shouldBe` spanishHomeRequest
 
     it "matches API paths with the API response surface" $ do
       pureRouteMatcher "/api/status" `shouldBe` apiStatusRequest
@@ -5552,16 +5552,16 @@ spec = do
             }
 
     it "keeps API payload rendering locale-aware without touching page routing" $ do
-      selectResponse defaultAppConfig frenchApiStatusRequest
+      selectResponse defaultAppConfig spanishApiStatusRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
               HarchWeb.responseContentType = "application/json",
-              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"fr\"}",
+              HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"es\"}",
               HarchWeb.responseObservabilityAttributes = [],
               HarchWeb.responseLogEntries = []
             }
-      selectResponse defaultAppConfig frenchApiSecondRequest
+      selectResponse defaultAppConfig spanishApiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
             { HarchWeb.responseStatus = 200,
@@ -5686,9 +5686,9 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         apiSecondRequest
@@ -5860,9 +5860,9 @@ spec = do
             buildSeededDatabaseEffect
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                   englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
           renderedPage =
             renderPageFromRouteData
@@ -5903,9 +5903,9 @@ spec = do
             buildSeededDatabaseEffect
               DatabaseSeed
                 { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                   englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                  frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
           renderedPage =
             renderPageFromRouteData
@@ -5946,9 +5946,9 @@ spec = do
             buildSeededDatabaseEffect
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                  frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                   englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                  frenchSecondPageData = Left (SecondPageDataError "seed unavailable")
+                  spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
                 }
       renderedHomePage <- renderPage defaultAppConfig homeRequest
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
@@ -5985,17 +5985,33 @@ spec = do
             }
 
     it "keeps locale-aware action paths in stubbed page data" $
-      buildPageModel frenchHomeRequest
+      buildPageModel spanishHomeRequest
         `shouldReturn` HomePage
           HomePageModel
             { homeHeading = "Home",
-              homeSummary = "Accueil cote serveur avec des donnees de developpement preconfigurees.",
+              homeSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.",
               homeErrorMessage = Nothing,
               homePrimaryAction =
                 CallToAction
-                  { callToActionLabel = "Browse the second page",
+                  { callToActionLabel = "Ver la segunda página",
                     callToActionRoute = SecondRoute,
-                    callToActionHref = "/fr/second"
+                    callToActionHref = "/es/second"
+                  }
+            }
+
+    it "localizes Spanish second-page return actions" $
+      buildPageModel spanishSecondRequest
+        `shouldReturn` SecondPage
+          SecondPageModel
+            { secondHeading = "Second",
+              secondSummary = "Second page content with stubbed data ready for future loaders.",
+              secondHighlights = [],
+              secondErrorMessage = Nothing,
+              secondPrimaryAction =
+                CallToAction
+                  { callToActionLabel = "Volver al inicio",
+                    callToActionRoute = HomeRoute,
+                    callToActionHref = "/es"
                   }
             }
 
@@ -6004,9 +6020,9 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         homeRequest
@@ -6060,14 +6076,14 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData =
                   Right
                     SecondPageData
                       { secondPageDataSummary = "Loaded from the seeded database effect.",
                         secondPageDataHighlights = ["Fast SSR", "Progressive enhancement"]
                       },
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         secondRequest
@@ -6090,9 +6106,9 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         secondRequest
@@ -6163,9 +6179,9 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         secondRequest
@@ -6183,9 +6199,9 @@ spec = do
         ( buildSeededDatabaseEffect
             DatabaseSeed
               { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                 englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
               }
         )
         homeRequest
@@ -6268,7 +6284,7 @@ spec = do
 
     it "keeps shell output identical for repeated renders of the same page input" $ do
       let application = buildApp defaultAppConfig
-      page <- renderPage defaultAppConfig frenchSecondRequest
+      page <- renderPage defaultAppConfig spanishSecondRequest
       HarchWeb.pageShell application page `shouldBe` HarchWeb.pageShell application page
 
     it "keeps the legacy page-shell shim aligned with the app shell seam" $ do
@@ -6355,13 +6371,13 @@ spec = do
     it "stores the same route codec behavior used by direct route tests" $ do
       let codec = HarchWeb.routeCodec pureApplication
       HarchWeb.parseRoute codec defaultRequestContext "/" `shouldBe` parseRoute defaultRequestContext "/"
-      HarchWeb.parseRoute codec defaultRequestContext "/fr" `shouldBe` parseRoute defaultRequestContext "/fr"
+      HarchWeb.parseRoute codec defaultRequestContext "/es" `shouldBe` parseRoute defaultRequestContext "/es"
       HarchWeb.parseRoute codec defaultRequestContext "/second" `shouldBe` parseRoute defaultRequestContext "/second"
       HarchWeb.parseRoute codec defaultRequestContext "/api/status" `shouldBe` parseRoute defaultRequestContext "/api/status"
       HarchWeb.parseRoute codec defaultRequestContext "/api/second" `shouldBe` parseRoute defaultRequestContext "/api/second"
       HarchWeb.parseRoute codec defaultRequestContext "/missing" `shouldBe` Nothing
       HarchWeb.renderRoute codec homeRequest `shouldBe` renderRoutePath homeRequest
-      HarchWeb.renderRoute codec frenchSecondRequest `shouldBe` renderRoutePath frenchSecondRequest
+      HarchWeb.renderRoute codec spanishSecondRequest `shouldBe` renderRoutePath spanishSecondRequest
       HarchWeb.renderRoute codec secondRequest `shouldBe` renderRoutePath secondRequest
       HarchWeb.renderRoute codec apiStatusRequest `shouldBe` renderRoutePath apiStatusRequest
       HarchWeb.renderRoute codec apiSecondRequest `shouldBe` renderRoutePath apiSecondRequest
@@ -6384,7 +6400,7 @@ spec = do
       HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldReturn` expectedApiNotFoundResponse
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
-      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["fr", "second"])
+      secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["es", "second"])
       Wai.responseStatus secondResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       renderedSecondResponse <- readResponseBody secondResponse
@@ -6472,9 +6488,9 @@ spec = do
               ( buildSeededDatabaseEffect
                   DatabaseSeed
                     { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                      frenchHomePageData = frenchHomePageData defaultDatabaseSeed,
+                      spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
                       englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                      frenchSecondPageData = frenchSecondPageData defaultDatabaseSeed
+                      spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                     }
               )
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication failingApplication) (waiRequest ["second"])
