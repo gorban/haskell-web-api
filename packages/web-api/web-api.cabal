@@ -73,6 +73,7 @@ library
     WebApi.Database
     WebApi.DatabaseSetup
     WebApi.Mfa
+    WebApi.MfaEnrollment
     WebApi.Page
     WebApi.PageShell
     WebApi.Postgres
