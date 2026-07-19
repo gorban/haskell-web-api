@@ -21,9 +21,11 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.AccountPages
-  ( RegistrationForm (..),
+  ( MfaEnrollmentForm (..),
+    RegistrationForm (..),
     VerificationForm (..),
     emptyRegistrationForm,
+    renderMfaEnrollmentPage,
     renderRegistrationPage,
     renderVerificationPage,
   )
@@ -82,6 +84,7 @@ data AppPageModel
   | SecondPage SecondPageModel
   | RegistrationPage Text RegistrationForm
   | EmailVerificationPage Text VerificationForm
+  | MfaEnrollmentPage Text MfaEnrollmentForm
   | NotFoundPage NotFoundPageModel
   deriving (Eq)
 
@@ -118,6 +121,8 @@ instance Show AppPageModel where
           . shows verificationFormIsError
           . showString "})"
       )
+  showsPrec precedence (MfaEnrollmentPage mfaEnrollmentPath MfaEnrollmentForm {mfaEnrollmentFormAccountId, mfaEnrollmentFormMessage, mfaEnrollmentFormIsError}) =
+    showParen (precedence > 10) (showString "MfaEnrollmentPage " . shows mfaEnrollmentPath . showChar ' ' . shows mfaEnrollmentFormAccountId . showChar ' ' . shows mfaEnrollmentFormMessage . showChar ' ' . shows mfaEnrollmentFormIsError)
   showsPrec precedence (NotFoundPage notFoundPage) =
     showParen (precedence > 10) (showString "NotFoundPage " . showsPrec 11 notFoundPage)
 
@@ -149,6 +154,7 @@ routeTitle route =
     SecondRoute -> "Second"
     RegistrationRoute -> "Create account"
     EmailVerificationRoute -> "Verify email"
+    MfaEnrollmentRoute -> "Set up authenticator"
     _ -> "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
@@ -180,6 +186,10 @@ buildPageModelFromRouteData routeRequest routeData =
             verificationFormMessage = Nothing,
             verificationFormIsError = False
           }
+    MfaEnrollmentRouteDataResult ->
+      MfaEnrollmentPage
+        (renderRoutePath (HarchWeb.RouteRequest MfaEnrollmentRoute (HarchWeb.requestContext routeRequest)))
+        (MfaEnrollmentForm (fromMaybe Text.empty (lookup "account" (requestQueryParameters (HarchWeb.requestContext routeRequest)))) Nothing [] Nothing False)
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -285,6 +295,8 @@ renderPageBody pageModel =
       renderRegistrationPage registrationPath registrationForm
     EmailVerificationPage verificationPath verificationForm ->
       renderVerificationPage verificationPath verificationForm
+    MfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm ->
+      renderMfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm
     NotFoundPage notFoundPage ->
       Text.concat
         [ "<section data-page=\"not-found\">",

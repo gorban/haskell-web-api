@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWeb.SecretSpec (spec) where
@@ -30,7 +31,7 @@ spec = do
       (maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext
       decryptSecret key "not-base64" `shouldBe` Nothing
       decryptSecret key (envelope <> "A") `shouldBe` Nothing
-      decryptSecret key (encodedEnvelope "\x02" ) `shouldBe` Nothing
+      decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing
       decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing
       decryptSecret otherKey envelope `shouldBe` Nothing
       encryptSecretWithNonce key "short" plaintext `shouldBe` Nothing

@@ -15,5 +15,6 @@ pageEnhancementHooks route =
     SecondRoute -> ["second-page"]
     RegistrationRoute -> []
     EmailVerificationRoute -> []
+    MfaEnrollmentRoute -> []
     StatusApiRoute -> []
     NotFoundRoute -> []

@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWeb.GoogleWorkspaceSpec (spec) where
@@ -81,10 +82,9 @@ spec = do
       tooEarly <- tryStatus serviceAccount 199
       rejected <- tryStatus serviceAccount 403
       map displayException [tooEarly, rejected]
-        `shouldBe`
-          [ "user error (Google Workspace token exchange failed with status 199)",
-            "user error (Google Workspace token exchange failed with status 403)"
-          ]
+        `shouldBe` [ "user error (Google Workspace token exchange failed with status 199)",
+                     "user error (Google Workspace token exchange failed with status 403)"
+                   ]
 
     it "rejects malformed and unsafe token responses" $ do
       (encodedCredentials, _) <- generatedCredentials
@@ -94,12 +94,11 @@ spec = do
       nonObject <- tryProvider serviceAccount "[]"
       unsafe <- tryProvider serviceAccount "{\"access_token\":\"bad\\ntoken\"}"
       map displayException [malformed, missing, nonObject, unsafe]
-        `shouldBe`
-          [ "user error (Google Workspace token exchange returned invalid JSON)",
-            "user error (Google Workspace token exchange response did not contain access_token)",
-            "user error (Google Workspace token exchange returned invalid JSON)",
-            "user error (Google Workspace token exchange returned an invalid access token)"
-          ]
+        `shouldBe` [ "user error (Google Workspace token exchange returned invalid JSON)",
+                     "user error (Google Workspace token exchange response did not contain access_token)",
+                     "user error (Google Workspace token exchange returned invalid JSON)",
+                     "user error (Google Workspace token exchange returned an invalid access token)"
+                   ]
 
     it "rejects malformed PEM and RSA key encodings before sending a token request" $ do
       let malformedPem = "-----BEGIN PRIVATE KEY-----\n%%%\n-----END PRIVATE KEY-----\n"
@@ -116,20 +115,19 @@ spec = do
           unsignableRsa = pemText "PRIVATE KEY" (pkcs8PrivateKey (rsaPrivateKeyDer 1 1 1 1 1 1 1 1))
       failures <- mapM tryInvalidPrivateKey [malformedPem, emptyPem, wrongPemLabel, emptyPkcs8, invalidPkcs8, incompleteTag, incompleteContent, nonRsaPkcs8, nonRsaOid, invalidRsaData, malformedRsa, unsignableRsa]
       map displayException failures
-        `shouldBe`
-          [ "user error (Google Workspace private key is not valid PEM)",
-            "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
-            "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
-            "user error (Google Workspace private key is not valid PKCS#8)",
-            "user error (Google Workspace private key is not valid PKCS#8)",
-            "user error (Google Workspace private key is not valid PKCS#8)",
-            "user error (Google Workspace private key is not valid PKCS#8)",
-            "user error (Google Workspace private key must be an RSA PKCS#8 key)",
-            "user error (Google Workspace private key must be an RSA PKCS#8 key)",
-            "user error (Google Workspace private key is not valid RSA data)",
-            "user error (Google Workspace private key must contain an RSA private key)",
-            "user error (Google Workspace private key could not sign the JWT)"
-          ]
+        `shouldBe` [ "user error (Google Workspace private key is not valid PEM)",
+                     "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
+                     "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
+                     "user error (Google Workspace private key is not valid PKCS#8)",
+                     "user error (Google Workspace private key is not valid PKCS#8)",
+                     "user error (Google Workspace private key is not valid PKCS#8)",
+                     "user error (Google Workspace private key is not valid PKCS#8)",
+                     "user error (Google Workspace private key must be an RSA PKCS#8 key)",
+                     "user error (Google Workspace private key must be an RSA PKCS#8 key)",
+                     "user error (Google Workspace private key is not valid RSA data)",
+                     "user error (Google Workspace private key must contain an RSA private key)",
+                     "user error (Google Workspace private key could not sign the JWT)"
+                   ]
 
 jwtGrantPrefix :: Text
 jwtGrantPrefix = "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion="
@@ -177,7 +175,8 @@ pkcs8PrivateKey = pkcs8PrivateKeyWithOid [1, 2, 840, 113549, 1, 1, 1]
 
 pkcs8PrivateKeyWithOid :: [Integer] -> ByteString.ByteString -> ByteString.ByteString
 pkcs8PrivateKeyWithOid objectIdentifier pkcs1 =
-  encodeASN1' DER
+  encodeASN1'
+    DER
     [ Start Sequence,
       IntVal 0,
       Start Sequence,
@@ -190,7 +189,8 @@ pkcs8PrivateKeyWithOid objectIdentifier pkcs1 =
 
 rsaPrivateKeyDer :: Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> Integer -> ByteString.ByteString
 rsaPrivateKeyDer modulus publicExponent privateExponent primeOne primeTwo exponentOne exponentTwo coefficient =
-  encodeASN1' DER
+  encodeASN1'
+    DER
     [ Start Sequence,
       IntVal 0,
       IntVal modulus,

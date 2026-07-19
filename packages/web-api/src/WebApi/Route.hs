@@ -53,6 +53,7 @@ data AppRoute
   | SecondRoute
   | RegistrationRoute
   | EmailVerificationRoute
+  | MfaEnrollmentRoute
   | StatusApiRoute
   | NotFoundRoute
   deriving (Eq, Show)
@@ -202,6 +203,7 @@ routeFromSegment segment
   | segment == "second" = Just SecondRoute
   | segment == "register" = Just RegistrationRoute
   | segment == "verify" = Just EmailVerificationRoute
+  | segment == "mfa" = Just MfaEnrollmentRoute
   | segment == "404" = Just NotFoundRoute
 routeFromSegment _ = Nothing
 
@@ -228,6 +230,7 @@ renderPageRouteSuffix route =
     SecondRoute -> "/second"
     RegistrationRoute -> "/register"
     EmailVerificationRoute -> "/verify"
+    MfaEnrollmentRoute -> "/mfa"
     NotFoundRoute -> "/404"
     StatusApiRoute -> "/404"
 

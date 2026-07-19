@@ -13,6 +13,7 @@ import qualified Data.ByteString.Builder as Builder
 import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
 import Data.Char (toLower)
+import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
@@ -25,6 +26,7 @@ import qualified HarchWeb.DevSmtp as DevSmtp
 import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
 import qualified HarchWeb.Password as Password
+import qualified HarchWeb.Totp as Totp
 import qualified Network.HTTP.Types as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import qualified Network.Socket as NetworkSocket
@@ -43,13 +45,14 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
-import WebApi.AccountPages (AccountWorkflow (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountWorkflow (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
+import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
@@ -285,7 +288,7 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
         [HarchWeb.RegionPatch patchId html] ->
-          patchId `elem` ["registration-region", "verification-region"]
+          patchId `elem` ["registration-region", "verification-region", "mfa-enrollment-region"]
             && expectedMessage `Text.isInfixOf` html
         _ -> False
   Nothing -> False
@@ -2749,8 +2752,10 @@ spec = do
     it "keeps account routes fully server-rendered and query-aware" $ do
       let registrationRequest = HarchWeb.RouteRequest RegistrationRoute defaultRequestContext
           verificationRequest = HarchWeb.RouteRequest EmailVerificationRoute (defaultRequestContext {requestQueryParameters = [("token", "prefilled-token")]})
+          mfaRequest = HarchWeb.RouteRequest MfaEnrollmentRoute (defaultRequestContext {requestQueryParameters = [("account", "account_01")]})
       selectRouteData registrationRequest `shouldReturn` RegistrationRouteDataResult
       selectRouteData verificationRequest `shouldReturn` EmailVerificationRouteDataResult
+      selectRouteData mfaRequest `shouldReturn` MfaEnrollmentRouteDataResult
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect registrationRequest
         `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
@@ -2761,6 +2766,8 @@ spec = do
         `shouldBe` EmailVerificationPage "/verify" (VerificationForm "prefilled-token" Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest EmailVerificationRoute defaultRequestContext) EmailVerificationRouteDataResult
         `shouldBe` EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False)
+      buildPageModelFromRouteData mfaRequest MfaEnrollmentRouteDataResult
+        `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -2794,6 +2801,7 @@ spec = do
       if emptyRegistrationForm == RegistrationForm Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
       if RegistrationForm "person@example.test" Nothing False /= RegistrationForm "other@example.test" Nothing False then pure () else expectationFailure "registration forms must compare their email values"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
+      if MfaEnrollmentForm "account_01" Nothing [] Nothing False /= MfaEnrollmentForm "account_01" Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       show (RegistrationPage "/register" (RegistrationForm "person@example.test" Nothing False))
         `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormEmail = \"person@example.test\", registrationFormMessage = Nothing, registrationFormIsError = False})"
       show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
@@ -2810,6 +2818,10 @@ spec = do
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
       renderRegistrationRegion "/register" (RegistrationForm "'>&" Nothing False)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
+      renderMfaEnrollmentPage "/es/mfa" (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") [] (Just "Ready <now>") False)
+        `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
+      renderMfaEnrollmentRegion "/mfa" (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
+        `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
       pageEnhancementHooks RegistrationRoute `shouldBe` []
       pageEnhancementHooks EmailVerificationRoute `shouldBe` []
 
@@ -2833,6 +2845,9 @@ spec = do
               { accountWorkflowStore = createdStore,
                 accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
                 accountWorkflowClock = pure 100,
+                accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
+                accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
+                accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \requestContext verificationToken ->
                   "https://account.example.test"
                     <> renderRoutePath
@@ -2853,6 +2868,12 @@ spec = do
               }
       handleAccountAction workflow (request "GET" "/register" [] English) `shouldReturn` Nothing
       handleAccountAction workflow (request "POST" "/missing" [] English) `shouldReturn` Nothing
+      invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
+      invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
+      spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
+      spanishInvalidMfaResult `shouldSatisfy` \case
+        Just response -> HarchWeb.clientActionStatus response == 422 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Nothing -> False
       invalidEmailResult <- handleAccountAction workflow (request "POST" "/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] English)
       invalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Enter a valid email address."
       spanishInvalidEmailResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] Spanish)
@@ -2911,6 +2932,9 @@ spec = do
               { accountWorkflowStore = accountStore,
                 accountWorkflowEmailDelivery = emailDelivery,
                 accountWorkflowClock = pure now,
+                accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
+                accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
+                accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
               }
           store createResult lookupResult consumeResult =
@@ -2965,6 +2989,58 @@ spec = do
       spanishRejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "no es valido o ya se ha utilizado"
       unavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
       unavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "temporarily unavailable"
+
+    it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
+      encryptedSecretReference <- newIORef Nothing
+      confirmationHashesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          mfaStore =
+            MfaStore
+              { saveUnconfirmedTotpEnrollment = \receivedAccountId encryptedSecret _ -> do
+                  receivedAccountId `shouldBe` accountId
+                  writeIORef encryptedSecretReference (Just encryptedSecret)
+                  pure (Right True),
+                loadTotpEnrollment = \receivedAccountId -> do
+                  receivedAccountId `shouldBe` accountId
+                  fmap (Right . fmap (`StoredTotpEnrollment` Nothing)) (readIORef encryptedSecretReference),
+                confirmTotpEnrollment = \receivedAccountId hashes _ -> do
+                  receivedAccountId `shouldBe` accountId
+                  writeIORef confirmationHashesReference (toList hashes)
+                  pure (Right True)
+              }
+          workflow =
+            unavailableAccountWorkflow
+              { accountWorkflowMfaStore = mfaStore,
+                accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+                accountWorkflowClock = pure 500,
+                accountWorkflowTotpClock = pure 123456
+              }
+          request fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/mfa",
+                HarchWeb.clientActionFields = ("account", Account.accountIdText accountId) : fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+      started <- handleAccountAction workflow (request [("intent", "start")])
+      secret <-
+        case started of
+          Just response ->
+            case HarchWeb.clientActionPatches response of
+              [HarchWeb.RegionPatch _ html] ->
+                case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
+                  Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
+                  Nothing -> expectationFailure "expected an enrollment secret" >> pure Text.empty
+              _ -> expectationFailure "expected one enrollment patch" >> pure Text.empty
+          Nothing -> expectationFailure "expected enrollment action" >> pure Text.empty
+      totpSecret <- maybe (expectationFailure "expected a valid enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret secret)
+      confirmed <- handleAccountAction workflow (request [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
+      confirmed `shouldSatisfy` \case
+        Just response -> HarchWeb.clientActionStatus response == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Nothing -> False
+      confirmationHashes <- readIORef confirmationHashesReference
+      length confirmationHashes `shouldBe` 8
 
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do

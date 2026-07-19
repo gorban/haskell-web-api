@@ -4,15 +4,19 @@ module WebApi.AccountPages
   ( AccountWorkflow (..),
     RegistrationForm (..),
     VerificationForm (..),
+    MfaEnrollmentForm (..),
     emptyRegistrationForm,
     handleAccountAction,
     renderRegistrationPage,
     renderRegistrationRegion,
     renderVerificationPage,
     renderVerificationRegion,
+    renderMfaEnrollmentPage,
+    renderMfaEnrollmentRegion,
   )
 where
 
+import Data.Foldable (toList)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -20,6 +24,9 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
+import HarchWeb.RecoveryCode qualified as RecoveryCode
+import HarchWeb.Secret (SecretEncryptionKey)
+import HarchWeb.Totp qualified as Totp
 import WebApi.Account
   ( AccountStore,
     AccountStoreError (..),
@@ -27,6 +34,14 @@ import WebApi.Account
     RegistrationResult (..),
     confirmEmailVerificationAt,
     registerAccountAt,
+  )
+import WebApi.Mfa (MfaStore)
+import WebApi.MfaEnrollment
+  ( MfaEnrollmentConfirmation (..),
+    MfaEnrollmentError (..),
+    MfaEnrollmentStart (..),
+    confirmMfaEnrollment,
+    startMfaEnrollment,
   )
 import WebApi.Route
   ( AppLocale (..),
@@ -39,6 +54,9 @@ data AccountWorkflow = AccountWorkflow
   { accountWorkflowStore :: AccountStore,
     accountWorkflowEmailDelivery :: Email.EmailDelivery,
     accountWorkflowClock :: IO Word64,
+    accountWorkflowMfaStore :: MfaStore,
+    accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
+    accountWorkflowTotpClock :: IO Word64,
     accountWorkflowVerificationUrl :: AppRequestContext -> Account.EmailVerificationToken -> Text
   }
 
@@ -56,6 +74,15 @@ data VerificationForm = VerificationForm
   }
   deriving (Eq)
 
+data MfaEnrollmentForm = MfaEnrollmentForm
+  { mfaEnrollmentFormAccountId :: Text,
+    mfaEnrollmentFormSecret :: Maybe Text,
+    mfaEnrollmentFormRecoveryCodes :: [Text],
+    mfaEnrollmentFormMessage :: Maybe Text,
+    mfaEnrollmentFormIsError :: Bool
+  }
+  deriving (Eq)
+
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Nothing False
 
@@ -67,12 +94,14 @@ handleAccountAction workflow actionRequest =
         path
           | path == registrationPath -> Just <$> handleRegistration
           | path == verificationPath -> Just <$> handleVerification
+          | path == mfaEnrollmentPath -> Just <$> handleMfaEnrollment
         _ -> pure Nothing
     _ -> pure Nothing
   where
     actionContext = HarchWeb.clientActionContext actionRequest
     registrationPath = renderRoutePath (routeRequest RegistrationRoute)
     verificationPath = renderRoutePath (routeRequest EmailVerificationRoute)
+    mfaEnrollmentPath = renderRoutePath (routeRequest MfaEnrollmentRoute)
     routeRequest route = HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = actionContext}
 
     handleRegistration = do
@@ -118,6 +147,29 @@ handleAccountAction workflow actionRequest =
               Right Account.EmailVerificationRejected -> verificationResponse verificationPath 422 (VerificationForm tokenValue (Just (localized "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token")
               Left storeError -> verificationResponse verificationPath 503 (VerificationForm tokenValue (Just (storeErrorMessage storeError)) True) (Just "verification-token")
 
+    handleMfaEnrollment =
+      case Account.mkAccountId (actionField "account") of
+        Nothing -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (actionField "account") Nothing [] (Just (localized "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
+        Just accountId ->
+          case actionField "intent" of
+            "start" -> do
+              now <- accountWorkflowClock workflow
+              started <- startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now
+              pure $ case started of
+                Right (MfaEnrollmentStart secret) -> mfaEnrollmentResponse mfaEnrollmentPath 200 (mfaForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code")
+                Left errorValue -> mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage errorValue)) True) (Just "mfa-account")
+            "confirm" ->
+              case Totp.mkTotpCode (actionField "code") of
+                Nothing -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (localized "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
+                Just code -> do
+                  nowNanoseconds <- accountWorkflowClock workflow
+                  nowSeconds <- accountWorkflowTotpClock workflow
+                  confirmed <- confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code
+                  pure $ case confirmed of
+                    Right (MfaEnrollmentConfirmation recoveryCodes) -> mfaEnrollmentResponse mfaEnrollmentPath 200 (mfaForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing
+                    Left errorValue -> mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage errorValue)) True) (Just "mfa-code")
+            _ -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (localized "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
+
     actionField name =
       case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
         [value] -> value
@@ -127,6 +179,16 @@ handleAccountAction workflow actionRequest =
       case requestLocale actionContext of
         English -> english
         Spanish -> spanish
+
+    mfaForm = MfaEnrollmentForm
+
+    mfaErrorMessage errorValue =
+      case errorValue of
+        MfaEnrollmentAccountIsNotEligible -> localized "Verify your email address before enrolling an authenticator." "Verifica tu direccion de correo antes de registrar un autenticador."
+        MfaEnrollmentInvalidCode -> localized "That authenticator code is invalid." "Ese codigo de autenticador no es valido."
+        MfaEnrollmentNotFound -> localized "Start a new authenticator enrollment." "Inicia un nuevo registro de autenticador."
+        MfaEnrollmentConfirmationRejected -> localized "That enrollment can no longer be confirmed." "Ese registro ya no se puede confirmar."
+        _ -> localized "Authenticator enrollment is temporarily unavailable." "El registro del autenticador no esta disponible temporalmente."
 
 registrationResponse :: Text -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
 registrationResponse registrationPath status form focusId =
@@ -143,6 +205,63 @@ verificationResponse verificationPath status form focusId =
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion verificationPath form)],
       HarchWeb.clientActionFocusId = focusId
     }
+
+mfaEnrollmentResponse :: Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse mfaEnrollmentPath status form focusId =
+  HarchWeb.ClientActionResponse
+    { HarchWeb.clientActionStatus = status,
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion mfaEnrollmentPath form)],
+      HarchWeb.clientActionFocusId = focusId
+    }
+
+renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text
+renderMfaEnrollmentPage mfaEnrollmentPath form =
+  Text.concat
+    [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">Set up your authenticator</h1>",
+      renderMfaEnrollmentRegion mfaEnrollmentPath form,
+      "</section>"
+    ]
+
+renderMfaEnrollmentRegion :: Text -> MfaEnrollmentForm -> Text
+renderMfaEnrollmentRegion mfaEnrollmentPath form =
+  Text.concat
+    [ "<section id=\"mfa-enrollment-region\" aria-live=\"polite\">",
+      renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
+      renderEnrollmentSecret (mfaEnrollmentFormSecret form),
+      renderRecoveryCodes (mfaEnrollmentFormRecoveryCodes form),
+      "<form data-harch-action=\"true\" data-harch-control action=\"",
+      escapeHtml mfaEnrollmentPath,
+      "\" method=\"post\"><input id=\"mfa-account\" name=\"account\" type=\"hidden\" value=\"",
+      escapeHtml (mfaEnrollmentFormAccountId form),
+      "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">Start authenticator enrollment</button></form>",
+      renderConfirmationForm mfaEnrollmentPath form,
+      "</section>"
+    ]
+
+renderEnrollmentSecret :: Maybe Text -> Text
+renderEnrollmentSecret maybeSecret =
+  case maybeSecret of
+    Nothing -> Text.empty
+    Just secret -> Text.concat ["<p data-totp-secret=\"true\"><code>", escapeHtml secret, "</code></p>"]
+
+renderRecoveryCodes :: [Text] -> Text
+renderRecoveryCodes recoveryCodes =
+  case recoveryCodes of
+    [] -> Text.empty
+    _ -> Text.concat ["<section data-recovery-codes=\"true\"><h2>Recovery codes</h2><p>Save these codes. They will not be shown again.</p><ul>", Text.concat (map (\code -> Text.concat ["<li><code>", escapeHtml code, "</code></li>"]) recoveryCodes), "</ul></section>"]
+
+renderConfirmationForm :: Text -> MfaEnrollmentForm -> Text
+renderConfirmationForm mfaEnrollmentPath form =
+  case mfaEnrollmentFormSecret form of
+    Nothing -> Text.empty
+    Just _ ->
+      Text.concat
+        [ "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml mfaEnrollmentPath,
+          "\" method=\"post\"><input name=\"account\" type=\"hidden\" value=\"",
+          escapeHtml (mfaEnrollmentFormAccountId form),
+          "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">Authenticator code</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">Confirm authenticator</button></form>"
+        ]
 
 renderRegistrationPage :: Text -> RegistrationForm -> Text
 renderRegistrationPage registrationPath form =

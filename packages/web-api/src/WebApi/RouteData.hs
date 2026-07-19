@@ -53,6 +53,7 @@ data RouteDataResult
   | SecondRouteDataResult (Either DatabaseError SecondRouteData)
   | RegistrationRouteDataResult
   | EmailVerificationRouteDataResult
+  | MfaEnrollmentRouteDataResult
   | StatusApiDataResult StatusApiData
   | NotFoundRouteDataResult
   deriving (Eq, Show)
@@ -107,6 +108,8 @@ selectRouteDataSelectionWithDatabase databaseEffect routeRequest =
       pure RouteDataSelection {routeDataResult = RegistrationRouteDataResult, routeDataDatabaseOperations = []}
     EmailVerificationRoute ->
       pure RouteDataSelection {routeDataResult = EmailVerificationRouteDataResult, routeDataDatabaseOperations = []}
+    MfaEnrollmentRoute ->
+      pure RouteDataSelection {routeDataResult = MfaEnrollmentRouteDataResult, routeDataDatabaseOperations = []}
     StatusApiRoute ->
       pure $
         RouteDataSelection

@@ -18,6 +18,7 @@ import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (forM_)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
@@ -40,7 +41,8 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
-import WebApi.Postgres (buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect)
+import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
+import WebApi.Postgres (buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext (..),
@@ -111,6 +113,11 @@ buildAppSiteRoutes config databaseEffect =
             Site.siteRouteResponse = renderSelectedResponse
           },
         Site.SiteRoute
+          { Site.siteRouteValue = MfaEnrollmentRoute,
+            Site.siteRouteNavigationLabel = Nothing,
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
           { Site.siteRouteValue = StatusApiRoute,
             Site.siteRouteNavigationLabel = Nothing,
             Site.siteRouteResponse = renderSelectedResponse
@@ -161,6 +168,9 @@ buildRuntimeAccountWorkflow !environmentConfig =
           { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
             accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
             accountWorkflowClock = getMonotonicTimeNSec,
+            accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
+            accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
+            accountWorkflowTotpClock = floor <$> getPOSIXTime,
             accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
           }
 
@@ -305,5 +315,13 @@ unavailableAccountWorkflow =
           },
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
       accountWorkflowClock = pure 0,
+      accountWorkflowMfaStore =
+        MfaStore
+          { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
+            loadTotpEnrollment = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
+            confirmTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
+          },
+      accountWorkflowTotpEncryptionKey = error "MFA encryption is not configured",
+      accountWorkflowTotpClock = pure 0,
       accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
     }

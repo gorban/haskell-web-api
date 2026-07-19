@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.WebApi.MfaSpec (spec) where
@@ -93,7 +94,7 @@ spec = do
       loadTotpEnrollment store unknownAccountId `shouldReturnEqual` Right Nothing
       confirmTotpEnrollment store unknownAccountId ("hash" :| []) 500 `shouldReturnEqual` Right False
 
-shouldReturnEqual :: Eq value => IO value -> value -> Expectation
+shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do
   actual <- action
   unless (actual == expected) (expectationFailure "unexpected result")

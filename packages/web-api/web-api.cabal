@@ -95,6 +95,7 @@ library
     postgresql-libpq,
     process,
     text,
+    time,
     wai,
 
   -- Directories containing source files.

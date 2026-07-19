@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWeb.EmailSpec (spec) where
@@ -88,12 +89,15 @@ spec = do
         Right () -> expectationFailure "expected an SMTP resolver failure"
 
     it "delivers a dot-stuffed UTF-8 transactional message to a loopback SMTP server" $
-      withLoopbackSmtp acceptingServer (\port -> do
-        let config = required "loopback SMTP config" (mkSmtpConfig "127.0.0.1" port "account.example.test" sampleSender)
-        deliverSmtpEmail config sampleMessage)
+      withLoopbackSmtp
+        acceptingServer
+        ( \port -> do
+            let config = required "loopback SMTP config" (mkSmtpConfig "127.0.0.1" port "account.example.test" sampleSender)
+            deliverSmtpEmail config sampleMessage
+        )
         >>= \(_, deliveredMessage) ->
-        deliveredMessage
-          `shouldBe` TextEncoding.encodeUtf8 "From: <noreply@example.test>\r\nTo: <ada@example.test>\r\nSubject: Account verification\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n..first\r\nsecond\r\n..third\r\n.\r\n"
+          deliveredMessage
+            `shouldBe` TextEncoding.encodeUtf8 "From: <noreply@example.test>\r\nTo: <ada@example.test>\r\nSubject: Account verification\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n..first\r\nsecond\r\n..third\r\n.\r\n"
 
     it "stops when the SMTP server rejects a command" $ do
       _ <- withLoopbackSmtp rejectingEhloServer $ \port -> do
@@ -107,11 +111,14 @@ spec = do
       pure ()
 
     it "uses SMTP AUTH PLAIN when credentials are configured" $
-      withLoopbackSmtp acceptingAuthenticatedServer (\port -> do
-        let config = required "authenticated SMTP config" (mkAuthenticatedSmtpConfig "127.0.0.1" port "account.example.test" sampleSender "smtp-user" "smtp-password")
-        deliverSmtpEmail config sampleMessage)
+      withLoopbackSmtp
+        acceptingAuthenticatedServer
+        ( \port -> do
+            let config = required "authenticated SMTP config" (mkAuthenticatedSmtpConfig "127.0.0.1" port "account.example.test" sampleSender "smtp-user" "smtp-password")
+            deliverSmtpEmail config sampleMessage
+        )
         >>= \(_, deliveredMessage) ->
-        deliveredMessage `shouldSatisfy` ByteString.isInfixOf "Subject: Account verification"
+          deliveredMessage `shouldSatisfy` ByteString.isInfixOf "Subject: Account verification"
 
 withLoopbackSmtp :: (Socket.Socket -> IO ByteString.ByteString) -> (Word16 -> IO value) -> IO (value, ByteString.ByteString)
 withLoopbackSmtp server action =

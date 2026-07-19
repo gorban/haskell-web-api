@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.WebApi.MfaEnrollmentSpec (spec) where
@@ -152,7 +153,7 @@ spec = do
       sameMfaEnrollmentConfirmation (MfaEnrollmentConfirmation (recoveryCode :| [])) (MfaEnrollmentConfirmation (recoveryCode :| [])) `shouldBe` True
       MfaEnrollmentConfirmation (recoveryCode :| []) /= MfaEnrollmentConfirmation (requiredRecoveryCode "ABCDEF0123456789ABCD" :| []) `shouldBe` True
 
-shouldReturnEqual :: Eq value => IO value -> value -> Expectation
+shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do
   actual <- action
   unless (actual == expected) (expectationFailure "unexpected result")
