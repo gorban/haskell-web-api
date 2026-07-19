@@ -6,6 +6,9 @@ Show the smallest app that opts into real database effects while staying close t
 
 Current repo alignment:
 
+- `HarchWeb.Database` defines the reusable typed effect contract: an application
+  supplies a result-indexed operation algebra and an interpreter, while each
+  operation returns its own result type plus stable query metadata.
 - the app already has a PostgreSQL-backed path,
 - the migration flow already uses `WEB_API_MIGRATION_DATABASE_*`,
 - the combined example app already proves the runtime path works.
