@@ -62,6 +62,7 @@ library
     HarchWeb.DevSmtp
     HarchWeb.Email
     HarchWeb.Gmail
+    HarchWeb.GoogleWorkspace
     HarchWeb.LoginProtection
     HarchWeb.Observability
     HarchWeb.Password
@@ -72,6 +73,7 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    aeson,
     base ^>=4.22.0.0,
     base64-bytestring,
     bytestring,
@@ -83,6 +85,7 @@ library
     http-client-tls,
     http-types,
     network,
+    pem,
     process,
     temporary,
     text,
@@ -119,8 +122,13 @@ test-suite harch-web-tests
   -- Other library packages from which modules are imported.
   build-depends:
     -- For testing framework:
+    aeson,
+    asn1-encoding,
+    asn1-types,
     base ^>=4.22.0.0,
+    base64-bytestring,
     bytestring,
+    cryptonite,
     directory,
     filepath,
     harch-web,
@@ -128,6 +136,7 @@ test-suite harch-web-tests
     http-client,
     http-types,
     network,
+    pem,
     process,
     temporary,
     text,
