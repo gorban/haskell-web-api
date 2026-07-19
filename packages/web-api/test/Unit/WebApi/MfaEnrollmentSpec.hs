@@ -40,7 +40,9 @@ spec = do
                   encryptedSecret <- readIORef encryptedSecretReference
                   pure (Right (fmap (`StoredTotpEnrollment` Nothing) encryptedSecret)),
                 confirmTotpEnrollment = \receivedAccountId hashes _ ->
-                  pure (Right (receivedAccountId == accountId && length hashes == 8 && not (any Text.null hashes)))
+                  pure (Right (receivedAccountId == accountId && length hashes == 8 && not (any Text.null hashes))),
+                loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
       started <- startMfaEnrollment store encryptionKey accountId 100
       case started of
@@ -64,7 +66,9 @@ spec = do
                   modifyIORef' savedValuesReference ((savedAccountId, encryptedSecret, now) :)
                   pure (Right True),
                 loadTotpEnrollment = \_ -> pure (error "unexpected load"),
-                confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation")
+                confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
+                loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
       startMfaEnrollmentWith (pure secret) (\_ plaintext -> if plaintext == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" then pure (Just "encrypted-secret") else pure Nothing) store encryptionKey accountId 100
         `shouldReturnEqual` Right (MfaEnrollmentStart secret)
@@ -93,7 +97,9 @@ spec = do
                     else pure (error "unexpected account"),
                 confirmTotpEnrollment = \receivedAccountId hashes now -> do
                   modifyIORef' confirmationCallsReference ((receivedAccountId, hashes, now) :)
-                  pure (Right True)
+                  pure (Right True),
+                loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
           hashCode recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
       confirmation <- confirmMfaEnrollmentWith (nextFrom recoveryCodes) hashCode store encryptionKey accountId 500 123456 (totpCode 123456 secret)
@@ -116,7 +122,9 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected save"),
                 loadTotpEnrollment = \_ -> pure enrollment,
-                confirmTotpEnrollment = \_ _ _ -> pure confirmation
+                confirmTotpEnrollment = \_ _ _ -> pure confirmation,
+                loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
           oneCode = requiredRecoveryCode "0123456789ABCDEF0123"
           successfulHash recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
@@ -163,7 +171,9 @@ storeWithSave result =
   MfaStore
     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure result,
       loadTotpEnrollment = \_ -> pure (error "unexpected load"),
-      confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation")
+      confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
+      loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
     }
 
 nextFrom :: NonEmpty RecoveryCode -> IO RecoveryCode

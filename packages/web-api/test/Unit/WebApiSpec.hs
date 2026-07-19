@@ -16,6 +16,7 @@ import Data.Char (toLower)
 import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import qualified Data.Text as Text
@@ -26,6 +27,7 @@ import qualified HarchWeb.DevSmtp as DevSmtp
 import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
 import qualified HarchWeb.Password as Password
+import qualified HarchWeb.Secret as Secret
 import qualified HarchWeb.Totp as Totp
 import qualified Network.HTTP.Types as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
@@ -52,7 +54,7 @@ import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
-import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
+import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
@@ -2158,7 +2160,10 @@ spec = do
           `shouldBe` baseUrlWithoutTrailingSlash
           <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         accountWorkflowStore workflow `seq` pure ()
+        accountWorkflowMfaStore workflow `seq` pure ()
+        accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
+        accountWorkflowTotpClock workflow >>= (`shouldSatisfy` (> 0))
         case Email.mkEmailMessage recipient "Verification test" "Hello" of
           Nothing -> expectationFailure "expected a valid SMTP test message"
           Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message
@@ -2763,6 +2768,8 @@ spec = do
         `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
         `shouldReturn` RouteDataSelection EmailVerificationRouteDataResult []
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect mfaRequest
+        `shouldReturn` RouteDataSelection MfaEnrollmentRouteDataResult []
       buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
         `shouldBe` RegistrationPage "/register" emptyRegistrationForm
       buildPageModelFromRouteData verificationRequest EmailVerificationRouteDataResult
@@ -2771,6 +2778,8 @@ spec = do
         `shouldBe` EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False)
       buildPageModelFromRouteData mfaRequest MfaEnrollmentRouteDataResult
         `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
+      buildPageModelFromRouteData (HarchWeb.RouteRequest MfaEnrollmentRoute defaultRequestContext) MfaEnrollmentRouteDataResult
+        `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm Text.empty Nothing [] Nothing False)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -2780,6 +2789,10 @@ spec = do
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Create account"
             && "data-page=\"registration\"" `Text.isInfixOf` HarchWeb.pageBody page
+      renderPageFromRouteData defaultAppConfig mfaRequest MfaEnrollmentRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Set up authenticator"
+            && "data-page=\"mfa-enrollment\"" `Text.isInfixOf` HarchWeb.pageBody page
       HarchWeb.renderResponse pureApplication registrationRequest
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
@@ -2788,6 +2801,10 @@ spec = do
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
           _ -> expectationFailure "expected an email-verification page response"
+      HarchWeb.renderResponse pureApplication mfaRequest
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
+          _ -> expectationFailure "expected an MFA-enrollment page response"
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
         runtimeApplication
@@ -2809,6 +2826,8 @@ spec = do
         `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormEmail = \"person@example.test\", registrationFormMessage = Nothing, registrationFormIsError = False})"
       show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
         `shouldBe` "EmailVerificationPage \"/verify\" (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
+      show (MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
+        `shouldBe` "MfaEnrollmentPage \"/mfa\" \"account_01\" Nothing False"
       renderRegistrationPage "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
         `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Create your account</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Email address</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Password</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Create account</button></form></section></section>"
       renderRegistrationRegion "/register" (RegistrationForm Text.empty (Just "No") True)
@@ -2827,6 +2846,7 @@ spec = do
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
       pageEnhancementHooks RegistrationRoute `shouldBe` []
       pageEnhancementHooks EmailVerificationRoute `shouldBe` []
+      pageEnhancementHooks MfaEnrollmentRoute `shouldBe` []
 
     it "captures registration actions before deferred behavior and patches the localized region" $ do
       deliveredMessagesReference <- newIORef []
@@ -2912,6 +2932,19 @@ spec = do
       assertAccountStoreError
         (consumeEmailVerification unconfiguredStore (Account.emailVerificationTokenDigest token) 0)
         (isUnavailable "account persistence is not configured")
+      let unconfiguredMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow
+          assertMfaUnavailable action = do
+            result <- action
+            case result of
+              Left (MfaStoreUnavailable "MFA persistence is not configured") -> pure ()
+              _ -> expectationFailure "expected unavailable MFA persistence"
+      assertMfaUnavailable (loadTotpEnrollment unconfiguredMfaStore accountId)
+      assertMfaUnavailable (saveUnconfirmedTotpEnrollment unconfiguredMfaStore accountId "secret" 0)
+      assertMfaUnavailable (confirmTotpEnrollment unconfiguredMfaStore accountId ("hash" :| []) 0)
+      assertMfaUnavailable (loadUnusedRecoveryCodeHashes unconfiguredMfaStore accountId)
+      assertMfaUnavailable (consumeRecoveryCodeHash unconfiguredMfaStore accountId "hash" 0)
+      accountWorkflowTotpEncryptionKey unavailableAccountWorkflow `seq` pure ()
+      accountWorkflowTotpClock unavailableAccountWorkflow `shouldReturn` 0
       unavailableDelivery <-
         try (Email.deliverEmail (accountWorkflowEmailDelivery unavailableAccountWorkflow) (error "the unavailable delivery must ignore messages")) :: IO (Either IOException ())
       unavailableDelivery `shouldSatisfy` \case Left errorMessage -> "email delivery is not configured" `isInfixOf` displayException errorMessage; Right _ -> False
@@ -3011,7 +3044,9 @@ spec = do
                   receivedAccountId `shouldBe` accountId
                   receivedNow `shouldBe` 500
                   writeIORef confirmationHashesReference (toList hashes)
-                  pure (Right True)
+                  pure (Right True),
+                loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
           workflow =
             unavailableAccountWorkflow
@@ -3029,6 +3064,9 @@ spec = do
                 HarchWeb.clientActionContext = actionContext
               }
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
+      started `shouldSatisfy` \case
+        Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
+        Nothing -> False
       secret <-
         case started of
           Just response ->
@@ -3048,8 +3086,83 @@ spec = do
       length confirmationHashes `shouldBe` 8
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
       spanishStarted `shouldSatisfy` \case
-        Just response -> any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code" && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
+      spanishSecret <-
+        case spanishStarted of
+          Just response ->
+            case HarchWeb.clientActionPatches response of
+              [HarchWeb.RegionPatch _ html] ->
+                case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
+                  Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
+                  Nothing -> expectationFailure "expected a Spanish enrollment secret" >> pure Text.empty
+              _ -> expectationFailure "expected one Spanish enrollment patch" >> pure Text.empty
+          Nothing -> expectationFailure "expected a Spanish enrollment action" >> pure Text.empty
+      spanishTotpSecret <- maybe (expectationFailure "expected a valid Spanish enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret spanishSecret)
+      spanishConfirmed <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 spanishTotpSecret))])
+      spanishConfirmed `shouldSatisfy` \case
+        Just response -> HarchWeb.clientActionStatus response == 200 && isNothing (HarchWeb.clientActionFocusId response) && any (Text.isInfixOf "Autenticador registrado" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Nothing -> False
+
+    it "returns every MFA enrollment action error as a localized region patch" $ do
+      let accountId = requiredAccountId "account_01"
+          request fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/mfa",
+                HarchWeb.clientActionFields = ("account", Account.accountIdText accountId) : fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+          spanishRequest fields =
+            (request fields)
+              { HarchWeb.clientActionPath = "/es/mfa",
+                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = Spanish}
+              }
+          workflowFor mfaStore =
+            unavailableAccountWorkflow
+              { accountWorkflowMfaStore = mfaStore,
+                accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+                accountWorkflowClock = pure 500,
+                accountWorkflowTotpClock = pure 123456
+              }
+          mfaStoreFor saveResult loadResult confirmationResult =
+            MfaStore
+              { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure saveResult,
+                loadTotpEnrollment = \_ -> pure loadResult,
+                confirmTotpEnrollment = \_ _ _ -> pure confirmationResult,
+                loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
+                consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption"
+              }
+          validTotpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedTotpSecret =
+            fromMaybe
+              (error "expected encrypted TOTP secret")
+              (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 3) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret validTotpSecret)))
+          expect mfaStore fields status focusId message = do
+            actionResult <- handleAccountAction (workflowFor mfaStore) (request fields)
+            actionResult `shouldSatisfy` actionHasStatusAndFocus status focusId message
+          expectSpanish mfaStore fields status focusId message = do
+            actionResult <- handleAccountAction (workflowFor mfaStore) (spanishRequest fields)
+            actionResult `shouldSatisfy` actionHasStatusAndFocus status focusId message
+      expect (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verify your email address"
+      expect (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Enter a six-digit authenticator code"
+      expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Start a new authenticator enrollment"
+      expect (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "That enrollment can no longer be confirmed"
+      expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Choose an enrollment action"
+      expectSpanish (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verifica tu direccion de correo"
+      expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Introduce un codigo de autenticador"
+      expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Inicia un nuevo registro"
+      expectSpanish (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Ese registro ya no se puede confirmar"
+      expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Elige una accion de registro"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
 
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do
@@ -6107,6 +6220,7 @@ spec = do
 
     it "parses SSR account routes and preserves email-verification query values" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/register") `shouldBe` Just RegistrationRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/mfa") `shouldBe` Just MfaEnrollmentRoute
       parseRoute defaultRequestContext "/verify?token=opaque-token"
         `shouldBe` Just
           HarchWeb.RouteRequest

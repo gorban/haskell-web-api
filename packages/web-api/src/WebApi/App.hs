@@ -38,6 +38,7 @@ import WebApi.Config
     ListenerConfig (..),
     ListenerScheme (..),
     SmtpDeliveryConfig (..),
+    defaultAppEnvironmentConfig,
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
@@ -319,9 +320,11 @@ unavailableAccountWorkflow =
         MfaStore
           { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
             loadTotpEnrollment = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
-            confirmTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
+            confirmTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
+            loadUnusedRecoveryCodeHashes = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
+            consumeRecoveryCodeHash = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
           },
-      accountWorkflowTotpEncryptionKey = error "MFA encryption is not configured",
+      accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
       accountWorkflowTotpClock = pure 0,
       accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
     }

@@ -24,5 +24,7 @@ data StoredTotpEnrollment = StoredTotpEnrollment
 data MfaStore = MfaStore
   { saveUnconfirmedTotpEnrollment :: AccountId -> Text -> Word64 -> IO (Either MfaStoreError Bool),
     loadTotpEnrollment :: AccountId -> IO (Either MfaStoreError (Maybe StoredTotpEnrollment)),
-    confirmTotpEnrollment :: AccountId -> NonEmpty Text -> Word64 -> IO (Either MfaStoreError Bool)
+    confirmTotpEnrollment :: AccountId -> NonEmpty Text -> Word64 -> IO (Either MfaStoreError Bool),
+    loadUnusedRecoveryCodeHashes :: AccountId -> IO (Either MfaStoreError [Text]),
+    consumeRecoveryCodeHash :: AccountId -> Text -> Word64 -> IO (Either MfaStoreError Bool)
   }

@@ -272,7 +272,9 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
   MfaStore
     { saveUnconfirmedTotpEnrollment = saveEnrollment,
       loadTotpEnrollment = loadEnrollment,
-      confirmTotpEnrollment = confirmEnrollment
+      confirmTotpEnrollment = confirmEnrollment,
+      loadUnusedRecoveryCodeHashes = loadRecoveryCodeHashes,
+      consumeRecoveryCodeHash = consumeRecoveryCode
     }
   where
     saveEnrollment accountId encryptedSecret now = do
@@ -310,6 +312,31 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
           Right [[confirmedAccountId]]
             | confirmedAccountId == accountIdText accountId -> Right True
           Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP confirmation result: " <> Text.pack (show rows)))
+
+    loadRecoveryCodeHashes accountId = do
+      queryResult <- runQuery databaseConfig loadUnusedRecoveryCodeHashesQuery [accountIdText accountId]
+      pure $
+        case queryResult of
+          Left queryError -> Left (MfaStoreUnavailable queryError)
+          Right rows ->
+            case traverse singleColumn rows of
+              Nothing -> Left (MfaStoreCorruptData ("unexpected recovery-code lookup result: " <> Text.pack (show rows)))
+              Just recoveryCodeHashes -> Right recoveryCodeHashes
+
+    consumeRecoveryCode accountId recoveryCodeHash now = do
+      queryResult <- runQuery databaseConfig consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)]
+      pure $
+        case queryResult of
+          Left queryError -> Left (MfaStoreUnavailable queryError)
+          Right [] -> Right False
+          Right [[consumedAccountId]]
+            | consumedAccountId == accountIdText accountId -> Right True
+          Right rows -> Left (MfaStoreCorruptData ("unexpected recovery-code consumption result: " <> Text.pack (show rows)))
+
+    singleColumn row =
+      case row of
+        [value] -> Just value
+        _ -> Nothing
 
 buildRuntimePostgresDatabaseEffectWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->
@@ -752,6 +779,14 @@ confirmTotpEnrollmentQuery recoveryCodeHashes =
   "WITH confirmed AS (UPDATE web_api.account_totp SET confirmed_at_nanoseconds = $2 WHERE account_id = $1 AND confirmed_at_nanoseconds IS NULL RETURNING account_id), removed_codes AS (DELETE FROM web_api.account_recovery_codes WHERE account_id IN (SELECT account_id FROM confirmed)), issued_codes AS (INSERT INTO web_api.account_recovery_codes (account_id, code_hash, created_at_nanoseconds) SELECT confirmed.account_id, recovery_codes.code_hash, $2 FROM confirmed CROSS JOIN (VALUES "
     <> Text.intercalate ", " ["($" <> Text.pack (show parameterIndex) <> ")" | parameterIndex <- [3 .. 2 + length (NonEmpty.toList recoveryCodeHashes)]]
     <> ") AS recovery_codes(code_hash)) SELECT account_id FROM confirmed;"
+
+loadUnusedRecoveryCodeHashesQuery :: Text
+loadUnusedRecoveryCodeHashesQuery =
+  "SELECT code_hash FROM web_api.account_recovery_codes WHERE account_id = $1 AND used_at_nanoseconds IS NULL ORDER BY code_hash ASC;"
+
+consumeRecoveryCodeHashQuery :: Text
+consumeRecoveryCodeHashQuery =
+  "UPDATE web_api.account_recovery_codes SET used_at_nanoseconds = $3 WHERE account_id = $1 AND code_hash = $2 AND used_at_nanoseconds IS NULL RETURNING account_id;"
 
 homeSummaryOperation :: DatabaseOperation
 homeSummaryOperation =
