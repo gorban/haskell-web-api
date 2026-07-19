@@ -11,6 +11,8 @@ module HarchWeb.Session
     SessionValidation (..),
     csrfTokenText,
     defaultSessionCookiePolicy,
+    generateCsrfToken,
+    generateSessionId,
     mkCsrfToken,
     mkSafeReturnPath,
     mkSessionCookieName,
@@ -24,8 +26,10 @@ module HarchWeb.Session
   )
 where
 
+import Crypto.Random.Entropy (getEntropy)
 import Data.Bits (xor, (.|.))
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -80,6 +84,12 @@ defaultSessionCookiePolicy =
     { sessionCookieName = SessionCookieName "__Host-harch-session",
       sessionCookieMaxAgeSeconds = 28800
     }
+
+generateSessionId :: IO SessionId
+generateSessionId = SessionId <$> generateOpaqueToken
+
+generateCsrfToken :: IO CsrfToken
+generateCsrfToken = CsrfToken <$> generateOpaqueToken
 
 mkSessionId :: Text -> Maybe SessionId
 mkSessionId token = SessionId <$> opaqueTokenText token
@@ -152,6 +162,9 @@ opaqueTokenText token =
       case Text.all isOpaqueTokenCharacter token of
         True -> Just token
         False -> Nothing
+
+generateOpaqueToken :: IO Text
+generateOpaqueToken = TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> getEntropy 32
 
 isOpaqueTokenCharacter :: Char -> Bool
 isOpaqueTokenCharacter character =

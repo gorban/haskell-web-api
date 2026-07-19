@@ -5,6 +5,7 @@ module Unit.HarchWeb.SessionSpec (spec) where
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb.Session
 import Test.Hspec
 
@@ -35,6 +36,15 @@ required label = fromMaybe (error ("expected " <> label))
 
 spec :: Spec
 spec = do
+  describe "opaque token generation" $ do
+    it "uses 256-bit URL-safe values for session identifiers and CSRF tokens" $ do
+      generatedSessionId <- generateSessionId
+      generatedCsrfToken <- generateCsrfToken
+      sessionIdText generatedSessionId `shouldSatisfy` (\token -> Text.length token == 43)
+      csrfTokenText generatedCsrfToken `shouldSatisfy` (\token -> Text.length token == 43)
+      mkSessionId (sessionIdText generatedSessionId) `shouldBe` Just generatedSessionId
+      mkCsrfToken (csrfTokenText generatedCsrfToken) `shouldBe` Just generatedCsrfToken
+
   describe "opaque tokens" $ do
     it "accepts long URL-safe values and rejects short or unsafe cookie values" $ do
       sessionIdText sampleSessionId `shouldBe` validSessionToken
