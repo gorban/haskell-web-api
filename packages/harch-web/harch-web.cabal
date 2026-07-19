@@ -68,6 +68,7 @@ library
     HarchWeb.Observability
     HarchWeb.Password
     HarchWeb.Session
+    HarchWeb.Secret
     HarchWeb.Site
     HarchWeb.Totp
 

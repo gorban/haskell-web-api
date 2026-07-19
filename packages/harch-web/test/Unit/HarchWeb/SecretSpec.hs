@@ -1,0 +1,70 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module Unit.HarchWeb.SecretSpec (spec) where
+
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Base64.URL qualified as Base64Url
+import Data.Text (Text)
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Secret
+import Test.Hspec
+
+spec :: Spec
+spec = do
+  describe "SecretEncryptionKey" $ do
+    it "accepts exactly one 256-bit base64url key" $ do
+      isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True
+      isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True
+      isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True
+
+  describe "AES-256-GCM secret envelopes" $ do
+    it "round-trips a versioned encrypted value and rejects altered inputs" $ do
+      let key = requiredKey
+          nonce = "0123456789ab"
+          plaintext = "authenticator-secret"
+          envelope = requiredEnvelope (encryptSecretWithNonce key nonce plaintext)
+      decryptSecret key envelope `shouldBe` Just plaintext
+      maybeRandomEnvelope <- encryptSecret key plaintext
+      (maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext
+      decryptSecret key "not-base64" `shouldBe` Nothing
+      decryptSecret key (envelope <> "A") `shouldBe` Nothing
+      decryptSecret key (encodedEnvelope "\x02" ) `shouldBe` Nothing
+      decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing
+      decryptSecret otherKey envelope `shouldBe` Nothing
+      encryptSecretWithNonce key "short" plaintext `shouldBe` Nothing
+
+isJust :: Maybe value -> Bool
+isJust maybeValue =
+  case maybeValue of
+    Just _ -> True
+    Nothing -> False
+
+isNothing :: Maybe value -> Bool
+isNothing maybeValue = not (isJust maybeValue)
+
+requiredKey :: SecretEncryptionKey
+requiredKey =
+  case mkSecretEncryptionKey encodedKey of
+    Just key -> key
+    Nothing -> error "expected a valid encryption key"
+
+otherKey :: SecretEncryptionKey
+otherKey =
+  case mkSecretEncryptionKey otherEncodedKey of
+    Just key -> key
+    Nothing -> error "expected a valid encryption key"
+
+requiredEnvelope :: Maybe Text -> Text
+requiredEnvelope maybeEnvelope =
+  case maybeEnvelope of
+    Just envelope -> envelope
+    Nothing -> error "expected a valid secret envelope"
+
+encodedEnvelope :: ByteString.ByteString -> Text
+encodedEnvelope = TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded
+
+encodedKey :: Text
+encodedKey = TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded (ByteString.replicate 32 1))
+
+otherEncodedKey :: Text
+otherEncodedKey = TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded (ByteString.replicate 32 2))
