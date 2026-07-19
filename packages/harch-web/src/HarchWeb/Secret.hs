@@ -20,6 +20,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 
 newtype SecretEncryptionKey = SecretEncryptionKey ByteString.ByteString
+  deriving (Eq)
 
 mkSecretEncryptionKey :: Text -> Maybe SecretEncryptionKey
 mkSecretEncryptionKey encodedKey = do

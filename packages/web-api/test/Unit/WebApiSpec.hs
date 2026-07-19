@@ -2105,7 +2105,8 @@ spec = do
                      ("SMTP_USER", "test@localhost"),
                      ("SMTP_PASSWORD", "password"),
                      ("EMAIL_FROM", "noreply@localhost"),
-                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
+                     ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
+                     ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                    ]
       smtpDeliveryHost (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` "127.0.0.1"
       smtpDeliveryPort (smtpDeliveryConfig defaultAppEnvironmentConfig) `shouldBe` 5025
@@ -2125,7 +2126,7 @@ spec = do
       show dynamicEnvironmentConfig
         `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
-                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}"
+                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
                    )
 
     it "builds localized verification URLs and delivers through the native loopback SMTP server" $
@@ -2236,9 +2237,9 @@ spec = do
       show [productionDatabaseConfig]
         `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}]"
       show productionEnvironmentConfig
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
       show [productionEnvironmentConfig]
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\"}]"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}]"
       show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
       show [MissingConfigValue "DATABASE_PASSWORD", InvalidConfigValue "APP_MODE" "staging"]
@@ -3837,6 +3838,8 @@ spec = do
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "65536")
       parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "not-a-port")]
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
+      parseAppEnvironmentConfig committedEnvDefaults [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
+        `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "not-a-key")
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $

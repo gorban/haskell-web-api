@@ -63,7 +63,7 @@ import Core.Config
   )
 import Data.Bifunctor (bimap)
 import Data.List (nub)
-import Data.Maybe (fromMaybe, isJust, listToMaybe)
+import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
@@ -91,6 +91,7 @@ import HarchWeb
     defaultStaticAssetContentTypes,
     firstCertbotDomain,
   )
+import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
 
 data AppMode
@@ -112,7 +113,8 @@ data AppEnvironmentConfig = AppEnvironmentConfig
   { appMode :: AppMode,
     databaseConfig :: DatabaseConfig,
     smtpDeliveryConfig :: SmtpDeliveryConfig,
-    publicBaseUrl :: Text
+    publicBaseUrl :: Text,
+    totpEncryptionKey :: SecretEncryptionKey
   }
   deriving (Eq)
 
@@ -126,6 +128,7 @@ instance Show AppEnvironmentConfig where
       <> renderSmtpDeliveryConfig smtpDeliveryConfig
       <> ", publicBaseUrl = "
       <> show publicBaseUrl
+      <> ", totpEncryptionKey = <redacted>"
       <> "}"
 
 data SmtpDeliveryConfig = SmtpDeliveryConfig
@@ -202,7 +205,8 @@ committedEnvDefaults =
     ("SMTP_USER", "test@localhost"),
     ("SMTP_PASSWORD", "password"),
     ("EMAIL_FROM", "noreply@localhost"),
-    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001")
+    ("PUBLIC_BASE_URL", "http://127.0.0.1:5001"),
+    ("TOTP_ENCRYPTION_KEY", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
   ]
 
 committedRuntimeDefaults :: [(Text, Text)]
@@ -246,7 +250,8 @@ defaultAppEnvironmentConfig =
             smtpDeliveryUsername = "test@localhost",
             smtpDeliveryPassword = "password"
           },
-      publicBaseUrl = "http://127.0.0.1:5001"
+      publicBaseUrl = "http://127.0.0.1:5001",
+      totpEncryptionKey = defaultTotpEncryptionKey
     }
 
 defaultAppConfig :: AppConfig
@@ -360,6 +365,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedSmtpUsername <- requiredConfigValue "SMTP_USER"
   parsedSmtpPassword <- requiredConfigValue "SMTP_PASSWORD"
   parsedPublicBaseUrl <- requiredConfigValue "PUBLIC_BASE_URL"
+  parsedTotpEncryptionKey <- parseTotpEncryptionKey =<< requiredConfigValue "TOTP_ENCRYPTION_KEY"
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
@@ -380,7 +386,8 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
               smtpDeliveryUsername = parsedSmtpUsername,
               smtpDeliveryPassword = parsedSmtpPassword
             },
-        publicBaseUrl = parsedPublicBaseUrl
+        publicBaseUrl = parsedPublicBaseUrl,
+        totpEncryptionKey = parsedTotpEncryptionKey
       }
   where
     requiredConfigValue key =
@@ -410,6 +417,16 @@ parseSmtpPort value = do
   if parsedPort <= 65535
     then Right parsedPort
     else Left (InvalidConfigValue "SMTP_PORT" value)
+
+parseTotpEncryptionKey :: Text -> Either ConfigParseError SecretEncryptionKey
+parseTotpEncryptionKey value =
+  maybe
+    (Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" value))
+    Right
+    (mkSecretEncryptionKey value)
+
+defaultTotpEncryptionKey :: SecretEncryptionKey
+defaultTotpEncryptionKey = fromJust (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
 
 parseAppStartupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppStartupConfig
 parseAppStartupConfig committedDefaults localOverrides environmentOverrides =

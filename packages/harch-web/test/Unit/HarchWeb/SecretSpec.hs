@@ -16,6 +16,8 @@ spec = do
       isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True
       isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True
       isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True
+      requiredKey == requiredKey `shouldBe` True
+      requiredKey /= otherKey `shouldBe` True
 
   describe "AES-256-GCM secret envelopes" $ do
     it "round-trips a versioned encrypted value and rejects altered inputs" $ do
