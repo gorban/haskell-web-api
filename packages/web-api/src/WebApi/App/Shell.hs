@@ -43,6 +43,7 @@ buildAppPageShellConfig config page =
                 HarchWeb.attributeValue = "true"
               }
           ],
+        HarchWeb.shellStylesheets = [],
         HarchWeb.shellRuntimeDescriptors = []
       }
 

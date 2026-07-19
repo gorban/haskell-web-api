@@ -5,8 +5,11 @@ module App.Pages.Home (homePage) where
 import App.Routes (TwoPageRoute (..), routeHref)
 import qualified Data.Text as Text
 import HarchWeb
-  ( Page (..),
+  ( CssClass (..),
+    Page (..),
     RouteRequest (..),
+    cssClassText,
+    cssScope,
   )
 
 homePage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
@@ -18,7 +21,9 @@ homePage routeRequest =
         pageContext = requestContext routeRequest,
         pageBody =
           Text.concat
-            [ "<section data-page=\"home\">",
+            [ "<section data-page=\"home\" class=\"",
+              cssClassText (ScopedCssClass (cssScope "home") "root"),
+              "\">",
               "<h1>Home</h1>",
               "<p>This page is fully server-rendered on direct load and reload.</p>",
               "<p><a href=\"",

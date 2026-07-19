@@ -15,6 +15,8 @@ spec =
         ( runBrowserScenario browser $ do
             visit homeUrl
             assertText (byRole Heading) (`shouldBe` "Home")
+            assertAttribute (css "link[rel='stylesheet']") "href" (`shouldBe` Just "/assets/two-pages.css")
+            assertAttribute (css "section[data-page='home']") "class" (`shouldBe` Just "harch-home-root")
             click (byRole Link `named` "Go to the second page")
             assertUrl (`shouldBe` secondUrl)
             assertText (byRole Heading) (`shouldBe` "Second")

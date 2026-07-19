@@ -59,7 +59,8 @@ spec =
       it "keeps the example site wiring small and explicit" $ do
         siteName twoPageSite `shouldBe` "two-pages-example"
         length (siteRoutes twoPageSite) `shouldBe` 3
-        staticAssetRoots (siteStaticAssets twoPageSite) `shouldBe` []
+        staticAssetRoots (siteStaticAssets twoPageSite)
+          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
         staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes
         staticCacheControlSeconds (siteStaticAssets twoPageSite) `shouldBe` Nothing
         redirectHttpToHttps (siteRequestPolicy twoPageSite) `shouldBe` False
@@ -79,7 +80,8 @@ spec =
                            listenerAcme = Nothing
                          }
                      ]
-        staticAssetRoots (staticAssets twoPageServerConfig) `shouldBe` []
+        staticAssetRoots (staticAssets twoPageServerConfig)
+          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
         staticAssetContentTypes (staticAssets twoPageServerConfig) `shouldBe` defaultStaticAssetContentTypes
         staticCacheControlSeconds (staticAssets twoPageServerConfig) `shouldBe` Nothing
         redirectHttpToHttps (requestPolicy twoPageServerConfig) `shouldBe` False
@@ -119,11 +121,14 @@ spec =
       it "renders the home page with shared navigation and the enhancement runtime" $ do
         let application = buildApplication
         appName application `shouldBe` "two-pages-example"
-        staticAssetRoots (applicationStaticAssets application) `shouldBe` []
+        staticAssetRoots (applicationStaticAssets application)
+          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
         response <- performWaiRequest (toWaiApplication application) (waiRequest [])
         Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
         Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
+        Text.isInfixOf "<link rel=\"stylesheet\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True
+        Text.isInfixOf "<section data-page=\"home\" class=\"harch-home-root\">" responseBody `shouldBe` True
         Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav>" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
         Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True
@@ -161,6 +166,13 @@ spec =
         Text.isInfixOf "X-Harch-Action" responseBody `shouldBe` True
         Text.isInfixOf "actionUrl.origin !== window.location.origin" responseBody `shouldBe` True
         Text.isInfixOf "drainCapturedActions" responseBody `shouldBe` True
+
+      it "serves the typed stylesheet through the configured static asset root" $ do
+        response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "two-pages.css"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/css; charset=utf-8"
+        responseBody <- readResponseBody response
+        Text.isInfixOf ".harch-home-root" responseBody `shouldBe` True
 
       it "returns validation patches for captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example"]

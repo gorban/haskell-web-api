@@ -16,10 +16,13 @@ module HarchWeb
     AcmeRequestAuth (..),
     ActiveAcmeChallenge (..),
     Application (..),
+    AssetPath (..),
     CertbotConfig (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
     CorsPolicyConfig (..),
+    CssClass (..),
+    CssScope (..),
     Document (..),
     HasServerConfig (..),
     HtmlAttribute (..),
@@ -56,6 +59,7 @@ module HarchWeb
     ServerStartupPlan (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
+    Stylesheet (..),
     StrictTransportSecurityConfig (..),
     TelemetrySignal (..),
     TlsCertificateSource (..),
@@ -77,6 +81,8 @@ module HarchWeb
     certbotCertificateName,
     certbotHasOption,
     certbotOptionValues,
+    cssClassText,
+    cssScope,
     createAcmeAccount,
     createAcmeOrder,
     decodeAcmeJsonResponse,
@@ -154,6 +160,7 @@ module HarchWeb
     splitCertbotDomainValue,
     staticAssetHref,
     staticAssetHrefWithPrefix,
+    stylesheet,
     toWaiApplication,
     triggerAcmeChallenge,
     unicodeJsonCharacterParser,
@@ -515,6 +522,45 @@ newtype RuntimeNonce = RuntimeNonce
   }
   deriving (Eq, Show)
 
+-- | A route-aware reference to an app-owned static file. This stays distinct
+-- from filesystem paths so components only pass browser-visible asset URLs.
+newtype AssetPath = AssetPath
+  { assetPathText :: Text
+  }
+  deriving (Eq, Show)
+
+-- | An external stylesheet declaration. Inline CSS remains intentionally
+-- absent so the default CSP can keep @style-src 'self'@.
+newtype Stylesheet = Stylesheet
+  { stylesheetAsset :: AssetPath
+  }
+  deriving (Eq, Show)
+
+-- | A stable namespace for styles authored by one page or component.
+newtype CssScope = CssScope
+  { cssScopeName :: Text
+  }
+  deriving (Eq, Show)
+
+-- | A rendered CSS class can either be deliberately global or tied to a
+-- component scope.
+data CssClass
+  = ScopedCssClass CssScope Text
+  | GlobalCssClass Text
+  deriving (Eq, Show)
+
+stylesheet :: AssetPath -> Stylesheet
+stylesheet = Stylesheet
+
+cssScope :: Text -> CssScope
+cssScope = CssScope
+
+cssClassText :: CssClass -> Text
+cssClassText cssClass =
+  case cssClass of
+    ScopedCssClass (CssScope scopeName) localName -> "harch-" <> scopeName <> "-" <> localName
+    GlobalCssClass className -> className
+
 data ResolvedNavigationItem route = ResolvedNavigationItem
   { navigationLabel :: Text,
     navigationRoute :: route,
@@ -532,6 +578,7 @@ data Document route = Document
     documentMainAttributes :: [HtmlAttribute],
     documentMainContent :: Text,
     documentBootstrapHooks :: [Text],
+    documentStylesheets :: [Stylesheet],
     documentRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
@@ -542,6 +589,7 @@ data PageShell route context = PageShell
     shellNavigationItems :: [NavigationItem route],
     shellMainId :: Text,
     shellMainAttributes :: [HtmlAttribute],
+    shellStylesheets :: [Stylesheet],
     shellRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
@@ -923,6 +971,7 @@ buildDocument codec shell page =
       documentMainAttributes = shellMainAttributes shell,
       documentMainContent = pageBody page,
       documentBootstrapHooks = pageBootstrapHooks page,
+      documentStylesheets = shellStylesheets shell,
       documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }
 
@@ -935,6 +984,7 @@ renderDocumentWithNonce runtimeNonce document =
     [ "<html><head><title>",
       documentTitle document,
       "</title>",
+      renderStylesheets (documentStylesheets document),
       renderRuntimeDescriptors runtimeNonce (documentRuntimeDescriptors document),
       "</head><body",
       renderAttributes (documentBodyAttributes document),
@@ -953,6 +1003,14 @@ renderDocumentWithNonce runtimeNonce document =
 
 buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
 buildPageShell = buildDocument
+
+renderStylesheets :: [Stylesheet] -> Text
+renderStylesheets =
+  Text.concat
+    . map
+      ( \Stylesheet {stylesheetAsset = AssetPath assetPath} ->
+          "<link rel=\"stylesheet\" href=\"" <> assetPath <> "\">"
+      )
 
 matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route context
 matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)

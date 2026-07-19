@@ -146,6 +146,7 @@ spec = do
                         shellNavigationItems = [],
                         shellMainId = "app-main",
                         shellMainAttributes = [],
+                        shellStylesheets = [],
                         shellRuntimeDescriptors = []
                       }
               }
@@ -304,6 +305,7 @@ samplePageShell page =
                 attributeValue = "true"
               }
           ],
+        shellStylesheets = [],
         shellRuntimeDescriptors = []
       }
 

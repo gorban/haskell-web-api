@@ -21,6 +21,7 @@ import HarchWeb
     ObservabilityConfig (..),
     RequestPolicyConfig (..),
     ServerConfig (..),
+    StaticAssetRoot (..),
     StaticAssetsConfig (..),
     RegionPatch (..),
     defaultCorsPolicyConfig,
@@ -102,7 +103,7 @@ twoPageServerConfig =
 twoPageStaticAssets :: StaticAssetsConfig
 twoPageStaticAssets =
   StaticAssetsConfig
-    { staticAssetRoots = [],
+    { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
       staticAssetContentTypes = defaultStaticAssetContentTypes,
       staticCacheControlSeconds = Nothing
     }

@@ -186,6 +186,7 @@ sampleShell =
               attributeValue = "true"
             }
         ],
+      shellStylesheets = [],
       shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
     }
 
@@ -941,9 +942,14 @@ spec = do
           page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           navigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/navigation.js", navigationRuntimeScript = "console.log('nav');"}
+          stylesheetPath = AssetPath "/assets/sample.css"
+          stylesheetValue = stylesheet stylesheetPath
+          scopedCssScope = cssScope "sample"
+          scopedCssClass = ScopedCssClass scopedCssScope "title"
+          globalCssClass = GlobalCssClass "visually-hidden"
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
@@ -978,6 +984,11 @@ spec = do
       navigationRuntimePath defaultNavigationRuntime `shouldBe` "/assets/navigation.js"
       navigationRuntimeScript defaultNavigationRuntime `shouldBe` defaultNavigationRuntimeScript
       Text.isInfixOf "function navigateTo" defaultNavigationRuntimeScript `shouldBe` True
+      assetPathText stylesheetPath `shouldBe` "/assets/sample.css"
+      stylesheetAsset stylesheetValue `shouldBe` AssetPath "/assets/sample.css"
+      cssScopeName scopedCssScope `shouldBe` "sample"
+      cssClassText scopedCssClass `shouldBe` "harch-sample-title"
+      cssClassText globalCssClass `shouldBe` "visually-hidden"
       resolvedNavigationItemLabel `shouldBe` "Known"
       resolvedNavigationItemRoute `shouldBe` KnownRoute
       resolvedNavigationItemHref `shouldBe` "/known"
@@ -990,12 +1001,14 @@ spec = do
       documentMainAttributes document `shouldBe` [mainAttribute]
       documentMainContent document `shouldBe` "<h1>Known</h1>"
       documentBootstrapHooks document `shouldBe` ["known-page"]
+      documentStylesheets document `shouldBe` [stylesheetValue]
       documentRuntimeDescriptors document `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
       shellBodyAttributes shell `shouldBe` [attribute]
       shellNavigationAttributes shell `shouldBe` [navigationAttribute]
       shellNavigationItems shell `shouldBe` [navigationItem]
       shellMainId shell `shouldBe` "app-main"
       shellMainAttributes shell `shouldBe` [mainAttribute]
+      shellStylesheets shell `shouldBe` [stylesheetValue]
       shellRuntimeDescriptors shell `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
       localServerHost localTestServer `shouldBe` "127.0.0.1"
       localServerPort localTestServer `shouldBe` 5001
@@ -1040,12 +1053,22 @@ spec = do
           otherInlineBootstrap = InlineBootstrap "other-capture" "window.capture = false;"
           runtimeNonce = RuntimeNonce "test-nonce"
           otherRuntimeNonce = RuntimeNonce "other-nonce"
+          stylesheetPath = AssetPath "/assets/sample.css"
+          otherStylesheetPath = AssetPath "/assets/other.css"
+          stylesheetValue = stylesheet stylesheetPath
+          otherStylesheetValue = stylesheet otherStylesheetPath
+          scopedCssScope = cssScope "sample"
+          otherScopedCssScope = cssScope "other"
+          scopedCssClass = ScopedCssClass scopedCssScope "title"
+          otherScopedCssClass = ScopedCssClass otherScopedCssScope "title"
+          globalCssClass = GlobalCssClass "visually-hidden"
+          otherGlobalCssClass = GlobalCssClass "other-global"
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentRuntimeDescriptors = []}
-          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellRuntimeDescriptors = []}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
+          shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellStylesheets = [], shellRuntimeDescriptors = []}
           body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
           pageMetadata = ResponseBody {responseStatus = 500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
@@ -1094,6 +1117,25 @@ spec = do
       (runtimeNonce /= otherRuntimeNonce) `shouldBe` True
       show runtimeNonce `shouldBe` "RuntimeNonce {runtimeNonceValue = \"test-nonce\"}"
       show [runtimeNonce] `shouldBe` "[RuntimeNonce {runtimeNonceValue = \"test-nonce\"}]"
+      (stylesheetPath == stylesheetPath) `shouldBe` True
+      (stylesheetPath /= otherStylesheetPath) `shouldBe` True
+      show stylesheetPath `shouldBe` "AssetPath {assetPathText = \"/assets/sample.css\"}"
+      show [stylesheetPath] `shouldBe` "[AssetPath {assetPathText = \"/assets/sample.css\"}]"
+      (stylesheetValue == stylesheetValue) `shouldBe` True
+      (stylesheetValue /= otherStylesheetValue) `shouldBe` True
+      show stylesheetValue `shouldBe` "Stylesheet {stylesheetAsset = AssetPath {assetPathText = \"/assets/sample.css\"}}"
+      (scopedCssScope == scopedCssScope) `shouldBe` True
+      (scopedCssScope /= otherScopedCssScope) `shouldBe` True
+      show scopedCssScope `shouldBe` "CssScope {cssScopeName = \"sample\"}"
+      show [scopedCssScope] `shouldBe` "[CssScope {cssScopeName = \"sample\"}]"
+      (scopedCssClass == scopedCssClass) `shouldBe` True
+      (scopedCssClass /= otherScopedCssClass) `shouldBe` True
+      (globalCssClass == globalCssClass) `shouldBe` True
+      (globalCssClass /= otherGlobalCssClass) `shouldBe` True
+      show scopedCssClass `shouldBe` "ScopedCssClass (CssScope {cssScopeName = \"sample\"}) \"title\""
+      show globalCssClass `shouldBe` "GlobalCssClass \"visually-hidden\""
+      show [scopedCssClass, globalCssClass]
+        `shouldBe` "[ScopedCssClass (CssScope {cssScopeName = \"sample\"}) \"title\",GlobalCssClass \"visually-hidden\"]"
       (resolvedNavigationItem == resolvedNavigationItem) `shouldBe` True
       (resolvedNavigationItem /= otherResolvedNavigationItem) `shouldBe` True
       show resolvedNavigationItem `shouldBe` "ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}"
@@ -1282,10 +1324,21 @@ spec = do
               ],
             documentMainContent = "<h1>Known</h1>",
             documentBootstrapHooks = [],
+            documentStylesheets = [],
             documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
           }
 
   describe "buildPageShell" $ do
+    it "renders typed external stylesheets before nonce-bound runtime descriptors" $ do
+      let document =
+            (buildDocument sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+              { documentStylesheets = [stylesheet (AssetPath "/assets/sample.css")]
+              }
+      Text.isInfixOf
+        "<title>Known</title><link rel=\"stylesheet\" href=\"/assets/sample.css\"><script type=\"module\" src=\"/assets/navigation.js\" defer></script>"
+        (renderDocument document)
+        `shouldBe` True
+
     it "renders the shared HTML document for the supplied page and shell options" $
       renderDocument (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
         `shouldBe` "<html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"

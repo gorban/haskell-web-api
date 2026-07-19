@@ -7,9 +7,11 @@ where
 
 import App.Routes (TwoPageRoute)
 import HarchWeb
-  ( HtmlAttribute (..),
+  ( AssetPath (..),
+    HtmlAttribute (..),
     Page,
     PageShell (..),
+    stylesheet,
   )
 
 twoPageShell :: Page TwoPageRoute () -> PageShell TwoPageRoute ()
@@ -35,5 +37,6 @@ twoPageShell _ =
               attributeValue = "true"
             }
         ],
+      shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
       shellRuntimeDescriptors = []
     }

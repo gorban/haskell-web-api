@@ -10,7 +10,7 @@ cabal clean
 #       Could not find test program "<repo-root>\dist-newstyle\build\<arch>\ghc-<version>\
 #         <package>\opt\build\<package>-tests\<package>-tests.exe".
 #         Did you build the package first?
-cabal build all
+cabal build all --jobs=1
 
 cat > hpc_index.html <<'EOF'
 <html><head><title>haskell-web-api Coverage Reports</title><style>
@@ -168,7 +168,7 @@ EOF
     find dist-newstyle -name "*.tix" -type f -print0 | xargs -0 rm -f --
 
     printf '\n\033[36mRunning tests with coverage for: %s\033[0m\n' "$pkg"
-    cabal test "$pkg" --enable-coverage --test-show-details=direct --test-options="+RTS --read-tix-file=no -RTS --match Unit"
+    cabal test "$pkg" --jobs=1 --enable-coverage --test-show-details=direct --test-options="+RTS --read-tix-file=no -RTS --match Unit"
 
     pkg_hpc_dir=$(find dist-newstyle -path "*/$pkg-*/opt/hpc/vanilla" -type d -print | head -n1)
     if [ -n "$pkg_hpc_dir" ]; then
