@@ -1,0 +1,167 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module HarchWeb.Session
+  ( CsrfToken,
+    OpaqueSession (..),
+    SafeReturnPath,
+    SessionCookieName,
+    SessionCookiePolicy (..),
+    SessionId,
+    SessionLookup (..),
+    SessionValidation (..),
+    csrfTokenText,
+    defaultSessionCookiePolicy,
+    mkCsrfToken,
+    mkSafeReturnPath,
+    mkSessionCookieName,
+    mkSessionId,
+    renderSafeReturnPath,
+    renderSessionCookie,
+    sessionCookieNameText,
+    sessionIdText,
+    validateCsrfToken,
+    validateSession,
+  )
+where
+
+import Data.Bits (xor, (.|.))
+import Data.ByteString qualified as ByteString
+import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
+import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
+
+newtype SessionId = SessionId Text
+  deriving (Eq, Show)
+
+newtype CsrfToken = CsrfToken Text
+  deriving (Eq, Show)
+
+newtype SessionCookieName = SessionCookieName Text
+  deriving (Eq, Show)
+
+newtype SafeReturnPath = SafeReturnPath Text
+  deriving (Eq, Show)
+
+-- | Server-side session state. The cookie contains only 'sessionId'; the
+-- principal and CSRF token never appear in it.
+data OpaqueSession principal = OpaqueSession
+  { sessionId :: SessionId,
+    sessionPrincipal :: principal,
+    sessionCsrfToken :: CsrfToken,
+    sessionIssuedAtNanoseconds :: Word64,
+    sessionExpiresAtNanoseconds :: Word64
+  }
+  deriving (Eq, Show)
+
+-- | Application-owned persistence operations. Token generation is deliberately
+-- injected: production callers must use a cryptographically secure generator.
+data SessionLookup principal = SessionLookup
+  { lookupOpaqueSession :: SessionId -> IO (Maybe (OpaqueSession principal)),
+    invalidateOpaqueSession :: SessionId -> IO ()
+  }
+
+data SessionValidation principal
+  = MissingSession
+  | ExpiredSession
+  | ActiveSession (OpaqueSession principal)
+  deriving (Eq, Show)
+
+data SessionCookiePolicy = SessionCookiePolicy
+  { sessionCookieName :: SessionCookieName,
+    sessionCookieMaxAgeSeconds :: Word64
+  }
+  deriving (Eq, Show)
+
+defaultSessionCookiePolicy :: SessionCookiePolicy
+defaultSessionCookiePolicy =
+  SessionCookiePolicy
+    { sessionCookieName = SessionCookieName "__Host-harch-session",
+      sessionCookieMaxAgeSeconds = 28800
+    }
+
+mkSessionId :: Text -> Maybe SessionId
+mkSessionId token = SessionId <$> opaqueTokenText token
+
+mkCsrfToken :: Text -> Maybe CsrfToken
+mkCsrfToken token = CsrfToken <$> opaqueTokenText token
+
+mkSessionCookieName :: Text -> Maybe SessionCookieName
+mkSessionCookieName name =
+  case Text.null name || Text.any (not . isCookieTokenCharacter) name of
+    True -> Nothing
+    False -> Just (SessionCookieName name)
+
+mkSafeReturnPath :: Text -> Maybe SafeReturnPath
+mkSafeReturnPath path =
+  case Text.isPrefixOf "//" path of
+    True -> Nothing
+    False ->
+      case Text.isPrefixOf "/" path && not (Text.any isUnsafePathCharacter path) of
+        True -> Just (SafeReturnPath path)
+        False -> Nothing
+
+sessionIdText :: SessionId -> Text
+sessionIdText (SessionId token) = token
+
+csrfTokenText :: CsrfToken -> Text
+csrfTokenText (CsrfToken token) = token
+
+sessionCookieNameText :: SessionCookieName -> Text
+sessionCookieNameText (SessionCookieName name) = name
+
+renderSafeReturnPath :: SafeReturnPath -> Text
+renderSafeReturnPath (SafeReturnPath path) = path
+
+renderSessionCookie :: SessionCookiePolicy -> SessionId -> Text
+renderSessionCookie policy sessionToken =
+  sessionCookieNameText (sessionCookieName policy)
+    <> "="
+    <> sessionIdText sessionToken
+    <> "; Path=/; Max-Age="
+    <> Text.pack (show (sessionCookieMaxAgeSeconds policy))
+    <> "; HttpOnly; Secure; SameSite=Strict"
+
+validateSession :: Word64 -> Maybe (OpaqueSession principal) -> SessionValidation principal
+validateSession _ Nothing = MissingSession
+validateSession now (Just session) =
+  case now >= sessionExpiresAtNanoseconds session of
+    True -> ExpiredSession
+    False -> ActiveSession session
+
+-- | Constant-work comparison for synchronizer tokens. Length is public; token
+-- bytes are compared without an early mismatch exit.
+validateCsrfToken :: CsrfToken -> CsrfToken -> Bool
+validateCsrfToken expected supplied =
+  let expectedBytes = TextEncoding.encodeUtf8 (csrfTokenText expected)
+      suppliedBytes = TextEncoding.encodeUtf8 (csrfTokenText supplied)
+      byteDifference =
+        foldl'
+          (.|.)
+          0
+          (ByteString.zipWith (\left right -> fromIntegral (left `xor` right)) expectedBytes suppliedBytes)
+      lengthDifference = ByteString.length expectedBytes `xor` ByteString.length suppliedBytes
+   in (byteDifference .|. lengthDifference) == 0
+
+opaqueTokenText :: Text -> Maybe Text
+opaqueTokenText token =
+  case Text.length token < 32 of
+    True -> Nothing
+    False ->
+      case Text.all isOpaqueTokenCharacter token of
+        True -> Just token
+        False -> Nothing
+
+isOpaqueTokenCharacter :: Char -> Bool
+isOpaqueTokenCharacter character =
+  isAscii character
+    && (character == '-' || character == '_' || isAsciiLower character || isAsciiUpper character || isDigit character)
+
+isCookieTokenCharacter :: Char -> Bool
+isCookieTokenCharacter character =
+  isAscii character
+    && (character == '-' || character == '_' || isAsciiLower character || isAsciiUpper character || isDigit character)
+
+isUnsafePathCharacter :: Char -> Bool
+isUnsafePathCharacter character = character == '\\' || character == '\r' || character == '\n' || character == '\0'

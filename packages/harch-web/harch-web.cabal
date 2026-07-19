@@ -60,6 +60,7 @@ library
     HarchWeb
     HarchWeb.Database
     HarchWeb.Observability
+    HarchWeb.Session
     HarchWeb.Site
 
   -- LANGUAGE extensions used by modules in this package.

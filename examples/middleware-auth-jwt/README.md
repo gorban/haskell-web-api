@@ -1,18 +1,21 @@
 # middleware-auth-jwt
 
-**Status:** Aspirational
+**Status:** In progress
 
 Show the desired app authoring model for:
 
 - middleware with an allowlist of public paths,
-- a login page with hardcoded credentials,
-- a successful login that returns a JWT cookie,
-- a protected page that requires that cookie.
+- a protected page backed by an opaque, server-side session,
+- host-only secure session cookies and synchronizer CSRF tokens,
+- application-owned session lookup and invalidation.
 
 Current repo alignment:
 
-- this is not yet a polished framework example,
-- the docs should treat it as a direction-setting example and a framework follow-up.
+- `HarchWeb.Session` supplies typed opaque session identifiers, expiry validation, invalidation
+  seams, strict cookie rendering, same-origin return paths, and CSRF token comparison;
+- the application supplies a cryptographically secure token generator and durable session store;
+- credential verification, password hashing, throttling, rate limiting, and audit hooks remain
+  follow-up work before this becomes a complete login example.
 
 Suggested snippet:
 
