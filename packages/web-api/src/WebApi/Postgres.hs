@@ -234,8 +234,16 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
         "ALTER DATABASE " <> sqlIdentifier (databaseName migrationDatabaseConfig) <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_content" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_highlights" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "accounts" <> " (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "email_verifications" <> " (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_totp" <> " (account_id TEXT PRIMARY KEY REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_recovery_codes" <> " (account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
         "ALTER TABLE " <> qualifiedTableName "page_content" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
-        "ALTER TABLE " <> qualifiedTableName "page_highlights" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";"
+        "ALTER TABLE " <> qualifiedTableName "page_highlights" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "accounts" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "email_verifications" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "account_totp" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "account_recovery_codes" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";"
       ]
 
     privilegeStatements =
@@ -252,8 +260,16 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
             "GRANT USAGE ON SCHEMA " <> appSchemaName <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
             "REVOKE ALL ON TABLE " <> qualifiedTableName "page_content" <> " FROM PUBLIC;",
             "REVOKE ALL ON TABLE " <> qualifiedTableName "page_highlights" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "accounts" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "email_verifications" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "account_totp" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "account_recovery_codes" <> " FROM PUBLIC;",
             "GRANT SELECT ON TABLE " <> qualifiedTableName "page_content" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
-            "GRANT SELECT ON TABLE " <> qualifiedTableName "page_highlights" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";"
+            "GRANT SELECT ON TABLE " <> qualifiedTableName "page_highlights" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "accounts" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "email_verifications" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_totp" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_recovery_codes" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";"
           ]
 
 seedStatements :: [Text]
