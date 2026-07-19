@@ -6,6 +6,8 @@ module WebApi.Postgres
     PostgresRunnerError (..),
     buildPostgresDatabaseEffect,
     buildPostgresDatabaseEffectWithRunner,
+    buildRuntimePostgresAccountStore,
+    buildRuntimePostgresAccountStoreWithRunner,
     buildRuntimePostgresDatabaseEffect,
     buildRuntimePostgresDatabaseEffectWithRunner,
     decodeRuntimeQueryValue,
@@ -13,6 +15,7 @@ module WebApi.Postgres
     renderRuntimeResultErrorMessage,
     migrationStatementsFor,
     runRuntimeRowsQuery,
+    runRuntimeParameterizedRowsQuery,
     runRuntimeScalarQuery,
     runPostgresMigrations,
     runPostgresMigrationsForRuntime,
@@ -33,9 +36,27 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error (lenientDecode)
 import Database.PostgreSQL.LibPQ qualified as LibPQ
 import GHC.Clock (getMonotonicTimeNSec)
+import HarchWeb.Account
+  ( StoredEmailVerification (..),
+    accountIdText,
+    emailVerificationTokenDigestText,
+    mkAccountId,
+    storedVerificationAccountId,
+    storedVerificationEmail,
+    storedVerificationExpiresAtNanoseconds,
+    storedVerificationTokenDigest,
+  )
+import HarchWeb.Email (emailAddressText, mkEmailAddress)
+import HarchWeb.Password (passwordHashText)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
+import Text.Read (readMaybe)
+import WebApi.Account
+  ( AccountStore (..),
+    AccountStoreError (..),
+    PendingAccount (..),
+  )
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database
   ( DatabaseEffect (..),
@@ -127,6 +148,79 @@ buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
 buildRuntimePostgresDatabaseEffect :: DatabaseConfig -> DatabaseEffect
 buildRuntimePostgresDatabaseEffect =
   buildRuntimePostgresDatabaseEffectWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
+
+buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
+buildRuntimePostgresAccountStore =
+  buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery
+
+buildRuntimePostgresAccountStoreWithRunner ::
+  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  DatabaseConfig ->
+  AccountStore
+buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
+  AccountStore
+    { createPendingAccount = createAccount,
+      findEmailVerification = findVerification,
+      consumeEmailVerification = consumeVerification
+    }
+  where
+    createAccount pendingAccount = do
+      queryResult <-
+        runQuery
+          databaseConfig
+          createPendingAccountQuery
+          [ accountIdText (pendingAccountId pendingAccount),
+            emailAddressText (pendingAccountEmail pendingAccount),
+            passwordHashText (pendingAccountPasswordHash pendingAccount),
+            emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
+            Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
+            Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount))
+          ]
+      pure $
+        case queryResult of
+          Left queryError -> Left (AccountStoreUnavailable queryError)
+          Right [] -> Right False
+          Right [[createdAccountId]]
+            | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right True
+          Right rows -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
+
+    findVerification tokenDigest = do
+      queryResult <- runQuery databaseConfig findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
+      pure $
+        case queryResult of
+          Left queryError -> Left (AccountStoreUnavailable queryError)
+          Right [] -> Right Nothing
+          Right [[accountIdValue, emailAddressValue, expiresAtValue]] -> do
+            accountId <- maybe (Left (AccountStoreCorruptData "email verification has an invalid account id")) Right (mkAccountId accountIdValue)
+            emailAddress <- maybe (Left (AccountStoreCorruptData "email verification has an invalid email address")) Right (mkEmailAddress emailAddressValue)
+            expiresAt <- maybe (Left (AccountStoreCorruptData "email verification has an invalid expiry")) Right (readMaybe (Text.unpack expiresAtValue))
+            Right
+              ( Just
+                  StoredEmailVerification
+                    { storedVerificationAccountId = accountId,
+                      storedVerificationEmail = emailAddress,
+                      storedVerificationTokenDigest = tokenDigest,
+                      storedVerificationExpiresAtNanoseconds = expiresAt
+                    }
+              )
+          Right rows -> Left (AccountStoreCorruptData ("unexpected email-verification result: " <> Text.pack (show rows)))
+
+    consumeVerification tokenDigest now = do
+      queryResult <-
+        runQuery
+          databaseConfig
+          consumeEmailVerificationQuery
+          [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
+      pure $
+        case queryResult of
+          Left queryError -> Left (AccountStoreUnavailable queryError)
+          Right [] -> Right Nothing
+          Right [[accountIdValue]] ->
+            maybe
+              (Left (AccountStoreCorruptData "email verification was consumed for an invalid account id"))
+              (Right . Just)
+              (mkAccountId accountIdValue)
+          Right rows -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
 
 buildRuntimePostgresDatabaseEffectWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->
@@ -349,6 +443,13 @@ runRuntimeRowsQuery databaseConfig sql =
     LibPQ.finish
     (runRuntimeQueryRows sql)
 
+runRuntimeParameterizedRowsQuery :: DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])
+runRuntimeParameterizedRowsQuery databaseConfig sql parameters =
+  bracket
+    (LibPQ.connectdb (runtimeConnectionString databaseConfig))
+    LibPQ.finish
+    (runRuntimeParameterizedQueryRows sql parameters)
+
 runRuntimeQueryRows :: Text -> LibPQ.Connection -> IO (Either Text [Text])
 runRuntimeQueryRows sql connection = do
   maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
@@ -363,6 +464,26 @@ runRuntimeQueryRows sql connection = do
         _ ->
           fmap Left (renderRuntimeResultError result)
 
+runRuntimeParameterizedQueryRows :: Text -> [Text] -> LibPQ.Connection -> IO (Either Text [[Text]])
+runRuntimeParameterizedQueryRows sql parameters connection = do
+  maybeResult <-
+    LibPQ.execParams
+      connection
+      (TextEncoding.encodeUtf8 sql)
+      (fmap parameterValue parameters)
+      LibPQ.Text
+  case maybeResult of
+    Nothing -> fmap Left (renderRuntimeConnectionError connection)
+    Just result -> do
+      resultStatus <- LibPQ.resultStatus result
+      case resultStatus of
+        LibPQ.TuplesOk -> readRuntimeQueryTable result
+        _ -> fmap Left (renderRuntimeResultError result)
+
+parameterValue :: Text -> Maybe (LibPQ.Oid, ByteString.ByteString, LibPQ.Format)
+parameterValue value =
+  Just (LibPQ.Oid 0, TextEncoding.encodeUtf8 value, LibPQ.Text)
+
 readRuntimeQueryRows :: LibPQ.Result -> IO (Either Text [Text])
 readRuntimeQueryRows result = do
   rowCount <- LibPQ.ntuples result
@@ -372,9 +493,27 @@ readRuntimeQueryRows result = do
       [0 .. rowCount - 1]
   pure (sequence values)
 
+readRuntimeQueryTable :: LibPQ.Result -> IO (Either Text [[Text]])
+readRuntimeQueryTable result = do
+  rowCount <- LibPQ.ntuples result
+  columnCount <- LibPQ.nfields result
+  rows <-
+    traverse
+      ( \rowIndex ->
+          traverse
+            (readRuntimeQueryColumnValue result rowIndex)
+            [0 .. columnCount - 1]
+      )
+      [0 .. rowCount - 1]
+  pure (mapM sequence rows)
+
 readRuntimeQueryValue :: LibPQ.Result -> LibPQ.Row -> IO (Either Text Text)
 readRuntimeQueryValue result rowIndex =
-  fmap decodeRuntimeQueryValue (LibPQ.getvalue result rowIndex 0)
+  readRuntimeQueryColumnValue result rowIndex 0
+
+readRuntimeQueryColumnValue :: LibPQ.Result -> LibPQ.Row -> LibPQ.Column -> IO (Either Text Text)
+readRuntimeQueryColumnValue result rowIndex columnIndex =
+  fmap decodeRuntimeQueryValue (LibPQ.getvalue result rowIndex columnIndex)
 
 decodeRuntimeQueryValue :: Maybe ByteString.ByteString -> Either Text Text
 decodeRuntimeQueryValue maybeValue =
@@ -494,6 +633,18 @@ secondHighlightsQuery locale =
       renderLocaleCode locale,
       "' ORDER BY position ASC;"
     ]
+
+createPendingAccountQuery :: Text
+createPendingAccountQuery =
+  "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, $3, $6) ON CONFLICT (email_normalized) DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
+
+findEmailVerificationQuery :: Text
+findEmailVerificationQuery =
+  "SELECT account_id, email_normalized, expires_at_nanoseconds FROM web_api.email_verifications WHERE token_digest = $1;"
+
+consumeEmailVerificationQuery :: Text
+consumeEmailVerificationQuery =
+  "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"
 
 homeSummaryOperation :: DatabaseOperation
 homeSummaryOperation =

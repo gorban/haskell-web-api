@@ -19,7 +19,10 @@ import Data.Text (Text)
 import qualified Data.Text as Text
 import qualified Data.Text.Encoding as TextEncoding
 import qualified HarchWeb
+import qualified HarchWeb.Account as Account
+import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
+import qualified HarchWeb.Password as Password
 import qualified Network.HTTP.Types as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import qualified Network.Socket as NetworkSocket
@@ -37,6 +40,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
+import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAppWithDatabaseBuilder, runWithConfig)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -45,7 +49,7 @@ import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperati
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
-import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
@@ -216,6 +220,60 @@ postgresTestConfig =
       databaseUser = "web_api_app",
       databasePassword = "super-secret"
     }
+
+testPasswordHashingPolicy :: Password.PasswordHashingPolicy
+testPasswordHashingPolicy =
+  fromMaybe (error "Expected valid test password hashing policy") (Password.mkPasswordHashingPolicy 1 8 1)
+
+requiredAccountId :: Text -> Account.AccountId
+requiredAccountId value =
+  fromMaybe (error "Expected a valid account id") (Account.mkAccountId value)
+
+requiredEmailAddress :: Text -> Email.EmailAddress
+requiredEmailAddress value =
+  fromMaybe (error "Expected a valid email address") (Email.mkEmailAddress value)
+
+requiredVerificationToken :: Text -> Account.EmailVerificationToken
+requiredVerificationToken value =
+  fromMaybe (error "Expected a valid verification token") (Account.mkEmailVerificationToken value)
+
+isUnavailable :: Text -> AccountStoreError -> Bool
+isUnavailable expectedError = \case
+  AccountStoreUnavailable actualError -> actualError == expectedError
+  AccountStoreCorruptData _ -> False
+
+isCorrupt :: Text -> AccountStoreError -> Bool
+isCorrupt expectedError = \case
+  AccountStoreUnavailable _ -> False
+  AccountStoreCorruptData actualError -> actualError == expectedError
+
+assertAccountStoreError :: IO (Either AccountStoreError value) -> (AccountStoreError -> Bool) -> IO ()
+assertAccountStoreError action matchesError = do
+  result <- action
+  case result of
+    Left storeError | matchesError storeError -> pure ()
+    _ -> expectationFailure "expected matching account-store error"
+
+assertAccountStoreSuccess :: IO (Either AccountStoreError value) -> (value -> Bool) -> IO ()
+assertAccountStoreSuccess action matchesValue = do
+  result <- action
+  case result of
+    Right value | matchesValue value -> pure ()
+    _ -> expectationFailure "expected matching account-store success"
+
+assertEmailVerificationResult :: IO (Either AccountStoreError Account.EmailVerificationValidation) -> (Either AccountStoreError Account.EmailVerificationValidation -> Bool) -> IO ()
+assertEmailVerificationResult action matchesResult = do
+  result <- action
+  if matchesResult result
+    then pure ()
+    else expectationFailure "unexpected email verification result"
+
+assertRegistrationResult :: IO (Either RegistrationError RegistrationResult) -> (Either RegistrationError RegistrationResult -> Bool) -> IO ()
+assertRegistrationResult action matchesResult = do
+  result <- action
+  if matchesResult result
+    then pure ()
+    else expectationFailure "unexpected registration result"
 
 migrationPostgresTestConfig :: DatabaseConfig
 migrationPostgresTestConfig =
@@ -2439,7 +2497,230 @@ spec = do
             }
       selectRouteData apiNotFoundRequest `shouldReturn` NotFoundRouteDataResult
 
+  describe "WebApi.Account" $ do
+    it "persists only a password hash and verification digest before delivering a localized verification email" $ do
+      pendingAccountsReference <- newIORef []
+      deliveredMessagesReference <- newIORef []
+      let accountStore =
+            AccountStore
+              { createPendingAccount = \pendingAccount -> do
+                  modifyIORef' pendingAccountsReference (<> [pendingAccount])
+                  pure (Right True),
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          emailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
+          emailAddress = requiredEmailAddress "person@example.test"
+      registrationResult <-
+        registerAccountAt
+          testPasswordHashingPolicy
+          accountStore
+          emailDelivery
+          Email.EmailSpanish
+          (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token)
+          100
+          200
+          emailAddress
+          (Password.mkPassword "correct horse battery staple")
+      pendingAccounts <- readIORef pendingAccountsReference
+      deliveredMessages <- readIORef deliveredMessagesReference
+      createdAccountId <-
+        case registrationResult of
+          Right (RegistrationCreated accountId) -> pure accountId
+          _ -> expectationFailure "expected a created registration" >> pure (requiredAccountId "unreachable")
+      case (pendingAccounts, deliveredMessages) of
+        ([pendingAccount], [message]) -> do
+          createdAccountId `shouldBe` pendingAccountId pendingAccount
+          pendingAccountEmail pendingAccount `shouldBe` emailAddress
+          pendingAccountCreatedAtNanoseconds pendingAccount `shouldBe` 100
+          Account.storedVerificationAccountId (pendingAccountVerification pendingAccount) `shouldBe` pendingAccountId pendingAccount
+          Account.storedVerificationEmail (pendingAccountVerification pendingAccount) `shouldBe` emailAddress
+          Account.storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount) `shouldBe` 300
+          Account.emailVerificationTokenDigestText (Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) `shouldSatisfy` (not . Text.null)
+          Password.verifyPassword (Password.mkPassword "correct horse battery staple") (pendingAccountPasswordHash pendingAccount) `shouldBe` True
+          Email.emailMessageRecipient message `shouldBe` emailAddress
+          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electronico"
+          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
+        _ -> expectationFailure "expected exactly one pending account and verification email"
+
+    it "covers password-hashing failures and account-workflow value representations" $ do
+      let accountStore =
+            AccountStore
+              { createPendingAccount = \_ -> error "password hashing should stop before persistence",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          emailDelivery = Email.EmailDelivery (\_ -> error "password hashing should stop before delivery")
+          emailAddress = requiredEmailAddress "person@example.test"
+          accountId = requiredAccountId "account_01"
+      assertRegistrationResult
+        (registerAccountAtWithPasswordHasher (\_ _ -> pure Nothing) testPasswordHashingPolicy accountStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Left RegistrationPasswordHashingFailed -> True; _ -> False)
+      Account.accountIdText accountId `shouldBe` "account_01"
+
+    it "does not send an email when registration is already present or persistence fails" $ do
+      deliveredMessagesReference <- newIORef []
+      let emailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
+          emailAddress = requiredEmailAddress "person@example.test"
+          existingStore =
+            AccountStore
+              { createPendingAccount = \_ -> pure (Right False),
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          unavailableStore = existingStore {createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
+      assertRegistrationResult
+        (registerAccountAt testPasswordHashingPolicy existingStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Right RegistrationAlreadyRegistered -> True; _ -> False)
+      assertRegistrationResult
+        (registerAccountAt testPasswordHashingPolicy unavailableStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Left (RegistrationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
+      readIORef deliveredMessagesReference `shouldReturn` []
+
+    it "reports delivery failures after the pending account has been stored and rejects overflowing expiry calculations" $ do
+      pendingAccountsReference <- newIORef []
+      let accountStore =
+            AccountStore
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
+          emailAddress = requiredEmailAddress "person@example.test"
+      assertRegistrationResult
+        (registerAccountAt testPasswordHashingPolicy accountStore failingDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Left (RegistrationDeliveryFailed message) -> "SMTP unavailable" `Text.isInfixOf` message; _ -> False)
+      length <$> readIORef pendingAccountsReference `shouldReturn` 1
+      assertRegistrationResult
+        (registerAccountAt testPasswordHashingPolicy accountStore failingDelivery Email.EmailEnglish (const "https://account.example.test/verify") maxBound 1 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Left RegistrationClockOverflow -> True; _ -> False)
+
+    it "validates and atomically consumes a matching verification token" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
+          accountStore =
+            AccountStore
+              { createPendingAccount = \_ -> error "unexpected account creation",
+                findEmailVerification = \digest ->
+                  if digest == Account.emailVerificationTokenDigest token
+                    then pure (Right (Just storedVerification))
+                    else error "unexpected token digest",
+                consumeEmailVerification = \digest now ->
+                  if digest == Account.emailVerificationTokenDigest token && now == 499
+                    then pure (Right (Just accountId))
+                    else error "unexpected verification consumption"
+              }
+      confirmationResult <- confirmEmailVerificationAt accountStore 499 token
+      case confirmationResult of
+        Right (Account.EmailVerificationAccepted actualAccountId actualEmailAddress) -> do
+          actualAccountId `shouldBe` accountId
+          actualEmailAddress `shouldBe` emailAddress
+        _ -> expectationFailure "expected accepted email verification"
+
+    it "handles missing, expired, raced, corrupt, and unavailable verification records" $ do
+      let accountId = requiredAccountId "account_01"
+          otherAccountId = requiredAccountId "account_02"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
+          storeWith lookupResult consumptionResult =
+            AccountStore
+              { createPendingAccount = \_ -> error "unexpected account creation",
+                findEmailVerification = \_ -> pure lookupResult,
+                consumeEmailVerification = \_ _ -> pure consumptionResult
+              }
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Left (AccountStoreUnavailable "lookup unavailable")) (Right Nothing)) 499 token)
+        (\case Left storeError -> isUnavailable "lookup unavailable" storeError; _ -> False)
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Right Nothing) (Right Nothing)) 499 token)
+        (\case Right Account.EmailVerificationRejected -> True; _ -> False)
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Right Nothing)) 500 token)
+        (\case Right Account.EmailVerificationExpired -> True; _ -> False)
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Left (AccountStoreUnavailable "consume unavailable"))) 499 token)
+        (\case Left storeError -> isUnavailable "consume unavailable" storeError; _ -> False)
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Right Nothing)) 499 token)
+        (\case Right Account.EmailVerificationRejected -> True; _ -> False)
+      assertEmailVerificationResult
+        (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Right (Just otherAccountId))) 499 token)
+        (\case Left storeError -> isCorrupt "email verification was consumed for a different account" storeError; _ -> False)
+
   describe "WebApi.Postgres" $ do
+    it "uses bound parameters for pending account and verification persistence" $ do
+      recordedQueriesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          runner _ sql parameters = do
+            modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
+            pure $
+              if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
+                then Right [["account_01"]]
+                else
+                  if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
+                    then Right [["account_01", "person@example.test", "500"]]
+                    else
+                      if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
+                        then Right [["account_01"]]
+                        else Left "unexpected query"
+          accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
+      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) id
+      assertAccountStoreSuccess
+        (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
+        (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
+      assertAccountStoreSuccess
+        (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
+        (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+      recordedQueries <- readIORef recordedQueriesReference
+      let queryText = Text.intercalate "\n" (map fst recordedQueries)
+          parameterText = Text.intercalate "\n" (concatMap snd recordedQueries)
+      Text.isInfixOf (Password.passwordHashText passwordHash) queryText `shouldBe` False
+      Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) queryText `shouldBe` False
+      Text.isInfixOf (Password.passwordHashText passwordHash) parameterText `shouldBe` True
+      Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) parameterText `shouldBe` True
+
+    it "maps malformed account-store query results to application-owned errors" $ do
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          storeFor result = buildRuntimePostgresAccountStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
+      assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) pendingAccount) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [])) pendingAccount) not
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) pendingAccount) (isCorrupt "unexpected pending-account result: [[\"other_account\"]]")
+      assertAccountStoreError (findEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token)) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (findEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token)) (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["invalid id", "person@example.test", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid account id")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "invalid email", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid email address")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01", "person@example.test", "invalid"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid expiry")
+      assertAccountStoreError (findEmailVerification (storeFor (Right [["account_01"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "unexpected email-verification result: [[\"account_01\"]]")
+      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["invalid id"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "email verification was consumed for an invalid account id")
+      assertAccountStoreError (consumeEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token) 499) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (consumeEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token) 499) (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: [[\"account_01\",\"extra\"]]")
+
     it "translates database config into psql commands for page queries" $ do
       recordedCommandsReference <- newIORef []
       let runner command = do
@@ -2825,6 +3106,31 @@ spec = do
         `shouldReturn` Left "expected exactly one row: first, second"
       runRuntimeRowsQuery defaultRealPostgresConfig "SELECT NULL::text;"
         `shouldReturn` Left "unexpected NULL column value"
+      runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT $1::text, $2::text;" ["first value", "second value"]
+        `shouldReturn` Right [["first value", "second value"]]
+      runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT NULL::text;" []
+        `shouldReturn` Left "unexpected NULL column value"
+
+      accountId <- Account.generateAccountId
+      token <- Account.generateEmailVerificationToken
+      let emailAddress = requiredEmailAddress (Account.accountIdText accountId <> "@example.test")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccount =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          accountStore = buildRuntimePostgresAccountStore defaultRealPostgresConfig
+      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) id
+      assertAccountStoreSuccess
+        (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
+        (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
+      assertAccountStoreSuccess
+        (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
+        (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
 
       syntaxResult <- runRuntimeRowsQuery defaultRealPostgresConfig "SELECT FROM"
       syntaxResult
@@ -2833,6 +3139,12 @@ spec = do
             Text.isInfixOf "syntax error" runtimeError
           Right rows ->
             error ("expected syntax failure, got rows: " <> show rows)
+
+      parameterSyntaxResult <- runRuntimeParameterizedRowsQuery defaultRealPostgresConfig "SELECT FROM" []
+      parameterSyntaxResult
+        `shouldSatisfy` \case
+          Left runtimeError -> Text.isInfixOf "syntax error" runtimeError
+          Right rows -> error ("expected parameterized syntax failure, got rows: " <> show rows)
 
       withUnusedTcpEndpoint $ \unusedEndpoint -> do
         refusedResult <-
@@ -2848,6 +3160,17 @@ spec = do
                 && not (Text.isInfixOf "posix_spawnp" runtimeError)
             Right value ->
               error ("expected connection failure, got value: " <> show value)
+        parameterRefusedResult <-
+          runRuntimeParameterizedRowsQuery
+            defaultRealPostgresConfig
+              { databasePort = tcpEndpointPort unusedEndpoint
+              }
+            "SELECT $1::text;"
+            ["value"]
+        parameterRefusedResult
+          `shouldSatisfy` \case
+            Left runtimeError -> not (Text.null runtimeError)
+            Right rows -> error ("expected parameterized connection failure, got rows: " <> show rows)
 
     it "runs migrations and seed statements in order through the provided runner" $ do
       recordedCommandsReference <- newIORef []

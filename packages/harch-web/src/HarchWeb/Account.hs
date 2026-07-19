@@ -6,7 +6,9 @@ module HarchWeb.Account
     StoredEmailVerification (..),
     accountIdText,
     emailVerificationTokenDigest,
+    emailVerificationTokenDigestText,
     emailVerificationTokenText,
+    generateAccountId,
     generateEmailVerificationToken,
     mkAccountId,
     mkEmailVerificationToken,
@@ -56,6 +58,10 @@ mkAccountId value =
     then Nothing
     else Just (AccountId value)
 
+generateAccountId :: IO AccountId
+generateAccountId =
+  AccountId . TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> getEntropy 16
+
 accountIdText :: AccountId -> Text
 accountIdText (AccountId value) = value
 
@@ -80,6 +86,9 @@ emailVerificationTokenDigest token =
             (convert (hash (TextEncoding.encodeUtf8 (emailVerificationTokenText token)) :: Digest SHA256))
         )
     )
+
+emailVerificationTokenDigestText :: EmailVerificationTokenDigest -> Text
+emailVerificationTokenDigestText (EmailVerificationTokenDigest value) = value
 
 mkStoredEmailVerification :: AccountId -> EmailAddress -> Word64 -> EmailVerificationToken -> StoredEmailVerification
 mkStoredEmailVerification accountId emailAddress expiresAt token =

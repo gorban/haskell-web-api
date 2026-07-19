@@ -15,6 +15,11 @@ spec = do
       accountIdText <$> mkAccountId "account_01-verified" `shouldBe` Just "account_01-verified"
       map mkAccountId ["", "account id", "account/id"] `shouldBe` [Nothing, Nothing, Nothing]
 
+    it "generates opaque URL-safe identifiers" $ do
+      accountId <- generateAccountId
+      Text.length (accountIdText accountId) `shouldBe` 22
+      mkAccountId (accountIdText accountId) `shouldBe` Just accountId
+
   describe "EmailVerificationToken" $ do
     it "accepts URL-safe bearer tokens without exposing a constructor" $ do
       emailVerificationTokenText <$> mkEmailVerificationToken validToken `shouldBe` Just validToken
@@ -45,6 +50,7 @@ spec = do
           accepted = EmailVerificationAccepted accountId emailAddress
       accountId == accountId `shouldBe` True
       digest == digest `shouldBe` True
+      emailVerificationTokenDigestText digest `shouldBe` "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA"
       stored == stored `shouldBe` True
       accepted == accepted `shouldBe` True
       [accountId] == [accountId] `shouldBe` True
