@@ -118,7 +118,7 @@ completePasswordLogin credentialStore mfaStore encryptionKey nowNanoseconds nowS
                 case decodeTotpSecret encryptionKey storedTotpEncryptedSecret of
                   Nothing -> PasswordMfaLoginCorruptEnrollment
                   Just secret ->
-                    if validateTotpCode nowSeconds secret suppliedCode
+                    if validateTotpCode nowSeconds 1 secret suppliedCode
                       then PasswordMfaLoginAccepted accountId
                       else PasswordMfaLoginRejected
             RecoveryCodeLoginProof suppliedCode -> completeRecoveryCode accountId suppliedCode

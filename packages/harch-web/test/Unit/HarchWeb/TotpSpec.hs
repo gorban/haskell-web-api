@@ -52,8 +52,20 @@ spec = do
       isNothing (mkTotpCode "2870820") `shouldBe` True
       isNothing (mkTotpCode "28708a") `shouldBe` True
       isNothing (mkTotpCode "28708\n") `shouldBe` True
-      validateTotpCode 59 rfcSecret correctCode `shouldBe` True
-      validateTotpCode 60 rfcSecret correctCode `shouldBe` False
+      validateTotpCode 59 0 rfcSecret correctCode `shouldBe` True
+      validateTotpCode 60 0 rfcSecret correctCode `shouldBe` False
+
+    it "accepts a caller-bounded adjacent-period clock skew" $ do
+      let nowSeconds = 60
+          previousPeriodCode = totpCode (nowSeconds - 30) rfcSecret
+          currentPeriodCode = totpCode nowSeconds rfcSecret
+          followingPeriodCode = totpCode (nowSeconds + 30) rfcSecret
+          outsideWindowCode = totpCode (nowSeconds + 60) rfcSecret
+      validateTotpCode nowSeconds 1 rfcSecret previousPeriodCode `shouldBe` True
+      validateTotpCode nowSeconds 1 rfcSecret currentPeriodCode `shouldBe` True
+      validateTotpCode nowSeconds 1 rfcSecret followingPeriodCode `shouldBe` True
+      validateTotpCode nowSeconds 1 rfcSecret outsideWindowCode `shouldBe` False
+      validateTotpCode 0 1 rfcSecret (totpCode 0 rfcSecret) `shouldBe` True
 
 rfcSecret :: TotpSecret
 rfcSecret = required (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")

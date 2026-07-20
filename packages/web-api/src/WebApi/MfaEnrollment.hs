@@ -116,7 +116,7 @@ confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId 
       case decodeSecret encryptionKey storedTotpEncryptedSecret of
         Nothing -> pure (Left MfaEnrollmentCorruptSecret)
         Just secret ->
-          if not (validateTotpCode nowSeconds secret suppliedCode)
+          if not (validateTotpCode nowSeconds 1 secret suppliedCode)
             then pure (Left MfaEnrollmentInvalidCode)
             else do
               recoveryCodes <- generateRecoveryCodes generateCode

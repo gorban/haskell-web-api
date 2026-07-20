@@ -53,11 +53,32 @@ totpCodeText :: TotpCode -> Text
 totpCodeText (TotpCode code) = code
 
 totpCode :: Word64 -> TotpSecret -> TotpCode
-totpCode nowSeconds (TotpSecret secret) =
-  TotpCode (renderCode (dynamicTruncation (hmacSha1 secret (nowSeconds `div` 30))))
+totpCode nowSeconds (TotpSecret secret) = totpCodeForCounter secret (nowSeconds `div` 30)
 
-validateTotpCode :: Word64 -> TotpSecret -> TotpCode -> Bool
-validateTotpCode nowSeconds secret suppliedCode = totpCode nowSeconds secret == suppliedCode
+-- | Accepts a code from the current TOTP period and up to the requested
+-- number of adjacent periods on either side. The caller chooses the bounded
+-- skew window appropriate for its authentication policy.
+validateTotpCode :: Word64 -> Word8 -> TotpSecret -> TotpCode -> Bool
+validateTotpCode nowSeconds maxSkewPeriods secret suppliedCode =
+  any (matchesCounter secret suppliedCode) (windowCounters (nowSeconds `div` 30) maxSkewPeriods)
+
+matchesCounter :: TotpSecret -> TotpCode -> Word64 -> Bool
+matchesCounter (TotpSecret secret) suppliedCode counter = totpCodeForCounter secret counter == suppliedCode
+
+totpCodeForCounter :: ByteString.ByteString -> Word64 -> TotpCode
+totpCodeForCounter secret counter =
+  TotpCode (renderCode (dynamicTruncation (hmacSha1 secret counter)))
+
+windowCounters :: Word64 -> Word8 -> [Word64]
+windowCounters currentCounter maxSkewPeriods =
+  previousAndCurrent <> following
+  where
+    maxOffset = fromIntegral maxSkewPeriods :: Word64
+    previousAndCurrent = [currentCounter - offset | offset <- [0 .. maxOffset], offset <= currentCounter]
+    -- A TOTP counter is derived by dividing a Word64 timestamp by the
+    -- 30-second period, so even its largest possible value leaves ample room
+    -- for the caller-bounded Word8 offset.
+    following = [currentCounter + offset | offset <- [1 .. maxOffset]]
 
 hmacSha1 :: ByteString.ByteString -> Word64 -> ByteString.ByteString
 hmacSha1 secret counter =

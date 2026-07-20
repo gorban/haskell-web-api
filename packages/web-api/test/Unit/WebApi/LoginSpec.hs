@@ -54,6 +54,12 @@ spec = do
           validProof = TotpLoginProof (totpCode 123456 secret)
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") validProof
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 - 30) secret))
+        `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 + 30) secret))
+        `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 + 60) secret))
+        `shouldReturnEqual` PasswordMfaLoginRejected
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "incorrect password") validProof
         `shouldReturnEqual` PasswordMfaLoginRejected
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))
