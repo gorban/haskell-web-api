@@ -28,6 +28,7 @@ import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
 import qualified HarchWeb.Password as Password
 import qualified HarchWeb.Secret as Secret
+import qualified HarchWeb.Session as Session
 import qualified HarchWeb.Totp as Totp
 import qualified Network.HTTP.Types as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
@@ -47,13 +48,14 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
-import WebApi.AccountPages (AccountWorkflow (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
@@ -62,6 +64,7 @@ import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectRe
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
 import qualified WebApi.Route
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites, toSetupPrerequisiteConfig)
 
@@ -293,7 +296,7 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
         [HarchWeb.RegionPatch patchId html] ->
-          patchId `elem` ["registration-region", "verification-region", "mfa-enrollment-region"]
+          patchId `elem` ["registration-region", "verification-region", "mfa-enrollment-region", "login-region", "logout-region"]
             && expectedMessage `Text.isInfixOf` html
         _ -> False
   Nothing -> False
@@ -2761,15 +2764,23 @@ spec = do
       let registrationRequest = HarchWeb.RouteRequest RegistrationRoute defaultRequestContext
           verificationRequest = HarchWeb.RouteRequest EmailVerificationRoute (defaultRequestContext {requestQueryParameters = [("token", "prefilled-token")]})
           mfaRequest = HarchWeb.RouteRequest MfaEnrollmentRoute (defaultRequestContext {requestQueryParameters = [("account", "account_01")]})
+          loginRequest = HarchWeb.RouteRequest LoginRoute defaultRequestContext
+          logoutRequest = HarchWeb.RouteRequest LogoutRoute defaultRequestContext
       selectRouteData registrationRequest `shouldReturn` RegistrationRouteDataResult
       selectRouteData verificationRequest `shouldReturn` EmailVerificationRouteDataResult
       selectRouteData mfaRequest `shouldReturn` MfaEnrollmentRouteDataResult
+      selectRouteData loginRequest `shouldReturn` LoginRouteDataResult
+      selectRouteData logoutRequest `shouldReturn` LogoutRouteDataResult
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect registrationRequest
         `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
         `shouldReturn` RouteDataSelection EmailVerificationRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect mfaRequest
         `shouldReturn` RouteDataSelection MfaEnrollmentRouteDataResult []
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect loginRequest
+        `shouldReturn` RouteDataSelection LoginRouteDataResult []
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect logoutRequest
+        `shouldReturn` RouteDataSelection LogoutRouteDataResult []
       buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
         `shouldBe` RegistrationPage "/register" emptyRegistrationForm
       buildPageModelFromRouteData verificationRequest EmailVerificationRouteDataResult
@@ -2780,6 +2791,10 @@ spec = do
         `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest MfaEnrollmentRoute defaultRequestContext) MfaEnrollmentRouteDataResult
         `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm Text.empty Nothing [] Nothing False)
+      buildPageModelFromRouteData loginRequest LoginRouteDataResult
+        `shouldBe` LoginPage "/login" (LoginForm Text.empty Nothing False)
+      buildPageModelFromRouteData logoutRequest LogoutRouteDataResult
+        `shouldBe` LogoutPage "/logout"
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -2793,6 +2808,14 @@ spec = do
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Set up authenticator"
             && "data-page=\"mfa-enrollment\"" `Text.isInfixOf` HarchWeb.pageBody page
+      renderPageFromRouteData defaultAppConfig loginRequest LoginRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Sign in"
+            && "data-page=\"login\"" `Text.isInfixOf` HarchWeb.pageBody page
+      renderPageFromRouteData defaultAppConfig logoutRequest LogoutRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Sign out"
+            && "data-page=\"logout\"" `Text.isInfixOf` HarchWeb.pageBody page
       HarchWeb.renderResponse pureApplication registrationRequest
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
@@ -2805,6 +2828,14 @@ spec = do
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
           _ -> expectationFailure "expected an MFA-enrollment page response"
+      HarchWeb.renderResponse pureApplication loginRequest
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"login\""
+          _ -> expectationFailure "expected a login page response"
+      HarchWeb.renderResponse pureApplication logoutRequest
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
+          _ -> expectationFailure "expected a logout page response"
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
         runtimeApplication
@@ -2822,12 +2853,16 @@ spec = do
       if RegistrationForm "person@example.test" Nothing False /= RegistrationForm "other@example.test" Nothing False then pure () else expectationFailure "registration forms must compare their email values"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
       if MfaEnrollmentForm "account_01" Nothing [] Nothing False /= MfaEnrollmentForm "account_01" Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
+      if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
       show (RegistrationPage "/register" (RegistrationForm "person@example.test" Nothing False))
         `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormEmail = \"person@example.test\", registrationFormMessage = Nothing, registrationFormIsError = False})"
       show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
         `shouldBe` "EmailVerificationPage \"/verify\" (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
       show (MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
         `shouldBe` "MfaEnrollmentPage \"/mfa\" \"account_01\" Nothing False"
+      show (LoginPage "/login" (LoginForm "person@example.test" Nothing False))
+        `shouldBe` "LoginPage \"/login\" \"person@example.test\" Nothing False"
+      show (LogoutPage "/logout") `shouldBe` "LogoutPage \"/logout\""
       renderRegistrationPage "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
         `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Create your account</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Email address</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Password</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Create account</button></form></section></section>"
       renderRegistrationRegion "/register" (RegistrationForm Text.empty (Just "No") True)
@@ -2844,9 +2879,18 @@ spec = do
         `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
       renderMfaEnrollmentRegion "/mfa" (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
+      renderLoginPage "/es/login" (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+        `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
+      renderLoginRegion "/login" (LoginForm Text.empty Nothing False)
+        `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
+      renderLogoutPage "/logout" `shouldSatisfy` Text.isInfixOf "data-harch-control"
+      renderLogoutRegion "/logout" (Just "Signed <out>") True
+        `shouldSatisfy` \html -> "data-error-state=\"true\"" `Text.isInfixOf` html && "Signed &lt;out&gt;" `Text.isInfixOf` html
       pageEnhancementHooks RegistrationRoute `shouldBe` []
       pageEnhancementHooks EmailVerificationRoute `shouldBe` []
       pageEnhancementHooks MfaEnrollmentRoute `shouldBe` []
+      pageEnhancementHooks LoginRoute `shouldBe` []
+      pageEnhancementHooks LogoutRoute `shouldBe` []
 
     it "captures registration actions before deferred behavior and patches the localized region" $ do
       deliveredMessagesReference <- newIORef []
@@ -2869,6 +2913,8 @@ spec = do
                 accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
                 accountWorkflowClock = pure 100,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
+                accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
+                accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \requestContext verificationToken ->
@@ -2969,6 +3015,8 @@ spec = do
                 accountWorkflowEmailDelivery = emailDelivery,
                 accountWorkflowClock = pure now,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
+                accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
+                accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
@@ -3025,6 +3073,167 @@ spec = do
       spanishRejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "no es valido o ya se ha utilizado"
       unavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
       unavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "temporarily unavailable"
+
+    it "issues a cookie only after password and TOTP verification, and revokes it on logout" $ do
+      savedSessionsReference <- newIORef []
+      invalidatedSessionsReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          password = Password.mkPassword "correct horse battery staple"
+          passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 7) password)
+          totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 7) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
+          credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True))))
+          mfaStore =
+            MfaStore
+              { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
+                loadTotpEnrollment = \account -> (account `shouldBe` accountId) >> pure (Right (Just (StoredTotpEnrollment encryptedTotpSecret (Just 1)))),
+                confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
+                loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+              }
+          sessionStore =
+            AccountSessionStore
+              { saveAccountSession = \session -> modifyIORef' savedSessionsReference (<> [session]) >> pure (Right True),
+                loadAccountSession = \_ -> pure (Right Nothing),
+                invalidateAccountSession = \session -> modifyIORef' invalidatedSessionsReference (<> [session]) >> pure (Right True)
+              }
+          workflow =
+            unavailableAccountWorkflow
+              { accountWorkflowCredentialStore = credentialStore,
+                accountWorkflowMfaStore = mfaStore,
+                accountWorkflowSessionStore = sessionStore,
+                accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+                accountWorkflowClock = pure 500,
+                accountWorkflowTotpClock = pure 123456
+              }
+          loginRequest fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/login",
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+          loginFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
+      invalidEmail <- handleAccountAction workflow (loginRequest [("email", "not-an-email")])
+      invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address"
+      loginResult <- handleAccountAction workflow (loginRequest loginFields)
+      case loginResult of
+        Nothing -> expectationFailure "expected login action response"
+        Just response -> do
+          HarchWeb.clientActionStatus response `shouldBe` 200
+          HarchWeb.clientActionFocusId response `shouldBe` Nothing
+          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+      savedSessions <- readIORef savedSessionsReference
+      length savedSessions `shouldBe` 1
+      loggedInSession <-
+        case savedSessions of
+          [session] -> pure session
+          _ -> expectationFailure "expected exactly one saved session" >> pure (error "unreachable")
+      let logoutRequest =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/logout",
+                HarchWeb.clientActionFields = [],
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext {requestSessionId = Just (Session.sessionId loggedInSession)}
+              }
+      logoutResult <- handleAccountAction workflow logoutRequest
+      case logoutResult of
+        Nothing -> expectationFailure "expected logout action response"
+        Just response -> do
+          HarchWeb.clientActionStatus response `shouldBe` 200
+          HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
+      readIORef invalidatedSessionsReference `shouldReturn` [Session.sessionId loggedInSession]
+
+    it "validates every login state and keeps logout revocation failures visible" $ do
+      let accountId = requiredAccountId "account_02"
+          password = Password.mkPassword "correct horse battery staple"
+          passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 8) password)
+          confirmedCredential = AccountCredential accountId passwordHash True
+          unverifiedCredential = AccountCredential accountId passwordHash False
+          totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 8) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
+          confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1)
+          loginRequest requestContext fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/login",
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = requestContext
+              }
+          spanishLoginRequest fields =
+            (loginRequest spanishRequestContext fields)
+              { HarchWeb.clientActionPath = "/es/login"
+              }
+          logoutRequest requestContext =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath = "/logout",
+                HarchWeb.clientActionFields = [],
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = requestContext
+              }
+          workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
+            unavailableAccountWorkflow
+              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult),
+                accountWorkflowMfaStore =
+                  MfaStore
+                    { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
+                      loadTotpEnrollment = \_ -> pure enrollmentResult,
+                      confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
+                      loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
+                      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                    },
+                accountWorkflowSessionStore =
+                  AccountSessionStore
+                    { saveAccountSession = \_ -> pure sessionSaveResult,
+                      loadAccountSession = \_ -> pure (Right Nothing),
+                      invalidateAccountSession = \_ -> pure invalidationResult
+                    },
+                accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
+                accountWorkflowClock = pure 500,
+                accountWorkflowTotpClock = pure 123456
+              }
+          validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
+          invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
+          validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
+          unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not-an-email")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Enter your password")
+      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("code", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Introduce un codigo")
+      handleAccountAction (workflowFor (Right (Just unverifiedCredential)) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Verify your email address")
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Enroll your authenticator")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", "0123456789ABCDEF0123")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
+      handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Left (MfaStoreUnavailable "down")) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1)))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
+      handleAccountAction unavailableSession (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction validWorkflow (logoutRequest defaultRequestContext)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out")
+      let sessionId = fromMaybe (error "expected valid session id") (Session.mkSessionId "0123456789ABCDEF0123456789ABCDEF0123456789ABC")
+          sessionContext = defaultRequestContext {requestSessionId = Just sessionId}
+      handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable)) (logoutRequest sessionContext)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
+      logoutSuccess <- handleAccountAction validWorkflow (logoutRequest sessionContext)
+      case logoutSuccess of
+        Just response -> HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+        Nothing -> expectationFailure "expected a logout action response"
 
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
       encryptedSecretReference <- newIORef Nothing
@@ -5484,7 +5693,8 @@ spec = do
                 requestCorrelationId = Just "req-456",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
-                requestQueryParameters = []
+                requestQueryParameters = [],
+                requestSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -5722,10 +5932,11 @@ spec = do
               requestCorrelationId = Just "req-789",
               requestSurface = PageSurface,
               requestPathPrefix = "",
-              requestQueryParameters = []
+              requestQueryParameters = [],
+              requestSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -5856,7 +6067,8 @@ spec = do
                 requestCorrelationId = Just "req-123",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
-                requestQueryParameters = []
+                requestQueryParameters = [],
+                requestSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -6005,7 +6217,8 @@ spec = do
                 requestCorrelationId = Just "req-999",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
-                requestQueryParameters = []
+                requestQueryParameters = [],
+                requestSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -6129,7 +6342,8 @@ spec = do
                 requestCorrelationId = Just "req-list",
                 requestSurface = PageSurface,
                 requestPathPrefix = "",
-                requestQueryParameters = []
+                requestQueryParameters = [],
+                requestSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -6186,7 +6400,7 @@ spec = do
       show [English, Spanish] `shouldBe` "[English,Spanish]"
       show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -6199,7 +6413,7 @@ spec = do
         `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
-      show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,StatusApiRoute,NotFoundRoute]"
+      show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,MfaEnrollmentRoute,LoginRoute,LogoutRoute,StatusApiRoute,NotFoundRoute]"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
@@ -6223,6 +6437,8 @@ spec = do
     it "parses SSR account routes and preserves email-verification query values" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/register") `shouldBe` Just RegistrationRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/mfa") `shouldBe` Just MfaEnrollmentRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/login") `shouldBe` Just LoginRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/logout") `shouldBe` Just LogoutRoute
       parseRoute defaultRequestContext "/verify?token=opaque-token"
         `shouldBe` Just
           HarchWeb.RouteRequest
@@ -6300,6 +6516,8 @@ spec = do
       renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext) `shouldBe` "/en/second"
       renderRoutePath (HarchWeb.RouteRequest RegistrationRoute defaultRequestContext) `shouldBe` "/register"
       renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute spanishRequestContext) `shouldBe` "/es/verify"
+      renderRoutePath (HarchWeb.RouteRequest LoginRoute defaultRequestContext) `shouldBe` "/login"
+      renderRoutePath (HarchWeb.RouteRequest LogoutRoute spanishRequestContext) `shouldBe` "/es/logout"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
@@ -6414,9 +6632,9 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = []}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
@@ -7031,8 +7249,8 @@ spec = do
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       homePageModel <- buildPageModel homeRequest
@@ -7215,10 +7433,17 @@ spec = do
             (waiRequest ["second"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", ", ")]
               }
+          sessionToken = Text.replicate 43 "a"
+          cookieRequest =
+            (waiRequest ["logout"])
+              { Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 ("theme=dark; __Host-harch-session=" <> sessionToken))]
+              }
       HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
       HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
+      HarchWeb.requestContextFromRequest pureApplication cookieRequest defaultRequestContext
+        `shouldBe` defaultRequestContext {requestSessionId = Session.mkSessionId sessionToken}
 
     it "derives normalized forwarded path prefixes when forwarded headers are trusted" $ do
       let forwardedPrefixRequest =

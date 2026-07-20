@@ -21,10 +21,13 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import WebApi.AccountPages
-  ( MfaEnrollmentForm (..),
+  ( LoginForm (..),
+    MfaEnrollmentForm (..),
     RegistrationForm (..),
     VerificationForm (..),
     emptyRegistrationForm,
+    renderLoginPage,
+    renderLogoutPage,
     renderMfaEnrollmentPage,
     renderRegistrationPage,
     renderVerificationPage,
@@ -85,6 +88,8 @@ data AppPageModel
   | RegistrationPage Text RegistrationForm
   | EmailVerificationPage Text VerificationForm
   | MfaEnrollmentPage Text MfaEnrollmentForm
+  | LoginPage Text LoginForm
+  | LogoutPage Text
   | NotFoundPage NotFoundPageModel
   deriving (Eq)
 
@@ -123,6 +128,10 @@ instance Show AppPageModel where
       )
   showsPrec precedence (MfaEnrollmentPage mfaEnrollmentPath MfaEnrollmentForm {mfaEnrollmentFormAccountId, mfaEnrollmentFormMessage, mfaEnrollmentFormIsError}) =
     showParen (precedence > 10) (showString "MfaEnrollmentPage " . shows mfaEnrollmentPath . showChar ' ' . shows mfaEnrollmentFormAccountId . showChar ' ' . shows mfaEnrollmentFormMessage . showChar ' ' . shows mfaEnrollmentFormIsError)
+  showsPrec precedence (LoginPage loginPath LoginForm {loginFormEmail, loginFormMessage, loginFormIsError}) =
+    showParen (precedence > 10) (showString "LoginPage " . shows loginPath . showChar ' ' . shows loginFormEmail . showChar ' ' . shows loginFormMessage . showChar ' ' . shows loginFormIsError)
+  showsPrec precedence (LogoutPage logoutPath) =
+    showParen (precedence > 10) (showString "LogoutPage " . shows logoutPath)
   showsPrec precedence (NotFoundPage notFoundPage) =
     showParen (precedence > 10) (showString "NotFoundPage " . showsPrec 11 notFoundPage)
 
@@ -155,6 +164,8 @@ routeTitle route =
     RegistrationRoute -> "Create account"
     EmailVerificationRoute -> "Verify email"
     MfaEnrollmentRoute -> "Set up authenticator"
+    LoginRoute -> "Sign in"
+    LogoutRoute -> "Sign out"
     _ -> "Not Found"
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
@@ -190,6 +201,13 @@ buildPageModelFromRouteData routeRequest routeData =
       MfaEnrollmentPage
         (renderRoutePath (HarchWeb.RouteRequest MfaEnrollmentRoute (HarchWeb.requestContext routeRequest)))
         (MfaEnrollmentForm (fromMaybe Text.empty (lookup "account" (requestQueryParameters (HarchWeb.requestContext routeRequest)))) Nothing [] Nothing False)
+    LoginRouteDataResult ->
+      LoginPage
+        (renderRoutePath (HarchWeb.RouteRequest LoginRoute (HarchWeb.requestContext routeRequest)))
+        (LoginForm Text.empty Nothing False)
+    LogoutRouteDataResult ->
+      LogoutPage
+        (renderRoutePath (HarchWeb.RouteRequest LogoutRoute (HarchWeb.requestContext routeRequest)))
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -297,6 +315,10 @@ renderPageBody pageModel =
       renderVerificationPage verificationPath verificationForm
     MfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm ->
       renderMfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm
+    LoginPage loginPath loginForm ->
+      renderLoginPage loginPath loginForm
+    LogoutPage logoutPath ->
+      renderLogoutPage logoutPath
     NotFoundPage notFoundPage ->
       Text.concat
         [ "<section data-page=\"not-found\">",

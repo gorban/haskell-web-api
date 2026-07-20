@@ -42,8 +42,9 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
+import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
-import WebApi.Postgres (buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
+import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext (..),
@@ -53,6 +54,7 @@ import WebApi.Route
     requestContextFromWaiRequest,
     routeCodec,
   )
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
 buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
 buildAppWithDatabase config databaseEffect =
@@ -119,6 +121,16 @@ buildAppSiteRoutes config databaseEffect =
             Site.siteRouteResponse = renderSelectedResponse
           },
         Site.SiteRoute
+          { Site.siteRouteValue = LoginRoute,
+            Site.siteRouteNavigationLabel = Just "Sign in",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
+          { Site.siteRouteValue = LogoutRoute,
+            Site.siteRouteNavigationLabel = Nothing,
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
           { Site.siteRouteValue = StatusApiRoute,
             Site.siteRouteNavigationLabel = Nothing,
             Site.siteRouteResponse = renderSelectedResponse
@@ -170,6 +182,8 @@ buildRuntimeAccountWorkflow !environmentConfig =
             accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
             accountWorkflowClock = getMonotonicTimeNSec,
             accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
+            accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
+            accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
             accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
             accountWorkflowTotpClock = floor <$> getPOSIXTime,
             accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
@@ -323,6 +337,13 @@ unavailableAccountWorkflow =
             confirmTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
             loadUnusedRecoveryCodeHashes = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
             consumeRecoveryCodeHash = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
+          },
+      accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured"))),
+      accountWorkflowSessionStore =
+        AccountSessionStore
+          { saveAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
+            loadAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
+            invalidateAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable)
           },
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
       accountWorkflowTotpClock = pure 0,

@@ -22,6 +22,14 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Session
+  ( SessionId,
+    defaultSessionCookiePolicy,
+    mkSessionId,
+    sessionCookieName,
+    sessionCookieNameText,
+  )
+import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
 data AppLocale
@@ -40,7 +48,8 @@ data AppRequestContext = AppRequestContext
     requestCorrelationId :: Maybe Text,
     requestSurface :: RequestSurface,
     requestPathPrefix :: Text,
-    requestQueryParameters :: [(Text, Text)]
+    requestQueryParameters :: [(Text, Text)],
+    requestSessionId :: Maybe SessionId
   }
   deriving (Eq, Show)
 
@@ -55,6 +64,8 @@ data AppRoute
   | RegistrationRoute
   | EmailVerificationRoute
   | MfaEnrollmentRoute
+  | LoginRoute
+  | LogoutRoute
   | StatusApiRoute
   | NotFoundRoute
   deriving (Eq, Show)
@@ -67,7 +78,8 @@ defaultRequestContext =
       requestCorrelationId = Nothing,
       requestSurface = PageSurface,
       requestPathPrefix = Text.empty,
-      requestQueryParameters = []
+      requestQueryParameters = [],
+      requestSessionId = Nothing
     }
 
 routeCodec :: HarchWeb.RouteCodec AppRoute AppRequestContext
@@ -153,7 +165,8 @@ requestContextFromWaiRequest trustProxyHeaders request requestContext =
               ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
                   >>= firstCommaSeparatedValue . Text.strip . TextEncoding.decodeUtf8
               )
-          else Text.empty
+          else Text.empty,
+      requestSessionId = requestSessionIdFromHeaders (Wai.requestHeaders request)
     }
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
@@ -211,6 +224,8 @@ routeFromSegment segment
   | segment == "register" = Just RegistrationRoute
   | segment == "verify" = Just EmailVerificationRoute
   | segment == "mfa" = Just MfaEnrollmentRoute
+  | segment == "login" = Just LoginRoute
+  | segment == "logout" = Just LogoutRoute
   | segment == "404" = Just NotFoundRoute
 routeFromSegment _ = Nothing
 
@@ -238,6 +253,8 @@ renderPageRouteSuffix route =
     RegistrationRoute -> "/register"
     EmailVerificationRoute -> "/verify"
     MfaEnrollmentRoute -> "/mfa"
+    LoginRoute -> "/login"
+    LogoutRoute -> "/logout"
     NotFoundRoute -> "/404"
     StatusApiRoute -> "/404"
 
@@ -265,6 +282,17 @@ normalizeRequestPathPrefix pathPrefix =
       normalizedPrefix =
         Text.dropWhileEnd (== '/') slashPrefixedPrefix
    in normalizedPrefix
+
+requestSessionIdFromHeaders :: Http.RequestHeaders -> Maybe SessionId
+requestSessionIdFromHeaders headers = do
+  cookieHeader <- lookup "Cookie" headers
+  cookieText <- either (const Nothing) Just (TextEncoding.decodeUtf8' cookieHeader)
+  cookieValue <- lookup (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (map parseCookiePair (Text.splitOn ";" cookieText))
+  mkSessionId cookieValue
+  where
+    parseCookiePair value =
+      let (name, rawValue) = Text.breakOn "=" (Text.strip value)
+       in (name, Text.drop 1 rawValue)
 
 applyRequestPathPrefix :: Text -> Text -> Text
 applyRequestPathPrefix pathPrefix path =

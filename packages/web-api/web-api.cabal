@@ -94,6 +94,7 @@ library
     core,
     directory,
     harch-web,
+    http-types,
     postgresql-libpq,
     process,
     text,

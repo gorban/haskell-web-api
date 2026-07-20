@@ -5,6 +5,7 @@ module WebApi.AccountPages
     RegistrationForm (..),
     VerificationForm (..),
     MfaEnrollmentForm (..),
+    LoginForm (..),
     emptyRegistrationForm,
     handleAccountAction,
     renderRegistrationPage,
@@ -13,12 +14,17 @@ module WebApi.AccountPages
     renderVerificationRegion,
     renderMfaEnrollmentPage,
     renderMfaEnrollmentRegion,
+    renderLoginPage,
+    renderLoginRegion,
+    renderLogoutPage,
+    renderLogoutRegion,
   )
 where
 
 import Data.Foldable (toList)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
@@ -26,7 +32,14 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret (SecretEncryptionKey)
+import HarchWeb.Session
+  ( defaultSessionCookiePolicy,
+    renderSessionCookie,
+    sessionCookieMaxAgeSeconds,
+    sessionId,
+  )
 import HarchWeb.Totp qualified as Totp
+import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountStore,
     AccountStoreError (..),
@@ -34,6 +47,12 @@ import WebApi.Account
     RegistrationResult (..),
     confirmEmailVerificationAt,
     registerAccountAt,
+  )
+import WebApi.Login
+  ( AccountCredentialStore,
+    MfaLoginProof (..),
+    PasswordMfaLoginResult (..),
+    completePasswordLogin,
   )
 import WebApi.Mfa (MfaStore)
 import WebApi.MfaEnrollment
@@ -49,12 +68,18 @@ import WebApi.Route
     AppRoute (..),
     renderRoutePath,
   )
+import WebApi.Session
+  ( AccountSessionStore (..),
+    issueAccountSession,
+  )
 
 data AccountWorkflow = AccountWorkflow
   { accountWorkflowStore :: AccountStore,
     accountWorkflowEmailDelivery :: Email.EmailDelivery,
     accountWorkflowClock :: IO Word64,
     accountWorkflowMfaStore :: MfaStore,
+    accountWorkflowCredentialStore :: AccountCredentialStore,
+    accountWorkflowSessionStore :: AccountSessionStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
     accountWorkflowTotpClock :: IO Word64,
     accountWorkflowVerificationUrl :: AppRequestContext -> Account.EmailVerificationToken -> Text
@@ -83,6 +108,13 @@ data MfaEnrollmentForm = MfaEnrollmentForm
   }
   deriving (Eq)
 
+data LoginForm = LoginForm
+  { loginFormEmail :: Text,
+    loginFormMessage :: Maybe Text,
+    loginFormIsError :: Bool
+  }
+  deriving (Eq)
+
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Nothing False
 
@@ -95,6 +127,8 @@ handleAccountAction workflow actionRequest =
           | path == registrationPath -> Just <$> handleRegistration
           | path == verificationPath -> Just <$> handleVerification
           | path == mfaEnrollmentPath -> Just <$> handleMfaEnrollment
+          | path == loginPath -> Just <$> handleLogin
+          | path == logoutPath -> Just <$> handleLogout
         _ -> pure Nothing
     _ -> pure Nothing
   where
@@ -102,6 +136,8 @@ handleAccountAction workflow actionRequest =
     registrationPath = renderRoutePath (routeRequest RegistrationRoute)
     verificationPath = renderRoutePath (routeRequest EmailVerificationRoute)
     mfaEnrollmentPath = renderRoutePath (routeRequest MfaEnrollmentRoute)
+    loginPath = renderRoutePath (routeRequest LoginRoute)
+    logoutPath = renderRoutePath (routeRequest LogoutRoute)
     routeRequest route = HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = actionContext}
 
     handleRegistration = do
@@ -170,6 +206,40 @@ handleAccountAction workflow actionRequest =
                     Left errorValue -> mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage errorValue)) True) (Just "mfa-code")
             _ -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (localized "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
 
+    handleLogin =
+      let emailValue = actionField "email"
+          passwordValue = actionField "password"
+          loginForm message = LoginForm emailValue (Just message)
+       in case (Email.mkEmailAddress emailValue, validPassword passwordValue, loginProof) of
+            (Nothing, _, _) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
+            (_, False, _) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
+            (_, _, Nothing) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
+            (Just emailAddress, True, Just proof) -> do
+              nowNanoseconds <- accountWorkflowClock workflow
+              nowSeconds <- accountWorkflowTotpClock workflow
+              loginResult <- completePasswordLogin (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds emailAddress (Password.mkPassword passwordValue) proof
+              case loginResult of
+                PasswordMfaLoginAccepted accountId -> do
+                  issuedSession <- issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds
+                  pure $ case issuedSession of
+                    Left _ -> loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []
+                    Right opaqueSession -> loginResponse loginPath 200 (loginForm (localized "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))]
+                PasswordMfaLoginEmailVerificationRequired _ -> pure (loginResponse loginPath 403 (loginForm (localized "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True) Nothing [])
+                PasswordMfaLoginEnrollmentRequired _ -> pure (loginResponse loginPath 403 (loginForm (localized "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True) Nothing [])
+                PasswordMfaLoginRejected -> pure (loginResponse loginPath 422 (loginForm (localized "Sign-in was rejected." "El inicio de sesion fue rechazado.") True) (Just "login-code") [])
+                PasswordMfaLoginCredentialStoreError _ -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") [])
+                PasswordMfaLoginMfaStoreError _ -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-code") [])
+                PasswordMfaLoginCorruptEnrollment -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-code") [])
+
+    handleLogout =
+      case requestSessionId actionContext of
+        Nothing -> pure (logoutResponse logoutPath 200 (Just (localized "You are signed out." "Has cerrado sesion.")) False [])
+        Just sessionId -> do
+          invalidated <- invalidateAccountSession (accountWorkflowSessionStore workflow) sessionId
+          pure $ case invalidated of
+            Left _ -> logoutResponse logoutPath 503 (Just (localized "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []
+            Right _ -> logoutResponse logoutPath 200 (Just (localized "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionId))]
+
     actionField name =
       case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
         [value] -> value
@@ -181,6 +251,12 @@ handleAccountAction workflow actionRequest =
         Spanish -> spanish
 
     mfaForm = MfaEnrollmentForm
+
+    loginProof =
+      case actionField "proof" of
+        "totp" -> TotpLoginProof <$> Totp.mkTotpCode (actionField "code")
+        "recovery" -> RecoveryCodeLoginProof <$> RecoveryCode.mkRecoveryCode (actionField "code")
+        _ -> Nothing
 
     mfaErrorMessage errorValue =
       case errorValue of
@@ -217,6 +293,24 @@ mfaEnrollmentResponse mfaEnrollmentPath status form focusId =
       HarchWeb.clientActionHeaders = []
     }
 
+loginResponse :: Text -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+loginResponse loginPath status form focusId headers =
+  HarchWeb.ClientActionResponse
+    { HarchWeb.clientActionStatus = status,
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "login-region" (renderLoginRegion loginPath form)],
+      HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionHeaders = headers
+    }
+
+logoutResponse :: Text -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+logoutResponse logoutPath status message isError headers =
+  HarchWeb.ClientActionResponse
+    { HarchWeb.clientActionStatus = status,
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "logout-region" (renderLogoutRegion logoutPath message isError)],
+      HarchWeb.clientActionFocusId = Nothing,
+      HarchWeb.clientActionHeaders = headers
+    }
+
 renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentPage mfaEnrollmentPath form =
   Text.concat
@@ -239,6 +333,44 @@ renderMfaEnrollmentRegion mfaEnrollmentPath form =
       "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">Start authenticator enrollment</button></form>",
       renderConfirmationForm mfaEnrollmentPath form,
       "</section>"
+    ]
+
+renderLoginPage :: Text -> LoginForm -> Text
+renderLoginPage loginPath form =
+  Text.concat
+    [ "<section data-page=\"login\"><h1 data-page-title=\"true\">Sign in</h1>",
+      renderLoginRegion loginPath form,
+      "</section>"
+    ]
+
+renderLoginRegion :: Text -> LoginForm -> Text
+renderLoginRegion loginPath form =
+  Text.concat
+    [ "<section id=\"login-region\" aria-live=\"polite\">",
+      renderMessage (loginFormMessage form) (loginFormIsError form),
+      "<form data-harch-action=\"true\" data-harch-control action=\"",
+      escapeHtml loginPath,
+      "\" method=\"post\"><label for=\"login-email\">Email address</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+      escapeHtml (loginFormEmail form),
+      "\"><label for=\"login-password\">Password</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">Verification method</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">Authenticator code</option><option value=\"recovery\">Recovery code</option></select><label for=\"login-code\">Verification code</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">Sign in</button></form></section>"
+    ]
+
+renderLogoutPage :: Text -> Text
+renderLogoutPage logoutPath =
+  Text.concat
+    [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">Sign out</h1>",
+      renderLogoutRegion logoutPath Nothing False,
+      "</section>"
+    ]
+
+renderLogoutRegion :: Text -> Maybe Text -> Bool -> Text
+renderLogoutRegion logoutPath message isError =
+  Text.concat
+    [ "<section id=\"logout-region\" aria-live=\"polite\">",
+      renderMessage message isError,
+      "<form data-harch-action=\"true\" data-harch-control action=\"",
+      escapeHtml logoutPath,
+      "\" method=\"post\"><button type=\"submit\">Sign out</button></form></section>"
     ]
 
 renderEnrollmentSecret :: Maybe Text -> Text

@@ -16,5 +16,7 @@ pageEnhancementHooks route =
     RegistrationRoute -> []
     EmailVerificationRoute -> []
     MfaEnrollmentRoute -> []
+    LoginRoute -> []
+    LogoutRoute -> []
     StatusApiRoute -> []
     NotFoundRoute -> []
