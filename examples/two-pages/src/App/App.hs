@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+
 module App.App
   ( buildApplication,
     twoPageServerConfig,
@@ -19,11 +20,11 @@ import HarchWeb
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
+    RegionPatch (..),
     RequestPolicyConfig (..),
     ServerConfig (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
-    RegionPatch (..),
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
@@ -65,16 +66,18 @@ twoPageClientAction actionRequest =
               Just emailAddress
                 | "@" `Text.isInfixOf` emailAddress,
                   "." `Text.isInfixOf` emailAddress ->
-                ClientActionResponse
-                  { clientActionStatus = 200,
-                    clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Thanks. Your subscription request is ready.</p>"],
-                    clientActionFocusId = Nothing
-                  }
+                    ClientActionResponse
+                      { clientActionStatus = 200,
+                        clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Thanks. Your subscription request is ready.</p>"],
+                        clientActionFocusId = Nothing,
+                        clientActionHeaders = []
+                      }
               _ ->
                 ClientActionResponse
                   { clientActionStatus = 422,
                     clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"alert\">Enter a valid email address.</p>"],
-                    clientActionFocusId = Just "subscription-email"
+                    clientActionFocusId = Just "subscription-email",
+                    clientActionHeaders = []
                   }
           )
       _ -> Nothing

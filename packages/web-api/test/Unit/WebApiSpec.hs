@@ -7415,6 +7415,7 @@ spec = do
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
+        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
 
   describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
@@ -7449,6 +7450,7 @@ spec = do
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
+        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability
@@ -7793,6 +7795,8 @@ stripVolatileDatabaseTimingResponse response =
       HarchWeb.PageResponseWithMetadata (stripVolatileDatabaseTimingResponseBody responseBody) page
     HarchWeb.BodyResponse responseBody ->
       HarchWeb.BodyResponse (stripVolatileDatabaseTimingResponseBody responseBody)
+    HarchWeb.ClientActionBodyResponse actionResponse ->
+      HarchWeb.ClientActionBodyResponse actionResponse
 
 stripVolatileDatabaseTimingResponseBody :: HarchWeb.ResponseBody -> HarchWeb.ResponseBody
 stripVolatileDatabaseTimingResponseBody responseBody =
