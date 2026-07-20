@@ -643,7 +643,8 @@ data RegionPatch = RegionPatch
 data ClientActionResponse = ClientActionResponse
   { clientActionStatus :: Int,
     clientActionPatches :: [RegionPatch],
-    clientActionFocusId :: Maybe Text
+    clientActionFocusId :: Maybe Text,
+    clientActionHeaders :: Http.ResponseHeaders
   }
   deriving (Eq, Show)
 
@@ -651,6 +652,7 @@ data Response route context
   = PageResponse (Page route context)
   | PageResponseWithMetadata ResponseBody (Page route context)
   | BodyResponse ResponseBody
+  | ClientActionBodyResponse ClientActionResponse
   deriving (Eq, Show)
 
 data RouteCodec route context = RouteCodec
@@ -1160,7 +1162,7 @@ toWaiApplication webApplication request respond = do
                                   }
                             maybe
                               (renderResponse webApplication routeRequest)
-                              (pure . BodyResponse . clientActionResponseBody)
+                              (pure . ClientActionBodyResponse)
                               maybeActionResponse
                           else renderResponse webApplication routeRequest
                   responseRenderedAt <- response `seq` getMonotonicTimeNSec
@@ -1169,6 +1171,7 @@ toWaiApplication webApplication request respond = do
                       PageResponse _ -> generateRuntimeNonce
                       PageResponseWithMetadata _ _ -> generateRuntimeNonce
                       BodyResponse _ -> pure $! RuntimeNonce ""
+                      ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
                   let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
                       requestLogFields = requestLogContextFields requestPolicyConfig request
                       extraObservabilityAttributes =
@@ -1178,6 +1181,7 @@ toWaiApplication webApplication request respond = do
                             PageResponseWithMetadata pageResponseBodyValue _ ->
                               responseObservabilityAttributes pageResponseBodyValue
                             BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
+                            ClientActionBodyResponse _ -> []
                       contextualizedResponseLogEntries =
                         case response of
                           PageResponse _ -> []
@@ -1189,6 +1193,7 @@ toWaiApplication webApplication request respond = do
                             map
                               (prependRequestLogContext requestLogFields)
                               (responseLogEntries responseBodyValue)
+                          ClientActionBodyResponse _ -> []
                       requestObservability =
                         maybe
                           id
@@ -1207,11 +1212,13 @@ toWaiApplication webApplication request respond = do
                                   PageResponseWithMetadata pageResponseBodyValue _ ->
                                     responseStatus pageResponseBodyValue
                                   BodyResponse responseBodyValue -> responseStatus responseBodyValue
+                                  ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
                               )
                               ( case response of
                                   PageResponse _ -> Observability.PageResponseKind
                                   PageResponseWithMetadata _ _ -> Observability.PageResponseKind
                                   BodyResponse _ -> Observability.BodyResponseKind
+                                  ClientActionBodyResponse _ -> Observability.BodyResponseKind
                               )
                               ( extraObservabilityAttributes
                                   <> requestTimingObservabilityAttributes
@@ -3113,6 +3120,8 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     BodyResponse responseBodyValue ->
       toWaiBodyResponse additionalHeaders responseBodyValue
+    ClientActionBodyResponse actionResponse ->
+      toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =
@@ -3243,6 +3252,7 @@ responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
         PageResponse _ -> Just runtimeNonce
         PageResponseWithMetadata _ _ -> Just runtimeNonce
         BodyResponse _ -> Nothing
+        ClientActionBodyResponse _ -> Nothing
     )
     <> strictTransportSecurityHeaders requestPolicyConfig request
     <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request

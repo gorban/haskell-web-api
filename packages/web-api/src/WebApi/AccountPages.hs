@@ -195,7 +195,8 @@ registrationResponse registrationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "registration-region" (renderRegistrationRegion registrationPath form)],
-      HarchWeb.clientActionFocusId = focusId
+      HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionHeaders = []
     }
 
 verificationResponse :: Text -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
@@ -203,7 +204,8 @@ verificationResponse verificationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion verificationPath form)],
-      HarchWeb.clientActionFocusId = focusId
+      HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionHeaders = []
     }
 
 mfaEnrollmentResponse :: Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
@@ -211,7 +213,8 @@ mfaEnrollmentResponse mfaEnrollmentPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion mfaEnrollmentPath form)],
-      HarchWeb.clientActionFocusId = focusId
+      HarchWeb.clientActionFocusId = focusId,
+      HarchWeb.clientActionHeaders = []
     }
 
 renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text

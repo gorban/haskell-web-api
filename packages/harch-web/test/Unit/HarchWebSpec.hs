@@ -955,7 +955,7 @@ spec = do
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -1092,8 +1092,8 @@ spec = do
           otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
           otherRegionPatch = RegionPatch {regionPatchId = "other-region", regionPatchHtml = "<p>Other</p>"}
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email"}
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = []}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = []}
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
@@ -1181,7 +1181,7 @@ spec = do
       show [regionPatch] `shouldContain` "RegionPatch {regionPatchId = \"status-region\""
       (clientActionResponse == clientActionResponse) `shouldBe` True
       (clientActionResponse /= otherClientActionResponse) `shouldBe` True
-      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\"}"
+      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\", clientActionHeaders = []}"
       show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = 200"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
@@ -1474,7 +1474,8 @@ spec = do
                         ClientActionResponse
                           { clientActionStatus = 422,
                             clientActionPatches = [RegionPatch "status-region" "<p id=\"status-region\">Enter a valid email address.</p>"],
-                            clientActionFocusId = Just "email"
+                            clientActionFocusId = Just "email",
+                            clientActionHeaders = [("Set-Cookie", "session=opaque")]
                           }
                     )
               }
@@ -1500,6 +1501,7 @@ spec = do
             }
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
+      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldBe` Just "session=opaque"
       readResponseBody response
         `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
 
@@ -1519,7 +1521,7 @@ spec = do
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =
             sampleApplication
-              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing}))
+              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = []}))
               }
       actionBodyChunks <- newIORef []
       let actionRequest =

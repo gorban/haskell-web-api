@@ -104,6 +104,8 @@ spec = do
           expectationFailure "expected pageSiteRoute to render a plain page response"
         BodyResponse _ ->
           expectationFailure "expected a page response for the home route"
+        ClientActionBodyResponse _ ->
+          expectationFailure "expected a page response for the home route"
 
     it "renders the configured not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["missing"])
