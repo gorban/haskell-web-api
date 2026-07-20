@@ -5,8 +5,9 @@ module Unit.WebApi.SessionSpec (spec) where
 
 import Control.Exception (evaluate)
 import Control.Monad (unless)
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Text qualified as Text
+import Data.Word (Word64)
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Session
   ( OpaqueSession (..),
@@ -22,6 +23,7 @@ import WebApi.Postgres (buildRuntimePostgresAccountSessionStore, buildRuntimePos
 import WebApi.Session
   ( AccountSessionStore (..),
     AccountSessionStoreError (..),
+    issueAccountSession,
   )
 
 spec :: Spec
@@ -105,6 +107,35 @@ spec = do
     it "keeps the account-session errors comparable without exposing persistence details" $ do
       AccountSessionStoreUnavailable == AccountSessionStoreUnavailable `shouldBe` True
       AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True
+
+  describe "account-session issuance" $ do
+    it "generates and persists an opaque session after authentication succeeds" $ do
+      savedSessionReference <- newIORef Nothing
+      let store =
+            AccountSessionStore
+              { saveAccountSession = \session -> writeIORef savedSessionReference (Just session) >> pure (Right True),
+                loadAccountSession = \_ -> pure (Right Nothing),
+                invalidateAccountSession = \_ -> pure (Right False)
+              }
+      issuedSessionResult <- issueAccountSession store accountId 100
+      case issuedSessionResult of
+        Left _ -> expectationFailure "expected session issuance to succeed"
+        Right issuedSession -> do
+          sessionPrincipal issuedSession `shouldBe` accountId
+          sessionIssuedAtNanoseconds issuedSession `shouldBe` 100
+          sessionExpiresAtNanoseconds issuedSession `shouldBe` 28800000000100
+          readIORef savedSessionReference `shouldReturn` Just issuedSession
+
+    it "preserves storage failures and refuses collisions or overflowing expirations" $ do
+      let store result =
+            AccountSessionStore
+              { saveAccountSession = \_ -> pure result,
+                loadAccountSession = \_ -> pure (Right Nothing),
+                invalidateAccountSession = \_ -> pure (Right False)
+              }
+      issueAccountSession (store (Left AccountSessionStoreUnavailable)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreUnavailable
+      issueAccountSession (store (Right False)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreCorruptData
+      issueAccountSession (store (Right True)) accountId (maxBound :: Word64) `shouldReturnEqual` Left AccountSessionStoreCorruptData
 
 shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do
