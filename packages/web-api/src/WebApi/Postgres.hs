@@ -12,6 +12,8 @@ module WebApi.Postgres
     buildRuntimePostgresAccountCredentialStoreWithRunner,
     buildRuntimePostgresMfaStore,
     buildRuntimePostgresMfaStoreWithRunner,
+    buildRuntimePostgresAccountSessionStore,
+    buildRuntimePostgresAccountSessionStoreWithRunner,
     buildRuntimePostgresDatabaseEffect,
     buildRuntimePostgresDatabaseEffectWithRunner,
     decodeRuntimeQueryValue,
@@ -53,6 +55,12 @@ import HarchWeb.Account
   )
 import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Password (passwordHashText, readPasswordHash)
+import HarchWeb.Session
+  ( OpaqueSession (..),
+    csrfTokenText,
+    mkCsrfToken,
+    sessionIdText,
+  )
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
@@ -84,6 +92,10 @@ import WebApi.Mfa
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
+  )
+import WebApi.Session
+  ( AccountSessionStore (..),
+    AccountSessionStoreError (..),
   )
 
 data PostgresCommand = PostgresCommand
@@ -338,6 +350,72 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
         [value] -> Just value
         _ -> Nothing
 
+buildRuntimePostgresAccountSessionStore :: DatabaseConfig -> AccountSessionStore
+buildRuntimePostgresAccountSessionStore !databaseConfig =
+  buildRuntimePostgresAccountSessionStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+
+buildRuntimePostgresAccountSessionStoreWithRunner ::
+  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  DatabaseConfig ->
+  AccountSessionStore
+buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
+  AccountSessionStore
+    { saveAccountSession = saveSession,
+      loadAccountSession = loadSession,
+      invalidateAccountSession = invalidateSession
+    }
+  where
+    saveSession session = do
+      queryResult <-
+        runQuery
+          databaseConfig
+          saveAccountSessionQuery
+          [ sessionIdText (sessionId session),
+            accountIdText (sessionPrincipal session),
+            csrfTokenText (sessionCsrfToken session),
+            Text.pack (show (sessionIssuedAtNanoseconds session)),
+            Text.pack (show (sessionExpiresAtNanoseconds session))
+          ]
+      pure $
+        case queryResult of
+          Left _ -> Left AccountSessionStoreUnavailable
+          Right [] -> Right False
+          Right [[savedSessionId]]
+            | savedSessionId == sessionIdText (sessionId session) -> Right True
+          Right _ -> Left AccountSessionStoreCorruptData
+
+    loadSession sessionToken = do
+      queryResult <- runQuery databaseConfig loadAccountSessionQuery [sessionIdText sessionToken]
+      pure $
+        case queryResult of
+          Left _ -> Left AccountSessionStoreUnavailable
+          Right [] -> Right Nothing
+          Right [[accountIdValue, csrfTokenValue, issuedAtValue, expiresAtValue]] ->
+            case (mkAccountId accountIdValue, mkCsrfToken csrfTokenValue, readMaybe (Text.unpack issuedAtValue), readMaybe (Text.unpack expiresAtValue)) of
+              (Just accountId, Just csrfToken, Just issuedAt, Just expiresAt) ->
+                Right
+                  ( Just
+                      OpaqueSession
+                        { sessionId = sessionToken,
+                          sessionPrincipal = accountId,
+                          sessionCsrfToken = csrfToken,
+                          sessionIssuedAtNanoseconds = issuedAt,
+                          sessionExpiresAtNanoseconds = expiresAt
+                        }
+                  )
+              _ -> Left AccountSessionStoreCorruptData
+          Right _ -> Left AccountSessionStoreCorruptData
+
+    invalidateSession sessionToken = do
+      queryResult <- runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken]
+      pure $
+        case queryResult of
+          Left _ -> Left AccountSessionStoreUnavailable
+          Right [] -> Right False
+          Right [[invalidatedSessionId]]
+            | invalidatedSessionId == sessionIdText sessionToken -> Right True
+          Right _ -> Left AccountSessionStoreCorruptData
+
 buildRuntimePostgresDatabaseEffectWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->
   (DatabaseConfig -> Text -> IO (Either Text [Text])) ->
@@ -448,12 +526,14 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "email_verifications" <> " (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_totp" <> " (account_id TEXT PRIMARY KEY REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_recovery_codes" <> " (account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_sessions" <> " (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
         "ALTER TABLE " <> qualifiedTableName "page_content" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "ALTER TABLE " <> qualifiedTableName "page_highlights" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "ALTER TABLE " <> qualifiedTableName "accounts" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "ALTER TABLE " <> qualifiedTableName "email_verifications" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "ALTER TABLE " <> qualifiedTableName "account_totp" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
-        "ALTER TABLE " <> qualifiedTableName "account_recovery_codes" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";"
+        "ALTER TABLE " <> qualifiedTableName "account_recovery_codes" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
+        "ALTER TABLE " <> qualifiedTableName "account_sessions" <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";"
       ]
 
     privilegeStatements =
@@ -474,12 +554,14 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
             "REVOKE ALL ON TABLE " <> qualifiedTableName "email_verifications" <> " FROM PUBLIC;",
             "REVOKE ALL ON TABLE " <> qualifiedTableName "account_totp" <> " FROM PUBLIC;",
             "REVOKE ALL ON TABLE " <> qualifiedTableName "account_recovery_codes" <> " FROM PUBLIC;",
+            "REVOKE ALL ON TABLE " <> qualifiedTableName "account_sessions" <> " FROM PUBLIC;",
             "GRANT SELECT ON TABLE " <> qualifiedTableName "page_content" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
             "GRANT SELECT ON TABLE " <> qualifiedTableName "page_highlights" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "accounts" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "email_verifications" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
             "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_totp" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
-            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_recovery_codes" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";"
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_recovery_codes" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";",
+            "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName "account_sessions" <> " TO " <> sqlIdentifier (databaseUser runtimeDatabaseConfig) <> ";"
           ]
 
 seedStatements :: [Text]
@@ -787,6 +869,18 @@ loadUnusedRecoveryCodeHashesQuery =
 consumeRecoveryCodeHashQuery :: Text
 consumeRecoveryCodeHashQuery =
   "UPDATE web_api.account_recovery_codes SET used_at_nanoseconds = $3 WHERE account_id = $1 AND code_hash = $2 AND used_at_nanoseconds IS NULL RETURNING account_id;"
+
+saveAccountSessionQuery :: Text
+saveAccountSessionQuery =
+  "INSERT INTO web_api.account_sessions (session_id, account_id, csrf_token, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;"
+
+loadAccountSessionQuery :: Text
+loadAccountSessionQuery =
+  "SELECT account_id, csrf_token, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.account_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;"
+
+invalidateAccountSessionQuery :: Text
+invalidateAccountSessionQuery =
+  "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = issued_at_nanoseconds WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;"
 
 homeSummaryOperation :: DatabaseOperation
 homeSummaryOperation =

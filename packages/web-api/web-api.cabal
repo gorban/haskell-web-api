@@ -81,6 +81,7 @@ library
     WebApi.Response
     WebApi.Route
     WebApi.RouteData
+    WebApi.Session
     WebApi.SetupConfig
     WebApi.SetupPlan
 

@@ -3694,7 +3694,7 @@ spec = do
       recordedCommands <- readIORef recordedCommandsReference
       map commandSql recordedCommands `shouldBe` migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements
 
-    it "creates account verification and MFA storage without persisting raw bearer secrets" $ do
+    it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $ do
       migrationStatementsFor migrationPostgresTestConfig postgresTestConfig
         `shouldSatisfy` \statements ->
           all
@@ -3703,10 +3703,12 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.email_verifications (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
               "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
               "CREATE TABLE IF NOT EXISTS web_api.account_recovery_codes (account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
+              "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
               "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.accounts TO \"" <> databaseUser postgresTestConfig <> "\";",
               "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.email_verifications TO \"" <> databaseUser postgresTestConfig <> "\";",
               "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_totp TO \"" <> databaseUser postgresTestConfig <> "\";",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_recovery_codes TO \"" <> databaseUser postgresTestConfig <> "\";"
+              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_recovery_codes TO \"" <> databaseUser postgresTestConfig <> "\";",
+              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_sessions TO \"" <> databaseUser postgresTestConfig <> "\";"
             ]
 
     it "keeps the legacy same-config migration wrappers on the runtime-config path"
