@@ -37,7 +37,7 @@ done < <(find packages -name '*.cabal' -type f | grep -v '^packages/hspec-expect
 
 while IFS= read -r haskell_file; do
   dos2unix -q "$haskell_file"
-  output="$(hlint "$haskell_file" 2>&1)" || {
+  output="$(hlint --language=ImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
     format_ok=1
     continue

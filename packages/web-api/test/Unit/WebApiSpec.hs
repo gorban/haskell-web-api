@@ -60,7 +60,7 @@ import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..),
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
@@ -101,6 +101,9 @@ homeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb
 secondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = defaultRequestContext}
 
+spacesRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spacesRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SpacesRoute, HarchWeb.requestContext = defaultRequestContext}
+
 spanishRequestContext :: AppRequestContext
 spanishRequestContext = defaultRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = True}
 
@@ -118,6 +121,9 @@ spanishHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, H
 
 spanishSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishSecondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, HarchWeb.requestContext = spanishRequestContext}
+
+spanishSpacesRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishSpacesRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SpacesRoute, HarchWeb.requestContext = spanishRequestContext}
 
 prefixedHomeRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedHomeRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = HomeRoute, HarchWeb.requestContext = prefixedRequestContext}
@@ -307,6 +313,17 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
 
 forceShowValue :: (Show value) => value -> Bool
 forceShowValue = foldr seq True . show
+
+awaitDevSmtpEmail :: DevSmtp.DevSmtpServer -> Text -> IO (Maybe DevSmtp.DevSmtpEmail)
+awaitDevSmtpEmail server recipient = go (100 :: Int)
+  where
+    go remaining = do
+      received <- DevSmtp.takeLatestDevSmtpEmailTo server recipient
+      case received of
+        Just email -> pure (Just email)
+        Nothing
+          | remaining > 0 -> threadDelay 10000 >> go (remaining - 1)
+          | otherwise -> pure Nothing
 
 metadataFields :: RouteMetadata -> (Maybe Text, Text, Text, [Text])
 metadataFields metadata =
@@ -2188,7 +2205,7 @@ spec = do
         case Email.mkEmailMessage recipient "Verification test" "Hello" of
           Nothing -> expectationFailure "expected a valid SMTP test message"
           Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message
-        DevSmtp.takeLatestDevSmtpEmailTo server "person@example.test"
+        awaitDevSmtpEmail server "person@example.test"
           >>= \case
             Just received ->
               "Subject: Verification test"
@@ -2595,10 +2612,12 @@ spec = do
         `shouldBe` "SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}))"
       show (StatusApiDataResult statusApiData)
         `shouldBe` "StatusApiDataResult (StatusApiData {statusApiLocale = Spanish})"
+      show SpacesRouteDataResult `shouldBe` "SpacesRouteDataResult"
       show [homeRouteData] `shouldBe` "[HomeRouteData {homeRouteSummary = \"Stubbed home summary\"}]"
       show [secondRouteData]
         `shouldBe` "[SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = [\"Shared loader\"]}]"
       show [statusApiData] `shouldBe` "[StatusApiData {statusApiLocale = Spanish}]"
+      show [SpacesRouteDataResult] `shouldBe` "[SpacesRouteDataResult]"
       show [NotFoundRouteDataResult] `shouldBe` "[NotFoundRouteDataResult]"
 
     it "selects default stubbed and status route data without extra wiring" $ do
@@ -2617,6 +2636,9 @@ spec = do
                   secondRouteHighlights = []
                 }
           )
+      selectRouteData spacesRequest `shouldReturn` SpacesRouteDataResult
+      selectRouteDataSelectionWithDatabase (buildSeededDatabaseEffect defaultDatabaseSeed) spacesRequest
+        `shouldReturn` RouteDataSelection SpacesRouteDataResult []
       selectRouteData spanishApiStatusRequest
         `shouldReturn` StatusApiDataResult
           StatusApiData
@@ -6243,6 +6265,11 @@ spec = do
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
+          spacesPageModel =
+            SpacesPageModel
+              { spacesHeading = "Site under construction",
+                spacesSummary = "Follow this space."
+              }
           notFoundPageModel =
             NotFoundPageModel
               { notFoundHeading = "Not Found",
@@ -6287,10 +6314,13 @@ spec = do
       homePageModel `shouldNotBe` homePageModel {homeHeading = "Inicio"}
       secondPageModel `shouldBe` secondPageModel
       secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
+      spacesPageModel `shouldBe` spacesPageModel
+      spacesPageModel `shouldNotBe` spacesPageModel {spacesSummary = "Different"}
       notFoundPageModel `shouldBe` notFoundPageModel
       notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = "Missing"}
       HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
+      SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
       PageSurface `shouldNotBe` ApiSurface
       HomeRoute `shouldNotBe` SecondRoute
@@ -6393,6 +6423,11 @@ spec = do
                 secondErrorMessage = Nothing,
                 secondPrimaryAction = callToAction
               }
+          spacesPageModel =
+            SpacesPageModel
+              { spacesHeading = "Site under construction",
+                spacesSummary = "Follow this space."
+              }
           notFoundPageModel =
             NotFoundPageModel
               { notFoundHeading = "Not Found",
@@ -6403,8 +6438,13 @@ spec = do
       show Https `shouldBe` "Https"
       show HomeRoute `shouldBe` "HomeRoute"
       show SecondRoute `shouldBe` "SecondRoute"
+      show SpacesRoute `shouldBe` "SpacesRoute"
       show StatusApiRoute `shouldBe` "StatusApiRoute"
       show NotFoundRoute `shouldBe` "NotFoundRoute"
+      show spacesPageModel
+        `shouldBe` "SpacesPageModel {spacesHeading = \"Site under construction\", spacesSummary = \"Follow this space.\"}"
+      show [spacesPageModel]
+        `shouldBe` "[SpacesPageModel {spacesHeading = \"Site under construction\", spacesSummary = \"Follow this space.\"}]"
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 certbotConfig "")
       shouldBeParenthesized (showsPrec 11 acmeConfig "")
@@ -6421,9 +6461,11 @@ spec = do
       shouldBeParenthesized (showsPrec 11 callToAction "")
       shouldBeParenthesized (showsPrec 11 homePageModel "")
       shouldBeParenthesized (showsPrec 11 secondPageModel "")
+      shouldBeParenthesized (showsPrec 11 spacesPageModel "")
       shouldBeParenthesized (showsPrec 11 notFoundPageModel "")
       shouldBeParenthesized (showsPrec 11 (HomePage homePageModel) "")
       shouldBeParenthesized (showsPrec 11 (SecondPage secondPageModel) "")
+      shouldBeParenthesized (showsPrec 11 (SpacesPage spacesPageModel) "")
       shouldBeParenthesized (showsPrec 11 (NotFoundPage notFoundPageModel) "")
       shouldBeParenthesized (showsPrec 11 (UnsupportedLocalePrefix "de") "")
       shouldBeParenthesized (showsPrec 11 (UnsupportedPath "/missing") "")
@@ -6586,6 +6628,10 @@ spec = do
     it "parses the second page path" $
       parseRoute defaultRequestContext "/second" `shouldBe` Just secondRequest
 
+    it "parses the app-home spaces path with its typed locale" $ do
+      parseRoute defaultRequestContext "/spaces" `shouldBe` Just spacesRequest
+      parseRoute defaultRequestContext "/es/spaces" `shouldBe` Just spanishSpacesRequest
+
     it "parses SSR account routes and preserves email-verification query values" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/register") `shouldBe` Just RegistrationRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/mfa") `shouldBe` Just MfaEnrollmentRoute
@@ -6654,6 +6700,8 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath homeRequest) `shouldBe` Just homeRequest
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath spanishSecondRequest) `shouldBe` Just spanishSecondRequest
+      parseRoute defaultRequestContext (renderRoutePath spacesRequest) `shouldBe` Just spacesRequest
+      parseRoute defaultRequestContext (renderRoutePath spanishSpacesRequest) `shouldBe` Just spanishSpacesRequest
       parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext (renderRoutePath apiSecondRequest) `shouldBe` Just apiSecondRequest
@@ -6664,6 +6712,8 @@ spec = do
       renderRoutePath spanishHomeRequest `shouldBe` "/es"
       renderRoutePath secondRequest `shouldBe` "/second"
       renderRoutePath spanishSecondRequest `shouldBe` "/es/second"
+      renderRoutePath spacesRequest `shouldBe` "/spaces"
+      renderRoutePath spanishSpacesRequest `shouldBe` "/es/spaces"
       renderRoutePath (HarchWeb.RouteRequest HomeRoute explicitEnglishRequestContext) `shouldBe` "/en"
       renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext) `shouldBe` "/en/second"
       renderRoutePath (HarchWeb.RouteRequest RegistrationRoute defaultRequestContext) `shouldBe` "/register"
@@ -6691,6 +6741,9 @@ spec = do
 
     it "matches the second page path" $
       pureRouteMatcher "/second" `shouldBe` secondRequest
+
+    it "matches the app-home spaces path" $
+      pureRouteMatcher "/spaces" `shouldBe` spacesRequest
 
     it "matches locale-prefixed paths with the merged request context" $
       pureRouteMatcher "/es" `shouldBe` spanishHomeRequest
@@ -6722,6 +6775,16 @@ spec = do
             HarchWeb.pageContext = defaultRequestContext,
             HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
             HarchWeb.pageBootstrapHooks = ["second-page"]
+          }
+
+    it "renders the app-home spaces page entirely on the server" $
+      renderPage defaultAppConfig spacesRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Spaces",
+            HarchWeb.pageRoute = SpacesRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>",
+            HarchWeb.pageBootstrapHooks = []
           }
 
     it "selects a stable not-found page model" $
@@ -7278,6 +7341,20 @@ spec = do
                   }
             }
 
+    it "ports the spaces placeholder with its source-app English and Spanish copy" $ do
+      buildPageModel spacesRequest
+        `shouldReturn` SpacesPage
+          SpacesPageModel
+            { spacesHeading = "Site under construction",
+              spacesSummary = "Follow this space."
+            }
+      buildPageModel spanishSpacesRequest
+        `shouldReturn` SpacesPage
+          SpacesPageModel
+            { spacesHeading = "Sitio en construcción",
+              spacesSummary = "Sigan este espacio."
+            }
+
     it "builds explicit home-page error state when the database effect fails" $
       buildPageModelWithDatabase
         ( buildSeededDatabaseEffect
@@ -7401,8 +7478,16 @@ spec = do
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+
+    it "renders the app-home spaces surface without requiring client code" $ do
+      spacesPageModel <- buildPageModel spacesRequest
+      renderPageBody spacesPageModel
+        `shouldBe` "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>"
+      spanishSpacesPageModel <- buildPageModel spanishSpacesRequest
+      renderPageBody spanishSpacesPageModel
+        `shouldBe` "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Sitio en construcción</h1><p>Sigan este espacio.</p></section>"
 
     it "preserves page-body HTML invariants needed for later navigation enhancement" $ do
       homePageModel <- buildPageModel homeRequest
@@ -7478,9 +7563,10 @@ spec = do
 
   describe "page shell integration" $ do
     it "keeps every page route's path, title, and enhancements in one metadata table" $
-      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, NotFoundRoute, StatusApiRoute]
+      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, NotFoundRoute, StatusApiRoute]
         `shouldBe` [ (Nothing, "", "Home", []),
                      (Just "second", "/second", "Second", ["second-page"]),
+                     (Just "spaces", "/spaces", "Spaces", []),
                      (Just "register", "/register", "Create account", []),
                      (Just "verify", "/verify", "Verify email", []),
                      (Just "mfa", "/mfa", "Set up authenticator", []),
@@ -7493,15 +7579,18 @@ spec = do
     it "keeps client-only enhancement hooks in the app seam instead of page rendering" $ do
       pageEnhancementHooks HomeRoute `shouldBe` []
       pageEnhancementHooks SecondRoute `shouldBe` ["second-page"]
+      pageEnhancementHooks SpacesRoute `shouldBe` []
       pageEnhancementHooks StatusApiRoute `shouldBe` []
       pageEnhancementHooks NotFoundRoute `shouldBe` []
 
     it "marks the active navigation item for each routed page" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute
       secondShell <- renderedShell defaultAppConfig SecondRoute
+      spacesShell <- renderedShell defaultAppConfig SpacesRoute
       notFoundShell <- renderedShell defaultAppConfig NotFoundRoute
-      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a>" homeShell `shouldBe` True
-      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a>" secondShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" homeShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a>" secondShell `shouldBe` True
+      Text.isInfixOf "<a href=\"/spaces\" data-page-link=\"true\" aria-current=\"page\">Spaces</a>" spacesShell `shouldBe` True
       Text.isInfixOf "aria-current=\"page\"" notFoundShell `shouldBe` False
 
     it "emits deterministic navigation hooks and script references when assets are configured" $ do
@@ -7677,12 +7766,14 @@ spec = do
     it "stores the same response-selection behavior used by direct response tests" $ do
       expectedHomeResponse <- selectResponse defaultAppConfig homeRequest
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
+      expectedSpacesResponse <- selectResponse defaultAppConfig spacesRequest
       expectedApiStatusResponse <- selectResponse defaultAppConfig apiStatusRequest
       expectedApiSecondResponse <- selectResponse defaultAppConfig apiSecondRequest
       expectedNotFoundResponse <- selectResponse defaultAppConfig notFoundRequest
       expectedApiNotFoundResponse <- selectResponse defaultAppConfig apiNotFoundRequest
       HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` expectedHomeResponse
       HarchWeb.renderResponse pureApplication secondRequest `shouldReturn` expectedSecondResponse
+      HarchWeb.renderResponse pureApplication spacesRequest `shouldReturn` expectedSpacesResponse
       HarchWeb.renderResponse pureApplication apiStatusRequest `shouldReturn` expectedApiStatusResponse
       HarchWeb.renderResponse pureApplication apiSecondRequest `shouldReturn` expectedApiSecondResponse
       HarchWeb.renderResponse pureApplication notFoundRequest `shouldReturn` expectedNotFoundResponse
@@ -7695,6 +7786,11 @@ spec = do
       renderedSecondResponse <- readResponseBody secondResponse
       Text.isInfixOf "<h1 data-page-title=\"true\">Second</h1>" renderedSecondResponse `shouldBe` True
       Text.isInfixOf "<script nonce=\"" renderedSecondResponse `shouldBe` True
+
+      spacesResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["spaces"])
+      Wai.responseStatus spacesResponse `shouldBe` Http.status200
+      renderedSpacesResponse <- readResponseBody spacesResponse
+      Text.isInfixOf "<h1 data-page-title=\"true\">Site under construction</h1>" renderedSpacesResponse `shouldBe` True
 
       apiStatusResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["api", "status"])
       Wai.responseStatus apiStatusResponse `shouldBe` Http.status200

@@ -52,6 +52,7 @@ newtype StatusApiData = StatusApiData
 data RouteDataResult
   = HomeRouteDataResult (Either DatabaseError HomeRouteData)
   | SecondRouteDataResult (Either DatabaseError SecondRouteData)
+  | SpacesRouteDataResult
   | RegistrationRouteDataResult
   | EmailVerificationRouteDataResult
   | MfaEnrollmentRouteDataResult
@@ -116,6 +117,7 @@ routeDataPlan route =
   case route of
     HomeRoute -> LoadHomeRouteData
     SecondRoute -> LoadSecondRouteData
+    SpacesRoute -> UseStaticRouteData SpacesRouteDataResult
     StatusApiRoute -> BuildStatusRouteData
     RegistrationRoute -> UseStaticRouteData RegistrationRouteDataResult
     EmailVerificationRoute -> UseStaticRouteData EmailVerificationRouteDataResult

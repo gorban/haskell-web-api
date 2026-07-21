@@ -63,6 +63,7 @@ data RouteSelectionError
 data AppRoute
   = HomeRoute
   | SecondRoute
+  | SpacesRoute
   | RegistrationRoute
   | EmailVerificationRoute
   | MfaEnrollmentRoute
@@ -246,6 +247,7 @@ pageRoutes :: [AppRoute]
 pageRoutes =
   [ HomeRoute,
     SecondRoute,
+    SpacesRoute,
     RegistrationRoute,
     EmailVerificationRoute,
     MfaEnrollmentRoute,
@@ -278,6 +280,7 @@ routeMetadata route =
   case route of
     HomeRoute -> RouteMetadata Nothing Text.empty "Home" []
     SecondRoute -> RouteMetadata (Just "second") "/second" "Second" ["second-page"]
+    SpacesRoute -> RouteMetadata (Just "spaces") "/spaces" "Spaces" []
     RegistrationRoute -> RouteMetadata (Just "register") "/register" "Create account" []
     EmailVerificationRoute -> RouteMetadata (Just "verify") "/verify" "Verify email" []
     MfaEnrollmentRoute -> RouteMetadata (Just "mfa") "/mfa" "Set up authenticator" []

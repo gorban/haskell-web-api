@@ -6,6 +6,7 @@ module WebApi.Page
     HomePageModel (..),
     NotFoundPageModel (..),
     SecondPageModel (..),
+    SpacesPageModel (..),
     buildPageModelFromRouteData,
     buildPageModelWithDatabase,
     buildPageModel,
@@ -77,6 +78,12 @@ data SecondPageModel = SecondPageModel
   }
   deriving (Eq, Show)
 
+data SpacesPageModel = SpacesPageModel
+  { spacesHeading :: Text,
+    spacesSummary :: Text
+  }
+  deriving (Eq, Show)
+
 data NotFoundPageModel = NotFoundPageModel
   { notFoundHeading :: Text,
     notFoundSummary :: Text,
@@ -87,6 +94,7 @@ data NotFoundPageModel = NotFoundPageModel
 data AppPageModel
   = HomePage HomePageModel
   | SecondPage SecondPageModel
+  | SpacesPage SpacesPageModel
   | RegistrationPage Text RegistrationForm
   | EmailVerificationPage Text VerificationForm
   | MfaEnrollmentPage Text MfaEnrollmentForm
@@ -100,6 +108,8 @@ instance Show AppPageModel where
     showParen (precedence > 10) (showString "HomePage " . showsPrec 11 homePage)
   showsPrec precedence (SecondPage secondPage) =
     showParen (precedence > 10) (showString "SecondPage " . showsPrec 11 secondPage)
+  showsPrec precedence (SpacesPage spacesPage) =
+    showParen (precedence > 10) (showString "SpacesPage " . showsPrec 11 spacesPage)
   showsPrec precedence (RegistrationPage registrationPath RegistrationForm {registrationFormEmail, registrationFormMessage, registrationFormIsError}) =
     showParen
       (precedence > 10)
@@ -177,6 +187,12 @@ buildPageModelFromRouteData routeRequest routeData =
       buildHomePageModel routeRequest homeRouteDataResult
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
+    SpacesRouteDataResult ->
+      SpacesPage
+        SpacesPageModel
+          { spacesHeading = localizedText routeRequest "Site under construction" "Sitio en construcción",
+            spacesSummary = localizedText routeRequest "Follow this space." "Sigan este espacio."
+          }
     RegistrationRouteDataResult ->
       RegistrationPage
         (renderRoutePath (HarchWeb.RouteRequest RegistrationRoute (HarchWeb.requestContext routeRequest)))
@@ -301,6 +317,15 @@ renderPageBody pageModel =
           renderSecondPageHighlights secondPage,
           renderCallToAction (secondPrimaryAction secondPage),
           "</section>"
+        ]
+    SpacesPage spacesPage ->
+      Text.concat
+        [ "<section data-page=\"spaces\">",
+          "<h1 data-page-title=\"true\">",
+          spacesHeading spacesPage,
+          "</h1><p>",
+          spacesSummary spacesPage,
+          "</p></section>"
         ]
     RegistrationPage registrationPath registrationForm ->
       renderRegistrationPage registrationPath registrationForm

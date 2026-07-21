@@ -63,6 +63,27 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "serves the app-home spaces placeholder through SSR and enhanced navigation" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
+              spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
+          runBrowserScenario
+            browser
+            ( do
+                visit homeUrl
+                click (byRole Link `named` "Spaces")
+                assertUrl (`shouldBe` spacesUrl)
+                assertText (byRole Heading) (`shouldBe` "Site under construction")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                visitWithoutScripts spanishSpacesUrl
+                assertText (byRole Heading) (`shouldBe` "Sitio en construcción")
+                assertText (byText "Sigan este espacio.") (`shouldBe` "Sigan este espacio.")
+            )
+            `shouldReturn` Right ()
+
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
   loadedConfig <- loadPlaywrightBrowserConfig

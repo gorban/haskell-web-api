@@ -108,6 +108,11 @@ buildAppSiteRoutes config databaseEffect =
             Site.siteRouteResponse = renderSelectedResponse
           },
         Site.SiteRoute
+          { Site.siteRouteValue = SpacesRoute,
+            Site.siteRouteNavigationLabel = Just "Spaces",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
           { Site.siteRouteValue = RegistrationRoute,
             Site.siteRouteNavigationLabel = Just "Create account",
             Site.siteRouteResponse = renderSelectedResponse

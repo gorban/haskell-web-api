@@ -58,6 +58,10 @@ addAppNavigationItems shell =
           HarchWeb.NavigationItem
             { HarchWeb.navigationLabel = "Second",
               HarchWeb.navigationRoute = SecondRoute
+            },
+          HarchWeb.NavigationItem
+            { HarchWeb.navigationLabel = "Spaces",
+              HarchWeb.navigationRoute = SpacesRoute
             }
         ]
     }
