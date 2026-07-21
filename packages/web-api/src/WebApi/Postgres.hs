@@ -34,6 +34,7 @@ module WebApi.Postgres
 where
 
 import Control.Exception (bracket, evaluate)
+import Control.Monad.Except (ExceptT (ExceptT), liftEither, runExceptT, withExceptT)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty qualified as NonEmpty
@@ -44,7 +45,9 @@ import Data.Text.Encoding.Error (lenientDecode)
 import Database.PostgreSQL.LibPQ qualified as LibPQ
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Account
-  ( StoredEmailVerification (..),
+  ( AccountId,
+    EmailVerificationTokenDigest,
+    StoredEmailVerification (..),
     accountIdText,
     emailVerificationTokenDigestText,
     mkAccountId,
@@ -57,6 +60,7 @@ import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Password (passwordHashText, readPasswordHash)
 import HarchWeb.Session
   ( OpaqueSession (..),
+    SessionId,
     csrfTokenText,
     mkCsrfToken,
     sessionIdText,
@@ -191,17 +195,12 @@ buildRuntimePostgresAccountCredentialStoreWithRunner ::
 buildRuntimePostgresAccountCredentialStoreWithRunner runQuery databaseConfig =
   AccountCredentialStore findCredential
   where
-    findCredential emailAddress = do
-      queryResult <- runQuery databaseConfig findAccountCredentialByEmailQuery [emailAddressText emailAddress]
-      pure $
-        case queryResult of
-          Left queryError -> Left (AccountCredentialStoreUnavailable queryError)
-          Right [] -> Right Nothing
-          Right [[accountIdValue, passwordHashValue, verifiedAtValue]] -> do
-            accountId <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid account id")) Right (mkAccountId accountIdValue)
-            passwordHash <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid password hash")) Right (readPasswordHash passwordHashValue)
-            Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
-          Right rows -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
+    findCredential emailAddress =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountCredentialStoreUnavailable $
+            runQuery databaseConfig findAccountCredentialByEmailQuery [emailAddressText emailAddress]
+        liftEither (decodeAccountCredentialRows rows)
 
 buildRuntimePostgresAccountStoreWithRunner ::
   (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
@@ -214,63 +213,89 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
       consumeEmailVerification = consumeVerification
     }
   where
-    createAccount pendingAccount = do
-      queryResult <-
-        runQuery
-          databaseConfig
-          createPendingAccountQuery
-          [ accountIdText (pendingAccountId pendingAccount),
-            emailAddressText (pendingAccountEmail pendingAccount),
-            passwordHashText (pendingAccountPasswordHash pendingAccount),
-            emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
-            Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
-            Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount))
-          ]
-      pure $
-        case queryResult of
-          Left queryError -> Left (AccountStoreUnavailable queryError)
-          Right [] -> Right False
-          Right [[createdAccountId]]
-            | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right True
-          Right rows -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
+    createAccount pendingAccount =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountStoreUnavailable $
+            runQuery
+              databaseConfig
+              createPendingAccountQuery
+              [ accountIdText (pendingAccountId pendingAccount),
+                emailAddressText (pendingAccountEmail pendingAccount),
+                passwordHashText (pendingAccountPasswordHash pendingAccount),
+                emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
+                Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
+                Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount))
+              ]
+        liftEither (decodeCreatedAccount pendingAccount rows)
 
-    findVerification tokenDigest = do
-      queryResult <- runQuery databaseConfig findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
-      pure $
-        case queryResult of
-          Left queryError -> Left (AccountStoreUnavailable queryError)
-          Right [] -> Right Nothing
-          Right [[accountIdValue, emailAddressValue, expiresAtValue]] -> do
-            accountId <- maybe (Left (AccountStoreCorruptData "email verification has an invalid account id")) Right (mkAccountId accountIdValue)
-            emailAddress <- maybe (Left (AccountStoreCorruptData "email verification has an invalid email address")) Right (mkEmailAddress emailAddressValue)
-            expiresAt <- maybe (Left (AccountStoreCorruptData "email verification has an invalid expiry")) Right (readMaybe (Text.unpack expiresAtValue))
-            Right
-              ( Just
-                  StoredEmailVerification
-                    { storedVerificationAccountId = accountId,
-                      storedVerificationEmail = emailAddress,
-                      storedVerificationTokenDigest = tokenDigest,
-                      storedVerificationExpiresAtNanoseconds = expiresAt
-                    }
-              )
-          Right rows -> Left (AccountStoreCorruptData ("unexpected email-verification result: " <> Text.pack (show rows)))
+    findVerification tokenDigest =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountStoreUnavailable $
+            runQuery databaseConfig findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
+        liftEither (decodeStoredVerification tokenDigest rows)
 
-    consumeVerification tokenDigest now = do
-      queryResult <-
-        runQuery
-          databaseConfig
-          consumeEmailVerificationQuery
-          [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
-      pure $
-        case queryResult of
-          Left queryError -> Left (AccountStoreUnavailable queryError)
-          Right [] -> Right Nothing
-          Right [[accountIdValue]] ->
-            maybe
-              (Left (AccountStoreCorruptData "email verification was consumed for an invalid account id"))
-              (Right . Just)
-              (mkAccountId accountIdValue)
-          Right rows -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
+    consumeVerification tokenDigest now =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountStoreUnavailable $
+            runQuery
+              databaseConfig
+              consumeEmailVerificationQuery
+              [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
+        liftEither (decodeConsumedVerification rows)
+
+runStoreQuery :: (Text -> storeError) -> IO (Either Text value) -> ExceptT storeError IO value
+runStoreQuery mapError = withExceptT mapError . ExceptT
+
+decodeAccountCredentialRows :: [[Text]] -> Either AccountCredentialStoreError (Maybe AccountCredential)
+decodeAccountCredentialRows rows =
+  case rows of
+    [] -> Right Nothing
+    [[accountIdValue, passwordHashValue, verifiedAtValue]] -> do
+      accountId <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid account id")) Right (mkAccountId accountIdValue)
+      passwordHash <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid password hash")) Right (readPasswordHash passwordHashValue)
+      Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
+    _ -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
+
+decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError Bool
+decodeCreatedAccount pendingAccount rows =
+  case rows of
+    [] -> Right False
+    [[createdAccountId]]
+      | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right True
+    _ -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
+
+decodeStoredVerification :: EmailVerificationTokenDigest -> [[Text]] -> Either AccountStoreError (Maybe StoredEmailVerification)
+decodeStoredVerification tokenDigest rows =
+  case rows of
+    [] -> Right Nothing
+    [[accountIdValue, emailAddressValue, expiresAtValue]] -> do
+      accountId <- maybe (Left (AccountStoreCorruptData "email verification has an invalid account id")) Right (mkAccountId accountIdValue)
+      emailAddress <- maybe (Left (AccountStoreCorruptData "email verification has an invalid email address")) Right (mkEmailAddress emailAddressValue)
+      expiresAt <- maybe (Left (AccountStoreCorruptData "email verification has an invalid expiry")) Right (readMaybe (Text.unpack expiresAtValue))
+      Right
+        ( Just
+            StoredEmailVerification
+              { storedVerificationAccountId = accountId,
+                storedVerificationEmail = emailAddress,
+                storedVerificationTokenDigest = tokenDigest,
+                storedVerificationExpiresAtNanoseconds = expiresAt
+              }
+        )
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification result: " <> Text.pack (show rows)))
+
+decodeConsumedVerification :: [[Text]] -> Either AccountStoreError (Maybe AccountId)
+decodeConsumedVerification rows =
+  case rows of
+    [] -> Right Nothing
+    [[accountIdValue]] ->
+      maybe
+        (Left (AccountStoreCorruptData "email verification was consumed for an invalid account id"))
+        (Right . Just)
+        (mkAccountId accountIdValue)
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
 
 buildRuntimePostgresMfaStore :: DatabaseConfig -> MfaStore
 buildRuntimePostgresMfaStore !databaseConfig =
@@ -289,66 +314,69 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
       consumeRecoveryCodeHash = consumeRecoveryCode
     }
   where
-    saveEnrollment accountId encryptedSecret now = do
-      queryResult <- runQuery databaseConfig saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)]
-      pure $
-        case queryResult of
-          Left queryError -> Left (MfaStoreUnavailable queryError)
-          Right [] -> Right False
-          Right [[savedAccountId]]
-            | savedAccountId == accountIdText accountId -> Right True
-          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment result: " <> Text.pack (show rows)))
+    saveEnrollment accountId encryptedSecret now =
+      runMfaStoreQuery
+        (runQuery databaseConfig saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)])
+        (decodeMatchingAccount "unexpected TOTP enrollment result: " accountId)
 
-    loadEnrollment accountId = do
-      queryResult <- runQuery databaseConfig loadTotpEnrollmentQuery [accountIdText accountId]
-      pure $
-        case queryResult of
-          Left queryError -> Left (MfaStoreUnavailable queryError)
-          Right [] -> Right Nothing
-          Right [[encryptedSecret, confirmedAtValue]] ->
-            case confirmedAtValue of
-              "" -> Right (Just (StoredTotpEnrollment encryptedSecret Nothing))
-              _ ->
-                maybe
-                  (Left (MfaStoreCorruptData "TOTP enrollment has an invalid confirmation timestamp"))
-                  (Right . Just . StoredTotpEnrollment encryptedSecret . Just)
-                  (readMaybe (Text.unpack confirmedAtValue))
-          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
+    loadEnrollment accountId =
+      runMfaStoreQuery
+        (runQuery databaseConfig loadTotpEnrollmentQuery [accountIdText accountId])
+        decodeTotpEnrollment
 
-    confirmEnrollment accountId recoveryCodeHashes now = do
-      queryResult <- runQuery databaseConfig (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes)
-      pure $
-        case queryResult of
-          Left queryError -> Left (MfaStoreUnavailable queryError)
-          Right [] -> Right False
-          Right [[confirmedAccountId]]
-            | confirmedAccountId == accountIdText accountId -> Right True
-          Right rows -> Left (MfaStoreCorruptData ("unexpected TOTP confirmation result: " <> Text.pack (show rows)))
+    confirmEnrollment accountId recoveryCodeHashes now =
+      runMfaStoreQuery
+        (runQuery databaseConfig (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes))
+        (decodeMatchingAccount "unexpected TOTP confirmation result: " accountId)
 
-    loadRecoveryCodeHashes accountId = do
-      queryResult <- runQuery databaseConfig loadUnusedRecoveryCodeHashesQuery [accountIdText accountId]
-      pure $
-        case queryResult of
-          Left queryError -> Left (MfaStoreUnavailable queryError)
-          Right rows ->
-            case traverse singleColumn rows of
-              Nothing -> Left (MfaStoreCorruptData ("unexpected recovery-code lookup result: " <> Text.pack (show rows)))
-              Just recoveryCodeHashes -> Right recoveryCodeHashes
+    loadRecoveryCodeHashes accountId =
+      runMfaStoreQuery
+        (runQuery databaseConfig loadUnusedRecoveryCodeHashesQuery [accountIdText accountId])
+        decodeRecoveryCodeHashes
 
-    consumeRecoveryCode accountId recoveryCodeHash now = do
-      queryResult <- runQuery databaseConfig consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)]
-      pure $
-        case queryResult of
-          Left queryError -> Left (MfaStoreUnavailable queryError)
-          Right [] -> Right False
-          Right [[consumedAccountId]]
-            | consumedAccountId == accountIdText accountId -> Right True
-          Right rows -> Left (MfaStoreCorruptData ("unexpected recovery-code consumption result: " <> Text.pack (show rows)))
+    consumeRecoveryCode accountId recoveryCodeHash now =
+      runMfaStoreQuery
+        (runQuery databaseConfig consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)])
+        (decodeMatchingAccount "unexpected recovery-code consumption result: " accountId)
 
-    singleColumn row =
-      case row of
-        [value] -> Just value
-        _ -> Nothing
+runMfaStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either MfaStoreError value) -> IO (Either MfaStoreError value)
+runMfaStoreQuery query decodeRows =
+  runExceptT $ do
+    rows <- runStoreQuery MfaStoreUnavailable query
+    liftEither (decodeRows rows)
+
+decodeMatchingAccount :: Text -> AccountId -> [[Text]] -> Either MfaStoreError Bool
+decodeMatchingAccount errorPrefix accountId rows =
+  case rows of
+    [] -> Right False
+    [[returnedAccountId]]
+      | returnedAccountId == accountIdText accountId -> Right True
+    _ -> Left (MfaStoreCorruptData (errorPrefix <> Text.pack (show rows)))
+
+decodeTotpEnrollment :: [[Text]] -> Either MfaStoreError (Maybe StoredTotpEnrollment)
+decodeTotpEnrollment rows =
+  case rows of
+    [] -> Right Nothing
+    [[encryptedSecret, ""]] -> Right (Just (StoredTotpEnrollment encryptedSecret Nothing))
+    [[encryptedSecret, confirmedAtValue]] ->
+      maybe
+        (Left (MfaStoreCorruptData "TOTP enrollment has an invalid confirmation timestamp"))
+        (Right . Just . StoredTotpEnrollment encryptedSecret . Just)
+        (readMaybe (Text.unpack confirmedAtValue))
+    _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
+
+decodeRecoveryCodeHashes :: [[Text]] -> Either MfaStoreError [Text]
+decodeRecoveryCodeHashes rows =
+  maybe
+    (Left (MfaStoreCorruptData ("unexpected recovery-code lookup result: " <> Text.pack (show rows))))
+    Right
+    (traverse decodeSingleColumn rows)
+
+decodeSingleColumn :: [value] -> Maybe value
+decodeSingleColumn row =
+  case row of
+    [value] -> Just value
+    _ -> Nothing
 
 buildRuntimePostgresAccountSessionStore :: DatabaseConfig -> AccountSessionStore
 buildRuntimePostgresAccountSessionStore !databaseConfig =
@@ -365,56 +393,63 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
       invalidateAccountSession = invalidateSession
     }
   where
-    saveSession session = do
-      queryResult <-
-        runQuery
-          databaseConfig
-          saveAccountSessionQuery
-          [ sessionIdText (sessionId session),
-            accountIdText (sessionPrincipal session),
-            csrfTokenText (sessionCsrfToken session),
-            Text.pack (show (sessionIssuedAtNanoseconds session)),
-            Text.pack (show (sessionExpiresAtNanoseconds session))
-          ]
-      pure $
-        case queryResult of
-          Left _ -> Left AccountSessionStoreUnavailable
-          Right [] -> Right False
-          Right [[savedSessionId]]
-            | savedSessionId == sessionIdText (sessionId session) -> Right True
-          Right _ -> Left AccountSessionStoreCorruptData
+    saveSession session =
+      runSessionStoreQuery
+        ( runQuery
+            databaseConfig
+            saveAccountSessionQuery
+            [ sessionIdText (sessionId session),
+              accountIdText (sessionPrincipal session),
+              csrfTokenText (sessionCsrfToken session),
+              Text.pack (show (sessionIssuedAtNanoseconds session)),
+              Text.pack (show (sessionExpiresAtNanoseconds session))
+            ]
+        )
+        (decodeMatchingSessionId (sessionIdText (sessionId session)))
 
-    loadSession sessionToken = do
-      queryResult <- runQuery databaseConfig loadAccountSessionQuery [sessionIdText sessionToken]
-      pure $
-        case queryResult of
-          Left _ -> Left AccountSessionStoreUnavailable
-          Right [] -> Right Nothing
-          Right [[accountIdValue, csrfTokenValue, issuedAtValue, expiresAtValue]] ->
-            case (mkAccountId accountIdValue, mkCsrfToken csrfTokenValue, readMaybe (Text.unpack issuedAtValue), readMaybe (Text.unpack expiresAtValue)) of
-              (Just accountId, Just csrfToken, Just issuedAt, Just expiresAt) ->
-                Right
-                  ( Just
-                      OpaqueSession
-                        { sessionId = sessionToken,
-                          sessionPrincipal = accountId,
-                          sessionCsrfToken = csrfToken,
-                          sessionIssuedAtNanoseconds = issuedAt,
-                          sessionExpiresAtNanoseconds = expiresAt
-                        }
-                  )
-              _ -> Left AccountSessionStoreCorruptData
-          Right _ -> Left AccountSessionStoreCorruptData
+    loadSession sessionToken =
+      runSessionStoreQuery
+        (runQuery databaseConfig loadAccountSessionQuery [sessionIdText sessionToken])
+        (decodeStoredSession sessionToken)
 
-    invalidateSession sessionToken = do
-      queryResult <- runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken]
-      pure $
-        case queryResult of
-          Left _ -> Left AccountSessionStoreUnavailable
-          Right [] -> Right False
-          Right [[invalidatedSessionId]]
-            | invalidatedSessionId == sessionIdText sessionToken -> Right True
-          Right _ -> Left AccountSessionStoreCorruptData
+    invalidateSession sessionToken =
+      runSessionStoreQuery
+        (runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken])
+        (decodeMatchingSessionId (sessionIdText sessionToken))
+
+runSessionStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either AccountSessionStoreError value) -> IO (Either AccountSessionStoreError value)
+runSessionStoreQuery query decodeRows =
+  runExceptT $ do
+    rows <- runStoreQuery (const AccountSessionStoreUnavailable) query
+    liftEither (decodeRows rows)
+
+decodeMatchingSessionId :: Text -> [[Text]] -> Either AccountSessionStoreError Bool
+decodeMatchingSessionId expectedSessionId rows =
+  case rows of
+    [] -> Right False
+    [[returnedSessionId]]
+      | returnedSessionId == expectedSessionId -> Right True
+    _ -> Left AccountSessionStoreCorruptData
+
+decodeStoredSession :: SessionId -> [[Text]] -> Either AccountSessionStoreError (Maybe (OpaqueSession AccountId))
+decodeStoredSession sessionToken rows =
+  case rows of
+    [] -> Right Nothing
+    [[accountIdValue, csrfTokenValue, issuedAtValue, expiresAtValue]] ->
+      case (mkAccountId accountIdValue, mkCsrfToken csrfTokenValue, readMaybe (Text.unpack issuedAtValue), readMaybe (Text.unpack expiresAtValue)) of
+        (Just accountId, Just csrfToken, Just issuedAt, Just expiresAt) ->
+          Right
+            ( Just
+                OpaqueSession
+                  { sessionId = sessionToken,
+                    sessionPrincipal = accountId,
+                    sessionCsrfToken = csrfToken,
+                    sessionIssuedAtNanoseconds = issuedAt,
+                    sessionExpiresAtNanoseconds = expiresAt
+                  }
+            )
+        _ -> Left AccountSessionStoreCorruptData
+    _ -> Left AccountSessionStoreCorruptData
 
 buildRuntimePostgresDatabaseEffectWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->

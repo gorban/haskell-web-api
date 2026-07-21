@@ -66,6 +66,7 @@ spec = do
       validateTotpCode nowSeconds 1 rfcSecret followingPeriodCode `shouldBe` True
       validateTotpCode nowSeconds 1 rfcSecret outsideWindowCode `shouldBe` False
       validateTotpCode 0 1 rfcSecret (totpCode 0 rfcSecret) `shouldBe` True
+      validateTotpCode 0 1 rfcSecret (totpCode 30 rfcSecret) `shouldBe` True
 
 rfcSecret :: TotpSecret
 rfcSecret = required (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")

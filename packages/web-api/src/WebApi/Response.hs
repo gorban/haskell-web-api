@@ -178,12 +178,12 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperatio
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
-            { Observability.attributeName = "exception.type",
+            { Observability.attributeName = "error.type",
               Observability.attributeValue = Observability.TextAttribute (databaseErrorType databaseError)
             },
           Observability.ObservabilityAttribute
-            { Observability.attributeName = "exception.message",
-              Observability.attributeValue = Observability.TextAttribute (databaseErrorMessage databaseError)
+            { Observability.attributeName = "app.failure.code",
+              Observability.attributeValue = Observability.TextAttribute (databaseFailureCode databaseError)
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.route",
@@ -267,11 +267,11 @@ databaseErrorType databaseError =
     HomePageDataError _ -> "HomePageDataError"
     SecondPageDataError _ -> "SecondPageDataError"
 
-databaseErrorMessage :: DatabaseError -> Text
-databaseErrorMessage databaseError =
+databaseFailureCode :: DatabaseError -> Text
+databaseFailureCode databaseError =
   case databaseError of
-    HomePageDataError message -> message
-    SecondPageDataError message -> message
+    HomePageDataError _ -> "database.home-page-data"
+    SecondPageDataError _ -> "database.second-page-data"
 
 renderRequestSurface :: RequestSurface -> Text
 renderRequestSurface requestSurfaceValue =

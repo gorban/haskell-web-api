@@ -47,6 +47,9 @@ module WebApi.Config
 where
 
 import Control.Applicative ((<|>))
+import Control.Monad (filterM)
+import Control.Monad.Except (MonadError (throwError))
+import Control.Monad.Reader (ReaderT, asks, runReaderT)
 import Core.Config
   ( ConfigOverridesFileError (..),
     ConfigParseError (..),
@@ -62,6 +65,7 @@ import Core.Config
     parsePositiveInt,
   )
 import Data.Bifunctor (bimap)
+import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
@@ -436,11 +440,32 @@ parseAppStartupConfig committedDefaults localOverrides environmentOverrides =
 
 parseRuntimeAppConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppConfig
 parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
-  parsedTitlePrefix <- requiredConfigValue "APP_TITLE_PREFIX"
-  parsedListeners <- parseListenerConfigs
-  parsedStaticAssets <- parseStaticAssetsConfig
-  parsedRequestPolicy <- parseRequestPolicyConfig parsedListeners
-  parsedObservability <- parseObservabilityConfig
+  runReaderT
+    parseAppConfig
+    ConfigSources
+      { configCommittedDefaults = committedDefaults,
+        configLocalOverrides = localOverrides,
+        configEnvironmentOverrides = environmentOverrides
+      }
+
+data ConfigSources = ConfigSources
+  { configCommittedDefaults :: [(Text, Text)],
+    configLocalOverrides :: [(Text, Text)],
+    configEnvironmentOverrides :: [(Text, Text)]
+  }
+
+type ConfigParser = ReaderT ConfigSources (Either ConfigParseError)
+
+liftEitherP :: Either ConfigParseError value -> ConfigParser value
+liftEitherP = either throwError pure
+
+parseAppConfig :: ConfigParser AppConfig
+parseAppConfig = do
+  parsedTitlePrefix <- requiredConfigValueP "APP_TITLE_PREFIX"
+  parsedListeners <- parseListenerConfigsP
+  parsedStaticAssets <- parseStaticAssetsConfigP
+  parsedRequestPolicy <- parseRequestPolicyConfigP parsedListeners
+  parsedObservability <- parseObservabilityConfigP
   pure
     AppConfig
       { appTitlePrefix = parsedTitlePrefix,
@@ -449,386 +474,290 @@ parseRuntimeAppConfig committedDefaults localOverrides environmentOverrides = do
         requestPolicy = parsedRequestPolicy,
         observability = parsedObservability
       }
+
+allConfigEntriesP :: ConfigParser [(Text, Text)]
+allConfigEntriesP = asks (\sources -> configCommittedDefaults sources <> configLocalOverrides sources <> configEnvironmentOverrides sources)
+
+optionalConfigValueP :: Text -> ConfigParser (Maybe Text)
+optionalConfigValueP key =
+  asks (\sources -> lookupConfigValue key (configCommittedDefaults sources) (configLocalOverrides sources) (configEnvironmentOverrides sources))
+
+requiredConfigValueP :: Text -> ConfigParser Text
+requiredConfigValueP key = do
+  maybeValue <- optionalConfigValueP key
+  liftEitherP (maybe (Left (MissingConfigValue key)) Right maybeValue)
+
+parseListenerConfigsP :: ConfigParser [ListenerConfig]
+parseListenerConfigsP = do
+  entries <- allConfigEntriesP
+  case declaredIndices "LISTENER_" entries of
+    [] -> throwError (MissingConfigValue "LISTENER_0_HOST")
+    listenerIndices -> traverse parseListenerConfigP listenerIndices
+
+parseListenerConfigP :: Int -> ConfigParser ListenerConfig
+parseListenerConfigP listenerIndex = do
+  parsedHost <- requiredIndexedConfigValueP "LISTENER" listenerIndex "HOST"
+  parsedPort <- parseRequiredIndexedP listenerIndex "PORT" parsePositiveInt
+  parsedScheme <- parseRequiredIndexedP listenerIndex "SCHEME" parseListenerScheme
+  parsedAcme <- parseListenerAcmeConfigP listenerIndex parsedScheme parsedPort
+  parsedTls <- parseListenerTlsConfigP listenerIndex parsedScheme
+  pure ListenerConfig {listenerHost = parsedHost, listenerPort = parsedPort, listenerScheme = parsedScheme, listenerTls = parsedTls, listenerAcme = parsedAcme}
+
+parseRequiredIndexedP :: Int -> Text -> (Text -> Text -> Either ConfigParseError value) -> ConfigParser value
+parseRequiredIndexedP listenerIndex suffix parser = do
+  let key = indexedConfigKey "LISTENER" listenerIndex suffix
+  value <- requiredConfigValueP key
+  liftEitherP (parser key value)
+
+parseListenerAcmeConfigP :: Int -> ListenerScheme -> Int -> ConfigParser (Maybe AcmeConfig)
+parseListenerAcmeConfigP listenerIndex Http parsedPort = do
+  hasAcmeConfig <- listenerHasAcmeConfigP listenerIndex
+  if hasAcmeConfig then Just <$> parseAcmeConfigP listenerIndex parsedPort else pure Nothing
+parseListenerAcmeConfigP _ Https _ = pure Nothing
+
+parseListenerTlsConfigP :: Int -> ListenerScheme -> ConfigParser (Maybe TlsConfig)
+parseListenerTlsConfigP _ Http = pure Nothing
+parseListenerTlsConfigP listenerIndex Https = do
+  tlsSource <- requiredIndexedConfigValueP "LISTENER" listenerIndex "TLS_SOURCE"
+  Just . TlsConfig <$> parseTlsCertificateSourceP listenerIndex tlsSource
+
+parseTlsCertificateSourceP :: Int -> Text -> ConfigParser TlsCertificateSource
+parseTlsCertificateSourceP listenerIndex tlsSource =
+  case tlsSource of
+    "manual" -> ManualCertificateFiles <$> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE" <*> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
+    "shared" -> parseSharedCertificateSourceP listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeoutP listenerIndex)
+    "shared-wait" -> parseSharedCertificateSourceP listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeoutP listenerIndex)
+    "shared-fail-fast" -> parseSharedCertificateSourceP listenerIndex (parseSharedTlsFailFastModeP listenerIndex)
+    "acme" -> AcmeCertificateSource <$> parseAcmeConfigP listenerIndex 80
+    _ -> throwError (InvalidConfigValue (indexedConfigKey "LISTENER" listenerIndex "TLS_SOURCE") tlsSource)
+
+parseSharedCertificateSourceP :: Int -> ConfigParser TlsStartupMode -> ConfigParser TlsCertificateSource
+parseSharedCertificateSourceP listenerIndex parseStartupMode = SharedCertificateFiles <$> resolveSharedCertificateDirectoryP listenerIndex <*> parseStartupMode
+
+parseSharedTlsWaitTimeoutP :: Int -> ConfigParser (Maybe Int)
+parseSharedTlsWaitTimeoutP listenerIndex = do
+  let key = indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS"
+  maybeValue <- optionalConfigValueP key
+  liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
+
+parseSharedTlsFailFastModeP :: Int -> ConfigParser TlsStartupMode
+parseSharedTlsFailFastModeP listenerIndex = do
+  let key = indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS"
+  maybeValue <- optionalConfigValueP key
+  liftEitherP (maybe (Right RequireCertificateFiles) (Left . InvalidConfigValue key) maybeValue)
+
+parseAcmeConfigP :: Int -> Int -> ConfigParser AcmeConfig
+parseAcmeConfigP listenerIndex parsedPort = do
+  rejectRemovedCertbotConfigP listenerIndex
+  parsedDirectoryUrl <- fromMaybe defaultAcmeDirectoryUrl <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_DIRECTORY_URL"
+  parsedContactEmails <- parseRequiredIndexedP listenerIndex "ACME_CONTACT_EMAILS" parseDelimitedTexts
+  parsedDomains <- parseConfiguredAcmeDomainsP listenerIndex
+  parsedCertbotConfig <- parseAcmeCertbotConfigP listenerIndex
+  resolvedCertificateDirectory <- resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig
+  pure AcmeConfig {acmeDirectoryUrl = parsedDirectoryUrl, acmeContactEmails = parsedContactEmails, acmeDomains = parsedDomains, acmeHttp01Port = parsedPort, acmeCertificateDirectory = Just resolvedCertificateDirectory, acmeCertbotConfig = parsedCertbotConfig}
+
+parseConfiguredAcmeDomainsP :: Int -> ConfigParser [Text]
+parseConfiguredAcmeDomainsP listenerIndex = do
+  let key = indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"
+  maybeValue <- optionalConfigValueP key
+  liftEitherP (maybe (Right []) (parseDelimitedTexts key) maybeValue)
+
+resolveSharedCertificateDirectoryP :: Int -> ConfigParser FilePath
+resolveSharedCertificateDirectoryP listenerIndex = do
+  maybeDirectory <- optionalIndexedConfigValueP "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"
+  case maybeDirectory of
+    Just directory -> pure (Text.unpack directory)
+    Nothing -> do
+      listenerIndices <- acmeListenerIndicesP
+      resolvedDirectories <- traverse resolveConfiguredAcmeCertificateDirectoryP listenerIndices
+      liftEitherP $ case nub resolvedDirectories of
+        [sharedDirectory] -> Right sharedDirectory
+        _ -> Left (MissingConfigValue (indexedConfigKey "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"))
+
+resolveConfiguredAcmeCertificateDirectoryP :: Int -> ConfigParser FilePath
+resolveConfiguredAcmeCertificateDirectoryP listenerIndex = do
+  parsedDomains <- parseConfiguredAcmeDomainsP listenerIndex
+  parsedCertbotConfig <- parseAcmeCertbotConfigP listenerIndex
+  resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig
+
+resolveAcmeCertificateDirectoryP :: Int -> [Text] -> CertbotConfig -> ConfigParser FilePath
+resolveAcmeCertificateDirectoryP listenerIndex parsedDomains parsedCertbotConfig = do
+  configuredDirectory <- optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY"
+  pure $ maybe (defaultCertificateDirectoryPath (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig)) Text.unpack configuredDirectory
+
+defaultAcmeCertificateIdentifier :: Int -> [Text] -> CertbotConfig -> Text
+defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig =
+  fromMaybe (Text.pack ("listener-" <> show listenerIndex)) (listToMaybe (certbotOptionValues "--cert-name" arguments) <|> firstCertbotDomain arguments <|> listToMaybe parsedDomains)
   where
-    allConfigEntries = committedDefaults <> localOverrides <> environmentOverrides
+    arguments = certbotArguments parsedCertbotConfig
 
-    requiredConfigValue key =
-      case lookupConfigValue key committedDefaults localOverrides environmentOverrides of
-        Just value -> Right value
-        Nothing -> Left (MissingConfigValue key)
+defaultCertificateDirectoryPath :: Text -> FilePath
+defaultCertificateDirectoryPath certificateIdentifier = defaultCertificateDirectoryRoot <> "/" <> Text.unpack certificateIdentifier
 
-    optionalConfigValue key =
-      lookupConfigValue key committedDefaults localOverrides environmentOverrides
+acmeListenerIndicesP :: ConfigParser [Int]
+acmeListenerIndicesP = allConfigEntriesP >>= filterM listenerHasAcmeRuntimeP . declaredIndices "LISTENER_"
 
-    parseListenerConfigs =
-      case declaredIndices "LISTENER_" allConfigEntries of
-        [] -> Left (MissingConfigValue "LISTENER_0_HOST")
-        listenerIndices -> traverse parseListenerConfig listenerIndices
+listenerHasAcmeRuntimeP :: Int -> ConfigParser Bool
+listenerHasAcmeRuntimeP listenerIndex = do
+  tlsSource <- optionalIndexedConfigValueP "LISTENER" listenerIndex "TLS_SOURCE"
+  hasAcmeConfig <- listenerHasAcmeConfigP listenerIndex
+  pure (tlsSource == Just "acme" || hasAcmeConfig)
 
-    parseListenerConfig listenerIndex = do
-      parsedHost <- requiredIndexedConfigValue "LISTENER" listenerIndex "HOST"
-      parsedPort <-
-        parsePositiveInt (indexedConfigKey "LISTENER" listenerIndex "PORT")
-          =<< requiredIndexedConfigValue "LISTENER" listenerIndex "PORT"
-      parsedScheme <-
-        parseListenerScheme
-          (indexedConfigKey "LISTENER" listenerIndex "SCHEME")
-          =<< requiredIndexedConfigValue "LISTENER" listenerIndex "SCHEME"
-      parsedAcme <- parseListenerAcmeConfig listenerIndex parsedScheme parsedPort
-      parsedTls <- parseListenerTlsConfig listenerIndex parsedScheme
-      pure
-        ListenerConfig
-          { listenerHost = parsedHost,
-            listenerPort = parsedPort,
-            listenerScheme = parsedScheme,
-            listenerTls = parsedTls,
-            listenerAcme = parsedAcme
-          }
+listenerHasAcmeConfigP :: Int -> ConfigParser Bool
+listenerHasAcmeConfigP listenerIndex =
+  any (Text.isPrefixOf (Text.pack ("LISTENER_" <> show listenerIndex <> "_ACME_")) . fst) <$> allConfigEntriesP
 
-    parseListenerAcmeConfig listenerIndex Http parsedPort =
-      if listenerHasAcmeConfig listenerIndex
-        then Just <$> parseAcmeConfig listenerIndex parsedPort
-        else Right Nothing
-    parseListenerAcmeConfig _ Https _ =
-      Right Nothing
+rejectRemovedCertbotConfigP :: Int -> ConfigParser ()
+rejectRemovedCertbotConfigP listenerIndex =
+  optionalConfigValueP key >>= traverse_ (throwError . InvalidConfigValue key)
+  where
+    key = indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND"
 
-    parseListenerTlsConfig _ Http = Right Nothing
-    parseListenerTlsConfig listenerIndex Https = do
-      tlsSource <- requiredIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE"
-      parsedCertificateSource <- parseTlsCertificateSource listenerIndex tlsSource
-      pure (Just (TlsConfig {certificateSource = parsedCertificateSource}))
+parseAcmeCertbotConfigP :: Int -> ConfigParser CertbotConfig
+parseAcmeCertbotConfigP listenerIndex =
+  (CertbotConfig . maybe defaultCertbotExecutable Text.unpack <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE")
+    <*> (maybe [] (parseDelimitedTextsUnsafe ",") <$> optionalIndexedConfigValueP "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
 
-    parseTlsCertificateSource listenerIndex tlsSource =
-      case Text.unpack tlsSource of
-        "manual" ->
-          ManualCertificateFiles
-            <$> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE"
-            <*> requiredIndexedFilePathValue "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
-        "shared" ->
-          parseSharedCertificateSource listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeout listenerIndex)
-        "shared-wait" ->
-          parseSharedCertificateSource listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeout listenerIndex)
-        "shared-fail-fast" ->
-          parseSharedCertificateSource listenerIndex (parseSharedTlsFailFastMode listenerIndex)
-        "acme" -> parseAcmeCertificateSource listenerIndex
-        _ ->
-          Left
-            ( InvalidConfigValue
-                (indexedConfigKey "LISTENER" listenerIndex "TLS_SOURCE")
-                tlsSource
-            )
+parseStaticAssetsConfigP :: ConfigParser StaticAssetsConfig
+parseStaticAssetsConfigP = do
+  entries <- allConfigEntriesP
+  StaticAssetsConfig
+    <$> traverse parseStaticAssetRootP (declaredIndices "STATIC_ASSET_ROOT_" entries)
+    <*> parseStaticAssetContentTypesP
+    <*> (optionalConfigValueP "STATIC_CACHE_CONTROL_SECONDS" >>= liftEitherP . traverse (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS"))
 
-    parseSharedCertificateSource listenerIndex parseStartupMode =
-      SharedCertificateFiles
-        <$> resolveSharedCertificateDirectory listenerIndex
-        <*> parseStartupMode
+parseStaticAssetRootP :: Int -> ConfigParser StaticAssetRoot
+parseStaticAssetRootP staticRootIndex = StaticAssetRoot <$> requiredIndexedConfigValueP "STATIC_ASSET_ROOT" staticRootIndex "URL_PREFIX" <*> requiredIndexedFilePathValueP "STATIC_ASSET_ROOT" staticRootIndex "DIRECTORY"
 
-    parseSharedTlsWaitTimeout listenerIndex =
-      traverse
-        (parseNonNegativeInt (indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS"))
-        (optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS")
+parseStaticAssetContentTypesP :: ConfigParser [(Text, Text)]
+parseStaticAssetContentTypesP = do
+  entries <- allConfigEntriesP
+  case declaredIndices "STATIC_ASSET_CONTENT_TYPE_" entries of
+    [] -> pure defaultStaticAssetContentTypes
+    contentTypeIndices -> traverse parseStaticAssetContentTypeP contentTypeIndices
 
-    parseSharedTlsFailFastMode listenerIndex =
-      case optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS" of
-        Nothing -> Right RequireCertificateFiles
-        Just value ->
-          Left
-            ( InvalidConfigValue
-                (indexedConfigKey "LISTENER" listenerIndex "TLS_SHARED_WAIT_SECONDS")
-                value
-            )
+parseStaticAssetContentTypeP :: Int -> ConfigParser (Text, Text)
+parseStaticAssetContentTypeP contentTypeIndex = (,) <$> parseStaticAssetExtensionP contentTypeIndex <*> parseStaticAssetMimeTypeP contentTypeIndex
 
-    parseAcmeCertificateSource listenerIndex =
-      AcmeCertificateSource <$> parseAcmeConfig listenerIndex 80
+parseStaticAssetExtensionP :: Int -> ConfigParser Text
+parseStaticAssetExtensionP contentTypeIndex = do
+  let key = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "EXTENSION"
+  extension <- requiredConfigValueP key
+  liftEitherP $ if Text.null extension || Text.isPrefixOf "." extension then Right extension else Left (InvalidConfigValue key extension)
 
-    parseAcmeConfig listenerIndex parsedPort =
-      do
-        () <- rejectRemovedCertbotConfig listenerIndex
-        let parsedDirectoryUrl =
-              fromMaybe
-                defaultAcmeDirectoryUrl
-                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DIRECTORY_URL")
-        parsedContactEmails <-
-          parseDelimitedTexts
-            (indexedConfigKey "LISTENER" listenerIndex "ACME_CONTACT_EMAILS")
-            =<< requiredIndexedConfigValue "LISTENER" listenerIndex "ACME_CONTACT_EMAILS"
-        parsedDomains <- parseConfiguredAcmeDomains listenerIndex
-        parsedCertbotConfig <- parseAcmeCertbotConfig listenerIndex
-        resolvedCertificateDirectory <-
-          resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig
-        pure
-          AcmeConfig
-            { acmeDirectoryUrl = parsedDirectoryUrl,
-              acmeContactEmails = parsedContactEmails,
-              acmeDomains = parsedDomains,
-              acmeHttp01Port = parsedPort,
-              acmeCertificateDirectory = Just resolvedCertificateDirectory,
-              acmeCertbotConfig = parsedCertbotConfig
-            }
+parseStaticAssetMimeTypeP :: Int -> ConfigParser Text
+parseStaticAssetMimeTypeP contentTypeIndex = do
+  let key = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "MIME_TYPE"
+  mimeType <- requiredConfigValueP key
+  liftEitherP $ if Text.null mimeType then Left (InvalidConfigValue key mimeType) else Right mimeType
 
-    parseConfiguredAcmeDomains listenerIndex =
-      maybe
-        (Right [])
-        (parseDelimitedTexts (indexedConfigKey "LISTENER" listenerIndex "ACME_DOMAINS"))
-        (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_DOMAINS")
+parseRequestPolicyConfigP :: [ListenerConfig] -> ConfigParser RequestPolicyConfig
+parseRequestPolicyConfigP parsedListeners =
+  RequestPolicyConfig
+    <$> parseRedirectHttpToHttpsP parsedListeners
+    <*> pure (defaultHttpsRedirectPort parsedListeners)
+    <*> parseOptionalStrictTransportSecurityP
+    <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
+    <*> parseCorsPolicyConfigP
+    <*> parseResponseSecurityHeadersConfigP
 
-    resolveSharedCertificateDirectory listenerIndex =
-      case optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY" of
-        Just directory ->
-          Right (Text.unpack directory)
-        Nothing -> do
-          resolvedAcmeDirectories <- traverse resolveConfiguredAcmeCertificateDirectory acmeListenerIndices
-          case nub resolvedAcmeDirectories of
-            [sharedDirectory] ->
-              Right sharedDirectory
-            _ ->
-              Left
-                (MissingConfigValue (indexedConfigKey "LISTENER" listenerIndex "TLS_CERTIFICATE_DIRECTORY"))
+parseRedirectHttpToHttpsP :: [ListenerConfig] -> ConfigParser Bool
+parseRedirectHttpToHttpsP parsedListeners = do
+  maybeValue <- optionalConfigValueP "REDIRECT_HTTP_TO_HTTPS"
+  liftEitherP $ case maybeValue of
+    Nothing -> Right (defaultRedirectHttpToHttps parsedListeners)
+    Just "true" -> Right True
+    Just "false" -> Right False
+    Just value -> Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" value)
 
-    resolveConfiguredAcmeCertificateDirectory listenerIndex = do
-      parsedDomains <- parseConfiguredAcmeDomains listenerIndex
-      parsedCertbotConfig <- parseAcmeCertbotConfig listenerIndex
-      resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig
+defaultRedirectHttpToHttps :: [ListenerConfig] -> Bool
+defaultRedirectHttpToHttps parsedListeners = any ((== Http) . listenerScheme) parsedListeners && any ((== Https) . listenerScheme) parsedListeners
 
-    resolveAcmeCertificateDirectory listenerIndex parsedDomains parsedCertbotConfig =
-      pure $
-        maybe
-          ( defaultCertificateDirectoryPath
-              (defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig)
-          )
-          Text.unpack
-          (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTIFICATE_DIRECTORY")
+defaultHttpsRedirectPort :: [ListenerConfig] -> Maybe Int
+defaultHttpsRedirectPort parsedListeners =
+  if any ((== Http) . listenerScheme) parsedListeners
+    then case nub [listenerPort listener | listener <- parsedListeners, listenerScheme listener == Https] of
+      [redirectPort] -> Just redirectPort
+      _ -> Nothing
+    else Nothing
 
-    defaultAcmeCertificateIdentifier listenerIndex parsedDomains parsedCertbotConfig =
-      fromMaybe
-        (Text.pack ("listener-" <> show listenerIndex))
-        ( listToMaybe (certbotOptionValues "--cert-name" (certbotArguments parsedCertbotConfig))
-            <|> firstCertbotDomain (certbotArguments parsedCertbotConfig)
-            <|> listToMaybe parsedDomains
-        )
+parseOptionalStrictTransportSecurityP :: ConfigParser (Maybe StrictTransportSecurityConfig)
+parseOptionalStrictTransportSecurityP = do
+  maybeMaxAge <- optionalConfigValueP "HSTS_MAX_AGE_SECONDS"
+  case maybeMaxAge of
+    Just maxAgeValue -> Just <$> (StrictTransportSecurityConfig <$> liftEitherP (parseNonNegativeInt "HSTS_MAX_AGE_SECONDS" maxAgeValue) <*> parseOptionalBoolP "HSTS_INCLUDE_SUBDOMAINS" <*> parseOptionalBoolP "HSTS_PRELOAD")
+    Nothing -> do
+      hasDependentSetting <- any isJust <$> traverse optionalConfigValueP ["HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD"]
+      if hasDependentSetting then throwError (MissingConfigValue "HSTS_MAX_AGE_SECONDS") else pure Nothing
 
-    defaultCertificateDirectoryPath certificateIdentifier =
-      defaultCertificateDirectoryRoot <> "/" <> Text.unpack certificateIdentifier
+parseOptionalBoolP :: Text -> ConfigParser Bool
+parseOptionalBoolP key = optionalConfigValueP key >>= maybe (pure False) (liftEitherP . parseBoolean key)
 
-    acmeListenerIndices =
-      filter
-        listenerHasAcmeRuntime
-        (declaredIndices "LISTENER_" allConfigEntries)
+parseOptionalBoolWithDefaultP :: Text -> Bool -> ConfigParser Bool
+parseOptionalBoolWithDefaultP key defaultValue = optionalConfigValueP key >>= maybe (pure defaultValue) (liftEitherP . parseBoolean key)
 
-    listenerHasAcmeRuntime listenerIndex =
-      optionalIndexedConfigValue "LISTENER" listenerIndex "TLS_SOURCE" == Just "acme"
-        || listenerHasAcmeConfig listenerIndex
+parseCorsPolicyConfigP :: ConfigParser CorsPolicyConfig
+parseCorsPolicyConfigP =
+  CorsPolicyConfig
+    <$> parseOptionalDelimitedTextListP "CORS_ALLOWED_ORIGINS" (corsAllowedOrigins defaultCorsPolicyConfig)
+    <*> parseOptionalDelimitedTextListP "CORS_ALLOWED_METHODS" (corsAllowedMethods defaultCorsPolicyConfig)
+    <*> parseOptionalDelimitedTextListP "CORS_ALLOWED_HEADERS" (corsAllowedHeaders defaultCorsPolicyConfig)
+    <*> (optionalConfigValueP "CORS_MAX_AGE_SECONDS" >>= liftEitherP . traverse (parseNonNegativeInt "CORS_MAX_AGE_SECONDS"))
 
-    listenerHasAcmeConfig listenerIndex =
-      any
-        (Text.isPrefixOf (Text.pack ("LISTENER_" <> show listenerIndex <> "_ACME_")) . fst)
-        allConfigEntries
+parseOptionalDelimitedTextListP :: Text -> [Text] -> ConfigParser [Text]
+parseOptionalDelimitedTextListP key defaultValues = optionalConfigValueP key >>= maybe (pure defaultValues) (liftEitherP . parseDelimitedTexts key)
 
-    rejectRemovedCertbotConfig listenerIndex =
-      case optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND" of
-        Nothing -> Right ()
-        Just backendValue ->
-          Left
-            ( InvalidConfigValue
-                (indexedConfigKey "LISTENER" listenerIndex "ACME_CHALLENGE_BACKEND")
-                backendValue
-            )
+parseResponseSecurityHeadersConfigP :: ConfigParser ResponseSecurityHeadersConfig
+parseResponseSecurityHeadersConfigP =
+  ResponseSecurityHeadersConfig
+    <$> parseOptionalTextHeaderP "CONTENT_SECURITY_POLICY" (contentSecurityPolicy defaultResponseSecurityHeadersConfig)
+    <*> parseOptionalBoolWithDefaultP "X_CONTENT_TYPE_OPTIONS_NOSNIFF" (contentTypeOptionsNoSniff defaultResponseSecurityHeadersConfig)
+    <*> parseOptionalTextHeaderP "X_XSS_PROTECTION" (xssProtection defaultResponseSecurityHeadersConfig)
+    <*> parseOptionalTextHeaderP "REFERRER_POLICY" (referrerPolicy defaultResponseSecurityHeadersConfig)
+    <*> parseOptionalTextHeaderP "PERMISSIONS_POLICY" (permissionsPolicy defaultResponseSecurityHeadersConfig)
+    <*> parseOptionalTextHeaderP "X_FRAME_OPTIONS" (frameOptions defaultResponseSecurityHeadersConfig)
 
-    parseAcmeCertbotConfig listenerIndex =
-      pure $
-        CertbotConfig
-          { certbotExecutable =
-              maybe
-                defaultCertbotExecutable
-                Text.unpack
-                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_EXECUTABLE"),
-            certbotArguments =
-              maybe
-                []
-                (parseDelimitedTextsUnsafe ",")
-                (optionalIndexedConfigValue "LISTENER" listenerIndex "ACME_CERTBOT_ARGUMENTS")
-          }
+parseOptionalTextHeaderP :: Text -> Maybe Text -> ConfigParser (Maybe Text)
+parseOptionalTextHeaderP key defaultValue = do
+  maybeValue <- optionalConfigValueP key
+  liftEitherP $ case maybeValue of
+    Nothing -> Right defaultValue
+    Just value | Text.null value -> Left (InvalidConfigValue key value)
+    Just value -> Right (Just value)
 
-    parseStaticAssetsConfig =
-      StaticAssetsConfig
-        <$> traverse parseStaticAssetRoot (declaredIndices "STATIC_ASSET_ROOT_" allConfigEntries)
-        <*> parseStaticAssetContentTypes
-        <*> traverse
-          (parseNonNegativeInt "STATIC_CACHE_CONTROL_SECONDS")
-          (optionalConfigValue "STATIC_CACHE_CONTROL_SECONDS")
+parseObservabilityConfigP :: ConfigParser ObservabilityConfig
+parseObservabilityConfigP = ObservabilityConfig <$> parseOptionalTracingExporterP <*> parseOptionalOtlpExporterP "OTLP_METRICS"
 
-    parseRequestPolicyConfig parsedListeners =
-      RequestPolicyConfig
-        <$> parseRedirectHttpToHttps parsedListeners
-        <*> pure (defaultHttpsRedirectPort parsedListeners)
-        <*> parseOptionalStrictTransportSecurity
-        <*> parseOptionalBoolWithDefault "TRUST_FORWARDED_HEADERS" False
-        <*> parseCorsPolicyConfig
-        <*> parseResponseSecurityHeadersConfig
+parseOptionalTracingExporterP :: ConfigParser (Maybe OtlpExporter)
+parseOptionalTracingExporterP = do
+  maybeEnabled <- optionalConfigValueP "OTLP_TRACING_ENABLED"
+  case maybeEnabled of
+    Nothing -> parseOptionalOtlpExporterWithDefaultP "OTLP_TRACING" Nothing
+    Just enabledValue -> do
+      enabled <- liftEitherP (parseBoolean "OTLP_TRACING_ENABLED" enabledValue)
+      if enabled then parseOptionalOtlpExporterWithDefaultP "OTLP_TRACING" (Just defaultLocalTracingEndpoint) else pure Nothing
 
-    parseRedirectHttpToHttps parsedListeners =
-      case optionalConfigValue "REDIRECT_HTTP_TO_HTTPS" of
-        Nothing -> Right (defaultRedirectHttpToHttps parsedListeners)
-        Just "true" -> Right True
-        Just "false" -> Right False
-        Just value -> Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" value)
+parseOptionalOtlpExporterP :: Text -> ConfigParser (Maybe OtlpExporter)
+parseOptionalOtlpExporterP exporterPrefix = parseOptionalOtlpExporterWithDefaultP exporterPrefix Nothing
 
-    defaultRedirectHttpToHttps parsedListeners =
-      any ((== Http) . listenerScheme) parsedListeners
-        && any ((== Https) . listenerScheme) parsedListeners
+parseOptionalOtlpExporterWithDefaultP :: Text -> Maybe Text -> ConfigParser (Maybe OtlpExporter)
+parseOptionalOtlpExporterWithDefaultP exporterPrefix defaultEndpoint = do
+  configuredEndpoint <- optionalConfigValueP (exporterPrefix <> "_ENDPOINT")
+  configuredHeaders <- optionalConfigValueP (exporterPrefix <> "_HEADERS")
+  case configuredEndpoint <|> defaultEndpoint of
+    Just endpoint -> pure (Just OtlpExporter {otlpEndpoint = endpoint, otlpHeaders = maybe [] (parseHeadersUnsafe . Text.strip) configuredHeaders})
+    Nothing -> liftEitherP $ case configuredHeaders of
+      Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
+      Nothing -> Right Nothing
 
-    defaultHttpsRedirectPort parsedListeners =
-      if any ((== Http) . listenerScheme) parsedListeners
-        then case nub [listenerPort listener | listener <- parsedListeners, listenerScheme listener == Https] of
-          [redirectPort] -> Just redirectPort
-          _ -> Nothing
-        else Nothing
+requiredIndexedConfigValueP :: Text -> Int -> Text -> ConfigParser Text
+requiredIndexedConfigValueP prefix configIndex suffix = requiredConfigValueP (indexedConfigKey prefix configIndex suffix)
 
-    parseOptionalStrictTransportSecurity =
-      case optionalConfigValue "HSTS_MAX_AGE_SECONDS" of
-        Nothing ->
-          if any (isJust . optionalConfigValue) ["HSTS_INCLUDE_SUBDOMAINS", "HSTS_PRELOAD"]
-            then Left (MissingConfigValue "HSTS_MAX_AGE_SECONDS")
-            else Right Nothing
-        Just maxAgeValue ->
-          Just
-            <$> ( StrictTransportSecurityConfig
-                    <$> parseNonNegativeInt "HSTS_MAX_AGE_SECONDS" maxAgeValue
-                    <*> parseOptionalBool "HSTS_INCLUDE_SUBDOMAINS"
-                    <*> parseOptionalBool "HSTS_PRELOAD"
-                )
+optionalIndexedConfigValueP :: Text -> Int -> Text -> ConfigParser (Maybe Text)
+optionalIndexedConfigValueP prefix configIndex suffix = optionalConfigValueP (indexedConfigKey prefix configIndex suffix)
 
-    parseOptionalBool key =
-      case optionalConfigValue key of
-        Nothing -> Right False
-        Just "true" -> Right True
-        Just "false" -> Right False
-        Just value -> Left (InvalidConfigValue key value)
-
-    parseCorsPolicyConfig =
-      CorsPolicyConfig
-        <$> parseOptionalDelimitedTextList "CORS_ALLOWED_ORIGINS" (corsAllowedOrigins defaultCorsPolicyConfig)
-        <*> parseOptionalDelimitedTextList "CORS_ALLOWED_METHODS" (corsAllowedMethods defaultCorsPolicyConfig)
-        <*> parseOptionalDelimitedTextList "CORS_ALLOWED_HEADERS" (corsAllowedHeaders defaultCorsPolicyConfig)
-        <*> traverse
-          (parseNonNegativeInt "CORS_MAX_AGE_SECONDS")
-          (optionalConfigValue "CORS_MAX_AGE_SECONDS")
-
-    parseResponseSecurityHeadersConfig =
-      ResponseSecurityHeadersConfig
-        <$> parseOptionalTextHeader "CONTENT_SECURITY_POLICY" (contentSecurityPolicy defaultResponseSecurityHeadersConfig)
-        <*> parseOptionalBoolWithDefault "X_CONTENT_TYPE_OPTIONS_NOSNIFF" (contentTypeOptionsNoSniff defaultResponseSecurityHeadersConfig)
-        <*> parseOptionalTextHeader "X_XSS_PROTECTION" (xssProtection defaultResponseSecurityHeadersConfig)
-        <*> parseOptionalTextHeader "REFERRER_POLICY" (referrerPolicy defaultResponseSecurityHeadersConfig)
-        <*> parseOptionalTextHeader "PERMISSIONS_POLICY" (permissionsPolicy defaultResponseSecurityHeadersConfig)
-        <*> parseOptionalTextHeader "X_FRAME_OPTIONS" (frameOptions defaultResponseSecurityHeadersConfig)
-
-    parseOptionalDelimitedTextList key defaultValues =
-      case optionalConfigValue key of
-        Nothing -> Right defaultValues
-        Just value -> parseDelimitedTexts key value
-
-    parseOptionalTextHeader key defaultValue =
-      case optionalConfigValue key of
-        Nothing -> Right defaultValue
-        Just value ->
-          if Text.null value
-            then Left (InvalidConfigValue key value)
-            else Right (Just value)
-
-    parseOptionalBoolWithDefault key defaultValue =
-      case optionalConfigValue key of
-        Nothing -> Right defaultValue
-        Just value -> parseBoolean key value
-
-    parseStaticAssetRoot staticRootIndex =
-      StaticAssetRoot
-        <$> requiredIndexedConfigValue "STATIC_ASSET_ROOT" staticRootIndex "URL_PREFIX"
-        <*> requiredIndexedFilePathValue "STATIC_ASSET_ROOT" staticRootIndex "DIRECTORY"
-
-    parseStaticAssetContentTypes =
-      case declaredIndices "STATIC_ASSET_CONTENT_TYPE_" allConfigEntries of
-        [] -> Right defaultStaticAssetContentTypes
-        contentTypeIndices -> traverse parseStaticAssetContentType contentTypeIndices
-
-    parseStaticAssetContentType contentTypeIndex =
-      (,)
-        <$> parseStaticAssetExtension contentTypeIndex
-        <*> parseStaticAssetMimeType contentTypeIndex
-
-    parseStaticAssetExtension contentTypeIndex = do
-      let extensionKey = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "EXTENSION"
-      extension <- requiredConfigValue extensionKey
-      if Text.null extension || Text.isPrefixOf "." extension
-        then Right extension
-        else Left (InvalidConfigValue extensionKey extension)
-
-    parseStaticAssetMimeType contentTypeIndex = do
-      let mimeTypeKey = indexedConfigKey "STATIC_ASSET_CONTENT_TYPE" contentTypeIndex "MIME_TYPE"
-      mimeType <- requiredConfigValue mimeTypeKey
-      if Text.null mimeType
-        then Left (InvalidConfigValue mimeTypeKey mimeType)
-        else Right mimeType
-
-    parseObservabilityConfig =
-      ObservabilityConfig
-        <$> parseOptionalTracingExporter
-        <*> parseOptionalOtlpExporter "OTLP_METRICS"
-
-    parseOptionalTracingExporter =
-      case optionalConfigValue "OTLP_TRACING_ENABLED" of
-        Just tracingEnabledValue -> do
-          tracingEnabled <- parseBoolean "OTLP_TRACING_ENABLED" tracingEnabledValue
-          if tracingEnabled
-            then parseOptionalOtlpExporterWithDefault "OTLP_TRACING" (Just defaultLocalTracingEndpoint)
-            else Right Nothing
-        Nothing ->
-          parseOptionalOtlpExporterWithDefault "OTLP_TRACING" Nothing
-
-    parseOptionalOtlpExporter exporterPrefix =
-      parseOptionalOtlpExporterWithDefault exporterPrefix Nothing
-
-    parseOptionalOtlpExporterWithDefault exporterPrefix defaultEndpoint =
-      case optionalConfigValue (exporterPrefix <> "_ENDPOINT") of
-        Just endpoint ->
-          Right
-            ( Just
-                OtlpExporter
-                  { otlpEndpoint = endpoint,
-                    otlpHeaders =
-                      maybe
-                        []
-                        (parseHeadersUnsafe . Text.strip)
-                        (optionalConfigValue (exporterPrefix <> "_HEADERS"))
-                  }
-            )
-        Nothing ->
-          case defaultEndpoint of
-            Just endpoint ->
-              Right
-                ( Just
-                    OtlpExporter
-                      { otlpEndpoint = endpoint,
-                        otlpHeaders =
-                          maybe
-                            []
-                            (parseHeadersUnsafe . Text.strip)
-                            (optionalConfigValue (exporterPrefix <> "_HEADERS"))
-                      }
-                )
-            Nothing ->
-              case optionalConfigValue (exporterPrefix <> "_HEADERS") of
-                Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
-                Nothing -> Right Nothing
-
-    requiredIndexedConfigValue prefix configIndex suffix =
-      requiredConfigValue (indexedConfigKey prefix configIndex suffix)
-
-    optionalIndexedConfigValue prefix configIndex suffix =
-      optionalConfigValue (indexedConfigKey prefix configIndex suffix)
-
-    requiredIndexedFilePathValue prefix configIndex suffix =
-      Text.unpack <$> requiredIndexedConfigValue prefix configIndex suffix
+requiredIndexedFilePathValueP :: Text -> Int -> Text -> ConfigParser FilePath
+requiredIndexedFilePathValueP prefix configIndex suffix = Text.unpack <$> requiredIndexedConfigValueP prefix configIndex suffix
 
 parseListenerScheme :: Text -> Text -> Either ConfigParseError ListenerScheme
 parseListenerScheme key value =

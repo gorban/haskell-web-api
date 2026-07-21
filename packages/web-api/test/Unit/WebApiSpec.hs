@@ -27,6 +27,7 @@ import qualified HarchWeb.DevSmtp as DevSmtp
 import qualified HarchWeb.Email as Email
 import qualified HarchWeb.Observability as Observability
 import qualified HarchWeb.Password as Password
+import qualified HarchWeb.RecoveryCode as RecoveryCode
 import qualified HarchWeb.Secret as Secret
 import qualified HarchWeb.Session as Session
 import qualified HarchWeb.Totp as Totp
@@ -48,20 +49,22 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
-import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
+import qualified WebApi.AppEffect as AppEffect
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
+import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import qualified WebApi.PageShell as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, selectRoute)
+import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import qualified WebApi.Route
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
@@ -292,7 +295,8 @@ assertRegistrationResult action matchesResult = do
 actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe HarchWeb.ClientActionResponse -> Bool
 actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
   Just actionResponse ->
-    HarchWeb.clientActionStatus actionResponse == expectedStatus
+    forceShowValue actionResponse
+      && HarchWeb.clientActionStatus actionResponse == expectedStatus
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
         [HarchWeb.RegionPatch patchId html] ->
@@ -300,6 +304,17 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
             && expectedMessage `Text.isInfixOf` html
         _ -> False
   Nothing -> False
+
+forceShowValue :: (Show value) => value -> Bool
+forceShowValue = foldr seq True . show
+
+metadataFields :: RouteMetadata -> (Maybe Text, Text, Text, [Text])
+metadataFields metadata =
+  ( routePageSegment metadata,
+    routePageSuffix metadata,
+    routePageTitle metadata,
+    routeEnhancementHooks metadata
+  )
 
 migrationPostgresTestConfig :: DatabaseConfig
 migrationPostgresTestConfig =
@@ -2163,7 +2178,10 @@ spec = do
           `shouldBe` baseUrlWithoutTrailingSlash
           <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         accountWorkflowStore workflow `seq` pure ()
+        accountWorkflowPasswordHasher workflow `seq` pure ()
         accountWorkflowMfaStore workflow `seq` pure ()
+        accountWorkflowCredentialStore workflow `seq` pure ()
+        accountWorkflowSessionStore workflow `seq` pure ()
         accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow >>= (`shouldSatisfy` (> 0))
@@ -2759,6 +2777,28 @@ spec = do
         (confirmEmailVerificationAt (storeWith (Right (Just storedVerification)) (Right (Just otherAccountId))) 499 token)
         (\case Left storeError -> isCorrupt "email verification was consumed for a different account" storeError; _ -> False)
 
+  describe "WebApi.AppEffect" $ do
+    it "composes application services, IO, and typed failures through one boundary" $ do
+      let services = AppEffect.AppServices unavailableAccountWorkflow
+          successfulAction :: AppEffect.AppM Text Int
+          successfulAction = AppEffect.liftAppIO (pure 42)
+          failureDiagnostics = AppEffect.FailureDiagnostics "sample.failure" "SampleFailure" ["private detail"]
+          failure = AppEffect.AppFailure "safe failure" failureDiagnostics
+          failingAction :: AppEffect.AppM Text ()
+          failingAction = AppEffect.throwAppFailure failure
+      AppEffect.runAppM services successfulAction
+        >>= \case
+          Right 42 -> pure ()
+          _ -> expectationFailure "expected the applicative application action to return 42"
+      AppEffect.runAppM services failingAction
+        >>= \case
+          Left actualFailure -> do
+            AppEffect.appFailurePublic actualFailure `shouldBe` "safe failure"
+            AppEffect.failureCode (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` "sample.failure"
+            AppEffect.failureType (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` "SampleFailure"
+            AppEffect.failureLogEntries (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` ["private detail"]
+          Right () -> expectationFailure "expected a typed application failure"
+
   describe "WebApi.AccountPages" $ do
     it "keeps account routes fully server-rendered and query-aware" $ do
       let registrationRequest = HarchWeb.RouteRequest RegistrationRoute defaultRequestContext
@@ -2884,6 +2924,7 @@ spec = do
       renderLoginRegion "/login" (LoginForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
       renderLogoutPage "/logout" `shouldSatisfy` Text.isInfixOf "data-harch-control"
+      Text.length (renderLogoutPage "/logout") `shouldSatisfy` (> 0)
       renderLogoutRegion "/logout" (Just "Signed <out>") True
         `shouldSatisfy` \html -> "data-error-state=\"true\"" `Text.isInfixOf` html && "Signed &lt;out&gt;" `Text.isInfixOf` html
       pageEnhancementHooks RegistrationRoute `shouldBe` []
@@ -2911,6 +2952,7 @@ spec = do
             AccountWorkflow
               { accountWorkflowStore = createdStore,
                 accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
+                accountWorkflowPasswordHasher = Password.hashPassword,
                 accountWorkflowClock = pure 100,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -2989,6 +3031,21 @@ spec = do
       assertMfaUnavailable (confirmTotpEnrollment unconfiguredMfaStore accountId ("hash" :| []) 0)
       assertMfaUnavailable (loadUnusedRecoveryCodeHashes unconfiguredMfaStore accountId)
       assertMfaUnavailable (consumeRecoveryCodeHash unconfiguredMfaStore accountId "hash" 0)
+      let unconfiguredCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow
+      findAccountCredentialByEmail unconfiguredCredentialStore (requiredEmailAddress "person@example.test")
+        >>= \case
+          Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
+          _ -> expectationFailure "expected unavailable account credentials"
+      let unconfiguredSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow
+          assertSessionUnavailable :: IO (Either AccountSessionStoreError value) -> Expectation
+          assertSessionUnavailable action =
+            action >>= \case
+              Left AccountSessionStoreUnavailable -> pure ()
+              _ -> expectationFailure "expected unavailable account sessions"
+      assertSessionUnavailable (saveAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
+      assertSessionUnavailable (loadAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
+      assertSessionUnavailable (invalidateAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
+      accountWorkflowPasswordHasher unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpEncryptionKey unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpClock unavailableAccountWorkflow `shouldReturn` 0
       unavailableDelivery <-
@@ -3013,6 +3070,7 @@ spec = do
             AccountWorkflow
               { accountWorkflowStore = accountStore,
                 accountWorkflowEmailDelivery = emailDelivery,
+                accountWorkflowPasswordHasher = Password.hashPassword,
                 accountWorkflowClock = pure now,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -3043,12 +3101,38 @@ spec = do
       createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Check your inbox"
       unavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       unavailableRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      spanishUnavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
+      spanishUnavailableRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
       corruptRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreCorruptData "bad")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
-      corruptRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "invalid data"
+      corruptRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      corruptRegistration
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              not (any (Text.isInfixOf "bad" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response))
+                && any (Text.isInfixOf "bad") (HarchWeb.clientActionLogEntries response)
+                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
+          )
       deliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
       deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
       spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
       spanishDeliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "No pudimos enviar"
+      passwordHashingFailure <-
+        handleAccountAction
+          ( (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowPasswordHasher = \_ _ -> pure Nothing
+              }
+          )
+          (request "/register" validRegistration)
+      passwordHashingFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      spanishPasswordHashingFailure <-
+        handleAccountAction
+          ( (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowPasswordHasher = \_ _ -> pure Nothing
+              }
+          )
+          (spanishAction "/register" validRegistration)
+      spanishPasswordHashingFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
       clockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (request "/register" validRegistration)
       clockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       spanishClockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (spanishAction "/register" validRegistration)
@@ -3073,6 +3157,8 @@ spec = do
       spanishRejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "no es valido o ya se ha utilizado"
       unavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
       unavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "temporarily unavailable"
+      spanishUnavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
+      spanishUnavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "no esta disponible"
 
     it "issues a cookie only after password and TOTP verification, and revokes it on logout" $ do
       savedSessionsReference <- newIORef []
@@ -3122,6 +3208,7 @@ spec = do
       case loginResult of
         Nothing -> expectationFailure "expected login action response"
         Just response -> do
+          forceShowValue response `shouldBe` True
           HarchWeb.clientActionStatus response `shouldBe` 200
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
@@ -3131,6 +3218,8 @@ spec = do
         case savedSessions of
           [session] -> pure session
           _ -> expectationFailure "expected exactly one saved session" >> pure (error "unreachable")
+      Session.sessionPrincipal loggedInSession `shouldBe` accountId
+      Session.sessionIssuedAtNanoseconds loggedInSession `shouldBe` 500
       let logoutRequest =
             HarchWeb.ClientActionRequest
               { HarchWeb.clientActionMethod = "POST",
@@ -3143,6 +3232,7 @@ spec = do
       case logoutResult of
         Nothing -> expectationFailure "expected logout action response"
         Just response -> do
+          forceShowValue response `shouldBe` True
           HarchWeb.clientActionStatus response `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
       readIORef invalidatedSessionsReference `shouldReturn` [Session.sessionId loggedInSession]
@@ -3201,39 +3291,90 @@ spec = do
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
           validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
+          recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
+          recoveryHash = fromMaybe (error "expected a recovery-code hash") (RecoveryCode.hashRecoveryCodeWithSalt testPasswordHashingPolicy "0123456789abcdef" recoveryCode)
+          recoveryMfaStore =
+            (accountWorkflowMfaStore validWorkflow)
+              { loadUnusedRecoveryCodeHashes = \receivedAccountId -> do
+                  receivedAccountId `shouldBe` accountId
+                  pure (Right [RecoveryCode.recoveryCodeHashText recoveryHash]),
+                consumeRecoveryCodeHash = \receivedAccountId receivedHash receivedNow -> do
+                  receivedAccountId `shouldBe` accountId
+                  receivedHash `shouldBe` RecoveryCode.recoveryCodeHashText recoveryHash
+                  receivedNow `shouldBe` 500
+                  pure (Right True)
+              }
+          recoveryWorkflow = validWorkflow {accountWorkflowMfaStore = recoveryMfaStore}
+          recoveryFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", RecoveryCode.recoveryCodeText recoveryCode)]
           unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not-an-email")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
+      handleAccountAction validWorkflow (spanishLoginRequest [("email", "not-an-email")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "direccion de correo valida")
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Enter your password")
+      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Introduce tu contrasena")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("code", validCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Enter a valid authenticator")
       handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "unknown"), ("code", validCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Introduce un codigo")
       handleAccountAction (workflowFor (Right (Just unverifiedCredential)) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Verify your email address")
+      handleAccountAction (workflowFor (Right (Just unverifiedCredential)) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Verifica tu direccion")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Enroll your authenticator")
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Registra tu autenticador")
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
+      handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "inicio de sesion fue rechazado")
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", "0123456789ABCDEF0123")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
+      handleAccountAction recoveryWorkflow (loginRequest defaultRequestContext recoveryFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction (workflowFor (Left (AccountCredentialStoreCorruptData "bad credential")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Left (MfaStoreUnavailable "down")) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1)))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
       handleAccountAction unavailableSession (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreCorruptData) (Right True)) (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction unavailableSession (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
+      handleAccountAction validWorkflow (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       handleAccountAction validWorkflow (logoutRequest defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out")
+      handleAccountAction validWorkflow ((logoutRequest spanishRequestContext) {HarchWeb.clientActionPath = "/es/logout"})
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion")
       let sessionId = fromMaybe (error "expected valid session id") (Session.mkSessionId "0123456789ABCDEF0123456789ABCDEF0123456789ABC")
           sessionContext = defaultRequestContext {requestSessionId = Just sessionId}
       handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable)) (logoutRequest sessionContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
+      handleAccountAction (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreCorruptData)) (logoutRequest sessionContext)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
+      handleAccountAction
+        (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable))
+        ((logoutRequest (spanishRequestContext {requestSessionId = Just sessionId})) {HarchWeb.clientActionPath = "/es/logout"})
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "no esta disponible")
       logoutSuccess <- handleAccountAction validWorkflow (logoutRequest sessionContext)
       case logoutSuccess of
-        Just response -> HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+        Just response -> do
+          forceShowValue response `shouldBe` True
+          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a logout action response"
+      spanishLogoutSuccess <- handleAccountAction validWorkflow ((logoutRequest (spanishRequestContext {requestSessionId = Just sessionId})) {HarchWeb.clientActionPath = "/es/logout"})
+      spanishLogoutSuccess `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion"
 
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
       encryptedSecretReference <- newIORef Nothing
@@ -3355,23 +3496,34 @@ spec = do
             actionResult <- handleAccountAction (workflowFor mfaStore) (spanishRequest fields)
             actionResult `shouldSatisfy` actionHasStatusAndFocus status focusId message
       expect (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verify your email address"
-      expect (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "temporarily unavailable"
+      expect (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 (Just "mfa-account") "temporarily unavailable"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Enter a six-digit authenticator code"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Start a new authenticator enrollment"
-      expect (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "temporarily unavailable"
-      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "That enrollment can no longer be confirmed"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Choose an enrollment action"
       expectSpanish (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verifica tu direccion de correo"
-      expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 (Just "mfa-account") "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Introduce un codigo de autenticador"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Inicia un nuevo registro"
-      expectSpanish (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "no esta disponible temporalmente"
-      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Ese registro ya no se puede confirmar"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Elige una accion de registro"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
+      forM_
+        [ (MfaEnrollmentRecoveryCodeHashingFailed, "RecoveryCodeHashingError", "recovery-code hashing failed"),
+          (MfaEnrollmentEncryptionFailed, "TotpEncryptionError", "TOTP secret encryption failed")
+        ]
+        $ \(failureValue, expectedType, expectedDetail) ->
+          case mfaEnrollmentFailureDiagnostics "confirm" failureValue of
+            Nothing -> expectationFailure "expected infrastructure diagnostics for the MFA failure"
+            Just diagnostics -> do
+              AppEffect.failureCode diagnostics `shouldBe` "account.mfa.confirm"
+              AppEffect.failureType diagnostics `shouldBe` expectedType
+              AppEffect.failureLogEntries diagnostics `shouldSatisfy` any (Text.isInfixOf expectedDetail)
 
   describe "WebApi.Postgres" $ do
     it "uses bound parameters for pending account and verification persistence" $ do
@@ -6810,12 +6962,12 @@ spec = do
               HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.type",
+                    { Observability.attributeName = "error.type",
                       Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
                     },
                   Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.message",
-                      Observability.attributeValue = Observability.TextAttribute "seed unavailable"
+                    { Observability.attributeName = "app.failure.code",
+                      Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
                     },
                   Observability.ObservabilityAttribute
                     { Observability.attributeName = "app.route",
@@ -6893,12 +7045,12 @@ spec = do
               HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.type",
+                    { Observability.attributeName = "error.type",
                       Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
                     },
                   Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.message",
-                      Observability.attributeValue = Observability.TextAttribute "highlights unavailable"
+                    { Observability.attributeName = "app.failure.code",
+                      Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
                     },
                   Observability.ObservabilityAttribute
                     { Observability.attributeName = "app.route",
@@ -6946,12 +7098,12 @@ spec = do
             HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
             HarchWeb.responseObservabilityAttributes =
               [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "exception.type",
+                  { Observability.attributeName = "error.type",
                     Observability.attributeValue = Observability.TextAttribute "HomePageDataError"
                   },
                 Observability.ObservabilityAttribute
-                  { Observability.attributeName = "exception.message",
-                    Observability.attributeValue = Observability.TextAttribute "wrong loader"
+                  { Observability.attributeName = "app.failure.code",
+                    Observability.attributeValue = Observability.TextAttribute "database.home-page-data"
                   },
                 Observability.ObservabilityAttribute
                   { Observability.attributeName = "app.route",
@@ -6988,12 +7140,12 @@ spec = do
               HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.type",
+                    { Observability.attributeName = "error.type",
                       Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
                     },
                   Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.message",
-                      Observability.attributeValue = Observability.TextAttribute "seed unavailable"
+                    { Observability.attributeName = "app.failure.code",
+                      Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
                     },
                   Observability.ObservabilityAttribute
                     { Observability.attributeName = "app.route",
@@ -7031,12 +7183,12 @@ spec = do
               HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.type",
+                    { Observability.attributeName = "error.type",
                       Observability.attributeValue = Observability.TextAttribute "HomePageDataError"
                     },
                   Observability.ObservabilityAttribute
-                    { Observability.attributeName = "exception.message",
-                      Observability.attributeValue = Observability.TextAttribute "home seed unavailable"
+                    { Observability.attributeName = "app.failure.code",
+                      Observability.attributeValue = Observability.TextAttribute "database.home-page-data"
                     },
                   Observability.ObservabilityAttribute
                     { Observability.attributeName = "app.route",
@@ -7325,6 +7477,19 @@ spec = do
           }
 
   describe "page shell integration" $ do
+    it "keeps every page route's path, title, and enhancements in one metadata table" $
+      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, NotFoundRoute, StatusApiRoute]
+        `shouldBe` [ (Nothing, "", "Home", []),
+                     (Just "second", "/second", "Second", ["second-page"]),
+                     (Just "register", "/register", "Create account", []),
+                     (Just "verify", "/verify", "Verify email", []),
+                     (Just "mfa", "/mfa", "Set up authenticator", []),
+                     (Just "login", "/login", "Sign in", []),
+                     (Just "logout", "/logout", "Sign out", []),
+                     (Just "404", "/404", "Not Found", []),
+                     (Nothing, "/404", "Not Found", [])
+                   ]
+
     it "keeps client-only enhancement hooks in the app seam instead of page rendering" $ do
       pageEnhancementHooks HomeRoute `shouldBe` []
       pageEnhancementHooks SecondRoute `shouldBe` ["second-page"]
@@ -7438,12 +7603,18 @@ spec = do
             (waiRequest ["logout"])
               { Wai.requestHeaders = [("Cookie", TextEncoding.encodeUtf8 ("theme=dark; __Host-harch-session=" <> sessionToken))]
               }
+          invalidCookieRequest =
+            (waiRequest ["logout"])
+              { Wai.requestHeaders = [("Cookie", ByteString.pack [255])]
+              }
       HarchWeb.requestContextFromRequest pureApplication forwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
       HarchWeb.requestContextFromRequest pureApplication emptyForwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
       HarchWeb.requestContextFromRequest pureApplication cookieRequest defaultRequestContext
         `shouldBe` defaultRequestContext {requestSessionId = Session.mkSessionId sessionToken}
+      HarchWeb.requestContextFromRequest pureApplication invalidCookieRequest defaultRequestContext
+        `shouldBe` defaultRequestContext
 
     it "derives normalized forwarded path prefixes when forwarded headers are trusted" $ do
       let forwardedPrefixRequest =

@@ -24,12 +24,14 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
 import WebApi.Account (AccountStore (..), AccountStoreError (..))
-import WebApi.AccountPages (AccountWorkflow (..), handleAccountAction)
+import WebApi.AccountPages (handleAccountAction)
 import WebApi.App.Shell (buildAppPageShellConfig)
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
@@ -180,6 +182,7 @@ buildRuntimeAccountWorkflow !environmentConfig =
         AccountWorkflow
           { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
             accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
+            accountWorkflowPasswordHasher = Password.hashPassword,
             accountWorkflowClock = getMonotonicTimeNSec,
             accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
             accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
@@ -329,6 +332,7 @@ unavailableAccountWorkflow =
             consumeEmailVerification = \_ _ -> pure (Left (AccountStoreUnavailable "account persistence is not configured"))
           },
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
+      accountWorkflowPasswordHasher = Password.hashPassword,
       accountWorkflowClock = pure 0,
       accountWorkflowMfaStore =
         MfaStore

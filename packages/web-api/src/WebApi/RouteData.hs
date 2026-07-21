@@ -16,6 +16,7 @@ import WebApi.Database
   ( DatabaseEffect,
     DatabaseError,
     DatabaseOperation,
+    SecondPageData,
     databaseResultOperations,
     databaseResultValue,
     defaultDatabaseEffect,
@@ -72,62 +73,56 @@ selectRouteData =
 
 selectRouteDataSelectionWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataSelection
 selectRouteDataSelectionWithDatabase databaseEffect routeRequest =
-  case HarchWeb.requestRoute routeRequest of
-    HomeRoute -> do
-      homePageDataResult <- loadHomePageDataWithObservability databaseEffect (HarchWeb.requestContext routeRequest)
-      pure
-        RouteDataSelection
-          { routeDataResult =
-              HomeRouteDataResult
-                ( fmap
-                    ( \homePageData ->
-                        HomeRouteData
-                          { homeRouteSummary = homePageDataSummary homePageData
-                          }
-                    )
-                    (databaseResultValue homePageDataResult)
-                ),
-            routeDataDatabaseOperations = databaseResultOperations homePageDataResult
-          }
-    SecondRoute -> do
-      secondPageDataResult <- loadSecondPageDataWithObservability databaseEffect (HarchWeb.requestContext routeRequest)
-      pure
-        RouteDataSelection
-          { routeDataResult =
-              SecondRouteDataResult
-                ( fmap
-                    ( \secondPageData ->
-                        SecondRouteData
-                          { secondRouteSummary = secondPageDataSummary secondPageData,
-                            secondRouteHighlights = secondPageDataHighlights secondPageData
-                          }
-                    )
-                    (databaseResultValue secondPageDataResult)
-                ),
-            routeDataDatabaseOperations = databaseResultOperations secondPageDataResult
-          }
-    RegistrationRoute ->
-      pure RouteDataSelection {routeDataResult = RegistrationRouteDataResult, routeDataDatabaseOperations = []}
-    EmailVerificationRoute ->
-      pure RouteDataSelection {routeDataResult = EmailVerificationRouteDataResult, routeDataDatabaseOperations = []}
-    MfaEnrollmentRoute ->
-      pure RouteDataSelection {routeDataResult = MfaEnrollmentRouteDataResult, routeDataDatabaseOperations = []}
-    LoginRoute ->
-      pure RouteDataSelection {routeDataResult = LoginRouteDataResult, routeDataDatabaseOperations = []}
-    LogoutRoute ->
-      pure RouteDataSelection {routeDataResult = LogoutRouteDataResult, routeDataDatabaseOperations = []}
-    StatusApiRoute ->
-      pure $
-        RouteDataSelection
-          { routeDataResult =
-              StatusApiDataResult
-                StatusApiData
-                  { statusApiLocale = requestLocale (HarchWeb.requestContext routeRequest)
-                  },
-            routeDataDatabaseOperations = []
-          }
-    NotFoundRoute ->
-      pure RouteDataSelection {routeDataResult = NotFoundRouteDataResult, routeDataDatabaseOperations = []}
+  case routeDataPlan (HarchWeb.requestRoute routeRequest) of
+    LoadHomeRouteData -> selectHomeRouteData databaseEffect requestContext
+    LoadSecondRouteData -> selectSecondRouteData databaseEffect requestContext
+    BuildStatusRouteData -> pure (emptyRouteDataSelection (StatusApiDataResult (StatusApiData (requestLocale requestContext))))
+    UseStaticRouteData result -> pure (emptyRouteDataSelection result)
+  where
+    requestContext = HarchWeb.requestContext routeRequest
+
+data RouteDataPlan
+  = LoadHomeRouteData
+  | LoadSecondRouteData
+  | BuildStatusRouteData
+  | UseStaticRouteData RouteDataResult
+
+selectHomeRouteData :: DatabaseEffect -> AppRequestContext -> IO RouteDataSelection
+selectHomeRouteData databaseEffect requestContext = do
+  homePageDataResult <- loadHomePageDataWithObservability databaseEffect requestContext
+  pure
+    RouteDataSelection
+      { routeDataResult = HomeRouteDataResult (HomeRouteData . homePageDataSummary <$> databaseResultValue homePageDataResult),
+        routeDataDatabaseOperations = databaseResultOperations homePageDataResult
+      }
+
+selectSecondRouteData :: DatabaseEffect -> AppRequestContext -> IO RouteDataSelection
+selectSecondRouteData databaseEffect requestContext = do
+  secondPageDataResult <- loadSecondPageDataWithObservability databaseEffect requestContext
+  pure
+    RouteDataSelection
+      { routeDataResult = SecondRouteDataResult (toSecondRouteData <$> databaseResultValue secondPageDataResult),
+        routeDataDatabaseOperations = databaseResultOperations secondPageDataResult
+      }
+
+toSecondRouteData :: SecondPageData -> SecondRouteData
+toSecondRouteData pageData = SecondRouteData (secondPageDataSummary pageData) (secondPageDataHighlights pageData)
+
+emptyRouteDataSelection :: RouteDataResult -> RouteDataSelection
+emptyRouteDataSelection result = RouteDataSelection result []
+
+routeDataPlan :: AppRoute -> RouteDataPlan
+routeDataPlan route =
+  case route of
+    HomeRoute -> LoadHomeRouteData
+    SecondRoute -> LoadSecondRouteData
+    StatusApiRoute -> BuildStatusRouteData
+    RegistrationRoute -> UseStaticRouteData RegistrationRouteDataResult
+    EmailVerificationRoute -> UseStaticRouteData EmailVerificationRouteDataResult
+    MfaEnrollmentRoute -> UseStaticRouteData MfaEnrollmentRouteDataResult
+    LoginRoute -> UseStaticRouteData LoginRouteDataResult
+    LogoutRoute -> UseStaticRouteData LogoutRouteDataResult
+    NotFoundRoute -> UseStaticRouteData NotFoundRouteDataResult
 
 selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteDataWithDatabase databaseEffect routeRequest =

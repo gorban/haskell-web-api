@@ -42,7 +42,9 @@ import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
     AppRoute (..),
+    RouteMetadata (routePageTitle),
     renderRoutePath,
+    routeMetadata,
   )
 import WebApi.RouteData
   ( HomeRouteData (..),
@@ -157,16 +159,7 @@ renderPageFromRouteData config routeRequest routeData =
         }
 
 routeTitle :: AppRoute -> Text
-routeTitle route =
-  case route of
-    HomeRoute -> "Home"
-    SecondRoute -> "Second"
-    RegistrationRoute -> "Create account"
-    EmailVerificationRoute -> "Verify email"
-    MfaEnrollmentRoute -> "Set up authenticator"
-    LoginRoute -> "Sign in"
-    LogoutRoute -> "Sign out"
-    _ -> "Not Found"
+routeTitle = routePageTitle . routeMetadata
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
 buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect

@@ -115,6 +115,7 @@ spec = do
         _ -> expectationFailure "expected one confirmation call"
 
     it "rejects missing, corrupt, already-confirmed, invalid-code, hash, and store outcomes" $ do
+      hashCallsReference <- newIORef (0 :: Int)
       let secret = requiredTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
           encryptedSecret = requiredEncryptedSecret secret
           suppliedCode = totpCode 123456 secret
@@ -128,6 +129,7 @@ spec = do
               }
           oneCode = requiredRecoveryCode "0123456789ABCDEF0123"
           successfulHash recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
+          failingHash _ = modifyIORef' hashCallsReference (+ 1) >> pure Nothing
           confirmWith store generatedCode hashing = confirmMfaEnrollmentWith generatedCode hashing store encryptionKey accountId 500 123456 suppliedCode
       confirmWith (validStore (Left (MfaStoreUnavailable "unavailable")) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreUnavailable "unavailable"))
@@ -143,8 +145,9 @@ spec = do
         `shouldReturnEqual` Left MfaEnrollmentConfirmationRejected
       confirmMfaEnrollmentWith (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) encryptionKey accountId 500 123456 (requiredTotpCode "000000")
         `shouldReturnEqual` Left MfaEnrollmentInvalidCode
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) (pure oneCode) (\_ -> pure Nothing)
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) (pure oneCode) failingHash
         `shouldReturnEqual` Left MfaEnrollmentRecoveryCodeHashingFailed
+      readIORef hashCallsReference `shouldReturn` 1
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Left (MfaStoreCorruptData "bad confirmation"))) (pure oneCode) successfulHash
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreCorruptData "bad confirmation"))
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right False)) (pure oneCode) successfulHash

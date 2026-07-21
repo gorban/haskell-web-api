@@ -70,14 +70,18 @@ twoPageClientAction actionRequest =
                       { clientActionStatus = 200,
                         clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Thanks. Your subscription request is ready.</p>"],
                         clientActionFocusId = Nothing,
-                        clientActionHeaders = []
+                        clientActionHeaders = [],
+                        clientActionObservabilityAttributes = [],
+                        clientActionLogEntries = []
                       }
               _ ->
                 ClientActionResponse
                   { clientActionStatus = 422,
                     clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"alert\">Enter a valid email address.</p>"],
                     clientActionFocusId = Just "subscription-email",
-                    clientActionHeaders = []
+                    clientActionHeaders = [],
+                    clientActionObservabilityAttributes = [],
+                    clientActionLogEntries = []
                   }
           )
       _ -> Nothing

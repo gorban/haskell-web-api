@@ -10,6 +10,8 @@ module WebApi.Login
   )
 where
 
+import Control.Monad.Except (ExceptT (ExceptT), runExceptT, withExceptT)
+import Core.Control.Error (fromMaybeError)
 import Data.List (find)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
@@ -61,6 +63,18 @@ data PasswordMfaLoginResult
   | PasswordMfaLoginCorruptEnrollment
   deriving (Eq)
 
+data LoginInfrastructureError
+  = LoginMfaStoreError MfaStoreError
+  | LoginCorruptEnrollment
+
+data SecondFactorContext = SecondFactorContext
+  { secondFactorMfaStore :: MfaStore,
+    secondFactorEncryptionKey :: SecretEncryptionKey,
+    secondFactorNowNanoseconds :: Word64,
+    secondFactorNowSeconds :: Word64,
+    secondFactorProof :: MfaLoginProof
+  }
+
 -- | Validates the password first, then requires a confirmed authenticator.
 -- This function intentionally never creates a session: completing the second
 -- factor is required before the application may authenticate the account.
@@ -73,14 +87,14 @@ beginPasswordLogin credentialStore mfaStore emailAddress password = do
     Right (Just credential)
       | not (verifyPassword password (accountCredentialPasswordHash credential)) -> pure PasswordLoginRejected
       | not (accountCredentialEmailVerified credential) -> pure (PasswordLoginEmailVerificationRequired (accountCredentialId credential))
-      | otherwise -> do
-          enrollmentResult <- loadTotpEnrollment mfaStore (accountCredentialId credential)
-          pure $
-            case enrollmentResult of
-              Left storeError -> PasswordLoginMfaStoreError storeError
-              Right Nothing -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
-              Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Nothing}) -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
-              Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Just _}) -> PasswordLoginMfaRequired (accountCredentialId credential)
+    Right (Just credential) -> do
+      enrollmentResult <- loadTotpEnrollment mfaStore (accountCredentialId credential)
+      pure $
+        case enrollmentResult of
+          Left storeError -> PasswordLoginMfaStoreError storeError
+          Right Nothing -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
+          Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Nothing}) -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
+          Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Just _}) -> PasswordLoginMfaRequired (accountCredentialId credential)
 
 -- | Performs password validation before examining the supplied second factor.
 -- A recovery code is marked used by its stored hash only after its Argon2id
@@ -97,49 +111,82 @@ completePasswordLogin ::
   IO PasswordMfaLoginResult
 completePasswordLogin credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds emailAddress password proof = do
   passwordResult <- beginPasswordLogin credentialStore mfaStore emailAddress password
+  continuePasswordLogin
+    SecondFactorContext
+      { secondFactorMfaStore = mfaStore,
+        secondFactorEncryptionKey = encryptionKey,
+        secondFactorNowNanoseconds = nowNanoseconds,
+        secondFactorNowSeconds = nowSeconds,
+        secondFactorProof = proof
+      }
+    passwordResult
+
+continuePasswordLogin :: SecondFactorContext -> PasswordLoginResult -> IO PasswordMfaLoginResult
+continuePasswordLogin context passwordResult =
   case passwordResult of
     PasswordLoginRejected -> pure PasswordMfaLoginRejected
     PasswordLoginEmailVerificationRequired accountId -> pure (PasswordMfaLoginEmailVerificationRequired accountId)
     PasswordLoginMfaEnrollmentRequired accountId -> pure (PasswordMfaLoginEnrollmentRequired accountId)
     PasswordLoginCredentialStoreError storeError -> pure (PasswordMfaLoginCredentialStoreError storeError)
     PasswordLoginMfaStoreError storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
-    PasswordLoginMfaRequired accountId -> completeConfirmedEnrollment accountId
-  where
-    completeConfirmedEnrollment accountId = do
-      enrollmentResult <- loadTotpEnrollment mfaStore accountId
-      case enrollmentResult of
-        Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
-        Right Nothing -> pure (PasswordMfaLoginEnrollmentRequired accountId)
-        Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Nothing}) -> pure (PasswordMfaLoginEnrollmentRequired accountId)
-        Right (Just StoredTotpEnrollment {storedTotpEncryptedSecret}) ->
-          case proof of
-            TotpLoginProof suppliedCode ->
-              pure $
-                case decodeTotpSecret encryptionKey storedTotpEncryptedSecret of
-                  Nothing -> PasswordMfaLoginCorruptEnrollment
-                  Just secret ->
-                    if validateTotpCode nowSeconds 1 secret suppliedCode
-                      then PasswordMfaLoginAccepted accountId
-                      else PasswordMfaLoginRejected
-            RecoveryCodeLoginProof suppliedCode -> completeRecoveryCode accountId suppliedCode
+    PasswordLoginMfaRequired accountId -> completeConfirmedEnrollment context accountId
 
-    completeRecoveryCode accountId suppliedCode = do
-      recoveryHashResult <- loadUnusedRecoveryCodeHashes mfaStore accountId
-      case recoveryHashResult of
-        Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
-        Right recoveryHashValues ->
-          case traverse readRecoveryCodeHash recoveryHashValues of
-            Nothing -> pure PasswordMfaLoginCorruptEnrollment
-            Just recoveryHashes ->
-              case find (verifyRecoveryCode suppliedCode) recoveryHashes of
-                Nothing -> pure PasswordMfaLoginRejected
-                Just matchingHash -> do
-                  consumptionResult <- consumeRecoveryCodeHash mfaStore accountId (recoveryCodeHashText matchingHash) nowNanoseconds
-                  pure $
-                    case consumptionResult of
-                      Left storeError -> PasswordMfaLoginMfaStoreError storeError
-                      Right True -> PasswordMfaLoginAccepted accountId
-                      Right False -> PasswordMfaLoginRejected
+completeConfirmedEnrollment :: SecondFactorContext -> AccountId -> IO PasswordMfaLoginResult
+completeConfirmedEnrollment context accountId = do
+  enrollmentResult <- runExceptT (liftMfaStore (loadTotpEnrollment (secondFactorMfaStore context) accountId))
+  either
+    (pure . infrastructureFailureResult)
+    (maybe (pure (PasswordMfaLoginEnrollmentRequired accountId)) (completeStoredEnrollment context accountId))
+    enrollmentResult
+
+completeStoredEnrollment :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> IO PasswordMfaLoginResult
+completeStoredEnrollment context accountId enrollment =
+  case storedTotpConfirmedAtNanoseconds enrollment of
+    Nothing -> pure (PasswordMfaLoginEnrollmentRequired accountId)
+    Just _ -> verifyProof context accountId (storedTotpEncryptedSecret enrollment)
+
+verifyProof :: SecondFactorContext -> AccountId -> Text -> IO PasswordMfaLoginResult
+verifyProof context accountId encryptedSecret =
+  case secondFactorProof context of
+    TotpLoginProof suppliedCode ->
+      pure (verifyTotpProof context accountId encryptedSecret suppliedCode)
+    RecoveryCodeLoginProof suppliedCode ->
+      completeRecoveryCode context accountId suppliedCode
+
+verifyTotpProof :: SecondFactorContext -> AccountId -> Text -> TotpCode -> PasswordMfaLoginResult
+verifyTotpProof context accountId encryptedSecret suppliedCode =
+  case decodeTotpSecret (secondFactorEncryptionKey context) encryptedSecret of
+    Nothing -> PasswordMfaLoginCorruptEnrollment
+    Just secret ->
+      if validateTotpCode (secondFactorNowSeconds context) 1 secret suppliedCode
+        then PasswordMfaLoginAccepted accountId
+        else PasswordMfaLoginRejected
+
+completeRecoveryCode :: SecondFactorContext -> AccountId -> RecoveryCode -> IO PasswordMfaLoginResult
+completeRecoveryCode context accountId suppliedCode = do
+  recoveryResult <- runExceptT $ do
+    recoveryHashValues <- liftMfaStore (loadUnusedRecoveryCodeHashes (secondFactorMfaStore context) accountId)
+    recoveryHashes <-
+      fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
+    case find (verifyRecoveryCode suppliedCode) recoveryHashes of
+      Nothing -> pure False
+      Just matchingHash ->
+        liftMfaStore
+          (consumeRecoveryCodeHash (secondFactorMfaStore context) accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
+  pure $
+    either
+      infrastructureFailureResult
+      (\accepted -> if accepted then PasswordMfaLoginAccepted accountId else PasswordMfaLoginRejected)
+      recoveryResult
+
+liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT LoginInfrastructureError IO value
+liftMfaStore = withExceptT LoginMfaStoreError . ExceptT
+
+infrastructureFailureResult :: LoginInfrastructureError -> PasswordMfaLoginResult
+infrastructureFailureResult infrastructureError =
+  case infrastructureError of
+    LoginMfaStoreError storeError -> PasswordMfaLoginMfaStoreError storeError
+    LoginCorruptEnrollment -> PasswordMfaLoginCorruptEnrollment
 
 decodeTotpSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
 decodeTotpSecret encryptionKey encryptedSecret = do

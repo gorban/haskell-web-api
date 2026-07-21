@@ -5,12 +5,14 @@ module WebApi.Route
     AppRequestContext (..),
     AppRoute (..),
     RequestSurface (..),
+    RouteMetadata (..),
     RouteSelectionError (..),
     defaultRequestContext,
     matchRoute,
     parseRoute,
     renderRoutePath,
     requestContextFromWaiRequest,
+    routeMetadata,
     selectRoute,
     routeCodec,
   )
@@ -69,6 +71,13 @@ data AppRoute
   | StatusApiRoute
   | NotFoundRoute
   deriving (Eq, Show)
+
+data RouteMetadata = RouteMetadata
+  { routePageSegment :: Maybe Text,
+    routePageSuffix :: Text,
+    routePageTitle :: Text,
+    routeEnhancementHooks :: [Text]
+  }
 
 defaultRequestContext :: AppRequestContext
 defaultRequestContext =
@@ -170,11 +179,17 @@ requestContextFromWaiRequest trustProxyHeaders request requestContext =
     }
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
-parseRoutePath path
+parseRoutePath path = parseRouteSegments path =<< tokenizeRoutePath path
+
+tokenizeRoutePath :: Text -> Either RouteSelectionError [Text]
+tokenizeRoutePath path
   | not (Text.isPrefixOf "/" path) = Left (UnsupportedPath path)
   | path /= "/" && Text.isSuffixOf "/" path = Left (UnsupportedPath path)
-parseRoutePath path =
-  case drop 1 (Text.splitOn "/" path) of
+tokenizeRoutePath path = Right (drop 1 (Text.splitOn "/" path))
+
+parseRouteSegments :: Text -> [Text] -> Either RouteSelectionError (Maybe AppLocale, RequestSurface, AppRoute)
+parseRouteSegments path segments =
+  case segments of
     [segment]
       | Text.null segment -> Right (Nothing, PageSurface, HomeRoute)
     [segment]
@@ -219,15 +234,25 @@ parseApiPath segment
 parseApiPath _ = Right (Nothing, ApiSurface, NotFoundRoute)
 
 routeFromSegment :: Text -> Maybe AppRoute
-routeFromSegment segment
-  | segment == "second" = Just SecondRoute
-  | segment == "register" = Just RegistrationRoute
-  | segment == "verify" = Just EmailVerificationRoute
-  | segment == "mfa" = Just MfaEnrollmentRoute
-  | segment == "login" = Just LoginRoute
-  | segment == "logout" = Just LogoutRoute
-  | segment == "404" = Just NotFoundRoute
-routeFromSegment _ = Nothing
+routeFromSegment segment =
+  lookup
+    segment
+    [ (configuredSegment, route)
+    | route <- pageRoutes,
+      Just configuredSegment <- [routePageSegment (routeMetadata route)]
+    ]
+
+pageRoutes :: [AppRoute]
+pageRoutes =
+  [ HomeRoute,
+    SecondRoute,
+    RegistrationRoute,
+    EmailVerificationRoute,
+    MfaEnrollmentRoute,
+    LoginRoute,
+    LogoutRoute,
+    NotFoundRoute
+  ]
 
 localeFromPrefix :: Text -> Maybe AppLocale
 localeFromPrefix prefix
@@ -246,17 +271,20 @@ renderLocalePrefix locale isExplicit =
     Spanish -> "/es"
 
 renderPageRouteSuffix :: AppRoute -> Text
-renderPageRouteSuffix route =
+renderPageRouteSuffix = routePageSuffix . routeMetadata
+
+routeMetadata :: AppRoute -> RouteMetadata
+routeMetadata route =
   case route of
-    HomeRoute -> Text.empty
-    SecondRoute -> "/second"
-    RegistrationRoute -> "/register"
-    EmailVerificationRoute -> "/verify"
-    MfaEnrollmentRoute -> "/mfa"
-    LoginRoute -> "/login"
-    LogoutRoute -> "/logout"
-    NotFoundRoute -> "/404"
-    StatusApiRoute -> "/404"
+    HomeRoute -> RouteMetadata Nothing Text.empty "Home" []
+    SecondRoute -> RouteMetadata (Just "second") "/second" "Second" ["second-page"]
+    RegistrationRoute -> RouteMetadata (Just "register") "/register" "Create account" []
+    EmailVerificationRoute -> RouteMetadata (Just "verify") "/verify" "Verify email" []
+    MfaEnrollmentRoute -> RouteMetadata (Just "mfa") "/mfa" "Set up authenticator" []
+    LoginRoute -> RouteMetadata (Just "login") "/login" "Sign in" []
+    LogoutRoute -> RouteMetadata (Just "logout") "/logout" "Sign out" []
+    NotFoundRoute -> RouteMetadata (Just "404") "/404" "Not Found" []
+    StatusApiRoute -> RouteMetadata Nothing "/404" "Not Found" []
 
 renderApiRoutePath :: AppRoute -> Text
 renderApiRoutePath route =

@@ -3,14 +3,14 @@
 
 module Unit.HarchWeb.AcmeSpec (spec) where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, killThread, newMVar, readMVar, threadDelay)
 import Control.Exception (IOException, evaluate, finally, try)
 import Control.Monad (void)
 import qualified Data.ByteString as ByteString
 import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Char8 as ByteStringChar8
 import qualified Data.ByteString.Lazy as LazyByteString
-import Data.IORef (atomicModifyIORef', newIORef, readIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -1153,6 +1153,16 @@ data TestAcmeServer = TestAcmeServer
     serverDirectoryUrl :: Text
   }
 
+data TestAcmeServerState = TestAcmeServerState
+  { testAcmeBaseUrl :: Text,
+    testAcmeNonceHeaders :: [Http.Header],
+    testAcmePendingOrderCount :: IORef Int,
+    testAcmeProcessingOrderCount :: IORef Int,
+    testAcmeWaitingOrderCount :: IORef Int
+  }
+
+type TestAcmeHandler = Wai.Request -> IO Wai.Response
+
 withHttpAcmeServer :: (TestAcmeServer -> IO a) -> IO a
 withHttpAcmeServer action =
   withUnusedLoopbackPort $ \port -> do
@@ -1161,160 +1171,113 @@ withHttpAcmeServer action =
     pendingOrderCount <- newIORef (0 :: Int)
     processingOrderCount <- newIORef (0 :: Int)
     waitingOrderCount <- newIORef (0 :: Int)
-    let directoryResponse newOrderPath =
-          "{\"newNonce\":\"" <> baseUrl <> "/new-nonce\",\"newAccount\":\"" <> baseUrl <> "/new-account\",\"newOrder\":\"" <> baseUrl <> newOrderPath <> "\"}"
-        acmeApplication request respond = do
-          _ <- Wai.strictRequestBody request
-          case (Wai.requestMethod request, Wai.rawPathInfo request) of
-            ("GET", "/directory") ->
-              respond (jsonResponse Http.ok200 nonceHeaders (directoryResponse "/new-order"))
-            ("GET", "/directory-bad-json") ->
-              respond (jsonResponse Http.ok200 nonceHeaders "{}")
-            ("GET", "/directory-no-authorizations") ->
-              respond (jsonResponse Http.ok200 nonceHeaders (directoryResponse "/new-order-no-authorizations"))
-            ("GET", "/directory-immediately-valid") ->
-              respond (jsonResponse Http.ok200 nonceHeaders (directoryResponse "/new-order-immediately-valid"))
-            ("GET", "/directory-ready-no-finalize") ->
-              respond (jsonResponse Http.ok200 nonceHeaders (directoryResponse "/new-order-ready-no-finalize"))
-            ("GET", "/directory-valid-no-certificate") ->
-              respond (jsonResponse Http.ok200 nonceHeaders (directoryResponse "/new-order-valid-no-certificate"))
-            ("HEAD", "/new-nonce") ->
-              respond (Wai.responseLBS Http.noContent204 [("Replay-Nonce", "nonce-1")] "")
-            ("HEAD", "/new-nonce-missing") ->
-              respond (Wai.responseLBS Http.noContent204 [] "")
-            ("POST", "/capture") ->
-              respond
-                ( Wai.responseLBS
-                    Http.ok200
-                    [ ("Replay-Nonce", "nonce-2"),
-                      ("Content-Type", "application/json"),
-                      ("X-Seen-Accept", fromMaybe "" (lookup "Accept" (Wai.requestHeaders request)))
-                    ]
-                    "{\"status\":\"ok\"}"
-                )
-            ("POST", "/new-account") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/account/1"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    "{}"
-                )
-            ("POST", "/new-account-missing-location") ->
-              respond (jsonResponse Http.created201 nonceHeaders "{}")
-            ("POST", "/new-order") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order/1"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 ("{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}")))
-                )
-            ("POST", "/new-order-bad-json") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order/1"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    "{}"
-                )
-            ("POST", "/new-order-missing-location") ->
-              respond (jsonResponse Http.created201 nonceHeaders "{\"status\":\"ready\"}")
-            ("POST", "/new-order-no-authorizations") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order/1"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    "{\"status\":\"ready\",\"finalize\":\"http://unused.invalid/finalize\"}"
-                )
-            ("POST", "/new-order-immediately-valid") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order-immediately-valid"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\",\"certificate\":\"" <> baseUrl <> "/cert/1\"}")))
-                )
-            ("POST", "/new-order-ready-no-finalize") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order-ready-no-finalize"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 ("{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"]}")))
-                )
-            ("POST", "/new-order-valid-no-certificate") ->
-              respond
-                ( Wai.responseLBS
-                    Http.created201
-                    [("Location", ByteStringChar8.pack (Text.unpack (baseUrl <> "/order-valid-no-certificate"))), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
-                    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}")))
-                )
-            ("POST", "/authz/1") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"identifier\":{\"type\":\"dns\",\"value\":\"example.com\"},\"challenges\":[{\"type\":\"http-01\",\"url\":\"" <> baseUrl <> "/challenge/1\",\"token\":\"token\"}]}"))
-            ("POST", "/authz-no-http01") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"identifier\":{\"type\":\"dns\",\"value\":\"example.com\"},\"challenges\":[{\"type\":\"dns-01\",\"url\":\"" <> baseUrl <> "/challenge/2\",\"token\":\"token\"}]}"))
-            ("POST", "/authz-bad-json") ->
-              respond (jsonResponse Http.ok200 nonceHeaders "{}")
-            ("POST", "/challenge/1") ->
-              respond (jsonResponse Http.ok200 nonceHeaders "{}")
-            ("POST", "/order-ready") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"))
-            ("POST", "/order-valid") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\",\"certificate\":\"" <> baseUrl <> "/cert/1\"}"))
-            ("POST", "/order-pending-ready") -> do
-              priorPolls <- atomicModifyIORef' pendingOrderCount (\count -> (count + 1, count))
-              respond
-                ( jsonResponse
-                    Http.ok200
-                    nonceHeaders
-                    ( if priorPolls == 0
-                        then "{\"status\":\"pending\"}"
-                        else "{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"
-                    )
-                )
-            ("POST", "/order-processing-valid") -> do
-              priorPolls <- atomicModifyIORef' processingOrderCount (\count -> (count + 1, count))
-              respond
-                ( jsonResponse
-                    Http.ok200
-                    nonceHeaders
-                    ( if priorPolls == 0
-                        then "{\"status\":\"processing\"}"
-                        else "{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\",\"certificate\":\"" <> baseUrl <> "/cert/1\"}"
-                    )
-                )
-            ("POST", "/order-waiting-ready") -> do
-              priorPolls <- atomicModifyIORef' waitingOrderCount (\count -> (count + 1, count))
-              respond
-                ( jsonResponse
-                    Http.ok200
-                    nonceHeaders
-                    ( if priorPolls == 0
-                        then "{\"status\":\"waiting\"}"
-                        else "{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"
-                    )
-                )
-            ("POST", "/order-immediately-valid") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\",\"certificate\":\"" <> baseUrl <> "/cert/1\"}"))
-            ("POST", "/order-ready-no-finalize") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"]}"))
-            ("POST", "/order-valid-no-certificate") ->
-              respond (jsonResponse Http.ok200 nonceHeaders ("{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"))
-            ("POST", "/order-invalid") ->
-              respond
-                ( jsonResponse
-                    Http.ok200
-                    nonceHeaders
-                    "{\"status\":\"invalid\",\"error\":{\"type\":\"urn:ietf:params:acme:error:connection\",\"detail\":\"Fetching http://bruckdev.com/.well-known/acme-challenge/token: Timeout during connect\"}}"
-                )
-            ("POST", "/finalize/1") ->
-              respond (jsonResponse Http.ok200 nonceHeaders "{}")
-            ("POST", "/cert/1") ->
-              respond (Wai.responseLBS Http.ok200 [("Replay-Nonce", "nonce-2"), ("Content-Type", "application/pem-certificate-chain")] "PEM CERT")
-            (_, "/status-500") ->
-              respond (Wai.responseLBS Http.internalServerError500 [("Content-Type", "text/plain")] "boom")
-            _ ->
-              respond (Wai.responseLBS Http.notFound404 [] "not found")
-    serverThreadId <- forkIO (Warp.run port acmeApplication)
+    let serverState = TestAcmeServerState baseUrl nonceHeaders pendingOrderCount processingOrderCount waitingOrderCount
+    serverThreadId <- forkIO (Warp.run port (acmeApplication serverState))
     threadDelay 50000
     action TestAcmeServer {serverBaseUrl = baseUrl, serverDirectoryUrl = baseUrl <> "/directory"}
       `finally` killThread serverThreadId
+
+acmeApplication :: TestAcmeServerState -> Wai.Application
+acmeApplication serverState request respond = do
+  _ <- Wai.strictRequestBody request
+  let routeKey = (Wai.requestMethod request, Wai.rawPathInfo request)
+      handler = fromMaybe notFoundHandler (lookup routeKey (acmeRoutes serverState) <|> wildcardRoute routeKey)
+  handler request >>= respond
+  where
+    wildcardRoute (_, "/status-500") = Just (constantHandler (Wai.responseLBS Http.internalServerError500 [("Content-Type", "text/plain")] "boom"))
+    wildcardRoute _ = Nothing
+
+acmeRoutes :: TestAcmeServerState -> [((ByteString.ByteString, ByteString.ByteString), TestAcmeHandler)]
+acmeRoutes serverState =
+  [ (("GET", "/directory"), jsonHandler Http.ok200 headers (directoryResponse serverState "/new-order")),
+    (("GET", "/directory-bad-json"), jsonHandler Http.ok200 headers "{}"),
+    (("GET", "/directory-no-authorizations"), jsonHandler Http.ok200 headers (directoryResponse serverState "/new-order-no-authorizations")),
+    (("GET", "/directory-immediately-valid"), jsonHandler Http.ok200 headers (directoryResponse serverState "/new-order-immediately-valid")),
+    (("GET", "/directory-ready-no-finalize"), jsonHandler Http.ok200 headers (directoryResponse serverState "/new-order-ready-no-finalize")),
+    (("GET", "/directory-valid-no-certificate"), jsonHandler Http.ok200 headers (directoryResponse serverState "/new-order-valid-no-certificate")),
+    (("HEAD", "/new-nonce"), constantHandler (Wai.responseLBS Http.noContent204 [("Replay-Nonce", "nonce-1")] "")),
+    (("HEAD", "/new-nonce-missing"), constantHandler (Wai.responseLBS Http.noContent204 [] "")),
+    (("POST", "/capture"), captureHandler),
+    (("POST", "/new-account"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/account/1") "{}")),
+    (("POST", "/new-account-missing-location"), jsonHandler Http.created201 headers "{}"),
+    (("POST", "/new-order"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order/1") (readyOrderBody baseUrl))),
+    (("POST", "/new-order-bad-json"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order/1") "{}")),
+    (("POST", "/new-order-missing-location"), jsonHandler Http.created201 headers "{\"status\":\"ready\"}"),
+    (("POST", "/new-order-no-authorizations"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order/1") "{\"status\":\"ready\",\"finalize\":\"http://unused.invalid/finalize\"}")),
+    (("POST", "/new-order-immediately-valid"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order-immediately-valid") (validOrderBody baseUrl))),
+    (("POST", "/new-order-ready-no-finalize"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order-ready-no-finalize") (readyWithoutFinalizeBody baseUrl))),
+    (("POST", "/new-order-valid-no-certificate"), constantHandler (locatedResponse Http.created201 (baseUrl <> "/order-valid-no-certificate") (validWithoutCertificateBody baseUrl))),
+    (("POST", "/authz/1"), jsonHandler Http.ok200 headers (httpAuthorizationBody baseUrl)),
+    (("POST", "/authz-no-http01"), jsonHandler Http.ok200 headers (dnsAuthorizationBody baseUrl)),
+    (("POST", "/authz-bad-json"), jsonHandler Http.ok200 headers "{}"),
+    (("POST", "/challenge/1"), jsonHandler Http.ok200 headers "{}"),
+    (("POST", "/order-ready"), jsonHandler Http.ok200 headers (readyOrderBody baseUrl)),
+    (("POST", "/order-valid"), jsonHandler Http.ok200 headers (validOrderBody baseUrl)),
+    (("POST", "/order-pending-ready"), pollingHandler (testAcmePendingOrderCount serverState) "{\"status\":\"pending\"}" (readyOrderBody baseUrl) headers),
+    (("POST", "/order-processing-valid"), pollingHandler (testAcmeProcessingOrderCount serverState) "{\"status\":\"processing\"}" (validOrderBody baseUrl) headers),
+    (("POST", "/order-waiting-ready"), pollingHandler (testAcmeWaitingOrderCount serverState) "{\"status\":\"waiting\"}" (readyOrderBody baseUrl) headers),
+    (("POST", "/order-immediately-valid"), jsonHandler Http.ok200 headers (validOrderBody baseUrl)),
+    (("POST", "/order-ready-no-finalize"), jsonHandler Http.ok200 headers (readyWithoutFinalizeBody baseUrl)),
+    (("POST", "/order-valid-no-certificate"), jsonHandler Http.ok200 headers (validWithoutCertificateBody baseUrl)),
+    (("POST", "/order-invalid"), jsonHandler Http.ok200 headers "{\"status\":\"invalid\",\"error\":{\"type\":\"urn:ietf:params:acme:error:connection\",\"detail\":\"Fetching http://bruckdev.com/.well-known/acme-challenge/token: Timeout during connect\"}}"),
+    (("POST", "/finalize/1"), jsonHandler Http.ok200 headers "{}"),
+    (("POST", "/cert/1"), constantHandler (Wai.responseLBS Http.ok200 [("Replay-Nonce", "nonce-2"), ("Content-Type", "application/pem-certificate-chain")] "PEM CERT"))
+  ]
+  where
+    baseUrl = testAcmeBaseUrl serverState
+    headers = testAcmeNonceHeaders serverState
+    captureHandler request =
+      pure
+        ( Wai.responseLBS
+            Http.ok200
+            [("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json"), ("X-Seen-Accept", fromMaybe "" (lookup "Accept" (Wai.requestHeaders request)))]
+            "{\"status\":\"ok\"}"
+        )
+
+directoryResponse :: TestAcmeServerState -> Text -> Text
+directoryResponse serverState newOrderPath =
+  "{\"newNonce\":\"" <> baseUrl <> "/new-nonce\",\"newAccount\":\"" <> baseUrl <> "/new-account\",\"newOrder\":\"" <> baseUrl <> newOrderPath <> "\"}"
+  where
+    baseUrl = testAcmeBaseUrl serverState
+
+locatedResponse :: Http.Status -> Text -> Text -> Wai.Response
+locatedResponse status location body =
+  Wai.responseLBS
+    status
+    [("Location", TextEncoding.encodeUtf8 location), ("Replay-Nonce", "nonce-2"), ("Content-Type", "application/json")]
+    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 body))
+
+constantHandler :: Wai.Response -> TestAcmeHandler
+constantHandler response _ = pure response
+
+jsonHandler :: Http.Status -> [Http.Header] -> Text -> TestAcmeHandler
+jsonHandler status headers body = constantHandler (jsonResponse status headers body)
+
+pollingHandler :: IORef Int -> Text -> Text -> [Http.Header] -> TestAcmeHandler
+pollingHandler pollCount firstBody laterBody headers _ = do
+  priorPolls <- atomicModifyIORef' pollCount (\count -> (count + 1, count))
+  pure (jsonResponse Http.ok200 headers (if priorPolls == 0 then firstBody else laterBody))
+
+notFoundHandler :: TestAcmeHandler
+notFoundHandler = constantHandler (Wai.responseLBS Http.notFound404 [] "not found")
+
+readyOrderBody :: Text -> Text
+readyOrderBody baseUrl = "{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"
+
+validOrderBody :: Text -> Text
+validOrderBody baseUrl = "{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\",\"certificate\":\"" <> baseUrl <> "/cert/1\"}"
+
+readyWithoutFinalizeBody :: Text -> Text
+readyWithoutFinalizeBody baseUrl = "{\"status\":\"ready\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"]}"
+
+validWithoutCertificateBody :: Text -> Text
+validWithoutCertificateBody baseUrl = "{\"status\":\"valid\",\"authorizations\":[\"" <> baseUrl <> "/authz/1\"],\"finalize\":\"" <> baseUrl <> "/finalize/1\"}"
+
+httpAuthorizationBody :: Text -> Text
+httpAuthorizationBody baseUrl = "{\"identifier\":{\"type\":\"dns\",\"value\":\"example.com\"},\"challenges\":[{\"type\":\"http-01\",\"url\":\"" <> baseUrl <> "/challenge/1\",\"token\":\"token\"}]}"
+
+dnsAuthorizationBody :: Text -> Text
+dnsAuthorizationBody baseUrl = "{\"identifier\":{\"type\":\"dns\",\"value\":\"example.com\"},\"challenges\":[{\"type\":\"dns-01\",\"url\":\"" <> baseUrl <> "/challenge/2\",\"token\":\"token\"}]}"
 
 jsonResponse :: Http.Status -> [Http.Header] -> Text -> Wai.Response
 jsonResponse status headers body =

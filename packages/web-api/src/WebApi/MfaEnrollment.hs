@@ -9,6 +9,9 @@ module WebApi.MfaEnrollment
   )
 where
 
+import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError, withExceptT)
+import Control.Monad.IO.Class (liftIO)
+import Core.Control.Error (fromMaybeError, guardError)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
@@ -71,18 +74,15 @@ startMfaEnrollmentWith ::
   AccountId ->
   Word64 ->
   IO (Either MfaEnrollmentError MfaEnrollmentStart)
-startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now = do
-  secret <- generateSecret
-  encryptedSecret <- encrypt encryptionKey (TextEncoding.encodeUtf8 (renderTotpSecret secret))
-  case encryptedSecret of
-    Nothing -> pure (Left MfaEnrollmentEncryptionFailed)
-    Just encryptedSecretValue -> do
-      saveResult <- saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecretValue now
-      pure $
-        case saveResult of
-          Left storeError -> Left (MfaEnrollmentStoreError storeError)
-          Right False -> Left MfaEnrollmentAccountIsNotEligible
-          Right True -> Right (MfaEnrollmentStart secret)
+startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
+  runExceptT $ do
+    secret <- liftIO generateSecret
+    encryptedSecret <-
+      liftIO (encrypt encryptionKey (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+        >>= fromMaybeError MfaEnrollmentEncryptionFailed
+    saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
+    guardError MfaEnrollmentAccountIsNotEligible saved
+    pure (MfaEnrollmentStart secret)
 
 confirmMfaEnrollment ::
   PasswordHashingPolicy ->
@@ -106,30 +106,33 @@ confirmMfaEnrollmentWith ::
   Word64 ->
   TotpCode ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId nowNanoseconds nowSeconds suppliedCode = do
-  enrollmentResult <- loadTotpEnrollment mfaStore accountId
-  case enrollmentResult of
-    Left storeError -> pure (Left (MfaEnrollmentStoreError storeError))
-    Right Nothing -> pure (Left MfaEnrollmentNotFound)
-    Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Just _}) -> pure (Left MfaEnrollmentConfirmationRejected)
-    Right (Just StoredTotpEnrollment {storedTotpEncryptedSecret, storedTotpConfirmedAtNanoseconds = Nothing}) ->
-      case decodeSecret encryptionKey storedTotpEncryptedSecret of
-        Nothing -> pure (Left MfaEnrollmentCorruptSecret)
-        Just secret ->
-          if not (validateTotpCode nowSeconds 1 secret suppliedCode)
-            then pure (Left MfaEnrollmentInvalidCode)
-            else do
-              recoveryCodes <- generateRecoveryCodes generateCode
-              recoveryCodeHashes <- traverse hashCode recoveryCodes
-              case traverse (fmap recoveryCodeHashText) recoveryCodeHashes of
-                Nothing -> pure (Left MfaEnrollmentRecoveryCodeHashingFailed)
-                Just recoveryCodeHashesText -> do
-                  confirmationResult <- confirmTotpEnrollment mfaStore accountId recoveryCodeHashesText nowNanoseconds
-                  pure $
-                    case confirmationResult of
-                      Left storeError -> Left (MfaEnrollmentStoreError storeError)
-                      Right False -> Left MfaEnrollmentConfirmationRejected
-                      Right True -> Right (MfaEnrollmentConfirmation recoveryCodes)
+confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId nowNanoseconds nowSeconds suppliedCode =
+  runExceptT $ do
+    enrollment <-
+      liftMfaStore (loadTotpEnrollment mfaStore accountId)
+        >>= fromMaybeError MfaEnrollmentNotFound
+    encryptedSecret <- requireUnconfirmedEnrollment enrollment
+    secret <- fromMaybeError MfaEnrollmentCorruptSecret (decodeSecret encryptionKey encryptedSecret)
+    guardError MfaEnrollmentInvalidCode (validateTotpCode nowSeconds 1 secret suppliedCode)
+    recoveryCodes <- liftIO (generateRecoveryCodes generateCode)
+    recoveryCodeHashes <- traverse hashGeneratedRecoveryCode recoveryCodes
+    confirmed <- liftMfaStore (confirmTotpEnrollment mfaStore accountId recoveryCodeHashes nowNanoseconds)
+    guardError MfaEnrollmentConfirmationRejected confirmed
+    pure (MfaEnrollmentConfirmation recoveryCodes)
+  where
+    hashGeneratedRecoveryCode recoveryCode =
+      liftIO (hashCode recoveryCode)
+        >>= fmap recoveryCodeHashText
+          . fromMaybeError MfaEnrollmentRecoveryCodeHashingFailed
+
+liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT MfaEnrollmentError IO value
+liftMfaStore = withExceptT MfaEnrollmentStoreError . ExceptT
+
+requireUnconfirmedEnrollment :: StoredTotpEnrollment -> ExceptT MfaEnrollmentError IO Text
+requireUnconfirmedEnrollment enrollment =
+  case storedTotpConfirmedAtNanoseconds enrollment of
+    Just _ -> throwError MfaEnrollmentConfirmationRejected
+    Nothing -> pure (storedTotpEncryptedSecret enrollment)
 
 decodeSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
 decodeSecret encryptionKey encryptedSecret = do

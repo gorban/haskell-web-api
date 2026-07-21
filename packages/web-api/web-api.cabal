@@ -69,6 +69,7 @@ library
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Shell
+    WebApi.AppEffect
     WebApi.Config
     WebApi.Database
     WebApi.DatabaseSetup
@@ -95,6 +96,7 @@ library
     directory,
     harch-web,
     http-types,
+    mtl,
     postgresql-libpq,
     process,
     text,

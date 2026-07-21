@@ -15,14 +15,15 @@ import HarchWeb
   ( ClientActionRequest (..),
     ListenerConfig (..),
     RouteRequest (..),
-    applicationStaticAssets,
     appName,
+    applicationStaticAssets,
     corsPolicy,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     httpsRedirectPort,
     listenerConfigs,
+    metricsExporter,
     notFoundRequest,
     observability,
     parseRoute,
@@ -30,7 +31,6 @@ import HarchWeb
     renderRoute,
     requestPolicy,
     responseSecurityHeaders,
-    metricsExporter,
     staticAssetContentTypes,
     staticAssetRoots,
     staticAssets,
@@ -189,6 +189,19 @@ spec =
         responseBody <- readResponseBody response
         Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True
         Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True
+        directResponse <-
+          HarchWeb.handleClientAction
+            buildApplication
+            ClientActionRequest
+              { clientActionMethod = "POST",
+                clientActionPath = "/actions/subscribe",
+                clientActionFields = [("email", "ada@example")],
+                clientActionCsrfToken = Nothing,
+                clientActionContext = ()
+              }
+        fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just []
+        fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just []
+        fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
 
       it "returns a success patch for valid captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example.com"]
@@ -205,6 +218,19 @@ spec =
         responseBody <- readResponseBody response
         Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True
         Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True
+        directResponse <-
+          HarchWeb.handleClientAction
+            buildApplication
+            ClientActionRequest
+              { clientActionMethod = "POST",
+                clientActionPath = "/actions/subscribe",
+                clientActionFields = [("email", "ada@example.com")],
+                clientActionCsrfToken = Nothing,
+                clientActionContext = ()
+              }
+        fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just []
+        fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just []
+        fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
 
       it "leaves unrelated client actions for other app routes" $
         HarchWeb.handleClientAction
@@ -285,27 +311,22 @@ decodeUtf8Response :: LazyByteString.ByteString -> Text.Text
 decodeUtf8Response =
   TextEncoding.decodeUtf8 . LazyByteString.toStrict
 
-eqViaDictionary :: Eq a => a -> a -> Bool
+eqViaDictionary :: (Eq a) => a -> a -> Bool
 eqViaDictionary = (==)
-
 {-# NOINLINE eqViaDictionary #-}
 
-showViaDictionary :: Show a => a -> String
+showViaDictionary :: (Show a) => a -> String
 showViaDictionary = show
-
 {-# NOINLINE showViaDictionary #-}
 
-neqViaDictionary :: Eq a => a -> a -> Bool
+neqViaDictionary :: (Eq a) => a -> a -> Bool
 neqViaDictionary = (/=)
-
 {-# NOINLINE neqViaDictionary #-}
 
-showsPrecViaDictionary :: Show a => Int -> a -> ShowS
+showsPrecViaDictionary :: (Show a) => Int -> a -> ShowS
 showsPrecViaDictionary = showsPrec
-
 {-# NOINLINE showsPrecViaDictionary #-}
 
-showListViaDictionary :: Show a => [a] -> ShowS
+showListViaDictionary :: (Show a) => [a] -> ShowS
 showListViaDictionary = showList
-
 {-# NOINLINE showListViaDictionary #-}

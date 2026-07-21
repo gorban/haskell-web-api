@@ -8,6 +8,7 @@ module WebApi.AccountPages
     LoginForm (..),
     emptyRegistrationForm,
     handleAccountAction,
+    mfaEnrollmentFailureDiagnostics,
     renderRegistrationPage,
     renderRegistrationRegion,
     renderVerificationPage,
@@ -29,9 +30,9 @@ import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
-import HarchWeb.Secret (SecretEncryptionKey)
 import HarchWeb.Session
   ( defaultSessionCookiePolicy,
     renderSessionCookie,
@@ -41,20 +42,30 @@ import HarchWeb.Session
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
-  ( AccountStore,
-    AccountStoreError (..),
+  ( AccountStoreError (..),
     RegistrationError (..),
     RegistrationResult (..),
     confirmEmailVerificationAt,
-    registerAccountAt,
+    registerAccountAtWithPasswordHasher,
+  )
+import WebApi.AppEffect
+  ( AccountWorkflow (..),
+    AppFailure (..),
+    AppM,
+    AppServices (..),
+    FailureDiagnostics (..),
+    askAppServices,
+    liftAppIO,
+    runAppM,
+    throwAppFailure,
   )
 import WebApi.Login
-  ( AccountCredentialStore,
+  ( AccountCredentialStoreError (..),
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
     completePasswordLogin,
   )
-import WebApi.Mfa (MfaStore)
+import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment
   ( MfaEnrollmentConfirmation (..),
     MfaEnrollmentError (..),
@@ -70,20 +81,9 @@ import WebApi.Route
   )
 import WebApi.Session
   ( AccountSessionStore (..),
+    AccountSessionStoreError (..),
     issueAccountSession,
   )
-
-data AccountWorkflow = AccountWorkflow
-  { accountWorkflowStore :: AccountStore,
-    accountWorkflowEmailDelivery :: Email.EmailDelivery,
-    accountWorkflowClock :: IO Word64,
-    accountWorkflowMfaStore :: MfaStore,
-    accountWorkflowCredentialStore :: AccountCredentialStore,
-    accountWorkflowSessionStore :: AccountSessionStore,
-    accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
-    accountWorkflowTotpClock :: IO Word64,
-    accountWorkflowVerificationUrl :: AppRequestContext -> Account.EmailVerificationToken -> Text
-  }
 
 data RegistrationForm = RegistrationForm
   { registrationFormEmail :: Text,
@@ -120,151 +120,289 @@ emptyRegistrationForm = RegistrationForm Text.empty Nothing False
 
 handleAccountAction :: AccountWorkflow -> HarchWeb.ClientActionRequest AppRequestContext -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
-  case HarchWeb.clientActionMethod actionRequest of
-    "POST" ->
-      case HarchWeb.clientActionPath actionRequest of
-        path
-          | path == registrationPath -> Just <$> handleRegistration
-          | path == verificationPath -> Just <$> handleVerification
-          | path == mfaEnrollmentPath -> Just <$> handleMfaEnrollment
-          | path == loginPath -> Just <$> handleLogin
-          | path == logoutPath -> Just <$> handleLogout
-        _ -> pure Nothing
-    _ -> pure Nothing
-  where
-    actionContext = HarchWeb.clientActionContext actionRequest
-    registrationPath = renderRoutePath (routeRequest RegistrationRoute)
-    verificationPath = renderRoutePath (routeRequest EmailVerificationRoute)
-    mfaEnrollmentPath = renderRoutePath (routeRequest MfaEnrollmentRoute)
-    loginPath = renderRoutePath (routeRequest LoginRoute)
-    logoutPath = renderRoutePath (routeRequest LogoutRoute)
-    routeRequest route = HarchWeb.RouteRequest {HarchWeb.requestRoute = route, HarchWeb.requestContext = actionContext}
+  case selectedAccountAction actionRequest of
+    Nothing -> pure Nothing
+    Just action -> do
+      result <- runAppM (AppServices workflow) action
+      pure (Just (either attachClientActionFailure id result))
 
-    handleRegistration = do
-      let emailValue = actionField "email"
-          passwordValue = actionField "password"
-      case (Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _) ->
-          pure (registrationResponse registrationPath 422 (RegistrationForm emailValue (Just (localized "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
-        (_, False) ->
-          pure (registrationResponse registrationPath 422 (RegistrationForm emailValue (Just (localized "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
-        (Just emailAddress, True) -> do
-          now <- accountWorkflowClock workflow
-          registrationResult <-
-            registerAccountAt
-              Password.defaultPasswordHashingPolicy
-              (accountWorkflowStore workflow)
-              (accountWorkflowEmailDelivery workflow)
-              (emailLocale (requestLocale actionContext))
-              (accountWorkflowVerificationUrl workflow actionContext)
-              now
-              emailVerificationLifetimeNanoseconds
-              emailAddress
-              (Password.mkPassword passwordValue)
-          pure $
-            case registrationResult of
-              Right RegistrationAlreadyRegistered -> registrationResponse registrationPath 202 (RegistrationForm emailValue (Just (localized "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.")) False) Nothing
-              Right (RegistrationCreated _) -> registrationResponse registrationPath 202 (RegistrationForm emailValue (Just (localized "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.")) False) Nothing
-              Left (RegistrationStoreError storeError) -> registrationResponse registrationPath 503 (RegistrationForm emailValue (Just (storeErrorMessage storeError)) True) (Just "registration-email")
-              Left (RegistrationDeliveryFailed _) -> registrationResponse registrationPath 502 (RegistrationForm emailValue (Just (localized "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.")) True) (Just "registration-email")
-              Left _ -> registrationResponse registrationPath 503 (RegistrationForm emailValue (Just (localized "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.")) True) (Just "registration-email")
+selectedAccountAction :: HarchWeb.ClientActionRequest AppRequestContext -> Maybe (AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse)
+selectedAccountAction actionRequest =
+  if HarchWeb.clientActionMethod actionRequest /= "POST"
+    then Nothing
+    else
+      lookup
+        (HarchWeb.clientActionPath actionRequest)
+        [ (accountRoutePath actionRequest RegistrationRoute, handleRegistration actionRequest),
+          (accountRoutePath actionRequest EmailVerificationRoute, handleVerification actionRequest),
+          (accountRoutePath actionRequest MfaEnrollmentRoute, handleMfaEnrollment actionRequest),
+          (accountRoutePath actionRequest LoginRoute, handleLogin actionRequest),
+          (accountRoutePath actionRequest LogoutRoute, handleLogout actionRequest)
+        ]
 
-    handleVerification = do
-      let tokenValue = actionField "token"
-      case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse verificationPath 422 (VerificationForm tokenValue (Just (localized "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
+accountRoutePath :: HarchWeb.ClientActionRequest AppRequestContext -> AppRoute -> Text
+accountRoutePath actionRequest route =
+  renderRoutePath
+    HarchWeb.RouteRequest
+      { HarchWeb.requestRoute = route,
+        HarchWeb.requestContext = HarchWeb.clientActionContext actionRequest
+      }
+
+accountWorkflow :: AppM publicFailure AccountWorkflow
+accountWorkflow = appAccountWorkflow <$> askAppServices
+
+handleRegistration :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleRegistration actionRequest =
+  case parseRegistrationForm actionRequest of
+    Left response -> pure response
+    Right (emailValue, passwordValue, emailAddress) -> do
+      workflow <- accountWorkflow
+      now <- liftAppIO (accountWorkflowClock workflow)
+      registrationResult <-
+        liftAppIO $
+          registerAccountAtWithPasswordHasher
+            (accountWorkflowPasswordHasher workflow)
+            Password.defaultPasswordHashingPolicy
+            (accountWorkflowStore workflow)
+            (accountWorkflowEmailDelivery workflow)
+            (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
+            (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
+            now
+            emailVerificationLifetimeNanoseconds
+            emailAddress
+            (Password.mkPassword passwordValue)
+      interpretRegistrationResult actionRequest emailValue registrationResult
+
+parseRegistrationForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, Email.EmailAddress)
+parseRegistrationForm actionRequest =
+  let emailValue = actionField actionRequest "email"
+      passwordValue = actionField actionRequest "password"
+      path = accountRoutePath actionRequest RegistrationRoute
+   in case (Email.mkEmailAddress emailValue, validPassword passwordValue) of
+        (Nothing, _) -> Left (registrationResponse path 422 (RegistrationForm emailValue (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
+        (_, False) -> Left (registrationResponse path 422 (RegistrationForm emailValue (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
+        (Just emailAddress, True) -> Right (emailValue, passwordValue, emailAddress)
+
+interpretRegistrationResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Either RegistrationError RegistrationResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretRegistrationResult actionRequest emailValue registrationResult =
+  let path = accountRoutePath actionRequest RegistrationRoute
+      response status message isError = registrationResponse path status (RegistrationForm emailValue (Just message) isError)
+   in case registrationResult of
+        Right RegistrationAlreadyRegistered -> pure (response 202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
+        Right (RegistrationCreated _) -> pure (response 202 (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
+        Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response 502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) "account.registration.delivery" "EmailDeliveryError" detail
+        Left (RegistrationStoreError storeError) -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.store" "AccountStoreError" (accountStoreErrorDetail storeError)
+        Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.password-hash" "PasswordHashingError" "password hashing failed"
+        Left RegistrationClockOverflow -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.clock" "ClockOverflow" "verification expiry overflowed"
+
+handleVerification :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleVerification actionRequest =
+  let tokenValue = actionField actionRequest "token"
+      path = accountRoutePath actionRequest EmailVerificationRoute
+   in case Account.mkEmailVerificationToken tokenValue of
+        Nothing -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
         Just token -> do
-          now <- accountWorkflowClock workflow
-          confirmationResult <- confirmEmailVerificationAt (accountWorkflowStore workflow) now token
-          pure $
-            case confirmationResult of
-              Right (Account.EmailVerificationAccepted _ _) -> verificationResponse verificationPath 200 (VerificationForm Text.empty (Just (localized "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing
-              Right Account.EmailVerificationExpired -> verificationResponse verificationPath 422 (VerificationForm tokenValue (Just (localized "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token")
-              Right Account.EmailVerificationRejected -> verificationResponse verificationPath 422 (VerificationForm tokenValue (Just (localized "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token")
-              Left storeError -> verificationResponse verificationPath 503 (VerificationForm tokenValue (Just (storeErrorMessage storeError)) True) (Just "verification-token")
+          workflow <- accountWorkflow
+          now <- liftAppIO (accountWorkflowClock workflow)
+          confirmationResult <- liftAppIO (confirmEmailVerificationAt (accountWorkflowStore workflow) now token)
+          case confirmationResult of
+            Right (Account.EmailVerificationAccepted _ _) -> pure (verificationResponse path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing)
+            Right Account.EmailVerificationExpired -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token"))
+            Right Account.EmailVerificationRejected -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
+            Left storeError -> throwClientActionFailure (verificationResponse path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) "account.verification.store" "AccountStoreError" (accountStoreErrorDetail storeError)
 
-    handleMfaEnrollment =
-      case Account.mkAccountId (actionField "account") of
-        Nothing -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (actionField "account") Nothing [] (Just (localized "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
+handleMfaEnrollment :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleMfaEnrollment actionRequest =
+  let accountValue = actionField actionRequest "account"
+      path = accountRoutePath actionRequest MfaEnrollmentRoute
+   in case Account.mkAccountId accountValue of
+        Nothing -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm accountValue Nothing [] (Just (localized actionRequest "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
         Just accountId ->
-          case actionField "intent" of
-            "start" -> do
-              now <- accountWorkflowClock workflow
-              started <- startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now
-              pure $ case started of
-                Right (MfaEnrollmentStart secret) -> mfaEnrollmentResponse mfaEnrollmentPath 200 (mfaForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code")
-                Left errorValue -> mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage errorValue)) True) (Just "mfa-account")
-            "confirm" ->
-              case Totp.mkTotpCode (actionField "code") of
-                Nothing -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (localized "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
-                Just code -> do
-                  nowNanoseconds <- accountWorkflowClock workflow
-                  nowSeconds <- accountWorkflowTotpClock workflow
-                  confirmed <- confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code
-                  pure $ case confirmed of
-                    Right (MfaEnrollmentConfirmation recoveryCodes) -> mfaEnrollmentResponse mfaEnrollmentPath 200 (mfaForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing
-                    Left errorValue -> mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage errorValue)) True) (Just "mfa-code")
-            _ -> pure (mfaEnrollmentResponse mfaEnrollmentPath 422 (mfaForm (Account.accountIdText accountId) Nothing [] (Just (localized "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
+          case actionField actionRequest "intent" of
+            "start" -> startMfaAction actionRequest path accountId
+            "confirm" -> confirmMfaAction actionRequest path accountId
+            _ -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
 
-    handleLogin =
-      let emailValue = actionField "email"
-          passwordValue = actionField "password"
-          loginForm message = LoginForm emailValue (Just message)
-       in case (Email.mkEmailAddress emailValue, validPassword passwordValue, loginProof) of
-            (Nothing, _, _) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
-            (_, False, _) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
-            (_, _, Nothing) -> pure (loginResponse loginPath 422 (loginForm (localized "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
-            (Just emailAddress, True, Just proof) -> do
-              nowNanoseconds <- accountWorkflowClock workflow
-              nowSeconds <- accountWorkflowTotpClock workflow
-              loginResult <- completePasswordLogin (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds emailAddress (Password.mkPassword passwordValue) proof
-              case loginResult of
-                PasswordMfaLoginAccepted accountId -> do
-                  issuedSession <- issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds
-                  pure $ case issuedSession of
-                    Left _ -> loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []
-                    Right opaqueSession -> loginResponse loginPath 200 (loginForm (localized "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))]
-                PasswordMfaLoginEmailVerificationRequired _ -> pure (loginResponse loginPath 403 (loginForm (localized "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True) Nothing [])
-                PasswordMfaLoginEnrollmentRequired _ -> pure (loginResponse loginPath 403 (loginForm (localized "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True) Nothing [])
-                PasswordMfaLoginRejected -> pure (loginResponse loginPath 422 (loginForm (localized "Sign-in was rejected." "El inicio de sesion fue rechazado.") True) (Just "login-code") [])
-                PasswordMfaLoginCredentialStoreError _ -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") [])
-                PasswordMfaLoginMfaStoreError _ -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-code") [])
-                PasswordMfaLoginCorruptEnrollment -> pure (loginResponse loginPath 503 (loginForm (localized "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-code") [])
+startMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+startMfaAction actionRequest path accountId = do
+  workflow <- accountWorkflow
+  now <- liftAppIO (accountWorkflowClock workflow)
+  started <- liftAppIO (startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now)
+  case started of
+    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
+    Left errorValue -> interpretMfaFailure actionRequest path accountId "start" "mfa-account" errorValue
 
-    handleLogout =
-      case requestSessionId actionContext of
-        Nothing -> pure (logoutResponse logoutPath 200 (Just (localized "You are signed out." "Has cerrado sesion.")) False [])
-        Just sessionId -> do
-          invalidated <- invalidateAccountSession (accountWorkflowSessionStore workflow) sessionId
-          pure $ case invalidated of
-            Left _ -> logoutResponse logoutPath 503 (Just (localized "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []
-            Right _ -> logoutResponse logoutPath 200 (Just (localized "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionId))]
+confirmMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+confirmMfaAction actionRequest path accountId =
+  case Totp.mkTotpCode (actionField actionRequest "code") of
+    Nothing -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
+    Just code -> do
+      workflow <- accountWorkflow
+      nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
+      nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
+      confirmed <- liftAppIO (confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code)
+      case confirmed of
+        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
+        Left errorValue -> interpretMfaFailure actionRequest path accountId "confirm" "mfa-code" errorValue
 
-    actionField name =
-      case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
-        [value] -> value
-        _ -> Text.empty
+interpretMfaFailure :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> Text -> Text -> MfaEnrollmentError -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretMfaFailure actionRequest path accountId operation focusId errorValue =
+  let response status = mfaEnrollmentResponse path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
+   in case mfaEnrollmentFailureDiagnostics operation errorValue of
+        Nothing -> pure (response 422)
+        Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response 503, appFailureDiagnostics = diagnostics}
 
-    localized english spanish =
-      case requestLocale actionContext of
-        English -> english
-        Spanish -> spanish
+mfaEnrollmentFailureDiagnostics :: Text -> MfaEnrollmentError -> Maybe FailureDiagnostics
+mfaEnrollmentFailureDiagnostics operation errorValue =
+  case errorValue of
+    MfaEnrollmentStoreError storeError -> Just (failureDiagnostics "MfaStoreError" (mfaStoreErrorMessage storeError))
+    MfaEnrollmentCorruptSecret -> Just (failureDiagnostics "CorruptTotpEnrollment" "stored TOTP secret could not be decoded")
+    MfaEnrollmentRecoveryCodeHashingFailed -> Just (failureDiagnostics "RecoveryCodeHashingError" "recovery-code hashing failed")
+    MfaEnrollmentEncryptionFailed -> Just (failureDiagnostics "TotpEncryptionError" "TOTP secret encryption failed")
+    _ -> Nothing
+  where
+    failureDiagnostics = buildFailureDiagnostics ("account.mfa." <> operation)
 
-    mfaForm = MfaEnrollmentForm
+handleLogin :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleLogin actionRequest =
+  case parseLoginForm actionRequest of
+    Left response -> pure response
+    Right (emailValue, passwordValue, emailAddress, proof) -> do
+      workflow <- accountWorkflow
+      nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
+      nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
+      loginResult <- liftAppIO (completePasswordLogin (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds emailAddress (Password.mkPassword passwordValue) proof)
+      interpretLoginResult actionRequest emailValue nowNanoseconds loginResult
 
-    loginProof =
-      case actionField "proof" of
-        "totp" -> TotpLoginProof <$> Totp.mkTotpCode (actionField "code")
-        "recovery" -> RecoveryCodeLoginProof <$> RecoveryCode.mkRecoveryCode (actionField "code")
-        _ -> Nothing
+parseLoginForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, Email.EmailAddress, MfaLoginProof)
+parseLoginForm actionRequest =
+  let emailValue = actionField actionRequest "email"
+      passwordValue = actionField actionRequest "password"
+      path = accountRoutePath actionRequest LoginRoute
+      loginForm message = LoginForm emailValue (Just message)
+   in case (Email.mkEmailAddress emailValue, validPassword passwordValue, loginProof actionRequest) of
+        (Nothing, _, _) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
+        (_, False, _) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
+        (_, _, Nothing) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
+        (Just emailAddress, True, Just proof) -> Right (emailValue, passwordValue, emailAddress, proof)
 
-    mfaErrorMessage errorValue =
-      case errorValue of
-        MfaEnrollmentAccountIsNotEligible -> localized "Verify your email address before enrolling an authenticator." "Verifica tu direccion de correo antes de registrar un autenticador."
-        MfaEnrollmentInvalidCode -> localized "That authenticator code is invalid." "Ese codigo de autenticador no es valido."
-        MfaEnrollmentNotFound -> localized "Start a new authenticator enrollment." "Inicia un nuevo registro de autenticador."
-        MfaEnrollmentConfirmationRejected -> localized "That enrollment can no longer be confirmed." "Ese registro ya no se puede confirmar."
-        _ -> localized "Authenticator enrollment is temporarily unavailable." "El registro del autenticador no esta disponible temporalmente."
+interpretLoginResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> PasswordMfaLoginResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
+  let path = accountRoutePath actionRequest LoginRoute
+      loginForm message = LoginForm emailValue (Just message)
+      response status message isError = loginResponse path status (loginForm message isError)
+      unavailable focusId = response 503 (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True focusId []
+   in case loginResult of
+        PasswordMfaLoginAccepted accountId -> issueLoginSession actionRequest emailValue nowNanoseconds accountId
+        PasswordMfaLoginEmailVerificationRequired _ -> pure (response 403 (localized actionRequest "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True Nothing [])
+        PasswordMfaLoginEnrollmentRequired _ -> pure (response 403 (localized actionRequest "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True Nothing [])
+        PasswordMfaLoginRejected -> pure (response 422 (localized actionRequest "Sign-in was rejected." "El inicio de sesion fue rechazado.") True (Just "login-code") [])
+        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) "account.login.credential-store" "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
+        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) "account.login.mfa-store" "MfaStoreError" (mfaStoreErrorMessage storeError)
+        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) "account.login.corrupt-enrollment" "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
+
+issueLoginSession :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
+  workflow <- accountWorkflow
+  issuedSession <- liftAppIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
+  let path = accountRoutePath actionRequest LoginRoute
+      form message = LoginForm emailValue (Just message)
+  case issuedSession of
+    Left storeError -> throwClientActionFailure (loginResponse path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) "account.login.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+    Right opaqueSession -> pure (loginResponse path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
+
+handleLogout :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleLogout actionRequest =
+  let path = accountRoutePath actionRequest LogoutRoute
+   in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
+        Nothing -> pure (logoutResponse path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [])
+        Just sessionToken -> do
+          workflow <- accountWorkflow
+          invalidated <- liftAppIO (invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken)
+          case invalidated of
+            Left storeError -> throwClientActionFailure (logoutResponse path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) "account.logout.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+            Right _ -> pure (logoutResponse path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
+
+actionField :: HarchWeb.ClientActionRequest context -> Text -> Text
+actionField actionRequest name =
+  case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
+    [value] -> value
+    _ -> Text.empty
+
+localized :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Text -> Text
+localized actionRequest english spanish =
+  case requestLocale (HarchWeb.clientActionContext actionRequest) of
+    English -> english
+    Spanish -> spanish
+
+loginProof :: HarchWeb.ClientActionRequest context -> Maybe MfaLoginProof
+loginProof actionRequest =
+  case actionField actionRequest "proof" of
+    "totp" -> TotpLoginProof <$> Totp.mkTotpCode (actionField actionRequest "code")
+    "recovery" -> RecoveryCodeLoginProof <$> RecoveryCode.mkRecoveryCode (actionField actionRequest "code")
+    _ -> Nothing
+
+mfaErrorMessage :: HarchWeb.ClientActionRequest AppRequestContext -> MfaEnrollmentError -> Text
+mfaErrorMessage actionRequest errorValue =
+  case errorValue of
+    MfaEnrollmentAccountIsNotEligible -> localized actionRequest "Verify your email address before enrolling an authenticator." "Verifica tu direccion de correo antes de registrar un autenticador."
+    MfaEnrollmentInvalidCode -> localized actionRequest "That authenticator code is invalid." "Ese codigo de autenticador no es valido."
+    MfaEnrollmentNotFound -> localized actionRequest "Start a new authenticator enrollment." "Inicia un nuevo registro de autenticador."
+    MfaEnrollmentConfirmationRejected -> localized actionRequest "That enrollment can no longer be confirmed." "Ese registro ya no se puede confirmar."
+    _ -> localized actionRequest "Authenticator enrollment is temporarily unavailable." "El registro del autenticador no esta disponible temporalmente."
+
+throwClientActionFailure :: HarchWeb.ClientActionResponse -> Text -> Text -> Text -> AppM HarchWeb.ClientActionResponse value
+throwClientActionFailure publicResponse code typeName detail =
+  throwAppFailure
+    AppFailure
+      { appFailurePublic = publicResponse,
+        appFailureDiagnostics = buildFailureDiagnostics code typeName detail
+      }
+
+buildFailureDiagnostics :: Text -> Text -> Text -> FailureDiagnostics
+buildFailureDiagnostics code typeName detail =
+  FailureDiagnostics
+    { failureCode = code,
+      failureType = typeName,
+      failureLogEntries = ["ERROR [" <> code <> "] " <> detail]
+    }
+
+attachClientActionFailure :: AppFailure HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
+attachClientActionFailure failure =
+  let publicResponse = appFailurePublic failure
+      diagnostics = appFailureDiagnostics failure
+   in publicResponse
+        { HarchWeb.clientActionObservabilityAttributes =
+            HarchWeb.clientActionObservabilityAttributes publicResponse
+              <> [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute (failureType diagnostics)),
+                   Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute (failureCode diagnostics))
+                 ],
+          HarchWeb.clientActionLogEntries = HarchWeb.clientActionLogEntries publicResponse <> failureLogEntries diagnostics
+        }
+
+credentialStoreErrorMessage :: AccountCredentialStoreError -> Text
+credentialStoreErrorMessage storeError =
+  case storeError of
+    AccountCredentialStoreUnavailable detail -> detail
+    AccountCredentialStoreCorruptData detail -> detail
+
+accountStoreErrorDetail :: AccountStoreError -> Text
+accountStoreErrorDetail storeError =
+  case storeError of
+    AccountStoreUnavailable detail -> detail
+    AccountStoreCorruptData detail -> detail
+
+mfaStoreErrorMessage :: MfaStoreError -> Text
+mfaStoreErrorMessage storeError =
+  case storeError of
+    MfaStoreUnavailable detail -> detail
+    MfaStoreCorruptData detail -> detail
+
+sessionStoreErrorMessage :: AccountSessionStoreError -> Text
+sessionStoreErrorMessage storeError =
+  case storeError of
+    AccountSessionStoreUnavailable -> "account session store unavailable"
+    AccountSessionStoreCorruptData -> "account session store returned corrupt data"
 
 registrationResponse :: Text -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
 registrationResponse registrationPath status form focusId =
@@ -272,7 +410,9 @@ registrationResponse registrationPath status form focusId =
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "registration-region" (renderRegistrationRegion registrationPath form)],
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = []
+      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
     }
 
 verificationResponse :: Text -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
@@ -281,7 +421,9 @@ verificationResponse verificationPath status form focusId =
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion verificationPath form)],
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = []
+      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
     }
 
 mfaEnrollmentResponse :: Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
@@ -290,7 +432,9 @@ mfaEnrollmentResponse mfaEnrollmentPath status form focusId =
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion mfaEnrollmentPath form)],
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = []
+      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
     }
 
 loginResponse :: Text -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
@@ -299,7 +443,9 @@ loginResponse loginPath status form focusId headers =
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "login-region" (renderLoginRegion loginPath form)],
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = headers
+      HarchWeb.clientActionHeaders = headers,
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
     }
 
 logoutResponse :: Text -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
@@ -308,7 +454,9 @@ logoutResponse logoutPath status message isError headers =
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "logout-region" (renderLogoutRegion logoutPath message isError)],
       HarchWeb.clientActionFocusId = Nothing,
-      HarchWeb.clientActionHeaders = headers
+      HarchWeb.clientActionHeaders = headers,
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
     }
 
 renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text
@@ -359,19 +507,25 @@ renderLogoutPage :: Text -> Text
 renderLogoutPage logoutPath =
   Text.concat
     [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">Sign out</h1>",
-      renderLogoutRegion logoutPath Nothing False,
+      renderLogoutRegionWithMessage logoutPath Nothing,
       "</section>"
     ]
 
 renderLogoutRegion :: Text -> Maybe Text -> Bool -> Text
 renderLogoutRegion logoutPath message isError =
+  renderLogoutRegionWithMessage logoutPath ((,isError) <$> message)
+
+renderLogoutRegionWithMessage :: Text -> Maybe (Text, Bool) -> Text
+renderLogoutRegionWithMessage logoutPath messageState =
   Text.concat
     [ "<section id=\"logout-region\" aria-live=\"polite\">",
-      renderMessage message isError,
+      maybe Text.empty renderLogoutMessage messageState,
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml logoutPath,
       "\" method=\"post\"><button type=\"submit\">Sign out</button></form></section>"
     ]
+  where
+    renderLogoutMessage (message, isError) = renderMessage (Just message) isError
 
 renderEnrollmentSecret :: Maybe Text -> Text
 renderEnrollmentSecret maybeSecret =
@@ -449,12 +603,6 @@ emailLocale locale =
 
 validPassword :: Text -> Bool
 validPassword password = Text.length password >= 12
-
-storeErrorMessage :: AccountStoreError -> Text
-storeErrorMessage storeError =
-  case storeError of
-    AccountStoreUnavailable _ -> "The account service is temporarily unavailable."
-    AccountStoreCorruptData _ -> "The account service returned invalid data."
 
 renderMessage :: Maybe Text -> Bool -> Text
 renderMessage maybeMessage isError =

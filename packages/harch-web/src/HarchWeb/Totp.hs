@@ -74,7 +74,7 @@ windowCounters currentCounter maxSkewPeriods =
   previousAndCurrent <> following
   where
     maxOffset = fromIntegral maxSkewPeriods :: Word64
-    previousAndCurrent = [currentCounter - offset | offset <- [0 .. maxOffset], offset <= currentCounter]
+    previousAndCurrent = [currentCounter - offset | offset <- [0 .. min maxOffset currentCounter]]
     -- A TOTP counter is derived by dividing a Word64 timestamp by the
     -- 30-second period, so even its largest possible value leaves ample room
     -- for the caller-bounded Word8 offset.
@@ -169,17 +169,11 @@ base32Character value =
   Text.index "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567" (fromIntegral value)
 
 base32Value :: Char -> Maybe Word8
-base32Value character =
-  case character of
-    _ | isAsciiUpper character -> Just (fromIntegral (ord character - ord 'A'))
-    _ | isAsciiLower character -> Just (fromIntegral (ord character - ord 'a'))
-    '2' -> Just 26
-    '3' -> Just 27
-    '4' -> Just 28
-    '5' -> Just 29
-    '6' -> Just 30
-    '7' -> Just 31
-    _ -> Nothing
+base32Value character
+  | isAsciiUpper character = Just (fromIntegral (ord character - ord 'A'))
+  | isAsciiLower character = Just (fromIntegral (ord character - ord 'a'))
+  | character >= '2' && character <= '7' = Just (fromIntegral (ord character - ord '2' + 26))
+base32Value _ = Nothing
 
 isAsciiDigit :: Char -> Bool
 isAsciiDigit character = isAscii character && isDigit character

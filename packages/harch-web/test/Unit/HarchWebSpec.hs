@@ -955,7 +955,7 @@ spec = do
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -1034,6 +1034,12 @@ spec = do
       clientActionStatus clientActionResponse `shouldBe` 200
       clientActionPatches clientActionResponse `shouldBe` [regionPatch]
       clientActionFocusId clientActionResponse `shouldBe` Nothing
+      clientActionHeaders clientActionResponse `shouldBe` []
+      clientActionObservabilityAttributes clientActionResponse `shouldBe` []
+      clientActionLogEntries clientActionResponse `shouldBe` []
+      let diagnostics = responseDiagnostics (ClientActionBodyResponse clientActionResponse :: Response TestRoute TestContext)
+      diagnosticObservabilityAttributes diagnostics `shouldBe` []
+      diagnosticLogEntries diagnostics `shouldBe` []
 
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -1092,8 +1098,8 @@ spec = do
           otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
           otherRegionPatch = RegionPatch {regionPatchId = "other-region", regionPatchHtml = "<p>Other</p>"}
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = []}
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
@@ -1181,7 +1187,7 @@ spec = do
       show [regionPatch] `shouldContain` "RegionPatch {regionPatchId = \"status-region\""
       (clientActionResponse == clientActionResponse) `shouldBe` True
       (clientActionResponse /= otherClientActionResponse) `shouldBe` True
-      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\", clientActionHeaders = []}"
+      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}"
       show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = 200"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
@@ -1465,7 +1471,10 @@ spec = do
 
     it "decodes captured form fields and returns typed region patches without rendering a page" $ do
       actionRequestReference <- newIORef Nothing
-      let actionApplication =
+      requestObservabilityReference <- newIORef Nothing
+      logEntriesReference <- newIORef []
+      let failureAttribute = Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute "RegistrationStoreUnavailable")
+          actionApplication =
             sampleApplication
               { handleClientAction = \actionRequest -> do
                   writeIORef actionRequestReference (Just actionRequest)
@@ -1475,9 +1484,13 @@ spec = do
                           { clientActionStatus = 422,
                             clientActionPatches = [RegionPatch "status-region" "<p id=\"status-region\">Enter a valid email address.</p>"],
                             clientActionFocusId = Just "email",
-                            clientActionHeaders = [("Set-Cookie", "session=opaque")]
+                            clientActionHeaders = [("Set-Cookie", "session=opaque")],
+                            clientActionObservabilityAttributes = [failureAttribute],
+                            clientActionLogEntries = ["private registration failure detail"]
                           }
-                    )
+                    ),
+                reportRequestObservability = writeIORef requestObservabilityReference . Just,
+                reportApplicationLog = \entry -> modifyIORef' logEntriesReference (<> [entry])
               }
       actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&intent=subscribe&blank&invalid=%FF"]
       let capturedActionRequest =
@@ -1504,6 +1517,11 @@ spec = do
       lookup "Set-Cookie" (Wai.responseHeaders response) `shouldBe` Just "session=opaque"
       readResponseBody response
         `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
+      maybeRequestObservability <- readIORef requestObservabilityReference
+      fmap (Observability.requestSpanAttributes . Observability.observabilityRequestSpan) maybeRequestObservability
+        `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
+      capturedLogEntries <- readIORef logEntriesReference
+      capturedLogEntries `shouldSatisfy` any (Text.isInfixOf "private registration failure detail")
 
     it "falls back to the SSR response when an action is not handled" $ do
       actionBodyChunks <- newIORef []
@@ -1521,7 +1539,7 @@ spec = do
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =
             sampleApplication
-              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = []}))
+              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
               }
       actionBodyChunks <- newIORef []
       let actionRequest =

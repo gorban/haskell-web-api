@@ -49,6 +49,7 @@ module HarchWeb
     ReloadingTlsCredentials,
     Response (..),
     ResponseBody (..),
+    ResponseDiagnostics (..),
     ResponseSecurityHeadersConfig (..),
     RegionPatch (..),
     ResolvedNavigationItem (..),
@@ -149,6 +150,9 @@ module HarchWeb
     renderDocumentWithNonce,
     runRequestMiddlewarePipeline,
     responseHeaderText,
+    responseDiagnostics,
+    responseKind,
+    responseStatusCode,
     requestHostWithoutPort,
     routeHref,
     loadReloadingTlsCredentials,
@@ -177,6 +181,8 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (replicateM, unless, void)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Control.Monad.IO.Class (liftIO)
 import Data.Bifunctor (bimap)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
@@ -198,7 +204,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Data.Word (Word64)
+import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Client qualified as HttpClient
@@ -606,6 +612,11 @@ data ResponseBody = ResponseBody
   }
   deriving (Eq, Show)
 
+data ResponseDiagnostics = ResponseDiagnostics
+  { diagnosticObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    diagnosticLogEntries :: [Text]
+  }
+
 -- | A typed application-owned request middleware. Middleware runs after
 -- framework redirect and CORS policy handling, and before routing or action
 -- dispatch. Static assets remain public unless an app serves them as routes.
@@ -644,7 +655,9 @@ data ClientActionResponse = ClientActionResponse
   { clientActionStatus :: Int,
     clientActionPatches :: [RegionPatch],
     clientActionFocusId :: Maybe Text,
-    clientActionHeaders :: Http.ResponseHeaders
+    clientActionHeaders :: Http.ResponseHeaders,
+    clientActionObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    clientActionLogEntries :: [Text]
   }
   deriving (Eq, Show)
 
@@ -654,6 +667,40 @@ data Response route context
   | BodyResponse ResponseBody
   | ClientActionBodyResponse ClientActionResponse
   deriving (Eq, Show)
+
+responseDiagnostics :: Response route context -> ResponseDiagnostics
+responseDiagnostics response =
+  case response of
+    PageResponse _ -> ResponseDiagnostics [] []
+    PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
+    ClientActionBodyResponse actionResponse -> responseBodyDiagnostics (clientActionResponseBody actionResponse)
+
+responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
+responseBodyDiagnostics responseBodyValue =
+  ResponseDiagnostics
+    { diagnosticObservabilityAttributes = responseObservabilityAttributes responseBodyValue,
+      diagnosticLogEntries = responseLogEntries responseBodyValue
+    }
+
+responseStatusCode :: (Eq route) => Application route context -> Response route context -> Int
+responseStatusCode webApplication response =
+  case response of
+    PageResponse page ->
+      if isNotFoundPage webApplication page
+        then 404
+        else 200
+    PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
+    BodyResponse responseBodyValue -> responseStatus responseBodyValue
+    ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
+
+responseKind :: Response route context -> Observability.ResponseKind
+responseKind response =
+  case response of
+    PageResponse _ -> Observability.PageResponseKind
+    PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+    BodyResponse _ -> Observability.BodyResponseKind
+    ClientActionBodyResponse _ -> Observability.BodyResponseKind
 
 data RouteCodec route context = RouteCodec
   { parseRoute :: context -> Text -> Maybe (RouteRequest route context),
@@ -1053,193 +1100,108 @@ toWaiApplication webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
+      requestPath = waiRequestPath requestPolicyConfig request
   policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
-  case corsPreflightResponse requestPolicyConfig request of
-    Just preflightResponse -> do
-      let preflightResponseWithHeaders =
-            applyResponseHeaders policyResponseHeaders preflightResponse
-      preflightResponseReportedAt <- preflightResponseWithHeaders `seq` getMonotonicTimeNSec
-      reportEarlyRequestObservability
-        webApplication
-        request
-        requestStartedAt
-        preflightResponseReportedAt
-        (externalRequestPath requestPolicyConfig request)
-        preflightResponseWithHeaders
-      respond preflightResponseWithHeaders
-    Nothing ->
-      case requestRedirectLocation requestPolicyConfig request of
-        Just redirectLocation -> do
-          let redirectResponse =
-                applyResponseHeaders policyResponseHeaders (httpsRedirectResponse redirectLocation)
-          redirectResponseReportedAt <- redirectResponse `seq` getMonotonicTimeNSec
-          reportEarlyRequestObservability
-            webApplication
-            request
-            requestStartedAt
-            redirectResponseReportedAt
-            (externalRequestPath requestPolicyConfig request)
-            redirectResponse
-          respond redirectResponse
-        Nothing -> do
-          let requestPath = waiRequestPath requestPolicyConfig request
-              maybeRuntimeResponse =
-                applicationNavigationRuntime webApplication
-                  >>= (`navigationRuntimeResponse` requestPath)
-          case maybeRuntimeResponse of
-            Just runtimeResponseBody -> do
-              runtimeResponseReportedAt <- getMonotonicTimeNSec
-              let runtimeResponse = toWaiBodyResponse [] runtimeResponseBody
-              reportEarlyRequestObservability
-                webApplication
-                request
-                requestStartedAt
-                runtimeResponseReportedAt
-                requestPath
-                runtimeResponse
-              respond
-                (applyResponseHeaders policyResponseHeaders runtimeResponse)
-            Nothing -> do
-              maybeStaticResponse <- serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath
-              case maybeStaticResponse of
-                Just (staticRoutePath, staticResponse) -> do
-                  staticResponseReportedAt <- getMonotonicTimeNSec
-                  reportEarlyRequestObservability
-                    webApplication
-                    request
-                    requestStartedAt
-                    staticResponseReportedAt
-                    (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath)
-                    staticResponse
-                  respond
-                    (applyResponseHeaders policyResponseHeaders staticResponse)
-                Nothing -> do
-                  middlewareStartedAt <- getMonotonicTimeNSec
-                  middlewareResult <-
-                    runRequestMiddlewarePipeline
-                      (applicationRequestMiddleware webApplication)
-                      request
-                      ( requestContextFromRequest
-                          webApplication
-                          request
-                          (defaultRequestContext webApplication)
-                      )
-                  middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
-                  let requestContext =
-                        case middlewareResult of
-                          ContinueMiddleware nextRequestContext -> nextRequestContext
-                          HaltMiddleware haltedRequestContext _ -> haltedRequestContext
-                      middlewareTiming =
-                        case applicationRequestMiddleware webApplication of
-                          [] -> []
-                          _ -> [("middleware", middlewareStartedAt, middlewareCompletedAt)]
-                  routeMatchingStartedAt <- getMonotonicTimeNSec
-                  let requestRouteTarget = waiRequestRouteTarget requestPolicyConfig request
-                      routeRequest =
-                        matchRoute
-                          (routeCodec webApplication)
-                          requestContext
-                          requestRouteTarget
-                  routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
-                  renderStartedAt <- getMonotonicTimeNSec
-                  response <-
-                    case middlewareResult of
-                      HaltMiddleware _ responseBody -> pure (BodyResponse responseBody)
-                      ContinueMiddleware _ ->
-                        if isClientActionRequest request
-                          then do
-                            requestBody <- Wai.strictRequestBody request
-                            let actionFields = parseClientActionFields requestBody
-                            maybeActionResponse <-
-                              handleClientAction
-                                webApplication
-                                ClientActionRequest
-                                  { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
-                                    clientActionPath = requestPath,
-                                    clientActionFields = actionFields,
-                                    clientActionCsrfToken = lookup "_csrf" actionFields,
-                                    clientActionContext = requestContext
-                                  }
-                            maybe
-                              (renderResponse webApplication routeRequest)
-                              (pure . ClientActionBodyResponse)
-                              maybeActionResponse
-                          else renderResponse webApplication routeRequest
-                  responseRenderedAt <- response `seq` getMonotonicTimeNSec
-                  runtimeNonce <-
-                    case response of
-                      PageResponse _ -> generateRuntimeNonce
-                      PageResponseWithMetadata _ _ -> generateRuntimeNonce
-                      BodyResponse _ -> pure $! RuntimeNonce ""
-                      ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
-                  let requestContextAttributes = requestContextObservabilityAttributes requestPolicyConfig request
-                      requestLogFields = requestLogContextFields requestPolicyConfig request
-                      extraObservabilityAttributes =
-                        requestContextAttributes
-                          <> case response of
-                            PageResponse _ -> []
-                            PageResponseWithMetadata pageResponseBodyValue _ ->
-                              responseObservabilityAttributes pageResponseBodyValue
-                            BodyResponse responseBodyValue -> responseObservabilityAttributes responseBodyValue
-                            ClientActionBodyResponse _ -> []
-                      contextualizedResponseLogEntries =
-                        case response of
-                          PageResponse _ -> []
-                          PageResponseWithMetadata pageResponseBodyValue _ ->
-                            map
-                              (prependRequestLogContext requestLogFields)
-                              (responseLogEntries pageResponseBodyValue)
-                          BodyResponse responseBodyValue ->
-                            map
-                              (prependRequestLogContext requestLogFields)
-                              (responseLogEntries responseBodyValue)
-                          ClientActionBodyResponse _ -> []
-                      requestObservability =
-                        maybe
-                          id
-                          Observability.withRequestTraceContext
-                          (requestTraceContext request)
-                          ( Observability.buildRequestObservability
-                              (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-                              (requestScheme requestPolicyConfig request)
-                              requestPath
-                              (renderRoute (routeCodec webApplication) routeRequest)
-                              ( case response of
-                                  PageResponse page ->
-                                    if isNotFoundPage webApplication page
-                                      then 404
-                                      else 200
-                                  PageResponseWithMetadata pageResponseBodyValue _ ->
-                                    responseStatus pageResponseBodyValue
-                                  BodyResponse responseBodyValue -> responseStatus responseBodyValue
-                                  ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
-                              )
-                              ( case response of
-                                  PageResponse _ -> Observability.PageResponseKind
-                                  PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-                                  BodyResponse _ -> Observability.BodyResponseKind
-                                  ClientActionBodyResponse _ -> Observability.BodyResponseKind
-                              )
-                              ( extraObservabilityAttributes
-                                  <> requestTimingObservabilityAttributes
-                                    requestStartedAt
-                                    responseRenderedAt
-                                    ( [("request-policy", requestStartedAt, policyEvaluatedAt)]
-                                        <> middlewareTiming
-                                        <> [ ("route-match", routeMatchingStartedAt, routeMatchedAt),
-                                             ("render-response", renderStartedAt, responseRenderedAt)
-                                           ]
-                                    )
-                              )
-                          )
-                  Observability.forceRequestObservability requestObservability `seq`
-                    reportRequestObservability webApplication requestObservability
-                      >> mapM_ (reportApplicationLog webApplication) contextualizedResponseLogEntries
-                      >> respond
-                        ( applyResponseHeaders
-                            (responsePolicyHeaders requestPolicyConfig request runtimeNonce response)
-                            (toWaiResponse [] runtimeNonce webApplication response)
-                        )
+  earlyResult <- runExceptT (evaluateEarlyRequestStages webApplication requestPolicyConfig policyResponseHeaders request requestPath)
+  case earlyResult of
+    Left EarlyResponse {earlyResponsePath, earlyResponseValue} -> do
+      responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
+      reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
+      respond earlyResponseValue
+    Right () ->
+      handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath
+
+data EarlyResponse = EarlyResponse
+  { earlyResponsePath :: Text,
+    earlyResponseValue :: Wai.Response
+  }
+
+evaluateEarlyRequestStages :: Application route context -> RequestPolicyConfig -> [Http.Header] -> Wai.Request -> Text -> ExceptT EarlyResponse IO ()
+evaluateEarlyRequestStages webApplication requestPolicyConfig policyResponseHeaders request requestPath = do
+  for_ (corsPreflightResponse requestPolicyConfig request) $ \response ->
+    throwEarly (externalRequestPath requestPolicyConfig request) response
+  for_ (requestRedirectLocation requestPolicyConfig request) $ \redirectLocation ->
+    throwEarly (externalRequestPath requestPolicyConfig request) (httpsRedirectResponse redirectLocation)
+  for_ (applicationNavigationRuntime webApplication >>= (`navigationRuntimeResponse` requestPath)) $ \runtimeResponseBody ->
+    throwEarly requestPath (toWaiBodyResponse [] runtimeResponseBody)
+  maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath)
+  for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
+    throwEarly (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath) staticResponse
+  where
+    throwEarly path = throwError . EarlyResponse path . applyResponseHeaders policyResponseHeaders
+
+handleRoutedRequest :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> IO Wai.ResponseReceived
+handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath = do
+  middlewareStartedAt <- getMonotonicTimeNSec
+  middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (defaultRequestContext webApplication))
+  middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
+  let requestContext = middlewareResultContext middlewareResult
+      middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt
+  routeMatchingStartedAt <- getMonotonicTimeNSec
+  let routeRequest = matchRoute (routeCodec webApplication) requestContext (waiRequestRouteTarget requestPolicyConfig request)
+  routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
+  renderStartedAt <- getMonotonicTimeNSec
+  response <- dispatchRoutedRequest webApplication request requestPath requestContext routeRequest middlewareResult
+  responseRenderedAt <- response `seq` getMonotonicTimeNSec
+  runtimeNonce <- responseRuntimeNonce response
+  finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response
+
+middlewareResultContext :: MiddlewareResult context -> context
+middlewareResultContext middlewareResult =
+  case middlewareResult of
+    ContinueMiddleware requestContext -> requestContext
+    HaltMiddleware requestContext _ -> requestContext
+
+middlewareTimingEntry :: Application route context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
+middlewareTimingEntry webApplication startedAt completedAt =
+  case applicationRequestMiddleware webApplication of
+    [] -> []
+    _ -> [("middleware", startedAt, completedAt)]
+
+dispatchRoutedRequest :: Application route context -> Wai.Request -> Text -> context -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
+dispatchRoutedRequest _ _ _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
+dispatchRoutedRequest webApplication request requestPath requestContext routeRequest (ContinueMiddleware _) =
+  if isClientActionRequest request
+    then do
+      requestBody <- Wai.strictRequestBody request
+      let actionFields = parseClientActionFields requestBody
+      maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = requestContext}
+      maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
+    else renderResponse webApplication routeRequest
+
+responseRuntimeNonce :: Response route context -> IO RuntimeNonce
+responseRuntimeNonce response =
+  case response of
+    PageResponse _ -> generateRuntimeNonce
+    PageResponseWithMetadata _ _ -> generateRuntimeNonce
+    BodyResponse _ -> pure $! RuntimeNonce ""
+    ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
+
+finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
+finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response = do
+  let requestLogFields = requestLogContextFields requestPolicyConfig request
+      diagnosticValues = responseDiagnostics response
+      contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
+      observabilityValue = buildRoutedRequestObservability webApplication request requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest response diagnosticValues
+  Observability.forceRequestObservability observabilityValue `seq`
+    reportRequestObservability webApplication observabilityValue
+      >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
+      >> respond (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
+
+buildRoutedRequestObservability :: (Eq route) => Application route context -> Wai.Request -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> Response route context -> ResponseDiagnostics -> Observability.RequestObservability
+buildRoutedRequestObservability webApplication request requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest response diagnosticValues =
+  maybe id Observability.withRequestTraceContext (requestTraceContext request) $
+    Observability.buildRequestObservability
+      (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+      (requestScheme requestPolicyConfig request)
+      requestPath
+      (renderRoute (routeCodec webApplication) routeRequest)
+      (responseStatusCode webApplication response)
+      (responseKind response)
+      ( requestContextObservabilityAttributes requestPolicyConfig request
+          <> diagnosticObservabilityAttributes diagnosticValues
+          <> requestTimingObservabilityAttributes requestStartedAt responseRenderedAt ([("request-policy", requestStartedAt, policyEvaluatedAt)] <> middlewareTiming <> [("route-match", routeMatchingStartedAt, routeMatchedAt), ("render-response", renderStartedAt, responseRenderedAt)])
+      )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -1876,17 +1838,19 @@ certbotShouldUseWebroot configuredArguments =
 certbotHasExplicitAuthenticator :: [Text] -> Bool
 certbotHasExplicitAuthenticator configuredArguments =
   certbotUsesWebroot configuredArguments
-    || certbotHasFlag "--standalone" configuredArguments
-    || certbotHasFlag "--manual" configuredArguments
-    || certbotHasFlag "--apache" configuredArguments
-    || certbotHasFlag "--nginx" configuredArguments
+    || any (`certbotHasFlag` configuredArguments) ["--standalone", "--manual", "--apache", "--nginx"]
     || any ("--dns-" `Text.isPrefixOf`) configuredArguments
-    || any
-      (`elem` ["standalone", "manual", "apache", "nginx"])
-      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
-    || any
-      ("dns-" `Text.isPrefixOf`)
-      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
+    || any isExplicitAuthenticator (certbotAuthenticatorValues configuredArguments)
+
+certbotAuthenticatorValues :: [Text] -> [Text]
+certbotAuthenticatorValues configuredArguments =
+  certbotOptionValues "-a" configuredArguments
+    <> certbotOptionValues "--authenticator" configuredArguments
+
+isExplicitAuthenticator :: Text -> Bool
+isExplicitAuthenticator authenticator =
+  authenticator `elem` ["standalone", "manual", "apache", "nginx"]
+    || "dns-" `Text.isPrefixOf` authenticator
 
 certbotUsesWebroot :: [Text] -> Bool
 certbotUsesWebroot configuredArguments =
@@ -2614,23 +2578,28 @@ base64urlText =
 
 hexTextToByteString :: Text -> Either String ByteString.ByteString
 hexTextToByteString hexText =
-  if odd (length cleanedHex)
-    then Left "hex string had an odd length"
-    else ByteString.pack <$> traverse hexPairToWord8 digitPairs
+  ByteString.pack <$> decodeHexPairs cleanedHex
   where
     cleanedHex = filter (not . (`elem` [' ', '\n', '\r', '\t'])) (Text.unpack hexText)
-    digitPairs =
-      [ (cleanedHex !! pairIndex, cleanedHex !! (pairIndex + 1))
-      | pairIndex <- [0, 2 .. length cleanedHex - 2]
-      ]
-    hexPairToWord8 (firstDigit, secondDigit) =
-      if isHexDigitChar firstDigit && isHexDigitChar secondDigit
-        then Right (fromIntegral (digitToInt firstDigit * 16 + digitToInt secondDigit))
-        else Left ("invalid hex digit pair: " <> [firstDigit, secondDigit])
-    isHexDigitChar hexDigit =
-      isDigit hexDigit
-        || ('a' <= hexDigit && hexDigit <= 'f')
-        || ('A' <= hexDigit && hexDigit <= 'F')
+
+decodeHexPairs :: String -> Either String [Word8]
+decodeHexPairs [] = Right []
+decodeHexPairs [_] = Left "hex string had an odd length"
+decodeHexPairs (firstDigit : secondDigit : remainingDigits) =
+  (:) <$> decodeHexByte firstDigit secondDigit <*> decodeHexPairs remainingDigits
+
+decodeHexByte :: Char -> Char -> Either String Word8
+decodeHexByte firstDigit secondDigit =
+  case (hexDigitValue firstDigit, hexDigitValue secondDigit) of
+    (Just highDigit, Just lowDigit) -> Right (fromIntegral (highDigit * 16 + lowDigit))
+    _ -> Left ("invalid hex digit pair: " <> [firstDigit, secondDigit])
+
+hexDigitValue :: Char -> Maybe Int
+hexDigitValue hexDigit
+  | isDigit hexDigit = Just (digitToInt hexDigit)
+  | 'a' <= hexDigit && hexDigit <= 'f' = Just (digitToInt hexDigit)
+  | 'A' <= hexDigit && hexDigit <= 'F' = Just (digitToInt hexDigit)
+hexDigitValue _ = Nothing
 
 runOpenSslTextCommand :: RuntimeAcmeBindPlan -> [String] -> IO String
 runOpenSslTextCommand !runtimeAcmePlan arguments = do
@@ -3169,8 +3138,8 @@ clientActionResponseBody actionResponse =
                   ]
               )
           ),
-      responseObservabilityAttributes = [],
-      responseLogEntries = []
+      responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
+      responseLogEntries = clientActionLogEntries actionResponse
     }
 
 applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
@@ -3940,59 +3909,60 @@ planServerStartup config = do
               | PlannedAcme acmeBindPlan <- plannedListeners
               ]
           }
-  where
-    classifyListener listenerConfig =
-      case (listenerScheme listenerConfig, listenerTls listenerConfig, listenerAcme listenerConfig) of
-        (Http, Nothing, Nothing) ->
-          Right [PlannedHttp (listenerEndpoint listenerConfig)]
-        (Http, Nothing, Just acmeConfig) ->
-          Right
-            [ PlannedHttp (listenerEndpoint listenerConfig),
-              PlannedAcme
-                AcmeBindPlan
-                  { acmeEndpoint = listenerEndpoint listenerConfig,
-                    acmeTlsEndpoint = Nothing,
-                    acmeListenerConfig = acmeConfig
-                  }
-            ]
-        (Http, Just _, _) ->
-          Left (InvalidListenerTlsConfiguration listenerConfig)
-        (Https, _, Just _) ->
-          Left (InvalidListenerAcmeConfiguration listenerConfig)
-        (Https, Nothing, Nothing) ->
-          Left (InvalidListenerTlsConfiguration listenerConfig)
-        (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
-          Right
+
+classifyListener :: ListenerConfig -> Either ListenerStartupError [PlannedListener]
+classifyListener listenerConfig =
+  case (listenerScheme listenerConfig, listenerTls listenerConfig, listenerAcme listenerConfig) of
+    (Http, Nothing, Nothing) ->
+      Right [PlannedHttp (listenerEndpoint listenerConfig)]
+    (Http, Nothing, Just acmeConfig) ->
+      Right
+        [ PlannedHttp (listenerEndpoint listenerConfig),
+          PlannedAcme
+            AcmeBindPlan
+              { acmeEndpoint = listenerEndpoint listenerConfig,
+                acmeTlsEndpoint = Nothing,
+                acmeListenerConfig = acmeConfig
+              }
+        ]
+    (Http, Just _, _) ->
+      Left (InvalidListenerTlsConfiguration listenerConfig)
+    (Https, _, Just _) ->
+      Left (InvalidListenerAcmeConfiguration listenerConfig)
+    (Https, Nothing, Nothing) ->
+      Left (InvalidListenerTlsConfiguration listenerConfig)
+    (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
+      Right
+        [ PlannedManualTls
+            ManualTlsBindPlan
+              { tlsEndpoint = listenerEndpoint listenerConfig,
+                tlsCertificateFile = certificatePath,
+                tlsPrivateKeyFile = privateKeyPath,
+                tlsCredentialSourceKind = ManualTlsCredentials,
+                tlsStartupMode = RequireCertificateFiles
+              }
+        ]
+    (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
+      let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
+       in Right
             [ PlannedManualTls
                 ManualTlsBindPlan
                   { tlsEndpoint = listenerEndpoint listenerConfig,
                     tlsCertificateFile = certificatePath,
                     tlsPrivateKeyFile = privateKeyPath,
-                    tlsCredentialSourceKind = ManualTlsCredentials,
-                    tlsStartupMode = RequireCertificateFiles
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = startupMode
                   }
             ]
-        (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
-          let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
-           in Right
-                [ PlannedManualTls
-                    ManualTlsBindPlan
-                      { tlsEndpoint = listenerEndpoint listenerConfig,
-                        tlsCertificateFile = certificatePath,
-                        tlsPrivateKeyFile = privateKeyPath,
-                        tlsCredentialSourceKind = SharedTlsCredentials,
-                        tlsStartupMode = startupMode
-                      }
-                ]
-        (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}, Nothing) ->
-          Right
-            [ PlannedAcme
-                AcmeBindPlan
-                  { acmeEndpoint = listenerEndpoint listenerConfig,
-                    acmeTlsEndpoint = Just (listenerEndpoint listenerConfig),
-                    acmeListenerConfig = acmeConfig
-                  }
-            ]
+    (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}, Nothing) ->
+      Right
+        [ PlannedAcme
+            AcmeBindPlan
+              { acmeEndpoint = listenerEndpoint listenerConfig,
+                acmeTlsEndpoint = Just (listenerEndpoint listenerConfig),
+                acmeListenerConfig = acmeConfig
+              }
+        ]
 
 sharedCertificatePaths :: FilePath -> (FilePath, FilePath)
 sharedCertificatePaths certificateDirectory =
