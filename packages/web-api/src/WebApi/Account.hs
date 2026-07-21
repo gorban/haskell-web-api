@@ -3,6 +3,8 @@
 module WebApi.Account
   ( AccountStore (..),
     AccountStoreError (..),
+    AccountProfile (..),
+    AccountProfileStore (..),
     PendingAccount (..),
     RegistrationError (..),
     RegistrationResult (..),
@@ -44,6 +46,19 @@ import HarchWeb.Password
 data AccountStoreError
   = AccountStoreUnavailable Text
   | AccountStoreCorruptData Text
+
+-- | The safe account data required by authenticated page surfaces. Password
+-- hashes, verification tokens, and other credentials never cross this seam.
+data AccountProfile = AccountProfile
+  { accountProfileId :: AccountId,
+    accountProfileEmail :: EmailAddress,
+    accountProfileEmailVerified :: Bool
+  }
+  deriving (Eq, Show)
+
+newtype AccountProfileStore = AccountProfileStore
+  { findAccountProfile :: AccountId -> IO (Either AccountStoreError (Maybe AccountProfile))
+  }
 
 data PendingAccount = PendingAccount
   { pendingAccountId :: AccountId,

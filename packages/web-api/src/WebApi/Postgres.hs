@@ -8,6 +8,8 @@ module WebApi.Postgres
     buildPostgresDatabaseEffectWithRunner,
     buildRuntimePostgresAccountStore,
     buildRuntimePostgresAccountStoreWithRunner,
+    buildRuntimePostgresAccountProfileStore,
+    buildRuntimePostgresAccountProfileStoreWithRunner,
     buildRuntimePostgresAccountCredentialStore,
     buildRuntimePostgresAccountCredentialStoreWithRunner,
     buildRuntimePostgresMfaStore,
@@ -70,7 +72,9 @@ import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
 import Text.Read (readMaybe)
 import WebApi.Account
-  ( AccountStore (..),
+  ( AccountProfile (..),
+    AccountProfileStore (..),
+    AccountStore (..),
     AccountStoreError (..),
     PendingAccount (..),
   )
@@ -184,6 +188,10 @@ buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
 buildRuntimePostgresAccountStore !databaseConfig =
   buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
 
+buildRuntimePostgresAccountProfileStore :: DatabaseConfig -> AccountProfileStore
+buildRuntimePostgresAccountProfileStore !databaseConfig =
+  buildRuntimePostgresAccountProfileStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+
 buildRuntimePostgresAccountCredentialStore :: DatabaseConfig -> AccountCredentialStore
 buildRuntimePostgresAccountCredentialStore !databaseConfig =
   buildRuntimePostgresAccountCredentialStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
@@ -246,6 +254,18 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
               [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
         liftEither (decodeConsumedVerification rows)
 
+buildRuntimePostgresAccountProfileStoreWithRunner ::
+  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  DatabaseConfig ->
+  AccountProfileStore
+buildRuntimePostgresAccountProfileStoreWithRunner runQuery databaseConfig =
+  AccountProfileStore $ \accountId ->
+    runExceptT $ do
+      rows <-
+        runStoreQuery AccountStoreUnavailable $
+          runQuery databaseConfig findAccountProfileQuery [accountIdText accountId]
+      liftEither (decodeAccountProfileRows accountId rows)
+
 runStoreQuery :: (Text -> storeError) -> IO (Either Text value) -> ExceptT storeError IO value
 runStoreQuery mapError = withExceptT mapError . ExceptT
 
@@ -258,6 +278,18 @@ decodeAccountCredentialRows rows =
       passwordHash <- maybe (Left (AccountCredentialStoreCorruptData "account credential lookup has an invalid password hash")) Right (readPasswordHash passwordHashValue)
       Right (Just (AccountCredential accountId passwordHash (verifiedAtValue /= "")))
     _ -> Left (AccountCredentialStoreCorruptData ("unexpected account credential lookup result: " <> Text.pack (show rows)))
+
+decodeAccountProfileRows :: AccountId -> [[Text]] -> Either AccountStoreError (Maybe AccountProfile)
+decodeAccountProfileRows accountId rows =
+  case rows of
+    [] -> Right Nothing
+    [[accountIdValue, emailAddressValue, verifiedAtValue]] -> do
+      returnedAccountId <- maybe (Left (AccountStoreCorruptData "account profile lookup has an invalid account id")) Right (mkAccountId accountIdValue)
+      emailAddress <- maybe (Left (AccountStoreCorruptData "account profile lookup has an invalid email address")) Right (mkEmailAddress emailAddressValue)
+      if returnedAccountId == accountId
+        then Right (Just (AccountProfile returnedAccountId emailAddress (verifiedAtValue /= "")))
+        else Left (AccountStoreCorruptData "account profile lookup returned a different account id")
+    _ -> Left (AccountStoreCorruptData ("unexpected account profile lookup result: " <> Text.pack (show rows)))
 
 decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError Bool
 decodeCreatedAccount pendingAccount rows =
@@ -882,6 +914,10 @@ consumeEmailVerificationQuery =
 findAccountCredentialByEmailQuery :: Text
 findAccountCredentialByEmailQuery =
   "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;"
+
+findAccountProfileQuery :: Text
+findAccountProfileQuery =
+  "SELECT account_id, email_normalized, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE account_id = $1;"
 
 saveUnconfirmedTotpEnrollmentQuery :: Text
 saveUnconfirmedTotpEnrollmentQuery =

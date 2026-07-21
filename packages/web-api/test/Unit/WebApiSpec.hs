@@ -48,7 +48,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
 import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -62,7 +62,7 @@ import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
-import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -3617,6 +3617,29 @@ spec = do
       assertAccountStoreError (consumeEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token) 499) (isUnavailable "connection failed")
       assertAccountStoreSuccess (consumeEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token) 499) (\case Nothing -> True; Just _ -> False)
       assertAccountStoreError (consumeEmailVerification (storeFor (Right [["account_01", "extra"]])) (Account.emailVerificationTokenDigest token) 499) (isCorrupt "unexpected email-verification consumption result: [[\"account_01\",\"extra\"]]")
+
+    it "loads safe account profiles and rejects malformed profile rows" $ do
+      let accountId = requiredAccountId "account_01"
+          profileStoreFor result = buildRuntimePostgresAccountProfileStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
+          expectedProfile = AccountProfile accountId (requiredEmailAddress "person@example.test") True
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "500"]])) accountId)
+        (\case Just profile -> profile == expectedProfile; Nothing -> False)
+      accountProfileId expectedProfile `shouldBe` accountId
+      accountProfileEmail expectedProfile `shouldBe` requiredEmailAddress "person@example.test"
+      accountProfileEmailVerified expectedProfile `shouldBe` True
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", ""]])) accountId)
+        (\case Just profile -> not (accountProfileEmailVerified profile); Nothing -> False)
+      assertAccountStoreSuccess
+        (findAccountProfile (profileStoreFor (Right [])) accountId)
+        (\case Nothing -> True; Just _ -> False)
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Left "connection failed")) accountId) (isUnavailable "connection failed")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["invalid id", "person@example.test", ""]])) accountId) (isCorrupt "account profile lookup has an invalid account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "invalid email", ""]])) accountId) (isCorrupt "account profile lookup has an invalid email address")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: [[\"account_01\"]]")
+      buildRuntimePostgresAccountProfileStore postgresTestConfig `seq` pure ()
 
     it "translates database config into psql commands for page queries" $ do
       recordedCommandsReference <- newIORef []
