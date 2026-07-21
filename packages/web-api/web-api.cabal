@@ -79,6 +79,7 @@ library
     WebApi.Page
     WebApi.PageShell
     WebApi.Postgres
+    WebApi.Profile
     WebApi.Response
     WebApi.Route
     WebApi.RouteData

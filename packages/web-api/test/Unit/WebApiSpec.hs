@@ -2199,6 +2199,7 @@ spec = do
         accountWorkflowMfaStore workflow `seq` pure ()
         accountWorkflowCredentialStore workflow `seq` pure ()
         accountWorkflowSessionStore workflow `seq` pure ()
+        accountWorkflowProfileStore workflow `seq` pure ()
         accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow >>= (`shouldSatisfy` (> 0))
@@ -2571,6 +2572,30 @@ spec = do
       selectRouteDataWithDatabase seededDatabaseEffect spanishHomeRequest
         `shouldReturn` HomeRouteDataResult
           (Left (HomePageDataError "home seed unavailable"))
+
+    it "preserves home-route database operations alongside selected data" $ do
+      let databaseOperation =
+            DatabaseOperation
+              { databaseOperationName = "load-home-page-summary",
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                databaseOperationStartedAtNanoseconds = Nothing,
+                databaseOperationEndedAtNanoseconds = Nothing
+              }
+          observedHomeEffect =
+            defaultDatabaseEffect
+              { loadHomePageDataWithObservability =
+                  \_ ->
+                    pure
+                      DatabaseResult
+                        { databaseResultValue = Right (HomePageData "Observed home summary."),
+                          databaseResultOperations = [databaseOperation]
+                        }
+              }
+      selectRouteDataSelectionWithDatabase observedHomeEffect homeRequest
+        `shouldReturn` RouteDataSelection
+          { routeDataResult = HomeRouteDataResult (Right (HomeRouteData "Observed home summary.")),
+            routeDataDatabaseOperations = [databaseOperation]
+          }
 
     it "keeps route-data selectors and derived instances deterministic for tests" $ do
       let homeRouteData =
@@ -2979,6 +3004,7 @@ spec = do
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \requestContext verificationToken ->
@@ -3067,6 +3093,10 @@ spec = do
       assertSessionUnavailable (saveAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
       assertSessionUnavailable (loadAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
       assertSessionUnavailable (invalidateAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
+      findAccountProfile (accountWorkflowProfileStore unavailableAccountWorkflow) accountId
+        >>= \case
+          Left (AccountStoreUnavailable "account profiles are not configured") -> pure ()
+          _ -> expectationFailure "expected unavailable account profiles"
       accountWorkflowPasswordHasher unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpEncryptionKey unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpClock unavailableAccountWorkflow `shouldReturn` 0
@@ -3097,6 +3127,7 @@ spec = do
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
                 accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
@@ -3624,7 +3655,13 @@ spec = do
           expectedProfile = AccountProfile accountId (requiredEmailAddress "person@example.test") True
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "500"]])) accountId)
-        (\case Just profile -> profile == expectedProfile; Nothing -> False)
+        ( \case
+            Just profile ->
+              accountProfileId profile == accountProfileId expectedProfile
+                && accountProfileEmail profile == accountProfileEmail expectedProfile
+                && accountProfileEmailVerified profile == accountProfileEmailVerified expectedProfile
+            Nothing -> False
+        )
       accountProfileId expectedProfile `shouldBe` accountId
       accountProfileEmail expectedProfile `shouldBe` requiredEmailAddress "person@example.test"
       accountProfileEmailVerified expectedProfile `shouldBe` True
@@ -3640,6 +3677,16 @@ spec = do
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: [[\"account_01\"]]")
       buildRuntimePostgresAccountProfileStore postgresTestConfig `seq` pure ()
+
+    it "executes the native account-profile adapter against a migrated PostgreSQL database" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      assertAccountStoreSuccess
+        ( findAccountProfile
+            (buildRuntimePostgresAccountProfileStore defaultRealPostgresConfig)
+            (requiredAccountId "profile_lookup_missing_01")
+        )
+        (\case Nothing -> True; Just _ -> False)
 
     it "translates database config into psql commands for page queries" $ do
       recordedCommandsReference <- newIORef []

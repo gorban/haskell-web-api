@@ -68,11 +68,6 @@ renderPageResponseFromRouteDataSelection ::
   HarchWeb.Response AppRoute AppRequestContext
 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection =
   case routeData of
-    HomeRouteDataResult (Left databaseError) ->
-      let renderedPage = renderPageFromRouteData config routeRequest routeData
-       in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/" "home-page" routeDataDatabaseOperationsValue databaseError))
-            renderedPage
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.PageResponseWithMetadata

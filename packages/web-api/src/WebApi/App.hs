@@ -28,7 +28,7 @@ import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
-import WebApi.Account (AccountStore (..), AccountStoreError (..))
+import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
 import WebApi.AccountPages (handleAccountAction)
 import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.AppEffect (AccountWorkflow (..))
@@ -46,7 +46,7 @@ import WebApi.Config
 import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
-import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
+import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
 import WebApi.Response (selectResponseWithDatabase)
 import WebApi.Route
   ( AppRequestContext (..),
@@ -192,6 +192,7 @@ buildRuntimeAccountWorkflow !environmentConfig =
             accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
             accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
             accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
+            accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
             accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
             accountWorkflowTotpClock = floor <$> getPOSIXTime,
             accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
@@ -353,6 +354,10 @@ unavailableAccountWorkflow =
           { saveAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
             loadAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
             invalidateAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable)
+          },
+      accountWorkflowProfileStore =
+        AccountProfileStore
+          { findAccountProfile = \_ -> pure (Left (AccountStoreUnavailable "account profiles are not configured"))
           },
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
       accountWorkflowTotpClock = pure 0,

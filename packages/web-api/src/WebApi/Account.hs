@@ -54,7 +54,6 @@ data AccountProfile = AccountProfile
     accountProfileEmail :: EmailAddress,
     accountProfileEmailVerified :: Bool
   }
-  deriving (Eq, Show)
 
 newtype AccountProfileStore = AccountProfileStore
   { findAccountProfile :: AccountId -> IO (Either AccountStoreError (Maybe AccountProfile))

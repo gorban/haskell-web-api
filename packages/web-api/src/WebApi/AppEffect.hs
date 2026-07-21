@@ -20,7 +20,7 @@ import HarchWeb.Account (EmailVerificationToken)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret (SecretEncryptionKey)
-import WebApi.Account (AccountStore)
+import WebApi.Account (AccountProfileStore, AccountStore)
 import WebApi.Login (AccountCredentialStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
@@ -34,6 +34,7 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
     accountWorkflowSessionStore :: AccountSessionStore,
+    accountWorkflowProfileStore :: AccountProfileStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
     accountWorkflowTotpClock :: IO Word64,
     accountWorkflowVerificationUrl :: AppRequestContext -> EmailVerificationToken -> Text
