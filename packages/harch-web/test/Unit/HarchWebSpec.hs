@@ -5,25 +5,25 @@ module Unit.HarchWebSpec (spec) where
 
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (SomeException, displayException, evaluate, finally, try)
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Char8 as ByteStringChar8
-import qualified Data.ByteString.Lazy as LazyByteString
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (isHexDigit)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-import qualified HarchWeb.Observability as Observability
-import qualified Network.HTTP.Types as Http
-import qualified Network.Socket as Socket
-import qualified Network.Socket.ByteString as SocketByteString
-import qualified Network.Wai as Wai
-import qualified Network.Wai.Handler.Warp as Warp
-import qualified Network.Wai.Internal as WaiInternal
+import HarchWeb.Observability qualified as Observability
+import Network.HTTP.Types qualified as Http
+import Network.Socket qualified as Socket
+import Network.Socket.ByteString qualified as SocketByteString
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
+import Network.Wai.Internal qualified as WaiInternal
 import System.Directory (createDirectoryIfMissing, doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
@@ -1094,6 +1094,10 @@ spec = do
           bodyResponseValue = BodyResponse body
           otherBodyResponseValue :: Response TestRoute TestContext
           otherBodyResponseValue = BodyResponse otherBody
+          redirectResponseValue :: Response TestRoute TestContext
+          redirectResponseValue = RedirectResponse body "/spaces"
+          otherRedirectResponseValue :: Response TestRoute TestContext
+          otherRedirectResponseValue = RedirectResponse otherBody "/other"
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Just "csrf-token", clientActionContext = defaultContext}
           otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
           regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
@@ -1176,6 +1180,9 @@ spec = do
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      (redirectResponseValue == redirectResponseValue) `shouldBe` True
+      (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
+      show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/spaces\""
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
@@ -1535,6 +1542,20 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
+
+    it "renders typed redirects with the location header and standard response metadata" $ do
+      let typedRedirect = redirectResponse 302 "/spaces" :: Response TestRoute TestContext
+          redirectApplication = sampleApplication {renderResponse = const (pure typedRedirect)}
+          diagnostics = responseDiagnostics typedRedirect
+      diagnosticObservabilityAttributes diagnostics `shouldBe` []
+      diagnosticLogEntries diagnostics `shouldBe` []
+      responseStatusCode redirectApplication typedRedirect `shouldBe` 302
+      responseKind typedRedirect `shouldBe` Observability.BodyResponseKind
+      response <- performWaiRequest (toWaiApplication redirectApplication) (waiRequest ["known"])
+      Wai.responseStatus response `shouldBe` Http.status302
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "/spaces"
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
+      readResponseBody response `shouldReturn` ""
 
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =

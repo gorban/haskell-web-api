@@ -3,7 +3,7 @@
 
 {-# E2E_SPEC #-}
 
-import qualified HarchWeb
+import HarchWeb qualified
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi (buildApp)
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)

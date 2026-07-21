@@ -2,9 +2,9 @@
 
 {-# SPEC #-}
 
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
 
 spec = do
   describe "planSetupPrerequisites" $ do

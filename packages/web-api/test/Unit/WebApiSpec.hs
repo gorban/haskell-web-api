@@ -7,11 +7,11 @@
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (IOException, SomeException, bracket, displayException, finally, try)
 import Control.Monad (forM_)
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Char8 as ByteStringChar8
-import qualified Data.ByteString.Lazy as LazyByteString
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (toLower)
 import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
@@ -19,24 +19,24 @@ import Data.List (find, isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
-import qualified HarchWeb
-import qualified HarchWeb.Account as Account
-import qualified HarchWeb.DevSmtp as DevSmtp
-import qualified HarchWeb.Email as Email
-import qualified HarchWeb.Observability as Observability
-import qualified HarchWeb.Password as Password
-import qualified HarchWeb.RecoveryCode as RecoveryCode
-import qualified HarchWeb.Secret as Secret
-import qualified HarchWeb.Session as Session
-import qualified HarchWeb.Totp as Totp
-import qualified Network.HTTP.Types as Http
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb qualified
+import HarchWeb.Account qualified as Account
+import HarchWeb.DevSmtp qualified as DevSmtp
+import HarchWeb.Email qualified as Email
+import HarchWeb.Observability qualified as Observability
+import HarchWeb.Password qualified as Password
+import HarchWeb.RecoveryCode qualified as RecoveryCode
+import HarchWeb.Secret qualified as Secret
+import HarchWeb.Session qualified as Session
+import HarchWeb.Totp qualified as Totp
+import Network.HTTP.Types qualified as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
-import qualified Network.Socket as NetworkSocket
-import qualified Network.Socket.ByteString as SocketByteString
-import qualified Network.Wai as Wai
-import qualified Network.Wai.Internal as WaiInternal
+import Network.Socket qualified as NetworkSocket
+import Network.Socket.ByteString qualified as SocketByteString
+import Network.Wai qualified as Wai
+import Network.Wai.Internal qualified as WaiInternal
 import Numeric (readHex)
 import System.Directory (createDirectory, getCurrentDirectory, removePathForcibly, setCurrentDirectory)
 import System.Environment (getEnv, getEnvironment, lookupEnv, setEnv, unsetEnv)
@@ -53,7 +53,7 @@ import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentF
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
-import qualified WebApi.AppEffect as AppEffect
+import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
@@ -61,11 +61,11 @@ import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), Accoun
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
-import qualified WebApi.PageShell as LegacyPageShell
+import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
-import qualified WebApi.Route
+import WebApi.Route qualified
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
@@ -7907,6 +7907,7 @@ spec = do
         HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
+        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
 
   describe "buildRuntimeApp" $ do
@@ -7942,6 +7943,7 @@ spec = do
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
         HarchWeb.PageResponse _ -> expectationFailure "expected body response"
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
+        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
       HarchWeb.reportRequestObservability
         runtimeApplication
@@ -8287,6 +8289,8 @@ stripVolatileDatabaseTimingResponse response =
       HarchWeb.PageResponseWithMetadata (stripVolatileDatabaseTimingResponseBody responseBody) page
     HarchWeb.BodyResponse responseBody ->
       HarchWeb.BodyResponse (stripVolatileDatabaseTimingResponseBody responseBody)
+    HarchWeb.RedirectResponse responseBody location ->
+      HarchWeb.RedirectResponse (stripVolatileDatabaseTimingResponseBody responseBody) location
     HarchWeb.ClientActionBodyResponse actionResponse ->
       HarchWeb.ClientActionBodyResponse actionResponse
 

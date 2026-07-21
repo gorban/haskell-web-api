@@ -15,7 +15,7 @@ where
 
 import Control.Exception (finally)
 import Data.Maybe (fromMaybe)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import System.Directory (findExecutable)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)

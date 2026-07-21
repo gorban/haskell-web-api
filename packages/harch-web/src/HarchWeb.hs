@@ -151,6 +151,7 @@ module HarchWeb
     runRequestMiddlewarePipeline,
     responseHeaderText,
     responseDiagnostics,
+    redirectResponse,
     responseKind,
     responseStatusCode,
     requestHostWithoutPort,
@@ -665,8 +666,20 @@ data Response route context
   = PageResponse (Page route context)
   | PageResponseWithMetadata ResponseBody (Page route context)
   | BodyResponse ResponseBody
+  | RedirectResponse ResponseBody Text
   | ClientActionBodyResponse ClientActionResponse
   deriving (Eq, Show)
+
+redirectResponse :: Int -> Text -> Response route context
+redirectResponse status =
+  RedirectResponse
+    ResponseBody
+      { responseStatus = status,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "",
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
 
 responseDiagnostics :: Response route context -> ResponseDiagnostics
 responseDiagnostics response =
@@ -674,6 +687,7 @@ responseDiagnostics response =
     PageResponse _ -> ResponseDiagnostics [] []
     PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
+    RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     ClientActionBodyResponse actionResponse -> responseBodyDiagnostics (clientActionResponseBody actionResponse)
 
 responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
@@ -692,6 +706,7 @@ responseStatusCode webApplication response =
         else 200
     PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
     BodyResponse responseBodyValue -> responseStatus responseBodyValue
+    RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
     ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
 
 responseKind :: Response route context -> Observability.ResponseKind
@@ -700,6 +715,7 @@ responseKind response =
     PageResponse _ -> Observability.PageResponseKind
     PageResponseWithMetadata _ _ -> Observability.PageResponseKind
     BodyResponse _ -> Observability.BodyResponseKind
+    RedirectResponse _ _ -> Observability.BodyResponseKind
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
 
 data RouteCodec route context = RouteCodec
@@ -1175,6 +1191,7 @@ responseRuntimeNonce response =
     PageResponse _ -> generateRuntimeNonce
     PageResponseWithMetadata _ _ -> generateRuntimeNonce
     BodyResponse _ -> pure $! RuntimeNonce ""
+    RedirectResponse _ _ -> pure $! RuntimeNonce ""
     ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
 
 finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
@@ -3089,6 +3106,8 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     BodyResponse responseBodyValue ->
       toWaiBodyResponse additionalHeaders responseBodyValue
+    RedirectResponse responseBodyValue location ->
+      toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse ->
       toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
 
@@ -3221,6 +3240,7 @@ responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
         PageResponse _ -> Just runtimeNonce
         PageResponseWithMetadata _ _ -> Just runtimeNonce
         BodyResponse _ -> Nothing
+        RedirectResponse _ _ -> Nothing
         ClientActionBodyResponse _ -> Nothing
     )
     <> strictTransportSecurityHeaders requestPolicyConfig request

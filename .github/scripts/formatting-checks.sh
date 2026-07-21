@@ -42,7 +42,7 @@ while IFS= read -r haskell_file; do
     format_ok=1
     continue
   }
-  output="$(ormolu -m check "$haskell_file" 2>&1)" || {
+  output="$(ormolu -m check --ghc-opt=-XImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
     format_ok=1
   }

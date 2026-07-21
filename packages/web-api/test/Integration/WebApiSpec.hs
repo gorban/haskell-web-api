@@ -5,13 +5,13 @@
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Char8 as ByteStringChar8
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
-import qualified Network.Socket as NetworkSocket
-import qualified Network.Socket.ByteString as SocketByteString
+import Network.Socket qualified as NetworkSocket
+import Network.Socket.ByteString qualified as SocketByteString
 import Numeric (readHex)
 import System.Environment (getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (ExitSuccess))

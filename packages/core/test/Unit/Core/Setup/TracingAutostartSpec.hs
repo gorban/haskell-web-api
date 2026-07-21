@@ -4,11 +4,11 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
-import qualified Core.Setup.TracingAutostart as TracingAutostart
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
+import Core.Setup.TracingAutostart qualified as TracingAutostart
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)

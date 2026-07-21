@@ -4,11 +4,11 @@
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
-import qualified Data.Aeson as Aeson
-import qualified Data.Aeson.Encoding as AesonEncoding
-import qualified Data.ByteString.Lazy as LazyByteString
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Encoding qualified as AesonEncoding
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (traverse_)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import System.Directory (withCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))

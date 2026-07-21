@@ -3,8 +3,8 @@
 {-# SPEC #-}
 
 import Control.Exception (finally)
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Data.Text as Text
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Data.Text qualified as Text
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 
 withListeningTcpEndpoint :: (Prerequisite.TcpEndpoint -> IO a) -> IO a

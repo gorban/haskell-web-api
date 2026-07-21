@@ -3,7 +3,7 @@
 module Unit.HarchWeb.AccountSpec (spec) where
 
 import Data.Maybe (fromMaybe, isNothing)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import HarchWeb.Account
 import HarchWeb.Email (mkEmailAddress)
 import Test.Hspec

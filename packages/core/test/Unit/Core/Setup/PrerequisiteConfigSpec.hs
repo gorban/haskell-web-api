@@ -4,10 +4,10 @@
 {-# SPEC #-}
 
 import Control.Exception (finally)
-import qualified Core.Config as CoreConfig
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Data.Text as Text
+import Core.Config qualified as CoreConfig
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Data.Text qualified as Text
 import System.Directory (createDirectory, getCurrentDirectory, removePathForcibly, setCurrentDirectory)
 import System.IO.Temp (withSystemTempDirectory)
 

@@ -2,7 +2,7 @@
 
 module Unit.HarchWeb.ObservabilitySpec (spec) where
 
-import qualified HarchWeb.Observability as Observability
+import HarchWeb.Observability qualified as Observability
 import Test.Hspec
 
 spec :: Spec

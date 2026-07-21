@@ -12,8 +12,8 @@ if ! command -v ormolu >/dev/null 2>&1; then
   exit 1
 fi
 
-actual_format="$(printf 'module Example where\nanswer::Int\nanswer=42\n' | ormolu --stdin-input-file Example.hs)"
-expected_format="$(printf 'module Example where\n\nanswer :: Int\nanswer = 42')"
+actual_format="$(printf 'module Example where\n\nimport Data.Text qualified as Text\n\nanswer::Int\nanswer=42\n' | ormolu --ghc-opt=-XImportQualifiedPost --stdin-input-file Example.hs)"
+expected_format="$(printf 'module Example where\n\nimport Data.Text qualified as Text\n\nanswer :: Int\nanswer = 42')"
 if [ "$actual_format" != "$expected_format" ]; then
   echo 'The installed Ormolu executable did not produce the expected formatting.' >&2
   exit 1

@@ -33,7 +33,7 @@ test("passes the document path and in-memory source to Ormolu", async () => {
   await withFakeOrmolu(async (executable) => {
     const output = await runOrmolu(executable, "/workspace/Example.hs", "answer=42\n");
     assert.deepEqual(JSON.parse(output), {
-      arguments: ["--stdin-input-file", "/workspace/Example.hs"],
+      arguments: ["--ghc-opt=-XImportQualifiedPost", "--stdin-input-file", "/workspace/Example.hs"],
       source: "answer=42\n"
     });
   });

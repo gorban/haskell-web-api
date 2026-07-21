@@ -4,14 +4,14 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Config as CoreConfig
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
-import qualified Core.Setup.PrerequisiteReport as PrerequisiteReport
-import qualified Core.Setup.TracingAutostart as TracingAutostart
-import qualified Data.Text as Text
+import Core.Config qualified as CoreConfig
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
+import Core.Setup.PrerequisiteReport qualified as PrerequisiteReport
+import Core.Setup.TracingAutostart qualified as TracingAutostart
+import Data.Text qualified as Text
 import GHC.IO.Handle (hDuplicate, hDuplicateTo)
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import System.Directory (getCurrentDirectory, setCurrentDirectory)

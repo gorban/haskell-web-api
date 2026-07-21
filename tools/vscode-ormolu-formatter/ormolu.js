@@ -2,7 +2,7 @@ const childProcess = require("child_process");
 
 function runOrmolu(executable, fileName, source) {
   return new Promise((resolve, reject) => {
-    const child = childProcess.spawn(executable, ["--stdin-input-file", fileName], {
+    const child = childProcess.spawn(executable, ["--ghc-opt=-XImportQualifiedPost", "--stdin-input-file", fileName], {
       stdio: ["pipe", "pipe", "pipe"]
     });
     let stdout = "";

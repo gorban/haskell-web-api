@@ -1332,7 +1332,9 @@ Those commands install:
 - `ormolu`
 
 The formatting-check script requires the positional `cabal-gild FILE --mode check` interface, and the
-installer intentionally pins `cabal-gild` to `1.8.4.1` so local installs match CI.
+installer intentionally pins `cabal-gild` to `1.8.4.1` and Ormolu to a tested revision so local installs
+match CI. Both the CI check and the VS Code formatter pass `-XImportQualifiedPost` to Ormolu, matching the
+project's postpositive qualified-import style.
 
 To fail fast on formatting regressions before a push or pull request, copy the tracked pre-commit hook into
 your local git hooks directory:
@@ -1456,7 +1458,8 @@ Remote default formatter and enable format-on-save:
 }
 ```
 
-The extension formats the in-memory editor content through `ormolu --stdin-input-file`, so a failed parse
+The extension formats the in-memory editor content through
+`ormolu --ghc-opt=-XImportQualifiedPost --stdin-input-file`, so a failed parse
 leaves the file unchanged and reports the Ormolu error in VS Code. It can be reinstalled after source changes
 by rerunning the install script. This workaround was verified in the rootless Fedora Distrobox setup with
 GHC `9.14.1`: after `Developer: Reload Window`, both `Format Document` and format-on-save reformatted a
@@ -1467,7 +1470,8 @@ Verify a new installation the same way:
 1. Run `Developer: Reload Window` after installing the extension or changing Remote Settings.
 2. Open a `.hs` file, add extra whitespace to a valid expression, and run `Format Document`.
 3. Make the same valid whitespace-only change again, save, and confirm format-on-save applies Ormolu.
-4. Confirm the saved file matches CI's formatter with `ormolu -m check FILE`.
+4. Confirm the saved file matches CI's formatter with
+   `ormolu -m check --ghc-opt=-XImportQualifiedPost FILE`.
 
 The extension source is guarded by a matching local/CI check:
 

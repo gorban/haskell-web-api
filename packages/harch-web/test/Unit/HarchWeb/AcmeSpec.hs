@@ -7,21 +7,21 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO, killThread, newMVar, readMVar, threadDelay)
 import Control.Exception (IOException, evaluate, finally, try)
 import Control.Monad (void)
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Lazy as LazyByteString
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-import qualified Network.HTTP.Client as HttpClient
-import qualified Network.HTTP.Types as Http
-import qualified Network.Socket as Socket
-import qualified Network.Wai as Wai
-import qualified Network.Wai.Handler.Warp as Warp
+import Network.HTTP.Client qualified as HttpClient
+import Network.HTTP.Types qualified as Http
+import Network.Socket qualified as Socket
+import Network.Wai qualified as Wai
+import Network.Wai.Handler.Warp qualified as Warp
 import System.Directory (doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.FilePath (takeDirectory, (</>))

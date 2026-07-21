@@ -7,7 +7,7 @@ import Control.Monad (forM_)
 import Control.Monad.Except (runExceptT)
 import Data.List (intercalate, isInfixOf)
 import System.FilePath (takeFileName, (</>))
-import qualified TestCore.E2EPrelude as E2EPrelude
+import TestCore.E2EPrelude qualified as E2EPrelude
 import TestCore.SpecPreprocessor (run, runPure)
 
 spec = do

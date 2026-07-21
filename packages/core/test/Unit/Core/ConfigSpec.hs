@@ -4,8 +4,8 @@
 {-# SPEC #-}
 
 import Control.Exception (finally)
-import qualified Core.Config as CoreConfig
-import qualified Data.Text as Text
+import Core.Config qualified as CoreConfig
+import Data.Text qualified as Text
 import System.Directory (createDirectory, removePathForcibly)
 import System.IO (hClose, hPutStr)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)

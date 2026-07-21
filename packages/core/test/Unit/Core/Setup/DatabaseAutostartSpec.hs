@@ -4,12 +4,12 @@
 
 import Control.Exception (finally)
 import Control.Monad (forM_)
-import qualified Core.Setup.DatabaseAutostart as DatabaseAutostart
-import qualified Core.Setup.Prerequisite as Prerequisite
-import qualified Core.Setup.PrerequisiteConfig as PrerequisiteConfig
-import qualified Core.Setup.PrerequisitePlan as PrerequisitePlan
+import Core.Setup.DatabaseAutostart qualified as DatabaseAutostart
+import Core.Setup.Prerequisite qualified as Prerequisite
+import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
 import Data.IORef (modifyIORef', newIORef, readIORef)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
