@@ -7224,7 +7224,7 @@ spec = do
             }
           renderedPage
 
-    it "maps required home-page failures into explicit HTML 500 responses" $ do
+    it "redirects root requests before a home-page database failure can be observed" $ do
       let failingDatabaseEffect =
             buildSeededDatabaseEffect
               DatabaseSeed
@@ -7233,39 +7233,18 @@ spec = do
                   englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
                   spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
-          renderedPage =
-            renderPageFromRouteData
-              defaultAppConfig
-              homeRequest
-              (HomeRouteDataResult (Left (HomePageDataError "home seed unavailable")))
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` HarchWeb.PageResponseWithMetadata
-          HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 500,
-              HarchWeb.responseContentType = "text/html; charset=utf-8",
-              HarchWeb.responseBody = "",
-              HarchWeb.responseObservabilityAttributes =
-                [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "error.type",
-                      Observability.attributeValue = Observability.TextAttribute "HomePageDataError"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "app.failure.code",
-                      Observability.attributeValue = Observability.TextAttribute "database.home-page-data"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "app.route",
-                      Observability.attributeValue = Observability.TextAttribute "/"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "app.surface",
-                      Observability.attributeValue = Observability.TextAttribute "page"
-                    }
-                ],
-              HarchWeb.responseLogEntries =
-                ["Database failure while rendering required home-page page response: HomePageDataError \"home seed unavailable\""]
-            }
-          renderedPage
+        `shouldReturn` (HarchWeb.redirectResponse 302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+
+    it "keeps locale and forwarded path prefixes in root redirect locations" $ do
+      let prefixedSpanishRequest =
+            HarchWeb.RouteRequest
+              HomeRoute
+              spanishRequestContext {requestPathPrefix = "/app"}
+      selectResponse defaultAppConfig spanishHomeRequest
+        `shouldReturn` (HarchWeb.redirectResponse 302 "/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+      selectResponse defaultAppConfig prefixedSpanishRequest
+        `shouldReturn` (HarchWeb.redirectResponse 302 "/app/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
 
     it "keeps routes without required database data on their existing responses" $ do
       let failingDatabaseEffect =
@@ -7276,9 +7255,8 @@ spec = do
                   englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                   spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
                 }
-      renderedHomePage <- renderPage defaultAppConfig homeRequest
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` HarchWeb.PageResponse renderedHomePage
+        `shouldReturn` (HarchWeb.redirectResponse 302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect apiStatusRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
@@ -7885,8 +7863,8 @@ spec = do
       secondResponseBody `shouldSatisfy` Text.isInfixOf "Second page content is temporarily unavailable."
 
       homeResponse <- performWaiRequest (HarchWeb.toWaiApplication failingApplication) (waiRequest [])
-      Wai.responseStatus homeResponse `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders homeResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
+      Wai.responseStatus homeResponse `shouldBe` Http.status302
+      lookup Http.hLocation (Wai.responseHeaders homeResponse) `shouldBe` Just "/spaces"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
       homePage <- renderPage defaultAppConfig homeRequest

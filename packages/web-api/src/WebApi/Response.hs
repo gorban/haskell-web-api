@@ -17,8 +17,9 @@ import WebApi.Page (renderPageFromRouteData)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
-    AppRoute,
+    AppRoute (..),
     RequestSurface (..),
+    renderRoutePath,
   )
 import WebApi.RouteData
   ( RouteDataResult (..),
@@ -34,15 +35,31 @@ selectResponse config =
 
 selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponseWithDatabase config databaseEffect routeRequest =
-  fmap
-    ( \routeDataSelection ->
-        case requestSurface (HarchWeb.requestContext routeRequest) of
-          ApiSurface ->
-            HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
-          PageSurface ->
-            renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
-    )
-    (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+  if isHomePageRequest routeRequest
+    then pure (HarchWeb.redirectResponse 302 (spacesLocation routeRequest))
+    else
+      fmap
+        ( \routeDataSelection ->
+            case requestSurface (HarchWeb.requestContext routeRequest) of
+              ApiSurface ->
+                HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
+              PageSurface ->
+                renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
+        )
+        (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+
+isHomePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
+isHomePageRequest routeRequest =
+  HarchWeb.requestRoute routeRequest == HomeRoute
+    && requestSurface (HarchWeb.requestContext routeRequest) == PageSurface
+
+spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
+spacesLocation routeRequest =
+  renderRoutePath
+    HarchWeb.RouteRequest
+      { HarchWeb.requestRoute = SpacesRoute,
+        HarchWeb.requestContext = HarchWeb.requestContext routeRequest
+      }
 
 renderPageResponseFromRouteDataSelection ::
   AppConfig ->

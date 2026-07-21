@@ -10,25 +10,20 @@ import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (
 
 spec =
   describe "stacked application real-browser smoke coverage" $ do
-    it "serves complete SSR and enhances same-origin navigation" $
+    it "redirects the root route to the complete Spaces SSR document" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
-              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
           runBrowserScenario
             browser
             ( do
                 visit homeUrl
-                assertText (byRole Heading) (`shouldBe` "Home")
-                click (byRole Link `named` "Browse the second page")
-                assertUrl (`shouldBe` secondUrl)
-                assertText (byRole Heading) (`shouldBe` "Second")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
+                assertText (byRole Heading) (`shouldBe` "Site under construction")
             )
             `shouldReturn` Right ()
 
-    it "keeps direct second-page loads and script-disabled navigation usable" $
+    it "keeps direct second-page loads and script-disabled root redirects usable" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
@@ -39,27 +34,21 @@ spec =
                 visit secondUrl
                 assertText (byRole Heading) (`shouldBe` "Second")
                 visitWithoutScripts homeUrl
-                click (byRole Link `named` "Browse the second page")
-                assertUrl (`shouldBe` secondUrl)
-                assertText (byRole Heading) (`shouldBe` "Second")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
+                assertText (byRole Heading) (`shouldBe` "Site under construction")
             )
             `shouldReturn` Right ()
 
-    it "serves Spanish SSR content and preserves its typed locale while scripts are disabled" $
+    it "redirects Spanish roots to localized Spaces SSR content while scripts are disabled" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let spanishHomeUrl = HarchWeb.localServerBaseUrl server <> "/es"
-              spanishSecondUrl = HarchWeb.localServerBaseUrl server <> "/es/second"
           runBrowserScenario
             browser
             ( do
                 visitWithoutScripts spanishHomeUrl
-                assertText (byText "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.") (`shouldBe` "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.")
-                click (byRole Link `named` "Ver la segunda página")
-                assertUrl (`shouldBe` spanishSecondUrl)
-                assertText (byRole Link `named` "Volver al inicio") (`shouldBe` "Volver al inicio")
+                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces"))
+                assertText (byRole Heading) (`shouldBe` "Sitio en construcción")
             )
             `shouldReturn` Right ()
 
@@ -67,12 +56,16 @@ spec =
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
           let homeUrl = HarchWeb.localServerBaseUrl server <> "/"
+              secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
               spacesUrl = HarchWeb.localServerBaseUrl server <> "/spaces"
               spanishSpacesUrl = HarchWeb.localServerBaseUrl server <> "/es/spaces"
           runBrowserScenario
             browser
             ( do
                 visit homeUrl
+                assertUrl (`shouldBe` spacesUrl)
+                assertText (byRole Heading) (`shouldBe` "Site under construction")
+                visit secondUrl
                 click (byRole Link `named` "Spaces")
                 assertUrl (`shouldBe` spacesUrl)
                 assertText (byRole Heading) (`shouldBe` "Site under construction")
