@@ -129,6 +129,40 @@ combined example app in `packages/web-api`, while the fuller starter walkthrough
 Coverage report:\
 <https://gorban.github.io/haskell-web-api/>
 
+## Haskell Code Quality
+
+Formatting and HLint remain CI checks. A separate advisory [Argon](https://github.com/rubik/argon)
+report identifies complexity and manual Monad-constructor plumbing without changing pre-commit or
+CI behavior:
+
+```sh
+tools/install-haskell-quality-tools.sh
+tools/haskell-quality-report.sh
+tools/test-haskell-quality-report.sh
+```
+
+The installer pins Argon to commit `28ca07453e3c28c0b52c1025f96420f214c354c2` and builds it with
+GHC 9.10.3 because that revision's dependencies do not currently resolve with the repository's GHC
+9.14 toolchain. The report requires `argon`, `hlint`, and `rg` on `PATH`.
+
+The report treats production functions at complexity 8 or greater as review candidates and prints
+scores above 10 first. It reports tests separately, omits the vendored `hspec-expectations-match`
+fork, and filters top-level Hspec `spec` declarations because their declarative nesting is not
+comparable to ordinary function control flow. Constructor-plumbing matches are intentionally
+heuristic: review each result and promote only established project patterns to
+[HLint hints](https://github.com/ndmitchell/hlint#customizing-the-hints) or shared combinators. Add
+project-specific failure/success constructor pairs to
+`tools/haskell-quality-monads.conf`.
+
+The fixture check exercises threshold arguments, Hspec and vendored exclusions, and both built-in
+and app-defined constructor pairs without installing Argon.
+
+Useful additional GHC warnings to evaluate after the advisory backlog is clean include
+`-Wcompat`, `-Wincomplete-uni-patterns`, `-Wincomplete-record-updates`, `-Wpartial-fields`, and
+`-Wredundant-constraints`; see the
+[GHC warning reference](https://downloads.haskell.org/ghc/latest/docs/users_guide/using-warnings.html).
+They are documented here rather than enabled as build gates during the initial campaign.
+
 ## Prerequisites
 
 The following is a detailed guide to set up a Haskell development environment on Windows, MacOS, and Linux
