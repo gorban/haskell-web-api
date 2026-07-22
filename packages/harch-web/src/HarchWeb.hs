@@ -1157,7 +1157,7 @@ handleRoutedRequest webApplication request respond requestStartedAt policyEvalua
   let routeRequest = matchRoute (routeCodec webApplication) requestContext (waiRequestRouteTarget requestPolicyConfig request)
   routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest webApplication request requestPath requestContext routeRequest middlewareResult
+  response <- dispatchRoutedRequest webApplication request requestPath routeRequest middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
   runtimeNonce <- responseRuntimeNonce response
   finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response
@@ -1174,14 +1174,14 @@ middlewareTimingEntry webApplication startedAt completedAt =
     [] -> []
     _ -> [("middleware", startedAt, completedAt)]
 
-dispatchRoutedRequest :: Application route context -> Wai.Request -> Text -> context -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
-dispatchRoutedRequest _ _ _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
-dispatchRoutedRequest webApplication request requestPath requestContext routeRequest (ContinueMiddleware _) =
+dispatchRoutedRequest :: Application route context -> Wai.Request -> Text -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
+dispatchRoutedRequest _ _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
+dispatchRoutedRequest webApplication request requestPath routeRequest@RouteRequest {requestContext = routedRequestContext} (ContinueMiddleware _) =
   if isClientActionRequest request
     then do
       requestBody <- Wai.strictRequestBody request
       let actionFields = parseClientActionFields requestBody
-      maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = requestContext}
+      maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
       maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
     else renderResponse webApplication routeRequest
 

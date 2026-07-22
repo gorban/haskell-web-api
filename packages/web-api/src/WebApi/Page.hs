@@ -270,7 +270,7 @@ renderPageModel config routeRequest pageModel =
     { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
       HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
       HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
-      HarchWeb.pageBody = renderPageBody pageModel,
+      HarchWeb.pageBody = renderPageBodyForLocale (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
       HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
     }
 
@@ -424,7 +424,10 @@ localizedText routeRequest englishText spanishText =
     Spanish -> spanishText
 
 renderPageBody :: AppPageModel -> Text
-renderPageBody pageModel =
+renderPageBody = renderPageBodyForLocale English
+
+renderPageBodyForLocale :: AppLocale -> AppPageModel -> Text
+renderPageBodyForLocale locale pageModel =
   case pageModel of
     HomePage homePage ->
       Text.concat
@@ -463,15 +466,15 @@ renderPageBody pageModel =
           "</p></section>"
         ]
     RegistrationPage registrationPath registrationForm ->
-      renderRegistrationPage registrationPath registrationForm
+      renderRegistrationPage locale registrationPath registrationForm
     EmailVerificationPage verificationPath verificationForm ->
-      renderVerificationPage verificationPath verificationForm
+      renderVerificationPage locale verificationPath verificationForm
     MfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm ->
-      renderMfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm
+      renderMfaEnrollmentPage locale mfaEnrollmentPath mfaEnrollmentForm
     LoginPage loginPath loginForm ->
-      renderLoginPage loginPath loginForm
+      renderLoginPage locale loginPath loginForm
     LogoutPage logoutPath ->
-      renderLogoutPage logoutPath
+      renderLogoutPage locale logoutPath
     ProfilePage profilePage ->
       renderProfilePageBody profilePage
     NotFoundPage notFoundPage ->

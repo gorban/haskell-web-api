@@ -6,6 +6,7 @@
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
+import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
 import Data.Text (Text)
 import System.IO.Temp (withSystemTempDirectory)
@@ -110,6 +111,24 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "keeps Spanish registration SSR and its immediate failure patch localized" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultDatabaseEffect localizedRegistrationWorkflow) $ \server -> do
+          let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
+          runBrowserScenario
+            browser
+            ( do
+                visit registrationUrl
+                assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
+                fill (byLabel "Direccion de correo") "person@example.test"
+                fill (byLabel "Contrasena") "correct horse battery staple"
+                click (byRole Button `named` "Crear cuenta")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+                assertText (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") (`shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.")
+            )
+            `shouldReturn` Right ()
+
     it "resends a pending-profile verification email through the immediate capture path" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultDatabaseEffect pendingProfileWorkflow) $ \server -> do
@@ -177,6 +196,16 @@ pendingProfileWorkflow =
               pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
           },
       accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+    }
+
+localizedRegistrationWorkflow :: AccountWorkflow
+localizedRegistrationWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowStore =
+        (accountWorkflowStore unavailableAccountWorkflow)
+          { createPendingAccount = \_ -> pure (Right False)
+          },
+      accountWorkflowPasswordHasher = \_ _ -> pure (Just (Password.PasswordHash "test-password-hash"))
     }
 
 pendingProfile :: AccountProfile

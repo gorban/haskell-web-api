@@ -3046,29 +3046,55 @@ spec = do
       show (LoginPage "/login" (LoginForm "person@example.test" Nothing False))
         `shouldBe` "LoginPage \"/login\" \"person@example.test\" Nothing False"
       show (LogoutPage "/logout") `shouldBe` "LogoutPage \"/logout\""
-      renderRegistrationPage "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
-        `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Create your account</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Email address</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Password</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Create account</button></form></section></section>"
-      renderRegistrationRegion "/register" (RegistrationForm Text.empty (Just "No") True)
+      renderRegistrationPage Spanish "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+        `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Crea tu cuenta</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Direccion de correo</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Contrasena</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Crear cuenta</button></form></section></section>"
+      renderRegistrationRegion English "/register" (RegistrationForm Text.empty (Just "No") True)
         `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
-      renderVerificationPage "/verify" (VerificationForm "token&value" Nothing False)
+      renderVerificationPage English "/verify" (VerificationForm "token&value" Nothing False)
         `shouldSatisfy` \html ->
           "<section data-page=\"email-verification\">" `Text.isPrefixOf` html
             && "value=\"token&amp;value\"" `Text.isInfixOf` html
-      renderVerificationRegion "/verify" (VerificationForm Text.empty Nothing False)
+      renderVerificationPage Spanish "/es/verify" (VerificationForm Text.empty Nothing False)
+        `shouldSatisfy` Text.isInfixOf "Verifica tu direccion de correo"
+      renderVerificationRegion English "/verify" (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderRegistrationRegion "/register" (RegistrationForm "'>&" Nothing False)
+      renderRegistrationRegion English "/register" (RegistrationForm "'>&" Nothing False)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
-      renderMfaEnrollmentPage "/es/mfa" (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") [] (Just "Ready <now>") False)
+      let spanishMfaPage = renderMfaEnrollmentPage Spanish "/es/mfa" (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
+      spanishMfaPage
         `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
-      renderMfaEnrollmentRegion "/mfa" (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
+      mapM_
+        (\label -> spanishMfaPage `shouldSatisfy` Text.isInfixOf label)
+        [ "Configura tu autenticador",
+          "Iniciar registro del autenticador",
+          "Codigo del autenticador",
+          "Confirmar autenticador",
+          "Codigos de recuperacion",
+          "Guarda estos codigos. No se mostraran de nuevo."
+        ]
+      renderMfaEnrollmentRegion English "/mfa" (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
-      renderLoginPage "/es/login" (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+      let spanishLoginPage = renderLoginPage Spanish "/es/login" (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+      spanishLoginPage
         `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
-      renderLoginRegion "/login" (LoginForm Text.empty Nothing False)
+      mapM_
+        (\label -> spanishLoginPage `shouldSatisfy` Text.isInfixOf label)
+        [ "Iniciar sesion",
+          "Direccion de correo",
+          "Contrasena",
+          "Metodo de verificacion",
+          "Codigo del autenticador",
+          "Codigo de recuperacion",
+          "Codigo de verificacion"
+        ]
+      renderLoginRegion English "/login" (LoginForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderLogoutPage "/logout" `shouldSatisfy` Text.isInfixOf "data-harch-control"
-      Text.length (renderLogoutPage "/logout") `shouldSatisfy` (> 0)
-      renderLogoutRegion "/logout" (Just "Signed <out>") True
+      renderLogoutPage English "/logout" `shouldSatisfy` Text.isInfixOf "data-harch-control"
+      Text.length (renderLogoutPage English "/logout") `shouldSatisfy` (> 0)
+      let spanishLogoutPage = renderLogoutPage Spanish "/es/logout"
+      spanishLogoutPage `shouldSatisfy` Text.isInfixOf "Cerrar sesion"
+      spanishLogoutPage `shouldSatisfy` Text.isInfixOf ">Cerrar sesion</button>"
+      renderLogoutRegion English "/logout" (Just "Signed <out>") True
         `shouldSatisfy` \html -> "data-error-state=\"true\"" `Text.isInfixOf` html && "Signed &lt;out&gt;" `Text.isInfixOf` html
       pageEnhancementHooks RegistrationRoute `shouldBe` []
       pageEnhancementHooks EmailVerificationRoute `shouldBe` []

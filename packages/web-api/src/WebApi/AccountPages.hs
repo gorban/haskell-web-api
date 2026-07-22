@@ -133,6 +133,82 @@ data LoginForm = LoginForm
   }
   deriving (Eq)
 
+data AccountPageCopy = AccountPageCopy
+  { accountRegistrationHeading :: Text,
+    accountEmailLabel :: Text,
+    accountRegistrationPasswordLabel :: Text,
+    accountCreateAccountLabel :: Text,
+    accountVerificationHeading :: Text,
+    accountVerificationTokenLabel :: Text,
+    accountVerifyEmailLabel :: Text,
+    accountMfaEnrollmentHeading :: Text,
+    accountStartMfaEnrollmentLabel :: Text,
+    accountConfirmMfaEnrollmentLabel :: Text,
+    accountLoginHeading :: Text,
+    accountLoginPasswordLabel :: Text,
+    accountVerificationMethodLabel :: Text,
+    accountAuthenticatorCodeLabel :: Text,
+    accountRecoveryCodeLabel :: Text,
+    accountVerificationCodeLabel :: Text,
+    accountSignInLabel :: Text,
+    accountLogoutHeading :: Text,
+    accountSignOutLabel :: Text,
+    accountRecoveryCodesHeading :: Text,
+    accountRecoveryCodesInstruction :: Text
+  }
+
+accountPageCopy :: AppLocale -> AccountPageCopy
+accountPageCopy locale =
+  case locale of
+    English ->
+      AccountPageCopy
+        { accountRegistrationHeading = "Create your account",
+          accountEmailLabel = "Email address",
+          accountRegistrationPasswordLabel = "Password",
+          accountCreateAccountLabel = "Create account",
+          accountVerificationHeading = "Verify your email address",
+          accountVerificationTokenLabel = "Verification token",
+          accountVerifyEmailLabel = "Verify email",
+          accountMfaEnrollmentHeading = "Set up your authenticator",
+          accountStartMfaEnrollmentLabel = "Start authenticator enrollment",
+          accountConfirmMfaEnrollmentLabel = "Confirm authenticator",
+          accountLoginHeading = "Sign in",
+          accountLoginPasswordLabel = "Password",
+          accountVerificationMethodLabel = "Verification method",
+          accountAuthenticatorCodeLabel = "Authenticator code",
+          accountRecoveryCodeLabel = "Recovery code",
+          accountVerificationCodeLabel = "Verification code",
+          accountSignInLabel = "Sign in",
+          accountLogoutHeading = "Sign out",
+          accountSignOutLabel = "Sign out",
+          accountRecoveryCodesHeading = "Recovery codes",
+          accountRecoveryCodesInstruction = "Save these codes. They will not be shown again."
+        }
+    Spanish ->
+      AccountPageCopy
+        { accountRegistrationHeading = "Crea tu cuenta",
+          accountEmailLabel = "Direccion de correo",
+          accountRegistrationPasswordLabel = "Contrasena",
+          accountCreateAccountLabel = "Crear cuenta",
+          accountVerificationHeading = "Verifica tu direccion de correo",
+          accountVerificationTokenLabel = "Token de verificacion",
+          accountVerifyEmailLabel = "Verificar correo",
+          accountMfaEnrollmentHeading = "Configura tu autenticador",
+          accountStartMfaEnrollmentLabel = "Iniciar registro del autenticador",
+          accountConfirmMfaEnrollmentLabel = "Confirmar autenticador",
+          accountLoginHeading = "Iniciar sesion",
+          accountLoginPasswordLabel = "Contrasena",
+          accountVerificationMethodLabel = "Metodo de verificacion",
+          accountAuthenticatorCodeLabel = "Codigo del autenticador",
+          accountRecoveryCodeLabel = "Codigo de recuperacion",
+          accountVerificationCodeLabel = "Codigo de verificacion",
+          accountSignInLabel = "Iniciar sesion",
+          accountLogoutHeading = "Cerrar sesion",
+          accountSignOutLabel = "Cerrar sesion",
+          accountRecoveryCodesHeading = "Codigos de recuperacion",
+          accountRecoveryCodesInstruction = "Guarda estos codigos. No se mostraran de nuevo."
+        }
+
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Nothing False
 
@@ -198,14 +274,14 @@ parseRegistrationForm actionRequest =
       passwordValue = actionField actionRequest "password"
       path = accountRoutePath actionRequest RegistrationRoute
    in case (Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _) -> Left (registrationResponse path 422 (RegistrationForm emailValue (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
-        (_, False) -> Left (registrationResponse path 422 (RegistrationForm emailValue (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
+        (Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path 422 (RegistrationForm emailValue (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
+        (_, False) -> Left (registrationResponse (actionLocale actionRequest) path 422 (RegistrationForm emailValue (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
         (Just emailAddress, True) -> Right (emailValue, passwordValue, emailAddress)
 
 interpretRegistrationResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Either RegistrationError RegistrationResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 interpretRegistrationResult actionRequest emailValue registrationResult =
   let path = accountRoutePath actionRequest RegistrationRoute
-      response status message isError = registrationResponse path status (RegistrationForm emailValue (Just message) isError)
+      response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm emailValue (Just message) isError)
    in case registrationResult of
         Right RegistrationAlreadyRegistered -> pure (response 202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
         Right (RegistrationCreated _) -> pure (response 202 (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
@@ -219,28 +295,28 @@ handleVerification actionRequest =
   let tokenValue = actionField actionRequest "token"
       path = accountRoutePath actionRequest EmailVerificationRoute
    in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
+        Nothing -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
         Just token -> do
           workflow <- accountWorkflow
           now <- liftAppIO (accountWorkflowClock workflow)
           confirmationResult <- liftAppIO (confirmEmailVerificationAt (accountWorkflowStore workflow) now token)
           case confirmationResult of
-            Right (Account.EmailVerificationAccepted _ _) -> pure (verificationResponse path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing)
-            Right Account.EmailVerificationExpired -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token"))
-            Right Account.EmailVerificationRejected -> pure (verificationResponse path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
-            Left storeError -> throwClientActionFailure (verificationResponse path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) "account.verification.store" "AccountStoreError" (accountStoreErrorDetail storeError)
+            Right (Account.EmailVerificationAccepted _ _) -> pure (verificationResponse (actionLocale actionRequest) path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing)
+            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token"))
+            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
+            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) "account.verification.store" "AccountStoreError" (accountStoreErrorDetail storeError)
 
 handleMfaEnrollment :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleMfaEnrollment actionRequest =
   let accountValue = actionField actionRequest "account"
       path = accountRoutePath actionRequest MfaEnrollmentRoute
    in case Account.mkAccountId accountValue of
-        Nothing -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm accountValue Nothing [] (Just (localized actionRequest "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
+        Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm accountValue Nothing [] (Just (localized actionRequest "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
         Just accountId ->
           case actionField actionRequest "intent" of
             "start" -> startMfaAction actionRequest path accountId
             "confirm" -> confirmMfaAction actionRequest path accountId
-            _ -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
+            _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
 
 startMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 startMfaAction actionRequest path accountId = do
@@ -248,25 +324,25 @@ startMfaAction actionRequest path accountId = do
   now <- liftAppIO (accountWorkflowClock workflow)
   started <- liftAppIO (startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now)
   case started of
-    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
+    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
     Left errorValue -> interpretMfaFailure actionRequest path accountId "start" "mfa-account" errorValue
 
 confirmMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 confirmMfaAction actionRequest path accountId =
   case Totp.mkTotpCode (actionField actionRequest "code") of
-    Nothing -> pure (mfaEnrollmentResponse path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
+    Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
     Just code -> do
       workflow <- accountWorkflow
       nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
       nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
       confirmed <- liftAppIO (confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code)
       case confirmed of
-        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
+        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
         Left errorValue -> interpretMfaFailure actionRequest path accountId "confirm" "mfa-code" errorValue
 
 interpretMfaFailure :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> Text -> Text -> MfaEnrollmentError -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 interpretMfaFailure actionRequest path accountId operation focusId errorValue =
-  let response status = mfaEnrollmentResponse path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
+  let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
    in case mfaEnrollmentFailureDiagnostics operation errorValue of
         Nothing -> pure (response 422)
         Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response 503, appFailureDiagnostics = diagnostics}
@@ -300,16 +376,16 @@ parseLoginForm actionRequest =
       path = accountRoutePath actionRequest LoginRoute
       loginForm message = LoginForm emailValue (Just message)
    in case (Email.mkEmailAddress emailValue, validPassword passwordValue, loginProof actionRequest) of
-        (Nothing, _, _) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
-        (_, False, _) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
-        (_, _, Nothing) -> Left (loginResponse path 422 (loginForm (localized actionRequest "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
+        (Nothing, _, _) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
+        (_, False, _) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
+        (_, _, Nothing) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
         (Just emailAddress, True, Just proof) -> Right (emailValue, passwordValue, emailAddress, proof)
 
 interpretLoginResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> PasswordMfaLoginResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
   let path = accountRoutePath actionRequest LoginRoute
       loginForm message = LoginForm emailValue (Just message)
-      response status message isError = loginResponse path status (loginForm message isError)
+      response status message isError = loginResponse (actionLocale actionRequest) path status (loginForm message isError)
       unavailable focusId = response 503 (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True focusId []
    in case loginResult of
         PasswordMfaLoginAccepted accountId -> issueLoginSession actionRequest emailValue nowNanoseconds accountId
@@ -327,20 +403,20 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   let path = accountRoutePath actionRequest LoginRoute
       form message = LoginForm emailValue (Just message)
   case issuedSession of
-    Left storeError -> throwClientActionFailure (loginResponse path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) "account.login.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-    Right opaqueSession -> pure (loginResponse path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
+    Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) "account.login.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+    Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
 
 handleLogout :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleLogout actionRequest =
   let path = accountRoutePath actionRequest LogoutRoute
    in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
-        Nothing -> pure (logoutResponse path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [])
+        Nothing -> pure (logoutResponse (actionLocale actionRequest) path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [])
         Just sessionToken -> do
           workflow <- accountWorkflow
           invalidated <- liftAppIO (invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken)
           case invalidated of
-            Left storeError -> throwClientActionFailure (logoutResponse path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) "account.logout.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
-            Right _ -> pure (logoutResponse path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
+            Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) "account.logout.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+            Right _ -> pure (logoutResponse (actionLocale actionRequest) path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
 
 handleProfile :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleProfile actionRequest = do
@@ -412,9 +488,12 @@ actionField actionRequest name =
 
 localized :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Text -> Text
 localized actionRequest english spanish =
-  case requestLocale (HarchWeb.clientActionContext actionRequest) of
+  case actionLocale actionRequest of
     English -> english
     Spanish -> spanish
+
+actionLocale :: HarchWeb.ClientActionRequest AppRequestContext -> AppLocale
+actionLocale = requestLocale . HarchWeb.clientActionContext
 
 loginProof :: HarchWeb.ClientActionRequest context -> Maybe MfaLoginProof
 loginProof actionRequest =
@@ -485,55 +564,55 @@ sessionStoreErrorMessage storeError =
     AccountSessionStoreUnavailable -> "account session store unavailable"
     AccountSessionStoreCorruptData -> "account session store returned corrupt data"
 
-registrationResponse :: Text -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-registrationResponse registrationPath status form focusId =
+registrationResponse :: AppLocale -> Text -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
+registrationResponse locale registrationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "registration-region" (renderRegistrationRegion registrationPath form)],
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "registration-region" (renderRegistrationRegion locale registrationPath form)],
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-verificationResponse :: Text -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-verificationResponse verificationPath status form focusId =
+verificationResponse :: AppLocale -> Text -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
+verificationResponse locale verificationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion verificationPath form)],
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion locale verificationPath form)],
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-mfaEnrollmentResponse :: Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
-mfaEnrollmentResponse mfaEnrollmentPath status form focusId =
+mfaEnrollmentResponse :: AppLocale -> Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse locale mfaEnrollmentPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion mfaEnrollmentPath form)],
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion locale mfaEnrollmentPath form)],
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-loginResponse :: Text -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-loginResponse loginPath status form focusId headers =
+loginResponse :: AppLocale -> Text -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+loginResponse locale loginPath status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "login-region" (renderLoginRegion loginPath form)],
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "login-region" (renderLoginRegion locale loginPath form)],
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-logoutResponse :: Text -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-logoutResponse logoutPath status message isError headers =
+logoutResponse :: AppLocale -> Text -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+logoutResponse locale logoutPath status message isError headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "logout-region" (renderLogoutRegion logoutPath message isError)],
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "logout-region" (renderLogoutRegion locale logoutPath message isError)],
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -551,48 +630,76 @@ profileResponse actionRequest status form =
       HarchWeb.clientActionLogEntries = []
     }
 
-renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text
-renderMfaEnrollmentPage mfaEnrollmentPath form =
+renderMfaEnrollmentPage :: AppLocale -> Text -> MfaEnrollmentForm -> Text
+renderMfaEnrollmentPage locale mfaEnrollmentPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
-    [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">Set up your authenticator</h1>",
-      renderMfaEnrollmentRegion mfaEnrollmentPath form,
+    [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">",
+      accountMfaEnrollmentHeading copy,
+      "</h1>",
+      renderMfaEnrollmentRegion locale mfaEnrollmentPath form,
       "</section>"
     ]
 
-renderMfaEnrollmentRegion :: Text -> MfaEnrollmentForm -> Text
-renderMfaEnrollmentRegion mfaEnrollmentPath form =
+renderMfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Text
+renderMfaEnrollmentRegion locale mfaEnrollmentPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
     [ "<section id=\"mfa-enrollment-region\" aria-live=\"polite\">",
       renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
       renderEnrollmentSecret (mfaEnrollmentFormSecret form),
-      renderRecoveryCodes (mfaEnrollmentFormRecoveryCodes form),
+      renderRecoveryCodes copy (mfaEnrollmentFormRecoveryCodes form),
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml mfaEnrollmentPath,
       "\" method=\"post\"><input id=\"mfa-account\" name=\"account\" type=\"hidden\" value=\"",
       escapeHtml (mfaEnrollmentFormAccountId form),
-      "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">Start authenticator enrollment</button></form>",
-      renderConfirmationForm mfaEnrollmentPath form,
+      "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">",
+      accountStartMfaEnrollmentLabel copy,
+      "</button></form>",
+      renderConfirmationForm locale mfaEnrollmentPath form,
       "</section>"
     ]
 
-renderLoginPage :: Text -> LoginForm -> Text
-renderLoginPage loginPath form =
+renderLoginPage :: AppLocale -> Text -> LoginForm -> Text
+renderLoginPage locale loginPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
-    [ "<section data-page=\"login\"><h1 data-page-title=\"true\">Sign in</h1>",
-      renderLoginRegion loginPath form,
+    [ "<section data-page=\"login\"><h1 data-page-title=\"true\">",
+      accountLoginHeading copy,
+      "</h1>",
+      renderLoginRegion locale loginPath form,
       "</section>"
     ]
 
-renderLoginRegion :: Text -> LoginForm -> Text
-renderLoginRegion loginPath form =
+renderLoginRegion :: AppLocale -> Text -> LoginForm -> Text
+renderLoginRegion locale loginPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
     [ "<section id=\"login-region\" aria-live=\"polite\">",
       renderMessage (loginFormMessage form) (loginFormIsError form),
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml loginPath,
-      "\" method=\"post\"><label for=\"login-email\">Email address</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+      "\" method=\"post\"><label for=\"login-email\">",
+      accountEmailLabel copy,
+      "</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
       escapeHtml (loginFormEmail form),
-      "\"><label for=\"login-password\">Password</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">Verification method</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">Authenticator code</option><option value=\"recovery\">Recovery code</option></select><label for=\"login-code\">Verification code</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">Sign in</button></form></section>"
+      "\"><label for=\"login-password\">",
+      accountLoginPasswordLabel copy,
+      "</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">",
+      accountVerificationMethodLabel copy,
+      "</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">",
+      accountAuthenticatorCodeLabel copy,
+      "</option><option value=\"recovery\">",
+      accountRecoveryCodeLabel copy,
+      "</option></select><label for=\"login-code\">",
+      accountVerificationCodeLabel copy,
+      "</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
+      accountSignInLabel copy,
+      "</button></form></section>"
     ]
 
 renderPendingProfileRegion :: Text -> PendingProfileForm -> Text
@@ -609,26 +716,34 @@ renderPendingProfileRegion profilePath form =
       "</button></form></section>"
     ]
 
-renderLogoutPage :: Text -> Text
-renderLogoutPage logoutPath =
+renderLogoutPage :: AppLocale -> Text -> Text
+renderLogoutPage locale logoutPath =
+  let copy = accountPageCopy locale
+   in
   Text.concat
-    [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">Sign out</h1>",
-      renderLogoutRegionWithMessage logoutPath Nothing,
+    [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">",
+      accountLogoutHeading copy,
+      "</h1>",
+      renderLogoutRegionWithMessage locale logoutPath Nothing,
       "</section>"
     ]
 
-renderLogoutRegion :: Text -> Maybe Text -> Bool -> Text
-renderLogoutRegion logoutPath message isError =
-  renderLogoutRegionWithMessage logoutPath ((,isError) <$> message)
+renderLogoutRegion :: AppLocale -> Text -> Maybe Text -> Bool -> Text
+renderLogoutRegion locale logoutPath message isError =
+  renderLogoutRegionWithMessage locale logoutPath ((,isError) <$> message)
 
-renderLogoutRegionWithMessage :: Text -> Maybe (Text, Bool) -> Text
-renderLogoutRegionWithMessage logoutPath messageState =
+renderLogoutRegionWithMessage :: AppLocale -> Text -> Maybe (Text, Bool) -> Text
+renderLogoutRegionWithMessage locale logoutPath messageState =
+  let copy = accountPageCopy locale
+   in
   Text.concat
     [ "<section id=\"logout-region\" aria-live=\"polite\">",
       maybe Text.empty renderLogoutMessage messageState,
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml logoutPath,
-      "\" method=\"post\"><button type=\"submit\">Sign out</button></form></section>"
+      "\" method=\"post\"><button type=\"submit\">",
+      accountSignOutLabel copy,
+      "</button></form></section>"
     ]
   where
     renderLogoutMessage (message, isError) = renderMessage (Just message) isError
@@ -639,63 +754,91 @@ renderEnrollmentSecret maybeSecret =
     Nothing -> Text.empty
     Just secret -> Text.concat ["<p data-totp-secret=\"true\"><code>", escapeHtml secret, "</code></p>"]
 
-renderRecoveryCodes :: [Text] -> Text
-renderRecoveryCodes recoveryCodes =
+renderRecoveryCodes :: AccountPageCopy -> [Text] -> Text
+renderRecoveryCodes copy recoveryCodes =
   case recoveryCodes of
     [] -> Text.empty
-    _ -> Text.concat ["<section data-recovery-codes=\"true\"><h2>Recovery codes</h2><p>Save these codes. They will not be shown again.</p><ul>", Text.concat (map (\code -> Text.concat ["<li><code>", escapeHtml code, "</code></li>"]) recoveryCodes), "</ul></section>"]
+    _ -> Text.concat ["<section data-recovery-codes=\"true\"><h2>", accountRecoveryCodesHeading copy, "</h2><p>", accountRecoveryCodesInstruction copy, "</p><ul>", Text.concat (map (\code -> Text.concat ["<li><code>", escapeHtml code, "</code></li>"]) recoveryCodes), "</ul></section>"]
 
-renderConfirmationForm :: Text -> MfaEnrollmentForm -> Text
-renderConfirmationForm mfaEnrollmentPath form =
+renderConfirmationForm :: AppLocale -> Text -> MfaEnrollmentForm -> Text
+renderConfirmationForm locale mfaEnrollmentPath form =
   case mfaEnrollmentFormSecret form of
     Nothing -> Text.empty
     Just _ ->
+      let copy = accountPageCopy locale
+       in
       Text.concat
         [ "<form data-harch-action=\"true\" data-harch-control action=\"",
           escapeHtml mfaEnrollmentPath,
           "\" method=\"post\"><input name=\"account\" type=\"hidden\" value=\"",
           escapeHtml (mfaEnrollmentFormAccountId form),
-          "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">Authenticator code</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">Confirm authenticator</button></form>"
+          "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">",
+          accountAuthenticatorCodeLabel copy,
+          "</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
+          accountConfirmMfaEnrollmentLabel copy,
+          "</button></form>"
         ]
 
-renderRegistrationPage :: Text -> RegistrationForm -> Text
-renderRegistrationPage registrationPath form =
+renderRegistrationPage :: AppLocale -> Text -> RegistrationForm -> Text
+renderRegistrationPage locale registrationPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
-    [ "<section data-page=\"registration\"><h1 data-page-title=\"true\">Create your account</h1>",
-      renderRegistrationRegion registrationPath form,
+    [ "<section data-page=\"registration\"><h1 data-page-title=\"true\">",
+      accountRegistrationHeading copy,
+      "</h1>",
+      renderRegistrationRegion locale registrationPath form,
       "</section>"
     ]
 
-renderRegistrationRegion :: Text -> RegistrationForm -> Text
-renderRegistrationRegion registrationPath form =
+renderRegistrationRegion :: AppLocale -> Text -> RegistrationForm -> Text
+renderRegistrationRegion locale registrationPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
     [ "<section id=\"registration-region\" aria-live=\"polite\">",
       renderMessage (registrationFormMessage form) (registrationFormIsError form),
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml registrationPath,
-      "\" method=\"post\"><label for=\"registration-email\">Email address</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+      "\" method=\"post\"><label for=\"registration-email\">",
+      accountEmailLabel copy,
+      "</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
       escapeHtml (registrationFormEmail form),
-      "\"><label for=\"registration-password\">Password</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Create account</button></form></section>"
+      "\"><label for=\"registration-password\">",
+      accountRegistrationPasswordLabel copy,
+      "</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">",
+      accountCreateAccountLabel copy,
+      "</button></form></section>"
     ]
 
-renderVerificationPage :: Text -> VerificationForm -> Text
-renderVerificationPage verificationPath form =
+renderVerificationPage :: AppLocale -> Text -> VerificationForm -> Text
+renderVerificationPage locale verificationPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
-    [ "<section data-page=\"email-verification\"><h1 data-page-title=\"true\">Verify your email address</h1>",
-      renderVerificationRegion verificationPath form,
+    [ "<section data-page=\"email-verification\"><h1 data-page-title=\"true\">",
+      accountVerificationHeading copy,
+      "</h1>",
+      renderVerificationRegion locale verificationPath form,
       "</section>"
     ]
 
-renderVerificationRegion :: Text -> VerificationForm -> Text
-renderVerificationRegion verificationPath form =
+renderVerificationRegion :: AppLocale -> Text -> VerificationForm -> Text
+renderVerificationRegion locale verificationPath form =
+  let copy = accountPageCopy locale
+   in
   Text.concat
     [ "<section id=\"verification-region\" aria-live=\"polite\">",
       renderMessage (verificationFormMessage form) (verificationFormIsError form),
       "<form data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml verificationPath,
-      "\" method=\"post\"><label for=\"verification-token\">Verification token</label><input id=\"verification-token\" name=\"token\" autocomplete=\"one-time-code\" required value=\"",
+      "\" method=\"post\"><label for=\"verification-token\">",
+      accountVerificationTokenLabel copy,
+      "</label><input id=\"verification-token\" name=\"token\" autocomplete=\"one-time-code\" required value=\"",
       escapeHtml (verificationFormToken form),
-      "\"><button type=\"submit\">Verify email</button></form></section>"
+      "\"><button type=\"submit\">",
+      accountVerifyEmailLabel copy,
+      "</button></form></section>"
     ]
 
 emailVerificationLifetimeNanoseconds :: Word64

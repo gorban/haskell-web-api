@@ -1476,7 +1476,7 @@ spec = do
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
 
-    it "decodes captured form fields and returns typed region patches without rendering a page" $ do
+    it "uses the route-resolved context for captured actions and returns typed region patches" $ do
       actionRequestReference <- newIORef Nothing
       requestObservabilityReference <- newIORef Nothing
       logEntriesReference <- newIORef []
@@ -1503,7 +1503,7 @@ spec = do
       let capturedActionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
-              ( (waiRequest ["actions", "subscribe"])
+              ( (waiRequest ["es", "known"])
                   { Wai.requestMethod = "POST",
                     Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")]
                   }
@@ -1514,10 +1514,10 @@ spec = do
         `shouldBe` Just
           ClientActionRequest
             { clientActionMethod = "POST",
-              clientActionPath = "/actions/subscribe",
+              clientActionPath = "/es/known",
               clientActionFields = [("email", "ada@example.com"), ("_csrf", "csrf-token"), ("intent", "subscribe"), ("blank", ""), ("invalid", "�")],
               clientActionCsrfToken = Just "csrf-token",
-              clientActionContext = defaultContext
+              clientActionContext = spanishContext
             }
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
