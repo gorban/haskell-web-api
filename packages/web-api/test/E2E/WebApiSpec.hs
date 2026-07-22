@@ -4,9 +4,17 @@
 {-# E2E_SPEC #-}
 
 import HarchWeb qualified
+import HarchWeb.Account qualified as Account
+import HarchWeb.Email qualified as Email
+import HarchWeb.Session qualified as Session
+import Data.Text (Text)
 import System.IO.Temp (withSystemTempDirectory)
-import WebApi (buildApp)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..))
+import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Database (defaultDatabaseEffect)
+import WebApi.Session (AccountSessionStore (..))
 
 spec =
   describe "stacked application real-browser smoke coverage" $ do
@@ -102,6 +110,24 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "resends a pending-profile verification email through the immediate capture path" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultDatabaseEffect pendingProfileWorkflow) $ \server -> do
+          let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+          runBrowserScenario
+            browser
+            ( do
+                setCookie profileUrl sessionCookieName sessionToken
+                visit profileUrl
+                assertText (byRole Heading) (`shouldBe` "Profile")
+                assertText (byText "person@example.test") (`shouldBe` "person@example.test")
+                click (byRole Button `named` "Resend verification email")
+                assertText (byText "Check your inbox for a verification link.") (`shouldBe` "Check your inbox for a verification link.")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+            )
+            `shouldReturn` Right ()
+
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
   loadedConfig <- loadPlaywrightBrowserConfig
@@ -125,3 +151,82 @@ withBrowserApp action = do
                 staticCacheControlSeconds = Nothing
               }
         }
+
+pendingProfileWorkflow :: AccountWorkflow
+pendingProfileWorkflow =
+  unavailableAccountWorkflow
+    { accountWorkflowStore =
+        AccountStore
+          { createPendingAccount = \_ -> error "unexpected account creation",
+            replaceEmailVerification = \_ -> pure (Right True),
+            findEmailVerification = \_ -> error "unexpected verification lookup",
+            consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+          },
+      accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> pure ()),
+      accountWorkflowClock = pure 100,
+      accountWorkflowSessionStore =
+        AccountSessionStore
+          { saveAccountSession = \_ -> error "unexpected session save",
+            loadAccountSession = \receivedSessionId ->
+              pure (Right (if receivedSessionId == pendingProfileSessionId then Just pendingProfileSession else Nothing)),
+            invalidateAccountSession = \_ -> error "unexpected session invalidation"
+          },
+      accountWorkflowProfileStore =
+        AccountProfileStore
+          { findAccountProfile = \receivedAccountId ->
+              pure (Right (if receivedAccountId == pendingProfileAccountId then Just pendingProfile else Nothing))
+          },
+      accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+    }
+
+pendingProfile :: AccountProfile
+pendingProfile = AccountProfile pendingProfileAccountId pendingProfileEmail False
+
+pendingProfileSession :: Session.OpaqueSession Account.AccountId
+pendingProfileSession =
+  Session.OpaqueSession
+    { Session.sessionId = pendingProfileSessionId,
+      Session.sessionPrincipal = pendingProfileAccountId,
+      Session.sessionCsrfToken = requiredCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_",
+      Session.sessionIssuedAtNanoseconds = 0,
+      Session.sessionExpiresAtNanoseconds = 200
+    }
+
+pendingProfileAccountId :: Account.AccountId
+pendingProfileAccountId = requiredAccountId "account_01"
+
+pendingProfileEmail :: Email.EmailAddress
+pendingProfileEmail = requiredEmailAddress "person@example.test"
+
+pendingProfileSessionId :: Session.SessionId
+pendingProfileSessionId = requiredSessionId sessionToken
+
+sessionCookieName :: Text
+sessionCookieName = Session.sessionCookieNameText (Session.sessionCookieName Session.defaultSessionCookiePolicy)
+
+sessionToken :: Text
+sessionToken = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
+
+requiredAccountId :: Text -> Account.AccountId
+requiredAccountId value =
+  case Account.mkAccountId value of
+    Just accountId -> accountId
+    Nothing -> error "expected a valid account id"
+
+requiredEmailAddress :: Text -> Email.EmailAddress
+requiredEmailAddress value =
+  case Email.mkEmailAddress value of
+    Just emailAddress -> emailAddress
+    Nothing -> error "expected a valid email address"
+
+requiredSessionId :: Text -> Session.SessionId
+requiredSessionId value =
+  case Session.mkSessionId value of
+    Just sessionIdValue -> sessionIdValue
+    Nothing -> error "expected a valid session id"
+
+requiredCsrfToken :: Text -> Session.CsrfToken
+requiredCsrfToken value =
+  case Session.mkCsrfToken value of
+    Just csrfToken -> csrfToken
+    Nothing -> error "expected a valid CSRF token"

@@ -49,6 +49,7 @@ module TestCore.Browser
     releaseRequestsMatching,
     reload,
     runBrowserScenario,
+    setCookie,
     submit,
     textContent,
     visit,
@@ -590,6 +591,13 @@ visit url = simpleCommand "visit" ["url" .= url]
 
 visitWithoutScripts :: Text -> BrowserScenario ()
 visitWithoutScripts url = simpleCommand "visitWithoutScripts" ["url" .= url]
+
+-- | Seed a same-origin browser cookie before visiting the supplied URL. This is
+-- intentionally scoped to the URL rather than exposing arbitrary browser
+-- context state to application scenarios.
+setCookie :: Text -> Text -> Text -> BrowserScenario ()
+setCookie url name value =
+  simpleCommand "setCookie" ["url" .= url, "name" .= name, "value" .= value]
 
 reload :: BrowserScenario ()
 reload = simpleCommand "reload" []

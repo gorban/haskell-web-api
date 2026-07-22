@@ -102,6 +102,7 @@ spec = do
           config
           ( do
               visit "http://localhost/"
+              setCookie "http://localhost/" "session" "opaque-session"
               click (byRole Link `named` "Continue")
               fill emailField "person@example.com"
               submit (byRole Form `named` "Registration")

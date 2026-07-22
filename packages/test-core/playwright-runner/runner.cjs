@@ -62,6 +62,7 @@ async function execute(request) {
     case 'initialize': return initialize(request);
     case 'visit': return visit(request.url, true);
     case 'visitWithoutScripts': return visit(request.url, false);
+    case 'setCookie': return setCookie(request.url, request.name, request.value);
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
     case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
@@ -122,6 +123,19 @@ async function visit(url, scriptsEnabled) {
   await requirePage().goto(url, { waitUntil: 'commit', timeout: timeout() });
   state.metrics = emptyMetrics();
   state.countHardNavigations = true;
+  return null;
+}
+
+async function setCookie(url, name, value) {
+  requireString(url, 'cookie URL');
+  requireString(name, 'cookie name');
+  requireString(value, 'cookie value');
+  if (!state.context) throw new Error('browser runner has not been initialized');
+  let cookie = { url, name, value };
+  if (name.startsWith('__Host-')) {
+    cookie = { name, value, domain: new URL(url).hostname, path: '/', secure: true };
+  }
+  await state.context.addCookies([cookie]);
   return null;
 }
 
