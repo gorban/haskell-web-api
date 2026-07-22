@@ -15,6 +15,7 @@ import HarchWeb.Password (PasswordHash, defaultPasswordHashingPolicy, hashPasswo
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkSecretEncryptionKey)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
+import HarchWeb.Username (mkUsername)
 import Test.Hspec
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
@@ -177,6 +178,17 @@ spec = do
             && accountCredentialEmailVerified credential
         _ -> False
 
+    it "uses a case-insensitive username parameter" $ do
+      let username = required "username" (mkUsername "person_01")
+          store = buildRuntimePostgresAccountCredentialStoreWithRunner runner databaseConfig
+          runner _ query parameters = do
+            query `shouldBe` "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE lower(username) = lower($1);"
+            parameters `shouldBe` ["person_01"]
+            pure (Right [["account_01", encodedPasswordHash, "500"]])
+      findAccountCredentialByUsername store username `shouldSatisfyEqual` \case
+        Right (Just credential) -> accountCredentialId credential == accountId
+        _ -> False
+
     it "maps absent, malformed, and unavailable credential results to typed outcomes" $ do
       let storeFor result = buildRuntimePostgresAccountCredentialStoreWithRunner (\_ _ _ -> pure result) databaseConfig
       findAccountCredentialByEmail (storeFor (Right [])) emailAddress `shouldSatisfyEqual` \case
@@ -213,7 +225,7 @@ spec = do
           _ -> False
 
 credentialStore :: Either AccountCredentialStoreError (Maybe AccountCredential) -> AccountCredentialStore
-credentialStore result = AccountCredentialStore (\requestedEmail -> requestedEmail `seq` pure result)
+credentialStore result = AccountCredentialStore (\requestedEmail -> requestedEmail `seq` pure result) (\requestedUsername -> requestedUsername `seq` pure result)
 
 mfaStore :: Either MfaStoreError (Maybe StoredTotpEnrollment) -> MfaStore
 mfaStore result =

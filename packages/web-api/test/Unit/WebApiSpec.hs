@@ -3139,11 +3139,11 @@ spec = do
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
       let spanishLoginPage = renderLoginPage Spanish "/es/login" (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
       spanishLoginPage
-        `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
+        `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "autocomplete=\"username\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
       mapM_
         (\label -> spanishLoginPage `shouldSatisfy` Text.isInfixOf label)
         [ "Iniciar sesion",
-          "Direccion de correo",
+          "Direccion de correo o nombre de usuario",
           "Contrasena",
           "Metodo de verificacion",
           "Codigo del autenticador",
@@ -3416,7 +3416,7 @@ spec = do
           passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 7) password)
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 7) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
-          credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True))))
+          credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True)))) (\_ -> pure (error "unexpected username credential lookup"))
           mfaStore =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
@@ -3449,7 +3449,7 @@ spec = do
                 HarchWeb.clientActionContext = defaultRequestContext
               }
           loginFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
-      invalidEmail <- handleAccountAction workflow (loginRequest [("email", "not-an-email")])
+      invalidEmail <- handleAccountAction workflow (loginRequest [("email", "not an identifier!")])
       invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address"
       loginResult <- handleAccountAction workflow (loginRequest loginFields)
       case loginResult of
@@ -3515,7 +3515,7 @@ spec = do
               }
           workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
             unavailableAccountWorkflow
-              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult),
+              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\_ -> pure credentialResult),
                 accountWorkflowMfaStore =
                   MfaStore
                     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
@@ -3537,6 +3537,7 @@ spec = do
           validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
           validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          usernameFields = [("email", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
           recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
           recoveryHash = fromMaybe (error "expected a recovery-code hash") (RecoveryCode.hashRecoveryCodeWithSalt testPasswordHashingPolicy "0123456789abcdef" recoveryCode)
@@ -3554,10 +3555,10 @@ spec = do
           recoveryWorkflow = validWorkflow {accountWorkflowMfaStore = recoveryMfaStore}
           recoveryFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", RecoveryCode.recoveryCodeText recoveryCode)]
           unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not-an-email")])
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not an identifier!")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
-      handleAccountAction validWorkflow (spanishLoginRequest [("email", "not-an-email")])
-        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "direccion de correo valida")
+      handleAccountAction validWorkflow (spanishLoginRequest [("email", "not an identifier!")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "nombre de usuario valido")
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-password") "Enter your password")
       handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "short"), ("proof", "totp"), ("code", validCode)])
@@ -3581,6 +3582,8 @@ spec = do
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", "0123456789ABCDEF0123")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
       handleAccountAction recoveryWorkflow (loginRequest defaultRequestContext recoveryFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext usernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")

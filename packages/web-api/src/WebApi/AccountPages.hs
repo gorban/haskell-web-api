@@ -24,6 +24,7 @@ module WebApi.AccountPages
   )
 where
 
+import Control.Applicative ((<|>))
 import Data.Foldable (toList)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -67,9 +68,10 @@ import WebApi.AppEffect
   )
 import WebApi.Login
   ( AccountCredentialStoreError (..),
+    LoginIdentifier (..),
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
-    completePasswordLogin,
+    completePasswordLoginWithIdentifier,
   )
 import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment
@@ -150,6 +152,7 @@ data AccountPageCopy = AccountPageCopy
     accountStartMfaEnrollmentLabel :: Text,
     accountConfirmMfaEnrollmentLabel :: Text,
     accountLoginHeading :: Text,
+    accountLoginIdentifierLabel :: Text,
     accountLoginPasswordLabel :: Text,
     accountVerificationMethodLabel :: Text,
     accountAuthenticatorCodeLabel :: Text,
@@ -180,6 +183,7 @@ accountPageCopy locale =
           accountStartMfaEnrollmentLabel = "Start authenticator enrollment",
           accountConfirmMfaEnrollmentLabel = "Confirm authenticator",
           accountLoginHeading = "Sign in",
+          accountLoginIdentifierLabel = "Email address or username",
           accountLoginPasswordLabel = "Password",
           accountVerificationMethodLabel = "Verification method",
           accountAuthenticatorCodeLabel = "Authenticator code",
@@ -206,6 +210,7 @@ accountPageCopy locale =
           accountStartMfaEnrollmentLabel = "Iniciar registro del autenticador",
           accountConfirmMfaEnrollmentLabel = "Confirmar autenticador",
           accountLoginHeading = "Iniciar sesion",
+          accountLoginIdentifierLabel = "Direccion de correo o nombre de usuario",
           accountLoginPasswordLabel = "Contrasena",
           accountVerificationMethodLabel = "Metodo de verificacion",
           accountAuthenticatorCodeLabel = "Codigo del autenticador",
@@ -377,24 +382,29 @@ handleLogin :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.C
 handleLogin actionRequest =
   case parseLoginForm actionRequest of
     Left response -> pure response
-    Right (emailValue, passwordValue, emailAddress, proof) -> do
+    Right (emailValue, passwordValue, identifier, proof) -> do
       workflow <- accountWorkflow
       nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
       nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
-      loginResult <- liftAppIO (completePasswordLogin (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds emailAddress (Password.mkPassword passwordValue) proof)
+      loginResult <- liftAppIO (completePasswordLoginWithIdentifier (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds identifier (Password.mkPassword passwordValue) proof)
       interpretLoginResult actionRequest emailValue nowNanoseconds loginResult
 
-parseLoginForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, Email.EmailAddress, MfaLoginProof)
+parseLoginForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, LoginIdentifier, MfaLoginProof)
 parseLoginForm actionRequest =
   let emailValue = actionField actionRequest "email"
+      usernameValue = actionField actionRequest "username"
       passwordValue = actionField actionRequest "password"
       path = accountRoutePath actionRequest LoginRoute
       loginForm message = LoginForm emailValue (Just message)
-   in case (Email.mkEmailAddress emailValue, validPassword passwordValue, loginProof actionRequest) of
-        (Nothing, _, _) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.") True) (Just "login-email") [])
+      maybeIdentifier =
+        (LoginEmailAddress <$> Email.mkEmailAddress emailValue)
+          <|> (LoginUsername <$> Username.mkUsername emailValue)
+          <|> (LoginUsername <$> Username.mkUsername usernameValue)
+   in case (maybeIdentifier, validPassword passwordValue, loginProof actionRequest) of
+        (Nothing, _, _) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid email address or username." "Introduce una direccion de correo o un nombre de usuario valido.") True) (Just "login-email") [])
         (_, False, _) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter your password." "Introduce tu contrasena.") True) (Just "login-password") [])
         (_, _, Nothing) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
-        (Just emailAddress, True, Just proof) -> Right (emailValue, passwordValue, emailAddress, proof)
+        (Just identifier, True, Just proof) -> Right (if Text.null emailValue then usernameValue else emailValue, passwordValue, identifier, proof)
 
 interpretLoginResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> PasswordMfaLoginResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
@@ -463,7 +473,7 @@ handlePendingProfile actionRequest workflow now profile =
 
 interpretProfileResendResult :: HarchWeb.ClientActionRequest AppRequestContext -> AccountProfile -> Either ResendVerificationError () -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 interpretProfileResendResult actionRequest profile resendResult =
-  let form message isError = pendingProfileForm actionRequest profile (Just message) isError
+  let form message = pendingProfileForm actionRequest profile (Just message)
    in case resendResult of
         Right () -> pure (profileResponse actionRequest 202 (form (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False))
         Left ResendVerificationNoLongerPending -> pure (profileResponse actionRequest 409 (form (localized actionRequest "Your profile state changed. Reload the page before trying again." "El estado de tu perfil ha cambiado. Recarga la pagina antes de intentarlo de nuevo.") True))
@@ -695,8 +705,8 @@ renderLoginRegion locale loginPath form =
           "<form data-harch-action=\"true\" data-harch-control action=\"",
           escapeHtml loginPath,
           "\" method=\"post\"><label for=\"login-email\">",
-          accountEmailLabel copy,
-          "</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+          accountLoginIdentifierLabel copy,
+          "</label><input id=\"login-email\" name=\"email\" type=\"text\" autocomplete=\"username\" required value=\"",
           escapeHtml (loginFormEmail form),
           "\"><label for=\"login-password\">",
           accountLoginPasswordLabel copy,

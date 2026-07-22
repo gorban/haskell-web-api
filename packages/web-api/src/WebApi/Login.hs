@@ -2,11 +2,14 @@ module WebApi.Login
   ( AccountCredential (..),
     AccountCredentialStore (..),
     AccountCredentialStoreError (..),
+    LoginIdentifier (..),
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
     PasswordLoginResult (..),
     beginPasswordLogin,
+    beginPasswordLoginWithIdentifier,
     completePasswordLogin,
+    completePasswordLoginWithIdentifier,
   )
 where
 
@@ -22,6 +25,7 @@ import HarchWeb.Password (Password, PasswordHash, verifyPassword)
 import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecret)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCode)
+import HarchWeb.Username (Username)
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
 
 data AccountCredential = AccountCredential
@@ -35,9 +39,14 @@ data AccountCredentialStoreError
   | AccountCredentialStoreCorruptData Text
   deriving (Eq)
 
-newtype AccountCredentialStore = AccountCredentialStore
-  { findAccountCredentialByEmail :: EmailAddress -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
+data AccountCredentialStore = AccountCredentialStore
+  { findAccountCredentialByEmail :: EmailAddress -> IO (Either AccountCredentialStoreError (Maybe AccountCredential)),
+    findAccountCredentialByUsername :: Username -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
   }
+
+data LoginIdentifier
+  = LoginEmailAddress EmailAddress
+  | LoginUsername Username
 
 data PasswordLoginResult
   = PasswordLoginRejected
@@ -79,8 +88,15 @@ data SecondFactorContext = SecondFactorContext
 -- This function intentionally never creates a session: completing the second
 -- factor is required before the application may authenticate the account.
 beginPasswordLogin :: AccountCredentialStore -> MfaStore -> EmailAddress -> Password -> IO PasswordLoginResult
-beginPasswordLogin credentialStore mfaStore emailAddress password = do
-  credentialResult <- findAccountCredentialByEmail credentialStore emailAddress
+beginPasswordLogin credentialStore mfaStore emailAddress =
+  beginPasswordLoginWithIdentifier credentialStore mfaStore (LoginEmailAddress emailAddress)
+
+beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginIdentifier -> Password -> IO PasswordLoginResult
+beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password = do
+  credentialResult <-
+    case identifier of
+      LoginEmailAddress emailAddress -> findAccountCredentialByEmail credentialStore emailAddress
+      LoginUsername username -> findAccountCredentialByUsername credentialStore username
   case credentialResult of
     Left storeError -> pure (PasswordLoginCredentialStoreError storeError)
     Right Nothing -> pure PasswordLoginRejected
@@ -110,7 +126,20 @@ completePasswordLogin ::
   MfaLoginProof ->
   IO PasswordMfaLoginResult
 completePasswordLogin credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds emailAddress password proof = do
-  passwordResult <- beginPasswordLogin credentialStore mfaStore emailAddress password
+  completePasswordLoginWithIdentifier credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds (LoginEmailAddress emailAddress) password proof
+
+completePasswordLoginWithIdentifier ::
+  AccountCredentialStore ->
+  MfaStore ->
+  SecretEncryptionKey ->
+  Word64 ->
+  Word64 ->
+  LoginIdentifier ->
+  Password ->
+  MfaLoginProof ->
+  IO PasswordMfaLoginResult
+completePasswordLoginWithIdentifier credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds identifier password proof = do
+  passwordResult <- beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password
   continuePasswordLogin
     SecondFactorContext
       { secondFactorMfaStore = mfaStore,

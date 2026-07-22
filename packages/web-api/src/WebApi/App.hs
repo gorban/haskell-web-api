@@ -354,7 +354,11 @@ unavailableAccountWorkflow =
             loadUnusedRecoveryCodeHashes = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
             consumeRecoveryCodeHash = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
           },
-      accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured"))),
+      accountWorkflowCredentialStore =
+        AccountCredentialStore
+          { findAccountCredentialByEmail = \_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured")),
+            findAccountCredentialByUsername = \_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured"))
+          },
       accountWorkflowSessionStore =
         AccountSessionStore
           { saveAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),

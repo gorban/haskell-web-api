@@ -203,13 +203,17 @@ buildRuntimePostgresAccountCredentialStoreWithRunner ::
   DatabaseConfig ->
   AccountCredentialStore
 buildRuntimePostgresAccountCredentialStoreWithRunner runQuery databaseConfig =
-  AccountCredentialStore findCredential
+  AccountCredentialStore findCredentialByEmail findCredentialByUsername
   where
-    findCredential emailAddress =
+    findCredentialByEmail emailAddress =
+      findCredential findAccountCredentialByEmailQuery [emailAddressText emailAddress]
+    findCredentialByUsername username =
+      findCredential findAccountCredentialByUsernameQuery [usernameText username]
+    findCredential query parameters =
       runExceptT $ do
         rows <-
           runStoreQuery AccountCredentialStoreUnavailable $
-            runQuery databaseConfig findAccountCredentialByEmailQuery [emailAddressText emailAddress]
+            runQuery databaseConfig query parameters
         liftEither (decodeAccountCredentialRows rows)
 
 buildRuntimePostgresAccountStoreWithRunner ::
@@ -957,6 +961,10 @@ consumeEmailVerificationQuery =
 findAccountCredentialByEmailQuery :: Text
 findAccountCredentialByEmailQuery =
   "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;"
+
+findAccountCredentialByUsernameQuery :: Text
+findAccountCredentialByUsernameQuery =
+  "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE lower(username) = lower($1);"
 
 findAccountProfileQuery :: Text
 findAccountProfileQuery =
