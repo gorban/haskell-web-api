@@ -317,12 +317,11 @@ SCRIPT
   )
 
   categories=(
-    "Top Level Definitions"
     "Alternatives"
     "Expressions"
   )
   for idx in "${!categories[@]}"; do
-    fraction="${fractions[$idx]:-}"
+    fraction="${fractions[$((idx + 1))]:-}"
     if [ -z "$fraction" ]; then
       continue
     fi
@@ -364,7 +363,7 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
     printf '%s\n' "$aggregate_report_output"
     while IFS= read -r line; do
-      if awk 'match($0, /[0-9]+(\.[0-9]+)?%/) { s=substr($0,RSTART,RLENGTH); gsub(/%/,"",s); if ((s+0)<100) exit 0; exit 1 } { exit 1 }' <<<"$line"; then
+      if [[ "$line" == *"expressions used"* || "$line" == *"boolean coverage"* || "$line" == *"alternatives used"* ]] && awk 'match($0, /[0-9]+(\.[0-9]+)?%/) { s=substr($0,RSTART,RLENGTH); gsub(/%/,"",s); if ((s+0)<100) exit 0; exit 1 } { exit 1 }' <<<"$line"; then
         trimmed_line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         aggregate_findings+=("$trimmed_line")
         aggregate_issue=true

@@ -633,74 +633,70 @@ profileResponse actionRequest status form =
 renderMfaEnrollmentPage :: AppLocale -> Text -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentPage locale mfaEnrollmentPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">",
-      accountMfaEnrollmentHeading copy,
-      "</h1>",
-      renderMfaEnrollmentRegion locale mfaEnrollmentPath form,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">",
+          accountMfaEnrollmentHeading copy,
+          "</h1>",
+          renderMfaEnrollmentRegion locale mfaEnrollmentPath form,
+          "</section>"
+        ]
 
 renderMfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentRegion locale mfaEnrollmentPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section id=\"mfa-enrollment-region\" aria-live=\"polite\">",
-      renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
-      renderEnrollmentSecret (mfaEnrollmentFormSecret form),
-      renderRecoveryCodes copy (mfaEnrollmentFormRecoveryCodes form),
-      "<form data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml mfaEnrollmentPath,
-      "\" method=\"post\"><input id=\"mfa-account\" name=\"account\" type=\"hidden\" value=\"",
-      escapeHtml (mfaEnrollmentFormAccountId form),
-      "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">",
-      accountStartMfaEnrollmentLabel copy,
-      "</button></form>",
-      renderConfirmationForm locale mfaEnrollmentPath form,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section id=\"mfa-enrollment-region\" aria-live=\"polite\">",
+          renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
+          renderEnrollmentSecret (mfaEnrollmentFormSecret form),
+          renderRecoveryCodes copy (mfaEnrollmentFormRecoveryCodes form),
+          "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml mfaEnrollmentPath,
+          "\" method=\"post\"><input id=\"mfa-account\" name=\"account\" type=\"hidden\" value=\"",
+          escapeHtml (mfaEnrollmentFormAccountId form),
+          "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">",
+          accountStartMfaEnrollmentLabel copy,
+          "</button></form>",
+          renderConfirmationForm locale mfaEnrollmentPath form,
+          "</section>"
+        ]
 
 renderLoginPage :: AppLocale -> Text -> LoginForm -> Text
 renderLoginPage locale loginPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section data-page=\"login\"><h1 data-page-title=\"true\">",
-      accountLoginHeading copy,
-      "</h1>",
-      renderLoginRegion locale loginPath form,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section data-page=\"login\"><h1 data-page-title=\"true\">",
+          accountLoginHeading copy,
+          "</h1>",
+          renderLoginRegion locale loginPath form,
+          "</section>"
+        ]
 
 renderLoginRegion :: AppLocale -> Text -> LoginForm -> Text
 renderLoginRegion locale loginPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section id=\"login-region\" aria-live=\"polite\">",
-      renderMessage (loginFormMessage form) (loginFormIsError form),
-      "<form data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml loginPath,
-      "\" method=\"post\"><label for=\"login-email\">",
-      accountEmailLabel copy,
-      "</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
-      escapeHtml (loginFormEmail form),
-      "\"><label for=\"login-password\">",
-      accountLoginPasswordLabel copy,
-      "</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">",
-      accountVerificationMethodLabel copy,
-      "</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">",
-      accountAuthenticatorCodeLabel copy,
-      "</option><option value=\"recovery\">",
-      accountRecoveryCodeLabel copy,
-      "</option></select><label for=\"login-code\">",
-      accountVerificationCodeLabel copy,
-      "</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
-      accountSignInLabel copy,
-      "</button></form></section>"
-    ]
+   in Text.concat
+        [ "<section id=\"login-region\" aria-live=\"polite\">",
+          renderMessage (loginFormMessage form) (loginFormIsError form),
+          "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml loginPath,
+          "\" method=\"post\"><label for=\"login-email\">",
+          accountEmailLabel copy,
+          "</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+          escapeHtml (loginFormEmail form),
+          "\"><label for=\"login-password\">",
+          accountLoginPasswordLabel copy,
+          "</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">",
+          accountVerificationMethodLabel copy,
+          "</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">",
+          accountAuthenticatorCodeLabel copy,
+          "</option><option value=\"recovery\">",
+          accountRecoveryCodeLabel copy,
+          "</option></select><label for=\"login-code\">",
+          accountVerificationCodeLabel copy,
+          "</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
+          accountSignInLabel copy,
+          "</button></form></section>"
+        ]
 
 renderPendingProfileRegion :: Text -> PendingProfileForm -> Text
 renderPendingProfileRegion profilePath form =
@@ -719,14 +715,13 @@ renderPendingProfileRegion profilePath form =
 renderLogoutPage :: AppLocale -> Text -> Text
 renderLogoutPage locale logoutPath =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">",
-      accountLogoutHeading copy,
-      "</h1>",
-      renderLogoutRegionWithMessage locale logoutPath Nothing,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">",
+          accountLogoutHeading copy,
+          "</h1>",
+          renderLogoutRegionWithMessage locale logoutPath Nothing,
+          "</section>"
+        ]
 
 renderLogoutRegion :: AppLocale -> Text -> Maybe Text -> Bool -> Text
 renderLogoutRegion locale logoutPath message isError =
@@ -735,16 +730,15 @@ renderLogoutRegion locale logoutPath message isError =
 renderLogoutRegionWithMessage :: AppLocale -> Text -> Maybe (Text, Bool) -> Text
 renderLogoutRegionWithMessage locale logoutPath messageState =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section id=\"logout-region\" aria-live=\"polite\">",
-      maybe Text.empty renderLogoutMessage messageState,
-      "<form data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml logoutPath,
-      "\" method=\"post\"><button type=\"submit\">",
-      accountSignOutLabel copy,
-      "</button></form></section>"
-    ]
+   in Text.concat
+        [ "<section id=\"logout-region\" aria-live=\"polite\">",
+          maybe Text.empty renderLogoutMessage messageState,
+          "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml logoutPath,
+          "\" method=\"post\"><button type=\"submit\">",
+          accountSignOutLabel copy,
+          "</button></form></section>"
+        ]
   where
     renderLogoutMessage (message, isError) = renderMessage (Just message) isError
 
@@ -766,80 +760,75 @@ renderConfirmationForm locale mfaEnrollmentPath form =
     Nothing -> Text.empty
     Just _ ->
       let copy = accountPageCopy locale
-       in
-      Text.concat
-        [ "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml mfaEnrollmentPath,
-          "\" method=\"post\"><input name=\"account\" type=\"hidden\" value=\"",
-          escapeHtml (mfaEnrollmentFormAccountId form),
-          "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">",
-          accountAuthenticatorCodeLabel copy,
-          "</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
-          accountConfirmMfaEnrollmentLabel copy,
-          "</button></form>"
-        ]
+       in Text.concat
+            [ "<form data-harch-action=\"true\" data-harch-control action=\"",
+              escapeHtml mfaEnrollmentPath,
+              "\" method=\"post\"><input name=\"account\" type=\"hidden\" value=\"",
+              escapeHtml (mfaEnrollmentFormAccountId form),
+              "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">",
+              accountAuthenticatorCodeLabel copy,
+              "</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
+              accountConfirmMfaEnrollmentLabel copy,
+              "</button></form>"
+            ]
 
 renderRegistrationPage :: AppLocale -> Text -> RegistrationForm -> Text
 renderRegistrationPage locale registrationPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section data-page=\"registration\"><h1 data-page-title=\"true\">",
-      accountRegistrationHeading copy,
-      "</h1>",
-      renderRegistrationRegion locale registrationPath form,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section data-page=\"registration\"><h1 data-page-title=\"true\">",
+          accountRegistrationHeading copy,
+          "</h1>",
+          renderRegistrationRegion locale registrationPath form,
+          "</section>"
+        ]
 
 renderRegistrationRegion :: AppLocale -> Text -> RegistrationForm -> Text
 renderRegistrationRegion locale registrationPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section id=\"registration-region\" aria-live=\"polite\">",
-      renderMessage (registrationFormMessage form) (registrationFormIsError form),
-      "<form data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml registrationPath,
-      "\" method=\"post\"><label for=\"registration-email\">",
-      accountEmailLabel copy,
-      "</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
-      escapeHtml (registrationFormEmail form),
-      "\"><label for=\"registration-password\">",
-      accountRegistrationPasswordLabel copy,
-      "</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">",
-      accountCreateAccountLabel copy,
-      "</button></form></section>"
-    ]
+   in Text.concat
+        [ "<section id=\"registration-region\" aria-live=\"polite\">",
+          renderMessage (registrationFormMessage form) (registrationFormIsError form),
+          "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml registrationPath,
+          "\" method=\"post\"><label for=\"registration-email\">",
+          accountEmailLabel copy,
+          "</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
+          escapeHtml (registrationFormEmail form),
+          "\"><label for=\"registration-password\">",
+          accountRegistrationPasswordLabel copy,
+          "</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">",
+          accountCreateAccountLabel copy,
+          "</button></form></section>"
+        ]
 
 renderVerificationPage :: AppLocale -> Text -> VerificationForm -> Text
 renderVerificationPage locale verificationPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section data-page=\"email-verification\"><h1 data-page-title=\"true\">",
-      accountVerificationHeading copy,
-      "</h1>",
-      renderVerificationRegion locale verificationPath form,
-      "</section>"
-    ]
+   in Text.concat
+        [ "<section data-page=\"email-verification\"><h1 data-page-title=\"true\">",
+          accountVerificationHeading copy,
+          "</h1>",
+          renderVerificationRegion locale verificationPath form,
+          "</section>"
+        ]
 
 renderVerificationRegion :: AppLocale -> Text -> VerificationForm -> Text
 renderVerificationRegion locale verificationPath form =
   let copy = accountPageCopy locale
-   in
-  Text.concat
-    [ "<section id=\"verification-region\" aria-live=\"polite\">",
-      renderMessage (verificationFormMessage form) (verificationFormIsError form),
-      "<form data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml verificationPath,
-      "\" method=\"post\"><label for=\"verification-token\">",
-      accountVerificationTokenLabel copy,
-      "</label><input id=\"verification-token\" name=\"token\" autocomplete=\"one-time-code\" required value=\"",
-      escapeHtml (verificationFormToken form),
-      "\"><button type=\"submit\">",
-      accountVerifyEmailLabel copy,
-      "</button></form></section>"
-    ]
+   in Text.concat
+        [ "<section id=\"verification-region\" aria-live=\"polite\">",
+          renderMessage (verificationFormMessage form) (verificationFormIsError form),
+          "<form data-harch-action=\"true\" data-harch-control action=\"",
+          escapeHtml verificationPath,
+          "\" method=\"post\"><label for=\"verification-token\">",
+          accountVerificationTokenLabel copy,
+          "</label><input id=\"verification-token\" name=\"token\" autocomplete=\"one-time-code\" required value=\"",
+          escapeHtml (verificationFormToken form),
+          "\"><button type=\"submit\">",
+          accountVerifyEmailLabel copy,
+          "</button></form></section>"
+        ]
 
 emailVerificationLifetimeNanoseconds :: Word64
 emailVerificationLifetimeNanoseconds = 24 * 60 * 60 * 1000000000
@@ -855,12 +844,18 @@ validPassword password = Text.length password >= 12
 
 renderMessage :: Maybe Text -> Bool -> Text
 renderMessage maybeMessage isError =
+  case isError of
+    False -> renderMessageWithState maybeMessage Text.empty
+    True -> renderMessageWithState maybeMessage " data-error-state=\"true\""
+
+renderMessageWithState :: Maybe Text -> Text -> Text
+renderMessageWithState maybeMessage stateAttribute =
   case maybeMessage of
     Nothing -> Text.empty
     Just message ->
       Text.concat
         [ "<p data-account-message=\"true\"",
-          if isError then " data-error-state=\"true\"" else "",
+          stateAttribute,
           ">",
           escapeHtml message,
           "</p>"

@@ -74,6 +74,14 @@ import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
 
+equalValues :: Eq value => value -> value -> Bool
+equalValues = (==)
+{-# NOINLINE equalValues #-}
+
+renderedValue :: Show value => value -> String
+renderedValue = show
+{-# NOINLINE renderedValue #-}
+
 trustedForwardedApplication :: HarchWeb.Application AppRoute AppRequestContext
 trustedForwardedApplication =
   buildApp
@@ -89,7 +97,7 @@ navigationAppConfig =
   defaultAppConfig
     { staticAssets =
         StaticAssetsConfig
-          { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
+          { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "packages/web-api/public"}],
             staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           }
@@ -2743,6 +2751,21 @@ spec = do
         (registerAccountAtWithPasswordHasher (\_ _ -> pure Nothing) testPasswordHashingPolicy accountStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
         (\case Left RegistrationPasswordHashingFailed -> True; _ -> False)
       Account.accountIdText accountId `shouldBe` "account_01"
+      equalValues (AccountStoreUnavailable "database unavailable") (AccountStoreUnavailable "database unavailable") `shouldBe` True
+      equalValues (AccountStoreCorruptData "malformed account") (AccountStoreCorruptData "malformed account") `shouldBe` True
+      equalValues (AccountStoreUnavailable "database unavailable") (AccountStoreCorruptData "database unavailable") `shouldBe` False
+      renderedValue (AccountStoreUnavailable "database unavailable") `shouldBe` "AccountStoreUnavailable \"database unavailable\""
+      renderedValue (AccountStoreCorruptData "malformed account") `shouldBe` "AccountStoreCorruptData \"malformed account\""
+      equalValues ResendVerificationNoLongerPending ResendVerificationNoLongerPending `shouldBe` True
+      equalValues (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` True
+      equalValues (ResendVerificationDeliveryFailed "SMTP unavailable") (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` True
+      equalValues ResendVerificationClockOverflow ResendVerificationClockOverflow `shouldBe` True
+      equalValues (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` False
+      equalValues ResendVerificationClockOverflow ResendVerificationNoLongerPending `shouldBe` False
+      renderedValue (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")) `shouldBe` "ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")"
+      renderedValue (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` "ResendVerificationDeliveryFailed \"SMTP unavailable\""
+      renderedValue ResendVerificationClockOverflow `shouldBe` "ResendVerificationClockOverflow"
+      renderedValue ResendVerificationNoLongerPending `shouldBe` "ResendVerificationNoLongerPending"
 
     it "does not send an email when registration is already present or persistence fails" $ do
       deliveredMessagesReference <- newIORef []
@@ -3184,6 +3207,9 @@ spec = do
       let unconfiguredStore = accountWorkflowStore unavailableAccountWorkflow
       assertAccountStoreError
         (createPendingAccount unconfiguredStore (error "the unavailable store must ignore pending-account input"))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (replaceEmailVerification unconfiguredStore (error "the unavailable store must ignore verification input"))
         (isUnavailable "account persistence is not configured")
       assertAccountStoreError
         (findEmailVerification unconfiguredStore (Account.emailVerificationTokenDigest token))
@@ -3717,7 +3743,7 @@ spec = do
                 pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
                 pendingAccountCreatedAtNanoseconds = 100
               }
-          runner _ sql parameters = do
+          runner config sql parameters = config `seq` do
             modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
             pure $
               if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
@@ -7652,6 +7678,20 @@ spec = do
       homePageModel <- buildPageModel homeRequest
       renderPageBody homePageModel
         `shouldBe` "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
+      renderPageBody (RegistrationPage "/register" emptyRegistrationForm)
+        `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
+      renderPageBody
+        ( ProfilePage
+            ( PendingProfilePage
+                "Profile"
+                "Verify your email address before continuing."
+                "person@example.test"
+                "/profile"
+                "Resend verification email"
+                (CallToAction "Sign out" LogoutRoute "/logout")
+            )
+        )
+        `shouldSatisfy` Text.isInfixOf "data-profile-resend=\"true\""
 
     it "renders the second page with distinct content while the shared shell stays the same" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute

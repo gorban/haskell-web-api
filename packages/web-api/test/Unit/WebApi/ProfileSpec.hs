@@ -7,8 +7,9 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb qualified
-import HarchWeb.Account (AccountId, mkAccountId)
+import HarchWeb.Account (AccountId, emailVerificationTokenText, mkAccountId, storedVerificationTokenDigest)
 import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
+import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import Test.Hspec
@@ -18,7 +19,7 @@ import WebApi.Account
     AccountStore (..),
     AccountStoreError (..),
   )
-import WebApi.AccountPages (handleAccountAction)
+import WebApi.AccountPages (PendingProfileForm (..), handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -96,7 +97,7 @@ spec =
           store replacementResult =
             AccountStore
               { createPendingAccount = \_ -> error "unexpected account creation",
-                replaceEmailVerification = \_ -> pure replacementResult,
+                replaceEmailVerification = \verification -> storedVerificationTokenDigest verification `seq` pure replacementResult,
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -107,9 +108,12 @@ spec =
                 accountWorkflowClock = pure now,
                 accountWorkflowSessionStore = sessionStore sessionResult,
                 accountWorkflowProfileStore = profileStore loadedProfile,
-                accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+                accountWorkflowVerificationUrl = \requestContext token ->
+                  case WebApi.Route.requestLocale requestContext of
+                    WebApi.Route.English -> "https://account.example.test/verify?token=" <> emailVerificationTokenText token
+                    WebApi.Route.Spanish -> "https://account.example.test/es/verify?token=" <> emailVerificationTokenText token
               }
-          delivery = EmailDelivery (\_ -> pure ())
+          delivery = EmailDelivery (\message -> Text.length (Email.emailMessageBody message) `seq` pure ())
           pendingWorkflow = workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150
           expect workflowValue request expectedStatus expectedText = do
             actionResult <- handleAccountAction workflowValue request
@@ -119,17 +123,27 @@ spec =
                 HarchWeb.clientActionStatus response `shouldBe` expectedStatus
                 HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId)
                 HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml)
+                length (show response) `shouldSatisfy` (> 0)
       expect pendingWorkflow (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
       expect pendingWorkflow (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect pendingWorkflow (actionRequest sessionRequestContext []) 422 "Choose a profile action"
       expect pendingWorkflow (actionRequest defaultRequestContext [("intent", "resend-verification")]) 403 "Sign in before"
+      expect pendingWorkflow (actionRequest spanishSessionRequestContext []) 422 "Elige una accion de perfil"
+      expect pendingWorkflow (actionRequest (defaultRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}) [("intent", "resend-verification")]) 403 "Inicia sesion antes"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "already verified"
+      expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "Tu direccion de correo ya esta verificada"
       expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "profile state changed"
+      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "El estado de tu perfil ha cambiado"
       expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 502 "could not send"
+      expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 502 "No pudimos enviar"
       expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
 
     it "keeps every profile page model comparable and printable" $ do
       let signInAction = CallToAction "Sign in" LoginRoute "/login"
@@ -148,6 +162,24 @@ spec =
       mapM_ (assertProfilePageModel . fst) models
       mapM_ assertProfilePageModelShow models
       ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False
+      equalValues
+        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+        `shouldBe` True
+      equalValues
+        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+        (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+        `shouldBe` False
+      equalValues
+        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+        (PendingProfileForm "person@example.test" Nothing True "Resend verification email")
+        `shouldBe` False
+      equalValues
+        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+        (PendingProfileForm "person@example.test" Nothing False "Send again")
+        `shouldBe` False
+      renderPendingProfileRegion "/profile" (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+        `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
 
 assertProfileResult :: IO (Either ProfileLoadError ProfileState) -> (Either ProfileLoadError ProfileState -> Bool) -> Expectation
 assertProfileResult action matches = do
@@ -155,6 +187,10 @@ assertProfileResult action matches = do
   if matches result
     then pure ()
     else expectationFailure "unexpected profile-resolution result"
+
+equalValues :: Eq value => value -> value -> Bool
+equalValues = (==)
+{-# NOINLINE equalValues #-}
 
 profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.Response AppRoute WebApi.Route.AppRequestContext)
 profileResponse workflow requestContext =
