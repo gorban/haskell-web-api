@@ -72,6 +72,7 @@ library
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.Totp
+    HarchWeb.Username
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
