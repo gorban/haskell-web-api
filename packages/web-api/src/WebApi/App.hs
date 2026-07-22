@@ -138,6 +138,11 @@ buildAppSiteRoutes config databaseEffect =
             Site.siteRouteResponse = renderSelectedResponse
           },
         Site.SiteRoute
+          { Site.siteRouteValue = ProfileRoute,
+            Site.siteRouteNavigationLabel = Just "Profile",
+            Site.siteRouteResponse = renderSelectedResponse
+          },
+        Site.SiteRoute
           { Site.siteRouteValue = StatusApiRoute,
             Site.siteRouteNavigationLabel = Nothing,
             Site.siteRouteResponse = renderSelectedResponse

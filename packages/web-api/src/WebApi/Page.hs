@@ -5,6 +5,7 @@ module WebApi.Page
     CallToAction (..),
     HomePageModel (..),
     NotFoundPageModel (..),
+    ProfilePageModel (..),
     SecondPageModel (..),
     SpacesPageModel (..),
     buildPageModelFromRouteData,
@@ -91,6 +92,13 @@ data NotFoundPageModel = NotFoundPageModel
   }
   deriving (Eq, Show)
 
+data ProfilePageModel = ProfilePageModel
+  { profileHeading :: Text,
+    profileSummary :: Text,
+    profileSignInAction :: CallToAction,
+    profileRegistrationAction :: CallToAction
+  }
+
 data AppPageModel
   = HomePage HomePageModel
   | SecondPage SecondPageModel
@@ -100,8 +108,25 @@ data AppPageModel
   | MfaEnrollmentPage Text MfaEnrollmentForm
   | LoginPage Text LoginForm
   | LogoutPage Text
+  | ProfilePage ProfilePageModel
   | NotFoundPage NotFoundPageModel
-  deriving (Eq)
+
+instance Eq AppPageModel where
+  HomePage left == HomePage right = left == right
+  SecondPage left == SecondPage right = left == right
+  SpacesPage left == SpacesPage right = left == right
+  RegistrationPage leftPath leftForm == RegistrationPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
+  EmailVerificationPage leftPath leftForm == EmailVerificationPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
+  MfaEnrollmentPage leftPath leftForm == MfaEnrollmentPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
+  LoginPage leftPath leftForm == LoginPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
+  LogoutPage leftPath == LogoutPage rightPath = leftPath == rightPath
+  ProfilePage left == ProfilePage right =
+    profileHeading left == profileHeading right
+      && profileSummary left == profileSummary right
+      && profileSignInAction left == profileSignInAction right
+      && profileRegistrationAction left == profileRegistrationAction right
+  NotFoundPage left == NotFoundPage right = left == right
+  _ == _ = False
 
 instance Show AppPageModel where
   showsPrec precedence (HomePage homePage) =
@@ -144,6 +169,19 @@ instance Show AppPageModel where
     showParen (precedence > 10) (showString "LoginPage " . shows loginPath . showChar ' ' . shows loginFormEmail . showChar ' ' . shows loginFormMessage . showChar ' ' . shows loginFormIsError)
   showsPrec precedence (LogoutPage logoutPath) =
     showParen (precedence > 10) (showString "LogoutPage " . shows logoutPath)
+  showsPrec precedence (ProfilePage profilePage) =
+    showParen
+      (precedence > 10)
+      ( showString "ProfilePage {profileHeading = "
+          . shows (profileHeading profilePage)
+          . showString ", profileSummary = "
+          . shows (profileSummary profilePage)
+          . showString ", profileSignInAction = "
+          . shows (profileSignInAction profilePage)
+          . showString ", profileRegistrationAction = "
+          . shows (profileRegistrationAction profilePage)
+          . showString "}"
+      )
   showsPrec precedence (NotFoundPage notFoundPage) =
     showParen (precedence > 10) (showString "NotFoundPage " . showsPrec 11 notFoundPage)
 
@@ -217,6 +255,14 @@ buildPageModelFromRouteData routeRequest routeData =
     LogoutRouteDataResult ->
       LogoutPage
         (renderRoutePath (HarchWeb.RouteRequest LogoutRoute (HarchWeb.requestContext routeRequest)))
+    ProfileRouteDataResult ->
+      ProfilePage
+        ProfilePageModel
+          { profileHeading = localizedText routeRequest "Profile" "Perfil",
+            profileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
+            profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
+            profileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
+          }
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -337,6 +383,18 @@ renderPageBody pageModel =
       renderLoginPage loginPath loginForm
     LogoutPage logoutPath ->
       renderLogoutPage logoutPath
+    ProfilePage profilePage ->
+      Text.concat
+        [ "<section data-page=\"profile\">",
+          "<h1 data-page-title=\"true\">",
+          profileHeading profilePage,
+          "</h1><p>",
+          profileSummary profilePage,
+          "</p>",
+          renderCallToAction (profileSignInAction profilePage),
+          renderCallToAction (profileRegistrationAction profilePage),
+          "</section>"
+        ]
     NotFoundPage notFoundPage ->
       Text.concat
         [ "<section data-page=\"not-found\">",

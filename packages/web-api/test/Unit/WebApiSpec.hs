@@ -60,7 +60,7 @@ import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..),
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
@@ -104,8 +104,18 @@ secondRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SecondRoute, Harc
 spacesRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spacesRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = SpacesRoute, HarchWeb.requestContext = defaultRequestContext}
 
+profileRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+profileRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = ProfileRoute, HarchWeb.requestContext = defaultRequestContext}
+
 spanishRequestContext :: AppRequestContext
 spanishRequestContext = defaultRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = True}
+
+assertSameProfilePageModel :: ProfilePageModel -> ProfilePageModel -> Expectation
+assertSameProfilePageModel actual expected =
+  if ProfilePage actual == ProfilePage expected
+    then pure ()
+    else expectationFailure "expected equal profile page models"
+{-# NOINLINE assertSameProfilePageModel #-}
 
 explicitEnglishRequestContext :: AppRequestContext
 explicitEnglishRequestContext = defaultRequestContext {requestLocaleIsExplicit = True}
@@ -2853,11 +2863,13 @@ spec = do
           mfaRequest = HarchWeb.RouteRequest MfaEnrollmentRoute (defaultRequestContext {requestQueryParameters = [("account", "account_01")]})
           loginRequest = HarchWeb.RouteRequest LoginRoute defaultRequestContext
           logoutRequest = HarchWeb.RouteRequest LogoutRoute defaultRequestContext
+          profileRequestValue = HarchWeb.RouteRequest ProfileRoute defaultRequestContext
       selectRouteData registrationRequest `shouldReturn` RegistrationRouteDataResult
       selectRouteData verificationRequest `shouldReturn` EmailVerificationRouteDataResult
       selectRouteData mfaRequest `shouldReturn` MfaEnrollmentRouteDataResult
       selectRouteData loginRequest `shouldReturn` LoginRouteDataResult
       selectRouteData logoutRequest `shouldReturn` LogoutRouteDataResult
+      selectRouteData profileRequestValue `shouldReturn` ProfileRouteDataResult
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect registrationRequest
         `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
@@ -2868,6 +2880,8 @@ spec = do
         `shouldReturn` RouteDataSelection LoginRouteDataResult []
       selectRouteDataSelectionWithDatabase defaultDatabaseEffect logoutRequest
         `shouldReturn` RouteDataSelection LogoutRouteDataResult []
+      selectRouteDataSelectionWithDatabase defaultDatabaseEffect profileRequestValue
+        `shouldReturn` RouteDataSelection ProfileRouteDataResult []
       buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
         `shouldBe` RegistrationPage "/register" emptyRegistrationForm
       buildPageModelFromRouteData verificationRequest EmailVerificationRouteDataResult
@@ -2882,6 +2896,34 @@ spec = do
         `shouldBe` LoginPage "/login" (LoginForm Text.empty Nothing False)
       buildPageModelFromRouteData logoutRequest LogoutRouteDataResult
         `shouldBe` LogoutPage "/logout"
+      buildPageModelFromRouteData profileRequestValue ProfileRouteDataResult
+        `shouldBe` ProfilePage
+          ProfilePageModel
+            { profileHeading = "Profile",
+              profileSummary = "Sign in to view and manage your profile.",
+              profileSignInAction = CallToAction "Sign in" LoginRoute "/login",
+              profileRegistrationAction = CallToAction "Create account" RegistrationRoute "/register"
+            }
+      let spanishProfileRequest = HarchWeb.RouteRequest ProfileRoute spanishRequestContext
+          spanishProfileModel =
+            ProfilePageModel
+              { profileHeading = "Perfil",
+                profileSummary = "Inicia sesión para ver y administrar tu perfil.",
+                profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
+                profileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
+              }
+      buildPageModelFromRouteData spanishProfileRequest ProfileRouteDataResult
+        `shouldBe` ProfilePage spanishProfileModel
+      let spanishProfileModelCopy =
+            ProfilePageModel
+              { profileHeading = "Perfil",
+                profileSummary = "Inicia sesión para ver y administrar tu perfil.",
+                profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
+                profileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
+              }
+      assertSameProfilePageModel spanishProfileModel spanishProfileModelCopy
+      show (ProfilePage spanishProfileModel)
+        `shouldSatisfy` (Text.isPrefixOf "ProfilePage {profileHeading" . Text.pack)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -2903,6 +2945,12 @@ spec = do
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Sign out"
             && "data-page=\"logout\"" `Text.isInfixOf` HarchWeb.pageBody page
+      renderPageFromRouteData defaultAppConfig profileRequestValue ProfileRouteDataResult
+        `shouldSatisfy` \page ->
+          HarchWeb.pageTitle page == "web-api: Profile"
+            && "data-page=\"profile\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "href=\"/login\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "href=\"/register\"" `Text.isInfixOf` HarchWeb.pageBody page
       HarchWeb.renderResponse pureApplication registrationRequest
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
@@ -2923,6 +2971,10 @@ spec = do
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
           _ -> expectationFailure "expected a logout page response"
+      HarchWeb.renderResponse pureApplication profileRequestValue
+        >>= \case
+          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
+          _ -> expectationFailure "expected a profile page response"
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
         runtimeApplication
@@ -6677,7 +6729,7 @@ spec = do
         `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}})]"
       show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
-      show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,MfaEnrollmentRoute,LoginRoute,LogoutRoute,StatusApiRoute,NotFoundRoute]"
+      show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,MfaEnrollmentRoute,LoginRoute,LogoutRoute,ProfileRoute,StatusApiRoute,NotFoundRoute]"
 
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
@@ -6707,6 +6759,7 @@ spec = do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/mfa") `shouldBe` Just MfaEnrollmentRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/login") `shouldBe` Just LoginRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/logout") `shouldBe` Just LogoutRoute
+      fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/profile") `shouldBe` Just ProfileRoute
       parseRoute defaultRequestContext "/verify?token=opaque-token"
         `shouldBe` Just
           HarchWeb.RouteRequest
@@ -6771,6 +6824,7 @@ spec = do
       parseRoute defaultRequestContext (renderRoutePath secondRequest) `shouldBe` Just secondRequest
       parseRoute defaultRequestContext (renderRoutePath spanishSecondRequest) `shouldBe` Just spanishSecondRequest
       parseRoute defaultRequestContext (renderRoutePath spacesRequest) `shouldBe` Just spacesRequest
+      parseRoute defaultRequestContext (renderRoutePath profileRequest) `shouldBe` Just profileRequest
       parseRoute defaultRequestContext (renderRoutePath spanishSpacesRequest) `shouldBe` Just spanishSpacesRequest
       parseRoute defaultRequestContext (renderRoutePath (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)) `shouldBe` Just (HarchWeb.RouteRequest SecondRoute explicitEnglishRequestContext)
       parseRoute defaultRequestContext (renderRoutePath apiStatusRequest) `shouldBe` Just apiStatusRequest
@@ -6790,6 +6844,7 @@ spec = do
       renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute spanishRequestContext) `shouldBe` "/es/verify"
       renderRoutePath (HarchWeb.RouteRequest LoginRoute defaultRequestContext) `shouldBe` "/login"
       renderRoutePath (HarchWeb.RouteRequest LogoutRoute spanishRequestContext) `shouldBe` "/es/logout"
+      renderRoutePath (HarchWeb.RouteRequest ProfileRoute spanishRequestContext) `shouldBe` "/es/profile"
       renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
@@ -7526,8 +7581,8 @@ spec = do
       secondPageModel <- buildPageModel secondRequest
       renderPageBody secondPageModel
         `shouldBe` "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
-      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a><a href=\"/profile\" data-page-link=\"true\">Profile</a></nav><main id=\"app-main\" data-navigation-content=\"true\">" homeShell `shouldBe` True
+      Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\" aria-current=\"page\">Second</a><a href=\"/spaces\" data-page-link=\"true\">Spaces</a><a href=\"/register\" data-page-link=\"true\">Create account</a><a href=\"/login\" data-page-link=\"true\">Sign in</a><a href=\"/profile\" data-page-link=\"true\">Profile</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"second-page\">" secondShell `shouldBe` True
 
     it "renders the app-home spaces surface without requiring client code" $ do
       spacesPageModel <- buildPageModel spacesRequest
@@ -7611,7 +7666,7 @@ spec = do
 
   describe "page shell integration" $ do
     it "keeps every page route's path, title, and enhancements in one metadata table" $
-      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, NotFoundRoute, StatusApiRoute]
+      map (metadataFields . routeMetadata) [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, NotFoundRoute, StatusApiRoute]
         `shouldBe` [ (Nothing, "", "Home", []),
                      (Just "second", "/second", "Second", ["second-page"]),
                      (Just "spaces", "/spaces", "Spaces", []),
@@ -7620,6 +7675,7 @@ spec = do
                      (Just "mfa", "/mfa", "Set up authenticator", []),
                      (Just "login", "/login", "Sign in", []),
                      (Just "logout", "/logout", "Sign out", []),
+                     (Just "profile", "/profile", "Profile", []),
                      (Just "404", "/404", "Not Found", []),
                      (Nothing, "/404", "Not Found", [])
                    ]

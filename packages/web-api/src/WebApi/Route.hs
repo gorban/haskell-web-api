@@ -69,6 +69,7 @@ data AppRoute
   | MfaEnrollmentRoute
   | LoginRoute
   | LogoutRoute
+  | ProfileRoute
   | StatusApiRoute
   | NotFoundRoute
   deriving (Eq, Show)
@@ -253,6 +254,7 @@ pageRoutes =
     MfaEnrollmentRoute,
     LoginRoute,
     LogoutRoute,
+    ProfileRoute,
     NotFoundRoute
   ]
 
@@ -286,6 +288,7 @@ routeMetadata route =
     MfaEnrollmentRoute -> RouteMetadata (Just "mfa") "/mfa" "Set up authenticator" []
     LoginRoute -> RouteMetadata (Just "login") "/login" "Sign in" []
     LogoutRoute -> RouteMetadata (Just "logout") "/logout" "Sign out" []
+    ProfileRoute -> RouteMetadata (Just "profile") "/profile" "Profile" []
     NotFoundRoute -> RouteMetadata (Just "404") "/404" "Not Found" []
     StatusApiRoute -> RouteMetadata Nothing "/404" "Not Found" []
 

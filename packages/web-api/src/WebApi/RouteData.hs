@@ -58,6 +58,7 @@ data RouteDataResult
   | MfaEnrollmentRouteDataResult
   | LoginRouteDataResult
   | LogoutRouteDataResult
+  | ProfileRouteDataResult
   | StatusApiDataResult StatusApiData
   | NotFoundRouteDataResult
   deriving (Eq, Show)
@@ -124,6 +125,7 @@ routeDataPlan route =
     MfaEnrollmentRoute -> UseStaticRouteData MfaEnrollmentRouteDataResult
     LoginRoute -> UseStaticRouteData LoginRouteDataResult
     LogoutRoute -> UseStaticRouteData LogoutRouteDataResult
+    ProfileRoute -> UseStaticRouteData ProfileRouteDataResult
     NotFoundRoute -> UseStaticRouteData NotFoundRouteDataResult
 
 selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
