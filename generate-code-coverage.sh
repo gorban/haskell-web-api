@@ -200,6 +200,10 @@ declare -a hpc_search_dirs=()
 declare -a per_project_findings=()
 declare -a aggregate_findings=()
 declare -a aggregate_tix_paths=()
+while IFS= read -r tixfile; do
+  [ -z "$tixfile" ] && continue
+  aggregate_tix_paths+=("$tixfile")
+done < <(find "$coverage_staging_dir" -path '*/tix/*.tix' -type f -print | sort)
 while IFS= read -r mixdir; do
   [ -z "$mixdir" ] && continue
   \cp -Rf "$mixdir"/. "$mix_cache_dir"/
@@ -274,17 +278,8 @@ SCRIPT
   report_sed_tmp="$(mktemp "$temp_root/report.sed.XXXXXX")"
   sed "1,/<\/body>/s@</body>@$snippet@" "$report" > "$report_sed_tmp"
   mv "$report_sed_tmp" "$report"
-  tix_root="$(dirname "$(dirname "$report")")/tix"
   pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$report")")")")")")"
   package_name="${pkg_version_dir%%-[0-9]*}"
-  if [ -d "$tix_root" ]; then
-    while IFS= read -r tixfile; do
-      [ -z "$tixfile" ] && continue
-      if ! array_contains "$tixfile" ${aggregate_tix_paths[@]+"${aggregate_tix_paths[@]}"}; then
-        aggregate_tix_paths+=("$tixfile")
-      fi
-    done < <(find "$tix_root" -name "*.tix" -type f -print)
-  fi
 
   fractions=()
   while IFS= read -r fraction_line; do

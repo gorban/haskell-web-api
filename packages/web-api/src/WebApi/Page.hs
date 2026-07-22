@@ -182,14 +182,18 @@ instance Show AppPageModel where
     showParen (precedence > 10) (showString "SecondPage " . showsPrec 11 secondPage)
   showsPrec precedence (SpacesPage spacesPage) =
     showParen (precedence > 10) (showString "SpacesPage " . showsPrec 11 spacesPage)
-  showsPrec precedence (RegistrationPage registrationPath RegistrationForm {registrationFormEmail, registrationFormMessage, registrationFormIsError}) =
+  showsPrec precedence (RegistrationPage registrationPath RegistrationForm {registrationFormUsername, registrationFormEmail, registrationFormDisplayName, registrationFormMessage, registrationFormIsError}) =
     showParen
       (precedence > 10)
       ( showString "RegistrationPage "
           . shows registrationPath
           . showChar ' '
-          . showString "(RegistrationForm {registrationFormEmail = "
+          . showString "(RegistrationForm {registrationFormUsername = "
+          . shows registrationFormUsername
+          . showString ", registrationFormEmail = "
           . shows registrationFormEmail
+          . showString ", registrationFormDisplayName = "
+          . shows registrationFormDisplayName
           . showString ", registrationFormMessage = "
           . shows registrationFormMessage
           . showString ", registrationFormIsError = "

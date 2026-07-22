@@ -98,7 +98,7 @@ navigationAppConfig =
   defaultAppConfig
     { staticAssets =
         StaticAssetsConfig
-          { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "packages/web-api/public"}],
+          { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
             staticAssetContentTypes = defaultStaticAssetContentTypes,
             staticCacheControlSeconds = Nothing
           }
@@ -3082,20 +3082,20 @@ spec = do
         HarchWeb.ClientActionRequest
           { HarchWeb.clientActionMethod = "POST",
             HarchWeb.clientActionPath = "/register",
-            HarchWeb.clientActionFields = [("email", "person@example.test"), ("password", "correct horse battery staple")],
+            HarchWeb.clientActionFields = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")],
             HarchWeb.clientActionCsrfToken = Nothing,
             HarchWeb.clientActionContext = defaultRequestContext
           }
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
 
     it "renders complete SSR registration and verification forms with escaped values" $ do
-      if emptyRegistrationForm == RegistrationForm Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
-      if RegistrationForm "person@example.test" Nothing False /= RegistrationForm "other@example.test" Nothing False then pure () else expectationFailure "registration forms must compare their email values"
+      if emptyRegistrationForm == RegistrationForm Text.empty Text.empty Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
+      if RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False /= RegistrationForm "other_01" "other@example.test" "Other Example" Nothing False then pure () else expectationFailure "registration forms must compare identity values"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
       if MfaEnrollmentForm "account_01" Nothing [] Nothing False /= MfaEnrollmentForm "account_01" Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
-      show (RegistrationPage "/register" (RegistrationForm "person@example.test" Nothing False))
-        `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormEmail = \"person@example.test\", registrationFormMessage = Nothing, registrationFormIsError = False})"
+      show (RegistrationPage "/register" (RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False))
+        `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
       show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
         `shouldBe` "EmailVerificationPage \"/verify\" (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
       show (MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
@@ -3103,9 +3103,15 @@ spec = do
       show (LoginPage "/login" (LoginForm "person@example.test" Nothing False))
         `shouldBe` "LoginPage \"/login\" \"person@example.test\" Nothing False"
       show (LogoutPage "/logout") `shouldBe` "LogoutPage \"/logout\""
-      renderRegistrationPage Spanish "/es/register" (RegistrationForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
-        `shouldBe` "<section data-page=\"registration\"><h1 data-page-title=\"true\">Crea tu cuenta</h1><section id=\"registration-region\" aria-live=\"polite\"><p data-account-message=\"true\">Ready &lt;now&gt;</p><form data-harch-action=\"true\" data-harch-control action=\"/es/register\" method=\"post\"><label for=\"registration-email\">Direccion de correo</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"person@example.test&quot; onclick=&quot;bad\"><label for=\"registration-password\">Contrasena</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">Crear cuenta</button></form></section></section>"
-      renderRegistrationRegion English "/register" (RegistrationForm Text.empty (Just "No") True)
+      renderRegistrationPage Spanish "/es/register" (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (Just "Ready <now>") False)
+        `shouldSatisfy` \html ->
+          "Nombre de usuario" `Text.isInfixOf` html
+            && "Nombre para mostrar (opcional)" `Text.isInfixOf` html
+            && "person_01&quot; onclick=&quot;bad" `Text.isInfixOf` html
+            && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html
+            && "Person &amp; Example" `Text.isInfixOf` html
+            && "Ready &lt;now&gt;" `Text.isInfixOf` html
+      renderRegistrationRegion English "/register" (RegistrationForm Text.empty Text.empty Text.empty (Just "No") True)
         `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
       renderVerificationPage English "/verify" (VerificationForm "token&value" Nothing False)
         `shouldSatisfy` \html ->
@@ -3115,7 +3121,7 @@ spec = do
         `shouldSatisfy` Text.isInfixOf "Verifica tu direccion de correo"
       renderVerificationRegion English "/verify" (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderRegistrationRegion English "/register" (RegistrationForm "'>&" Nothing False)
+      renderRegistrationRegion English "/register" (RegistrationForm "'>&" "'>&" "'>&" Nothing False)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
       let spanishMfaPage = renderMfaEnrollmentPage Spanish "/es/mfa" (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
       spanishMfaPage
@@ -3169,6 +3175,8 @@ spec = do
             AccountStore
               { createPendingAccount = \pendingAccount ->
                   do
+                    pendingAccountUsername pendingAccount `shouldBe` Just (fromMaybe (error "expected username") (Username.mkUsername "person_01"))
+                    pendingAccountDisplayName pendingAccount `shouldBe` Just "Person Example"
                     pendingAccountEmail pendingAccount `shouldBe` emailAddress
                     pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
@@ -3213,15 +3221,17 @@ spec = do
       spanishInvalidMfaResult `shouldSatisfy` \case
         Just response -> HarchWeb.clientActionStatus response == 422 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
-      invalidEmailResult <- handleAccountAction workflow (request "POST" "/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] English)
+      invalidUsernameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "no!"), ("email", "person@example.test"), ("password", "correct horse battery staple")] English)
+      invalidUsernameResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Use a username"
+      invalidEmailResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "not-an-email"), ("password", "correct horse battery staple")] English)
       invalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Enter a valid email address."
-      spanishInvalidEmailResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "not-an-email"), ("password", "correct horse battery staple")] Spanish)
+      spanishInvalidEmailResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "not-an-email"), ("password", "correct horse battery staple")] Spanish)
       spanishInvalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Introduce una direccion"
-      invalidPasswordResult <- handleAccountAction workflow (request "POST" "/register" [("email", "person@example.test"), ("password", "short")] English)
+      invalidPasswordResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "short")] English)
       invalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Use a password with at least 12 characters."
-      spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "person@example.test"), ("password", "short")] Spanish)
+      spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "short")] Spanish)
       spanishInvalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Usa una contrasena"
-      createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("email", "person@example.test"), ("password", "correct horse battery staple")] Spanish)
+      createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")] Spanish)
       createdResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Revisa tu bandeja de entrada"
       deliveredMessages <- readIORef deliveredMessagesReference
       deliveredMessages `shouldSatisfy` \case
@@ -3233,7 +3243,7 @@ spec = do
           HarchWeb.ClientActionRequest
             { HarchWeb.clientActionMethod = "POST",
               HarchWeb.clientActionPath = "/register",
-              HarchWeb.clientActionFields = [("email", "person@example.test"), ("password", "correct horse battery staple")],
+              HarchWeb.clientActionFields = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")],
               HarchWeb.clientActionCsrfToken = Nothing,
               HarchWeb.clientActionContext = defaultRequestContext
             }
@@ -3322,7 +3332,7 @@ spec = do
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumeResult
               }
-          validRegistration = [("email", "person@example.test"), ("password", "correct horse battery staple")]
+          validRegistration = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")]
           validToken = [("token", Account.emailVerificationTokenText token)]
           delivery = Email.EmailDelivery (\message -> Email.emailMessageSubject message `shouldBe` "Verify your email address")
           spanishAction path fields =

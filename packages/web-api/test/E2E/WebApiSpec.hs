@@ -120,6 +120,7 @@ spec =
             ( do
                 visit registrationUrl
                 assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
+                fill (byLabel "Nombre de usuario") "person_01"
                 fill (byLabel "Direccion de correo") "person@example.test"
                 fill (byLabel "Contrasena") "correct horse battery staple"
                 click (byRole Button `named` "Crear cuenta")

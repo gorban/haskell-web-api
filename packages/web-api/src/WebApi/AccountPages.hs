@@ -42,6 +42,7 @@ import HarchWeb.Session
     sessionId,
   )
 import HarchWeb.Totp qualified as Totp
+import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountProfile (..),
@@ -50,7 +51,7 @@ import WebApi.Account
     RegistrationResult (..),
     ResendVerificationError (..),
     confirmEmailVerificationAt,
-    registerAccountAtWithPasswordHasher,
+    registerAccountWithIdentityAtWithPasswordHasher,
     resendEmailVerificationAt,
   )
 import WebApi.AppEffect
@@ -96,7 +97,9 @@ import WebApi.Session
   )
 
 data RegistrationForm = RegistrationForm
-  { registrationFormEmail :: Text,
+  { registrationFormUsername :: Text,
+    registrationFormEmail :: Text,
+    registrationFormDisplayName :: Text,
     registrationFormMessage :: Maybe Text,
     registrationFormIsError :: Bool
   }
@@ -135,7 +138,9 @@ data LoginForm = LoginForm
 
 data AccountPageCopy = AccountPageCopy
   { accountRegistrationHeading :: Text,
+    accountUsernameLabel :: Text,
     accountEmailLabel :: Text,
+    accountDisplayNameLabel :: Text,
     accountRegistrationPasswordLabel :: Text,
     accountCreateAccountLabel :: Text,
     accountVerificationHeading :: Text,
@@ -163,7 +168,9 @@ accountPageCopy locale =
     English ->
       AccountPageCopy
         { accountRegistrationHeading = "Create your account",
+          accountUsernameLabel = "Username",
           accountEmailLabel = "Email address",
+          accountDisplayNameLabel = "Display name (optional)",
           accountRegistrationPasswordLabel = "Password",
           accountCreateAccountLabel = "Create account",
           accountVerificationHeading = "Verify your email address",
@@ -187,7 +194,9 @@ accountPageCopy locale =
     Spanish ->
       AccountPageCopy
         { accountRegistrationHeading = "Crea tu cuenta",
+          accountUsernameLabel = "Nombre de usuario",
           accountEmailLabel = "Direccion de correo",
+          accountDisplayNameLabel = "Nombre para mostrar (opcional)",
           accountRegistrationPasswordLabel = "Contrasena",
           accountCreateAccountLabel = "Crear cuenta",
           accountVerificationHeading = "Verifica tu direccion de correo",
@@ -210,7 +219,7 @@ accountPageCopy locale =
         }
 
 emptyRegistrationForm :: RegistrationForm
-emptyRegistrationForm = RegistrationForm Text.empty Nothing False
+emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothing False
 
 handleAccountAction :: AccountWorkflow -> HarchWeb.ClientActionRequest AppRequestContext -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
@@ -250,12 +259,12 @@ handleRegistration :: HarchWeb.ClientActionRequest AppRequestContext -> AppM Har
 handleRegistration actionRequest =
   case parseRegistrationForm actionRequest of
     Left response -> pure response
-    Right (emailValue, passwordValue, emailAddress) -> do
+    Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress) -> do
       workflow <- accountWorkflow
       now <- liftAppIO (accountWorkflowClock workflow)
       registrationResult <-
         liftAppIO $
-          registerAccountAtWithPasswordHasher
+          registerAccountWithIdentityAtWithPasswordHasher
             (accountWorkflowPasswordHasher workflow)
             Password.defaultPasswordHashingPolicy
             (accountWorkflowStore workflow)
@@ -264,24 +273,30 @@ handleRegistration actionRequest =
             (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
             now
             emailVerificationLifetimeNanoseconds
+            (Just username)
+            (nonEmptyText displayNameValue)
             emailAddress
             (Password.mkPassword passwordValue)
-      interpretRegistrationResult actionRequest emailValue registrationResult
+      interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult
 
-parseRegistrationForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, Email.EmailAddress)
+parseRegistrationForm :: HarchWeb.ClientActionRequest AppRequestContext -> Either HarchWeb.ClientActionResponse (Text, Text, Text, Text, Username.Username, Email.EmailAddress)
 parseRegistrationForm actionRequest =
-  let emailValue = actionField actionRequest "email"
+  let usernameValue = actionField actionRequest "username"
+      emailValue = actionField actionRequest "email"
+      displayNameValue = actionField actionRequest "displayName"
       passwordValue = actionField actionRequest "password"
       path = accountRoutePath actionRequest RegistrationRoute
-   in case (Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path 422 (RegistrationForm emailValue (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
-        (_, False) -> Left (registrationResponse (actionLocale actionRequest) path 422 (RegistrationForm emailValue (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
-        (Just emailAddress, True) -> Right (emailValue, passwordValue, emailAddress)
+      form = RegistrationForm usernameValue emailValue displayNameValue
+   in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
+        (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path 422 (form (Just (localized actionRequest "Use a username with 3 to 20 letters, numbers, underscores, or hyphens." "Usa un nombre de usuario de 3 a 20 letras, numeros, guiones bajos o guiones.")) True) (Just "registration-username"))
+        (_, Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path 422 (form (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
+        (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path 422 (form (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
+        (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
 
-interpretRegistrationResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Either RegistrationError RegistrationResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-interpretRegistrationResult actionRequest emailValue registrationResult =
+interpretRegistrationResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Text -> Text -> Either RegistrationError RegistrationResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult =
   let path = accountRoutePath actionRequest RegistrationRoute
-      response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm emailValue (Just message) isError)
+      response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
    in case registrationResult of
         Right RegistrationAlreadyRegistered -> pure (response 202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
         Right (RegistrationCreated _) -> pure (response 202 (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
@@ -791,10 +806,18 @@ renderRegistrationRegion locale registrationPath form =
           renderMessage (registrationFormMessage form) (registrationFormIsError form),
           "<form data-harch-action=\"true\" data-harch-control action=\"",
           escapeHtml registrationPath,
-          "\" method=\"post\"><label for=\"registration-email\">",
+          "\" method=\"post\"><label for=\"registration-username\">",
+          accountUsernameLabel copy,
+          "</label><input id=\"registration-username\" name=\"username\" autocomplete=\"username\" minlength=\"3\" maxlength=\"20\" required value=\"",
+          escapeHtml (registrationFormUsername form),
+          "\"><label for=\"registration-email\">",
           accountEmailLabel copy,
           "</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
           escapeHtml (registrationFormEmail form),
+          "\"><label for=\"registration-display-name\">",
+          accountDisplayNameLabel copy,
+          "</label><input id=\"registration-display-name\" name=\"displayName\" autocomplete=\"name\" value=\"",
+          escapeHtml (registrationFormDisplayName form),
           "\"><label for=\"registration-password\">",
           accountRegistrationPasswordLabel copy,
           "</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">",
@@ -841,6 +864,11 @@ emailLocale locale =
 
 validPassword :: Text -> Bool
 validPassword password = Text.length password >= 12
+
+nonEmptyText :: Text -> Maybe Text
+nonEmptyText value
+  | Text.null value = Nothing
+  | otherwise = Just value
 
 renderMessage :: Maybe Text -> Bool -> Text
 renderMessage maybeMessage isError =
