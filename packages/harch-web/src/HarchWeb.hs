@@ -16,6 +16,7 @@ module HarchWeb
     AcmeRequestAuth (..),
     ActiveAcmeChallenge (..),
     Application (..),
+    LiveRegion (..),
     AssetPath (..),
     CertbotConfig (..),
     ClientActionRequest (..),
@@ -123,6 +124,7 @@ module HarchWeb
     jsonTextField,
     jsonValueParser,
     loadAcmeJwk,
+    liveRegionAttributes,
     mailtoAcmeContact,
     matchRoute,
     navigationRuntimeResponse,
@@ -500,6 +502,14 @@ data HtmlAttribute = HtmlAttribute
   { attributeName :: Text,
     attributeValue :: Text
   }
+  deriving (Eq, Show)
+
+-- | The two live-region modes that are safe defaults for server-rendered region
+-- patches. Keep the role and its announcement urgency together so action UIs do
+-- not accidentally render a contradictory role/aria-live pair.
+data LiveRegion
+  = PoliteStatus
+  | AssertiveAlert
   deriving (Eq, Show)
 
 data NavigationItem route = NavigationItem
@@ -3031,6 +3041,12 @@ listenerSocketHints =
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute
+
+liveRegionAttributes :: LiveRegion -> [HtmlAttribute]
+liveRegionAttributes liveRegion =
+  case liveRegion of
+    PoliteStatus -> [HtmlAttribute "role" "status", HtmlAttribute "aria-live" "polite", HtmlAttribute "aria-atomic" "true"]
+    AssertiveAlert -> [HtmlAttribute "role" "alert", HtmlAttribute "aria-live" "assertive", HtmlAttribute "aria-atomic" "true"]
 
 renderAttribute :: HtmlAttribute -> Text
 renderAttribute attribute =

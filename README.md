@@ -71,6 +71,19 @@ edit first:
 To serve those bundled browser assets, point a static asset root at `packages/web-api/public` (or `public`
 when running from the package directory) and mount it at the URL prefix you want, such as `/assets`.
 
+## Accessibility review
+
+Treat each SSR page and client-action patch as a complete accessibility surface:
+
+- Use semantic landmarks, headings, labels, and native controls before adding ARIA.
+- Give every control an accessible name and associate validation text with the affected field.
+- Render actionable errors with `AssertiveAlert`; render independent success or progress updates with
+  `PoliteStatus`. `liveRegionAttributes` keeps the role, urgency, and atomic update behavior together.
+- Preserve focus deliberately after a region patch, and prove keyboard-only interaction in browser E2E
+  tests whenever a control is introduced or changed.
+- Verify direct loads, reloads, and script-disabled navigation retain the same semantic HTML and form
+  affordances as enhanced navigation.
+
 ## Getting Started
 
 If you want the cleanest "spin up your own site" story, start with the docs-first example ladder in
