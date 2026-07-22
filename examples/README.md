@@ -30,7 +30,7 @@ The design target and alignment analysis live in [../docs/design-guidance.md](..
 | [https-acme](https-acme/README.md) | Current | Explain ACME/certbot-backed real certificate flow and its constraints. |
 | [https-security](https-security/README.md) | Current | Enable redirects, HSTS, and related browser hardening settings. |
 | [middleware-auth-jwt](middleware-auth-jwt/README.md) | Working | Use opaque sessions, CSRF, and the account profile flow for protected surfaces. |
-| [custom-js](custom-js/README.md) | Iterative | Add a page-specific browser behavior without giving up SSR-first rendering. |
+| [custom-js](custom-js/README.md) | Working | Add a page-scoped deferred behavior without giving up SSR-first rendering. |
 | [custom-api](custom-api/README.md) | Iterative | Add app-specific API routes beyond the normal page/data flow. |
 | [multilanguage-routing](multilanguage-routing/README.md) | Iterative | Document the target path-based i18n routing story. |
 | [reverse-proxy-awareness](reverse-proxy-awareness/README.md) | Current | Run behind nginx with trusted forwarding and optional subpath mounting. |

@@ -8199,6 +8199,7 @@ spec = do
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
+        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
 
   describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
@@ -8235,6 +8236,7 @@ spec = do
         HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
+        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability
@@ -8583,6 +8585,8 @@ stripVolatileDatabaseTimingResponse response =
       HarchWeb.RedirectResponse (stripVolatileDatabaseTimingResponseBody responseBody) location
     HarchWeb.ClientActionBodyResponse actionResponse ->
       HarchWeb.ClientActionBodyResponse actionResponse
+    HarchWeb.EventStreamResponse responseBody eventSource ->
+      HarchWeb.EventStreamResponse (stripVolatileDatabaseTimingResponseBody responseBody) eventSource
 
 stripVolatileDatabaseTimingResponseBody :: HarchWeb.ResponseBody -> HarchWeb.ResponseBody
 stripVolatileDatabaseTimingResponseBody responseBody =
