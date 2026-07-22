@@ -53,6 +53,7 @@ data TestRoute
   = KnownRoute
   | QueryRoute Text
   | DataRoute
+  | EventStreamRoute
   | MissingRoute
   deriving (Eq, Show)
 
@@ -80,6 +81,8 @@ parseSampleRoute routeContext path
       Just RouteRequest {requestRoute = QueryRoute queryString, requestContext = routeContext}
   | path == "/data" =
       Just RouteRequest {requestRoute = DataRoute, requestContext = routeContext}
+  | path == "/events" =
+      Just RouteRequest {requestRoute = EventStreamRoute, requestContext = routeContext}
   | otherwise = Nothing
 
 renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
@@ -92,6 +95,7 @@ renderSampleRoute request =
           | otherwise -> "/known"
         (_, QueryRoute queryString) -> "/query?" <> queryString
         (_, DataRoute) -> "/data"
+        (_, EventStreamRoute) -> "/events"
         (_, MissingRoute) -> "/404"
     )
 
@@ -460,6 +464,7 @@ rootPathCodec =
           KnownRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/"
           QueryRoute queryString -> applyTestPathPrefix (requestPathPrefix (requestContext request)) ("/query?" <> queryString)
           DataRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/data"
+          EventStreamRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/events"
           MissingRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
@@ -483,6 +488,15 @@ renderSampleResponse request =
           { responseStatus = 202,
             responseContentType = "application/json",
             responseBody = "{\"route\":\"data\"}",
+            responseObservabilityAttributes = [],
+            responseLogEntries = []
+          }
+    EventStreamRoute ->
+      BodyResponse
+        ResponseBody
+          { responseStatus = 501,
+            responseContentType = "text/plain; charset=utf-8",
+            responseBody = "event stream not configured",
             responseObservabilityAttributes = [],
             responseLogEntries = []
           }
@@ -1436,6 +1450,28 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
       lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldSatisfy` (/= Nothing)
       readResponseBody response `shouldReturn` "Sign in required"
+
+    it "streams finite server-sent events through the normal response finalizer" $ do
+      eventSource <-
+        serverSentEventSourceFromList
+          [ ServerSentEvent (Just "page-update") (Just "1") "first",
+            ServerSentEvent Nothing (Just "2") "second"
+          ]
+      let eventApplication =
+            sampleApplication
+              { renderResponse = \request ->
+                  case requestRoute request of
+                    EventStreamRoute -> pure (eventStreamResponse eventSource)
+                    _ -> pure (renderSampleResponse request)
+              }
+      response <- performWaiRequest (toWaiApplication eventApplication) (waiRequest ["events"])
+      Wai.responseStatus response `shouldBe` Http.status200
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8"
+      lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache"
+      lookup "X-Accel-Buffering" (Wai.responseHeaders response) `shouldBe` Just "no"
+      lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldSatisfy` (/= Nothing)
+      readResponseBody response
+        `shouldReturn` "event: page-update\nid: 1\ndata: first\n\nid: 2\ndata: second\n\n"
 
     it "does not run app middleware for framework static responses" $ do
       middlewareRan <- newIORef False

@@ -2,7 +2,15 @@
 
 module Unit.HarchWeb.ServerSentEventSpec (spec) where
 
-import HarchWeb (ServerSentEvent (..), renderServerSentEvent, serverSentEventContentType)
+import HarchWeb
+  ( Response,
+    ServerSentEvent (..),
+    eventStreamResponse,
+    nextServerSentEvent,
+    renderServerSentEvent,
+    serverSentEventContentType,
+    serverSentEventSourceFromList,
+  )
 import Test.Hspec
 
 spec :: Spec
@@ -24,3 +32,13 @@ spec =
     it "removes line breaks from protocol fields without turning them into injected fields" $
       renderServerSentEvent (ServerSentEvent (Just "page\nupdate") (Just "4\r\n2") "ok\r\nnow")
         `shouldBe` "event: pageupdate\nid: 42\ndata: ok\ndata: now\n\n"
+
+    it "provides finite sources for deterministic subscriptions" $ do
+      source <- serverSentEventSourceFromList [ServerSentEvent Nothing (Just "1") "first"]
+      nextServerSentEvent source `shouldReturn` Just (ServerSentEvent Nothing (Just "1") "first")
+      nextServerSentEvent source `shouldReturn` Nothing
+
+    it "uses an opaque source in response display output" $ do
+      source <- serverSentEventSourceFromList []
+      show (eventStreamResponse source :: Response () ())
+        `shouldBe` "EventStreamResponse (ResponseBody {responseStatus = 200, responseContentType = \"text/event-stream; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [], responseLogEntries = []}) <event-source>"

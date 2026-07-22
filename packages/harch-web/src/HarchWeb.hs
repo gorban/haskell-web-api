@@ -57,6 +57,7 @@ module HarchWeb
     RuntimeDescriptor (..),
     RuntimeNonce (..),
     ServerSentEvent (..),
+    ServerSentEventSource (..),
     RouteCodec (..),
     RouteRequest (..),
     RuntimeAcmeBindPlan (..),
@@ -99,6 +100,7 @@ module HarchWeb
     defaultNavigationRuntimeScript,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
+    eventStreamResponse,
     escapeJsonCharacter,
     exportConnectionObservabilityToOtlp,
     exportRequestObservabilityToOtlp,
@@ -159,6 +161,7 @@ module HarchWeb
     responseKind,
     responseStatusCode,
     serverSentEventContentType,
+    serverSentEventSourceFromList,
     requestHostWithoutPort,
     routeHref,
     loadReloadingTlsCredentials,
@@ -193,6 +196,7 @@ import Data.Bifunctor (bimap)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
+import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (digitToInt, isDigit, isHexDigit, toLower)
@@ -637,6 +641,13 @@ data ServerSentEvent = ServerSentEvent
   }
   deriving (Eq, Show)
 
+-- | A subscription supplies the next event, or 'Nothing' when the stream has
+-- ended. A production source may block while it waits for data; a finite source
+-- is equally useful for deterministic integration tests and one-shot updates.
+newtype ServerSentEventSource = ServerSentEventSource
+  { nextServerSentEvent :: IO (Maybe ServerSentEvent)
+  }
+
 data ResponseDiagnostics = ResponseDiagnostics
   { diagnosticObservabilityAttributes :: [Observability.ObservabilityAttribute],
     diagnosticLogEntries :: [Text]
@@ -692,7 +703,30 @@ data Response route context
   | BodyResponse ResponseBody
   | RedirectResponse ResponseBody Text
   | ClientActionBodyResponse ClientActionResponse
-  deriving (Eq, Show)
+  | EventStreamResponse ResponseBody ServerSentEventSource
+
+instance (Eq route, Eq context) => Eq (Response route context) where
+  left == right =
+    case (left, right) of
+      (PageResponse leftPage, PageResponse rightPage) -> leftPage == rightPage
+      (PageResponseWithMetadata leftBody leftPage, PageResponseWithMetadata rightBody rightPage) -> leftBody == rightBody && leftPage == rightPage
+      (BodyResponse leftBody, BodyResponse rightBody) -> leftBody == rightBody
+      (RedirectResponse leftBody leftLocation, RedirectResponse rightBody rightLocation) -> leftBody == rightBody && leftLocation == rightLocation
+      (ClientActionBodyResponse leftAction, ClientActionBodyResponse rightAction) -> leftAction == rightAction
+      -- Sources are intentionally opaque IO actions. Response equality keeps
+      -- comparing the safe metadata while never running either subscription.
+      (EventStreamResponse leftBody _, EventStreamResponse rightBody _) -> leftBody == rightBody
+      _ -> False
+
+instance (Show route, Show context) => Show (Response route context) where
+  showsPrec precedence response =
+    case response of
+      PageResponse page -> showParen (precedence > 10) (showString "PageResponse " . showsPrec 11 page)
+      PageResponseWithMetadata responseBodyValue page -> showParen (precedence > 10) (showString "PageResponseWithMetadata " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 page)
+      BodyResponse responseBodyValue -> showParen (precedence > 10) (showString "BodyResponse " . showsPrec 11 responseBodyValue)
+      RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 location)
+      ClientActionBodyResponse actionResponse -> showParen (precedence > 10) (showString "ClientActionBodyResponse " . showsPrec 11 actionResponse)
+      EventStreamResponse responseBodyValue _ -> showParen (precedence > 10) (showString "EventStreamResponse " . showsPrec 11 responseBodyValue . showString " <event-source>")
 
 redirectResponse :: Int -> Text -> Response route context
 redirectResponse status =
@@ -705,6 +739,26 @@ redirectResponse status =
         responseLogEntries = []
       }
 
+eventStreamResponse :: ServerSentEventSource -> Response route context
+eventStreamResponse =
+  EventStreamResponse
+    ResponseBody
+      { responseStatus = 200,
+        responseContentType = serverSentEventContentType,
+        responseBody = Text.empty,
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
+
+serverSentEventSourceFromList :: [ServerSentEvent] -> IO ServerSentEventSource
+serverSentEventSourceFromList events = do
+  eventsReference <- newIORef events
+  pure $
+    ServerSentEventSource $
+      atomicModifyIORef' eventsReference $ \case
+        [] -> ([], Nothing)
+        event : remainingEvents -> (remainingEvents, Just event)
+
 responseDiagnostics :: Response route context -> ResponseDiagnostics
 responseDiagnostics response =
   case response of
@@ -713,6 +767,7 @@ responseDiagnostics response =
     BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
     RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     ClientActionBodyResponse actionResponse -> responseBodyDiagnostics (clientActionResponseBody actionResponse)
+    EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
 
 responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
 responseBodyDiagnostics responseBodyValue =
@@ -732,6 +787,7 @@ responseStatusCode webApplication response =
     BodyResponse responseBodyValue -> responseStatus responseBodyValue
     RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
     ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
+    EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
 
 responseKind :: Response route context -> Observability.ResponseKind
 responseKind response =
@@ -741,6 +797,7 @@ responseKind response =
     BodyResponse _ -> Observability.BodyResponseKind
     RedirectResponse _ _ -> Observability.BodyResponseKind
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
+    EventStreamResponse _ _ -> Observability.BodyResponseKind
 
 data RouteCodec route context = RouteCodec
   { parseRoute :: context -> Text -> Maybe (RouteRequest route context),
@@ -1217,6 +1274,7 @@ responseRuntimeNonce response =
     BodyResponse _ -> pure $! RuntimeNonce ""
     RedirectResponse _ _ -> pure $! RuntimeNonce ""
     ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
+    EventStreamResponse _ _ -> pure $! RuntimeNonce ""
 
 finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
 finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response = do
@@ -3165,6 +3223,8 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
       toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse ->
       toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
+    EventStreamResponse responseBodyValue eventSource ->
+      toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =
@@ -3172,6 +3232,27 @@ toWaiBodyResponse additionalHeaders responseBodyValue =
     (Http.mkStatus (responseStatus responseBodyValue) mempty)
     (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
     (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
+toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
+  Wai.responseStream
+    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    ( additionalHeaders
+        <> [ (Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue)),
+             ("Cache-Control", "no-cache"),
+             ("X-Accel-Buffering", "no")
+           ]
+    )
+    streamEvents
+  where
+    streamEvents write flush = do
+      maybeEvent <- nextServerSentEvent eventSource
+      case maybeEvent of
+        Nothing -> pure ()
+        Just event -> do
+          write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
+          flush
+          streamEvents write flush
 
 isClientActionRequest :: Wai.Request -> Bool
 isClientActionRequest request =
@@ -3297,6 +3378,7 @@ responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
         BodyResponse _ -> Nothing
         RedirectResponse _ _ -> Nothing
         ClientActionBodyResponse _ -> Nothing
+        EventStreamResponse _ _ -> Nothing
     )
     <> strictTransportSecurityHeaders requestPolicyConfig request
     <> corsPolicyHeaders (corsPolicy requestPolicyConfig) request

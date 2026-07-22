@@ -106,6 +106,8 @@ spec = do
           expectationFailure "expected a page response for the home route"
         RedirectResponse _ _ ->
           expectationFailure "expected a page response for the home route"
+        EventStreamResponse _ _ ->
+          expectationFailure "expected a page response for the home route"
         ClientActionBodyResponse _ ->
           expectationFailure "expected a page response for the home route"
 
