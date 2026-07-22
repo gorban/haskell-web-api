@@ -47,7 +47,7 @@ import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
 import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
-import WebApi.Response (selectResponseWithDatabase)
+import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route
   ( AppRequestContext (..),
     AppRoute (..),
@@ -77,7 +77,7 @@ buildAppWithDatabaseAndReporters ::
 buildAppWithDatabaseAndReporters config databaseEffect !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
-      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect))
+      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect accountWorkflow))
           { Site.siteRequestContextFromRequest =
               requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
             Site.siteStaticAssets = staticAssets config,
@@ -94,9 +94,9 @@ buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
   buildAppWithDatabase config defaultDatabaseEffect
 
-buildAppSiteRoutes :: AppConfig -> DatabaseEffect -> [Site.SiteRoute AppRoute AppRequestContext]
-buildAppSiteRoutes config databaseEffect =
-  let renderSelectedResponse = selectResponseWithDatabase config databaseEffect
+buildAppSiteRoutes :: AppConfig -> DatabaseEffect -> AccountWorkflow -> [Site.SiteRoute AppRoute AppRequestContext]
+buildAppSiteRoutes config databaseEffect accountWorkflow =
+  let renderSelectedResponse = selectResponseWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow
    in [ Site.SiteRoute
           { Site.siteRouteValue = HomeRoute,
             Site.siteRouteNavigationLabel = Just "Home",

@@ -2,6 +2,7 @@
 
 module WebApi.Response
   ( renderApiResponseFromRouteData,
+    selectResponseWithDatabaseAndAccountWorkflow,
     selectResponseWithDatabase,
     selectResponse,
   )
@@ -11,9 +12,11 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
+import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseEffect, DatabaseError (..), DatabaseOperation (..), defaultDatabaseEffect)
-import WebApi.Page (renderPageFromRouteData)
+import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
+import WebApi.Profile (ProfileLoadError (..), loadProfile)
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -47,6 +50,34 @@ selectResponseWithDatabase config databaseEffect routeRequest =
                 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
         )
         (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+
+selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> DatabaseEffect -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectResponseWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow routeRequest =
+  if isProfilePageRequest routeRequest
+    then selectProfileResponse config accountWorkflow routeRequest
+    else selectResponseWithDatabase config databaseEffect routeRequest
+
+isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
+isProfilePageRequest routeRequest =
+  HarchWeb.requestRoute routeRequest == ProfileRoute
+    && requestSurface (HarchWeb.requestContext routeRequest) == PageSurface
+
+selectProfileResponse :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectProfileResponse config accountWorkflow routeRequest = do
+  nowNanoseconds <- accountWorkflowClock accountWorkflow
+  loadedProfile <-
+    loadProfile
+      (accountWorkflowSessionStore accountWorkflow)
+      (accountWorkflowProfileStore accountWorkflow)
+      nowNanoseconds
+      (requestSessionId (HarchWeb.requestContext routeRequest))
+  pure $
+    case loadedProfile of
+      Right profileState -> HarchWeb.PageResponse (renderProfilePageWithState config routeRequest profileState)
+      Left profileLoadError ->
+        HarchWeb.PageResponseWithMetadata
+          (pageErrorResponseMetadata (profileFailureDiagnostics profileLoadError))
+          (renderUnavailableProfilePage config routeRequest)
 
 isHomePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isHomePageRequest routeRequest =
@@ -220,6 +251,36 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperatio
             ]
         ]
     }
+
+profileFailureDiagnostics :: ProfileLoadError -> FailureDiagnostics
+profileFailureDiagnostics profileLoadError =
+  FailureDiagnostics
+    { diagnosticsObservabilityAttributes =
+        [ Observability.ObservabilityAttribute
+            { Observability.attributeName = "error.type",
+              Observability.attributeValue = Observability.TextAttribute (profileLoadErrorType profileLoadError)
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.failure.code",
+              Observability.attributeValue = Observability.TextAttribute "profile.load"
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.route",
+              Observability.attributeValue = Observability.TextAttribute "/profile"
+            },
+          Observability.ObservabilityAttribute
+            { Observability.attributeName = "app.surface",
+              Observability.attributeValue = Observability.TextAttribute "page"
+            }
+        ],
+      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType profileLoadError]
+    }
+
+profileLoadErrorType :: ProfileLoadError -> Text
+profileLoadErrorType profileLoadError =
+  case profileLoadError of
+    ProfileSessionStoreError _ -> "AccountSessionStoreError"
+    ProfileAccountStoreError _ -> "AccountStoreError"
 
 databaseOperationObservabilityAttributes :: [DatabaseOperation] -> [Observability.ObservabilityAttribute]
 databaseOperationObservabilityAttributes =

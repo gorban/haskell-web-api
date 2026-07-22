@@ -12,6 +12,8 @@ module WebApi.Page
     buildPageModelWithDatabase,
     buildPageModel,
     renderPageFromRouteData,
+    renderUnavailableProfilePage,
+    renderProfilePageWithState,
     renderPageWithDatabase,
     renderPage,
     renderPageBody,
@@ -22,6 +24,8 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
+import HarchWeb.Email qualified as Email
+import WebApi.Account (AccountProfile (..))
 import WebApi.AccountPages
   ( LoginForm (..),
     MfaEnrollmentForm (..),
@@ -40,6 +44,7 @@ import WebApi.Database
   ( DatabaseEffect,
     defaultDatabaseEffect,
   )
+import WebApi.Profile (ProfileState (..))
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -92,12 +97,30 @@ data NotFoundPageModel = NotFoundPageModel
   }
   deriving (Eq, Show)
 
-data ProfilePageModel = ProfilePageModel
-  { profileHeading :: Text,
-    profileSummary :: Text,
-    profileSignInAction :: CallToAction,
-    profileRegistrationAction :: CallToAction
-  }
+data ProfilePageModel
+  = SignedOutProfilePage
+      { profileHeading :: Text,
+        profileSummary :: Text,
+        profileSignInAction :: CallToAction,
+        profileRegistrationAction :: CallToAction
+      }
+  | PendingProfilePage
+      { profileHeading :: Text,
+        profileSummary :: Text,
+        profileEmail :: Text,
+        profileSignOutAction :: CallToAction
+      }
+  | AuthenticatedProfilePage
+      { profileHeading :: Text,
+        profileSummary :: Text,
+        profileEmail :: Text,
+        profileSignOutAction :: CallToAction
+      }
+  | UnavailableProfilePage
+      { profileHeading :: Text,
+        profileSummary :: Text,
+        profileSignInAction :: CallToAction
+      }
 
 data AppPageModel
   = HomePage HomePageModel
@@ -120,11 +143,29 @@ instance Eq AppPageModel where
   MfaEnrollmentPage leftPath leftForm == MfaEnrollmentPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
   LoginPage leftPath leftForm == LoginPage rightPath rightForm = leftPath == rightPath && leftForm == rightForm
   LogoutPage leftPath == LogoutPage rightPath = leftPath == rightPath
-  ProfilePage left == ProfilePage right =
-    profileHeading left == profileHeading right
-      && profileSummary left == profileSummary right
-      && profileSignInAction left == profileSignInAction right
-      && profileRegistrationAction left == profileRegistrationAction right
+  ProfilePage SignedOutProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileSignInAction = leftSignInAction, profileRegistrationAction = leftRegistrationAction}
+    == ProfilePage SignedOutProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileSignInAction = rightSignInAction, profileRegistrationAction = rightRegistrationAction} =
+      leftHeading == rightHeading
+        && leftSummary == rightSummary
+        && leftSignInAction == rightSignInAction
+        && leftRegistrationAction == rightRegistrationAction
+  ProfilePage PendingProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileEmail = leftEmail, profileSignOutAction = leftSignOutAction}
+    == ProfilePage PendingProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileEmail = rightEmail, profileSignOutAction = rightSignOutAction} =
+      leftHeading == rightHeading
+        && leftSummary == rightSummary
+        && leftEmail == rightEmail
+        && leftSignOutAction == rightSignOutAction
+  ProfilePage AuthenticatedProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileEmail = leftEmail, profileSignOutAction = leftSignOutAction}
+    == ProfilePage AuthenticatedProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileEmail = rightEmail, profileSignOutAction = rightSignOutAction} =
+      leftHeading == rightHeading
+        && leftSummary == rightSummary
+        && leftEmail == rightEmail
+        && leftSignOutAction == rightSignOutAction
+  ProfilePage UnavailableProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileSignInAction = leftSignInAction}
+    == ProfilePage UnavailableProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileSignInAction = rightSignInAction} =
+      leftHeading == rightHeading
+        && leftSummary == rightSummary
+        && leftSignInAction == rightSignInAction
   NotFoundPage left == NotFoundPage right = left == right
   _ == _ = False
 
@@ -170,20 +211,21 @@ instance Show AppPageModel where
   showsPrec precedence (LogoutPage logoutPath) =
     showParen (precedence > 10) (showString "LogoutPage " . shows logoutPath)
   showsPrec precedence (ProfilePage profilePage) =
-    showParen
-      (precedence > 10)
-      ( showString "ProfilePage {profileHeading = "
-          . shows (profileHeading profilePage)
-          . showString ", profileSummary = "
-          . shows (profileSummary profilePage)
-          . showString ", profileSignInAction = "
-          . shows (profileSignInAction profilePage)
-          . showString ", profileRegistrationAction = "
-          . shows (profileRegistrationAction profilePage)
-          . showString "}"
-      )
+    showProfilePage precedence profilePage
   showsPrec precedence (NotFoundPage notFoundPage) =
     showParen (precedence > 10) (showString "NotFoundPage " . showsPrec 11 notFoundPage)
+
+showProfilePage :: Int -> ProfilePageModel -> ShowS
+showProfilePage precedence profilePage =
+  case profilePage of
+    SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
+      showParen (precedence > 10) (showString "SignedOutProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileSignInAction . showChar ' ' . shows profileRegistrationAction)
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
+      showParen (precedence > 10) (showString "PendingProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileSignOutAction)
+    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
+      showParen (precedence > 10) (showString "AuthenticatedProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileSignOutAction)
+    UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
+      showParen (precedence > 10) (showString "UnavailableProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileSignInAction)
 
 renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
 renderPage config =
@@ -197,14 +239,34 @@ renderPageWithDatabase config databaseEffect routeRequest =
 
 renderPageFromRouteData :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> HarchWeb.Page AppRoute AppRequestContext
 renderPageFromRouteData config routeRequest routeData =
-  let pageModel = buildPageModelFromRouteData routeRequest routeData
-   in HarchWeb.Page
-        { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
-          HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
-          HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
-          HarchWeb.pageBody = renderPageBody pageModel,
-          HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
-        }
+  renderPageModel config routeRequest (buildPageModelFromRouteData routeRequest routeData)
+
+renderProfilePageWithState :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> ProfileState -> HarchWeb.Page AppRoute AppRequestContext
+renderProfilePageWithState config routeRequest profileState =
+  renderPageModel config routeRequest (ProfilePage (buildProfilePageModel routeRequest profileState))
+
+renderUnavailableProfilePage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> HarchWeb.Page AppRoute AppRequestContext
+renderUnavailableProfilePage config routeRequest =
+  renderPageModel
+    config
+    routeRequest
+    ( ProfilePage
+        UnavailableProfilePage
+          { profileHeading = localizedText routeRequest "Profile" "Perfil",
+            profileSummary = localizedText routeRequest "Your profile is temporarily unavailable." "Tu perfil no está disponible temporalmente.",
+            profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión")
+          }
+    )
+
+renderPageModel :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel -> HarchWeb.Page AppRoute AppRequestContext
+renderPageModel config routeRequest pageModel =
+  HarchWeb.Page
+    { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
+      HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
+      HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
+      HarchWeb.pageBody = renderPageBody pageModel,
+      HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
+    }
 
 routeTitle :: AppRoute -> Text
 routeTitle = routePageTitle . routeMetadata
@@ -256,13 +318,7 @@ buildPageModelFromRouteData routeRequest routeData =
       LogoutPage
         (renderRoutePath (HarchWeb.RouteRequest LogoutRoute (HarchWeb.requestContext routeRequest)))
     ProfileRouteDataResult ->
-      ProfilePage
-        ProfilePageModel
-          { profileHeading = localizedText routeRequest "Profile" "Perfil",
-            profileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
-            profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
-            profileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
-          }
+      ProfilePage (buildProfilePageModel routeRequest ProfileUnauthenticated)
     _ ->
       NotFoundPage
         NotFoundPageModel
@@ -270,6 +326,31 @@ buildPageModelFromRouteData routeRequest routeData =
             notFoundSummary = "The requested page could not be found.",
             notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute "Return home"
           }
+
+buildProfilePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> ProfileState -> ProfilePageModel
+buildProfilePageModel routeRequest profileState =
+  case profileState of
+    ProfileUnauthenticated ->
+      SignedOutProfilePage
+        { profileHeading = localizedText routeRequest "Profile" "Perfil",
+          profileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
+          profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
+          profileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
+        }
+    ProfilePending profile ->
+      PendingProfilePage
+        { profileHeading = localizedText routeRequest "Profile" "Perfil",
+          profileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
+          profileEmail = Email.emailAddressText (accountProfileEmail profile),
+          profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+        }
+    ProfileAuthenticated profile ->
+      AuthenticatedProfilePage
+        { profileHeading = localizedText routeRequest "Profile" "Perfil",
+          profileSummary = localizedText routeRequest "You are signed in." "Has iniciado sesión.",
+          profileEmail = Email.emailAddressText (accountProfileEmail profile),
+          profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+        }
 
 buildHomePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError HomeRouteData -> AppPageModel
 buildHomePageModel routeRequest homeRouteDataResult =
@@ -384,17 +465,7 @@ renderPageBody pageModel =
     LogoutPage logoutPath ->
       renderLogoutPage logoutPath
     ProfilePage profilePage ->
-      Text.concat
-        [ "<section data-page=\"profile\">",
-          "<h1 data-page-title=\"true\">",
-          profileHeading profilePage,
-          "</h1><p>",
-          profileSummary profilePage,
-          "</p>",
-          renderCallToAction (profileSignInAction profilePage),
-          renderCallToAction (profileRegistrationAction profilePage),
-          "</section>"
-        ]
+      renderProfilePageBody profilePage
     NotFoundPage notFoundPage ->
       Text.concat
         [ "<section data-page=\"not-found\">",
@@ -407,6 +478,35 @@ renderPageBody pageModel =
           renderCallToAction (notFoundPrimaryAction notFoundPage),
           "</section>"
         ]
+
+renderProfilePageBody :: ProfilePageModel -> Text
+renderProfilePageBody profilePage =
+  case profilePage of
+    SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
+      profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
+    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
+    UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
+      profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction]
+
+profilePageSection :: Text -> Text -> [Text] -> Text
+profilePageSection heading summary content =
+  Text.concat
+    [ "<section data-page=\"profile\">",
+      "<h1 data-page-title=\"true\">",
+      heading,
+      "</h1><p>",
+      summary,
+      "</p>",
+      Text.concat content,
+      "</section>"
+    ]
+
+renderProfileEmail :: Text -> Text
+renderProfileEmail emailAddress =
+  Text.concat ["<p data-profile-email=\"true\">", emailAddress, "</p>"]
 
 renderHighlights :: [Text] -> Text
 renderHighlights highlights =

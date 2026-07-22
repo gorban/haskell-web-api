@@ -2898,7 +2898,7 @@ spec = do
         `shouldBe` LogoutPage "/logout"
       buildPageModelFromRouteData profileRequestValue ProfileRouteDataResult
         `shouldBe` ProfilePage
-          ProfilePageModel
+          SignedOutProfilePage
             { profileHeading = "Profile",
               profileSummary = "Sign in to view and manage your profile.",
               profileSignInAction = CallToAction "Sign in" LoginRoute "/login",
@@ -2906,7 +2906,7 @@ spec = do
             }
       let spanishProfileRequest = HarchWeb.RouteRequest ProfileRoute spanishRequestContext
           spanishProfileModel =
-            ProfilePageModel
+            SignedOutProfilePage
               { profileHeading = "Perfil",
                 profileSummary = "Inicia sesión para ver y administrar tu perfil.",
                 profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
@@ -2915,7 +2915,7 @@ spec = do
       buildPageModelFromRouteData spanishProfileRequest ProfileRouteDataResult
         `shouldBe` ProfilePage spanishProfileModel
       let spanishProfileModelCopy =
-            ProfilePageModel
+            SignedOutProfilePage
               { profileHeading = "Perfil",
                 profileSummary = "Inicia sesión para ver y administrar tu perfil.",
                 profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
@@ -2923,7 +2923,7 @@ spec = do
               }
       assertSameProfilePageModel spanishProfileModel spanishProfileModelCopy
       show (ProfilePage spanishProfileModel)
-        `shouldSatisfy` (Text.isPrefixOf "ProfilePage {profileHeading" . Text.pack)
+        `shouldSatisfy` (Text.isPrefixOf "SignedOutProfilePage" . Text.pack)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"

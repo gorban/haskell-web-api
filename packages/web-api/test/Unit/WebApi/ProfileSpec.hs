@@ -3,9 +3,12 @@
 module Unit.WebApi.ProfileSpec (spec) where
 
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Word (Word64)
+import HarchWeb qualified
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Email (EmailAddress, mkEmailAddress)
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import Test.Hspec
 import WebApi.Account
@@ -13,7 +16,15 @@ import WebApi.Account
     AccountProfileStore (..),
     AccountStoreError (..),
   )
+import WebApi.App (unavailableAccountWorkflow)
+import WebApi.AppEffect (AccountWorkflow (..))
+import WebApi.Config (defaultAppConfig)
+import WebApi.Database (defaultDatabaseEffect)
+import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..))
 import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfile)
+import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
+import WebApi.Route (AppRoute (..), defaultRequestContext)
+import WebApi.Route qualified
 import WebApi.Session
   ( AccountSessionStore (..),
     AccountSessionStoreError (..),
@@ -35,12 +46,130 @@ spec =
       assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Left (AccountStoreUnavailable "database unavailable"))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreUnavailable "database unavailable"))
       assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just mismatchedProfile))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreCorruptData "account profile lookup returned a different account id"))
 
+    it "renders signed-out, pending, authenticated, and unavailable profiles as SSR pages" $ do
+      signedOutResponse <- profileResponse (workflowFor (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile)))) defaultRequestContext
+      pendingResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile)))) sessionRequestContext
+      authenticatedResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just verifiedProfile)))) sessionRequestContext
+      spanishPendingResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just pendingProfile)))) spanishSessionRequestContext
+      spanishAuthenticatedResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Right (Just verifiedProfile)))) spanishSessionRequestContext
+      unavailableResponse <- profileResponse (workflowFor (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile)))) sessionRequestContext
+      spanishUnavailableResponse <- profileResponse (workflowFor (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile)))) spanishSessionRequestContext
+      accountUnavailableResponse <- profileResponse (workflowFor (sessionStore (Right (Just activeSession))) (profileStore (Left (AccountStoreUnavailable "database unavailable")))) sessionRequestContext
+      secondPageResponse <-
+        selectResponseWithDatabaseAndAccountWorkflow
+          defaultAppConfig
+          defaultDatabaseEffect
+          unavailableAccountWorkflow
+          (HarchWeb.RouteRequest SecondRoute defaultRequestContext)
+      responsePageBody signedOutResponse `shouldSatisfy` containsAll ["Sign in to view and manage your profile.", "href=\"/login\"", "href=\"/register\""]
+      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
+      responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
+      responsePageBody spanishPendingResponse `shouldSatisfy` containsAll ["Verifica tu dirección de correo antes de continuar.", "href=\"/es/logout\""]
+      responsePageBody spanishAuthenticatedResponse `shouldSatisfy` containsAll ["Has iniciado sesión.", "href=\"/es/logout\""]
+      responsePageBody unavailableResponse `shouldSatisfy` containsAll ["Your profile is temporarily unavailable.", "href=\"/login\""]
+      responsePageBody spanishUnavailableResponse `shouldSatisfy` containsAll ["Tu perfil no está disponible temporalmente.", "href=\"/es/login\""]
+      responseStatus unavailableResponse `shouldBe` 500
+      responsePageTitle authenticatedResponse `shouldBe` "web-api: Profile"
+      responsePageTitle unavailableResponse `shouldBe` "web-api: Profile"
+      responsePageBody unavailableResponse `shouldSatisfy` (not . Text.isInfixOf "AccountSessionStoreUnavailable")
+      responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountSessionStoreError"
+      responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountSessionStoreError"]
+      responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError"
+      responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"]
+      responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
+
+    it "keeps every profile page model comparable and printable" $ do
+      let signInAction = CallToAction "Sign in" LoginRoute "/login"
+          registrationAction = CallToAction "Create account" RegistrationRoute "/register"
+          signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
+          signedOutModel = SignedOutProfilePage "Profile" "Sign in to view and manage your profile." signInAction registrationAction
+          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" signOutAction
+          authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" signOutAction
+          unavailableModel = UnavailableProfilePage "Profile" "Your profile is temporarily unavailable." signInAction
+          models =
+            [ (signedOutModel, "SignedOutProfilePage"),
+              (pendingModel, "PendingProfilePage"),
+              (authenticatedModel, "AuthenticatedProfilePage"),
+              (unavailableModel, "UnavailableProfilePage")
+            ]
+      mapM_ (assertProfilePageModel . fst) models
+      mapM_ assertProfilePageModelShow models
+      ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False
+
 assertProfileResult :: IO (Either ProfileLoadError ProfileState) -> (Either ProfileLoadError ProfileState -> Bool) -> Expectation
 assertProfileResult action matches = do
   result <- action
   if matches result
     then pure ()
     else expectationFailure "unexpected profile-resolution result"
+
+profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.Response AppRoute WebApi.Route.AppRequestContext)
+profileResponse workflow requestContext =
+  selectResponseWithDatabaseAndAccountWorkflow
+    defaultAppConfig
+    defaultDatabaseEffect
+    workflow
+    (HarchWeb.RouteRequest ProfileRoute requestContext)
+
+workflowFor :: AccountSessionStore -> AccountProfileStore -> AccountWorkflow
+workflowFor sessionStoreValue profileStoreValue =
+  unavailableAccountWorkflow
+    { accountWorkflowClock = pure 150,
+      accountWorkflowSessionStore = sessionStoreValue,
+      accountWorkflowProfileStore = profileStoreValue
+    }
+
+sessionRequestContext :: WebApi.Route.AppRequestContext
+sessionRequestContext = defaultRequestContext {WebApi.Route.requestSessionId = Just testSessionId}
+
+spanishSessionRequestContext :: WebApi.Route.AppRequestContext
+spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}
+
+responsePageBody :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text
+responsePageBody response =
+  case response of
+    HarchWeb.PageResponse page -> HarchWeb.pageBody page
+    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.pageBody page
+    _ -> ""
+
+responseStatus :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Int
+responseStatus response =
+  case response of
+    HarchWeb.PageResponse _ -> 200
+    HarchWeb.PageResponseWithMetadata metadata _ -> HarchWeb.responseStatus metadata
+    _ -> 0
+
+responsePageTitle :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text
+responsePageTitle response =
+  case response of
+    HarchWeb.PageResponse page -> HarchWeb.pageTitle page
+    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.pageTitle page
+    _ -> ""
+
+responseDiagnosticAttributes :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> [Observability.ObservabilityAttribute]
+responseDiagnosticAttributes = HarchWeb.diagnosticObservabilityAttributes . HarchWeb.responseDiagnostics
+
+responseDiagnosticLogs :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> [Text]
+responseDiagnosticLogs = HarchWeb.diagnosticLogEntries . HarchWeb.responseDiagnostics
+
+profileFailureAttributes :: Text -> [Observability.ObservabilityAttribute]
+profileFailureAttributes errorType =
+  [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute errorType),
+    Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "profile.load"),
+    Observability.ObservabilityAttribute "app.route" (Observability.TextAttribute "/profile"),
+    Observability.ObservabilityAttribute "app.surface" (Observability.TextAttribute "page")
+  ]
+
+assertProfilePageModel :: ProfilePageModel -> Expectation
+assertProfilePageModel profilePageModel =
+  ProfilePage profilePageModel == ProfilePage profilePageModel `shouldBe` True
+
+assertProfilePageModelShow :: (ProfilePageModel, Text) -> Expectation
+assertProfilePageModelShow (profilePageModel, expectedPrefix) =
+  Text.pack (show (ProfilePage profilePageModel)) `shouldSatisfy` Text.isPrefixOf expectedPrefix
+
+containsAll :: [Text] -> Text -> Bool
+containsAll expectedFragments actualBody = all (`Text.isInfixOf` actualBody) expectedFragments
 
 isUnauthenticated :: Either ProfileLoadError ProfileState -> Bool
 isUnauthenticated result =
