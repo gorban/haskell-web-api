@@ -25,6 +25,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Email qualified as Email
+import HarchWeb.Username qualified as Username
 import WebApi.Account (AccountProfile (..))
 import WebApi.AccountPages
   ( LoginForm (..),
@@ -110,6 +111,8 @@ data ProfilePageModel
       { profileHeading :: Text,
         profileSummary :: Text,
         profileEmail :: Text,
+        profileUsername :: Maybe Text,
+        profileDisplayName :: Maybe Text,
         profileResendPath :: Text,
         profileResendLabel :: Text,
         profileSignOutAction :: CallToAction
@@ -118,6 +121,8 @@ data ProfilePageModel
       { profileHeading :: Text,
         profileSummary :: Text,
         profileEmail :: Text,
+        profileUsername :: Maybe Text,
+        profileDisplayName :: Maybe Text,
         profileSignOutAction :: CallToAction
       }
   | UnavailableProfilePage
@@ -230,10 +235,10 @@ showProfilePage precedence profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       showParen (precedence > 10) (showString "SignedOutProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileSignInAction . showChar ' ' . shows profileRegistrationAction)
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      showParen (precedence > 10) (showString "PendingProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileResendPath . showChar ' ' . shows profileResendLabel . showChar ' ' . shows profileSignOutAction)
-    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
-      showParen (precedence > 10) (showString "AuthenticatedProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileSignOutAction)
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
+      showParen (precedence > 10) (showString "PendingProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileUsername . showChar ' ' . shows profileDisplayName . showChar ' ' . shows profileResendPath . showChar ' ' . shows profileResendLabel . showChar ' ' . shows profileSignOutAction)
+    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
+      showParen (precedence > 10) (showString "AuthenticatedProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileUsername . showChar ' ' . shows profileDisplayName . showChar ' ' . shows profileSignOutAction)
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
       showParen (precedence > 10) (showString "UnavailableProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileSignInAction)
 
@@ -352,6 +357,8 @@ buildProfilePageModel routeRequest profileState =
         { profileHeading = localizedText routeRequest "Profile" "Perfil",
           profileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
           profileEmail = Email.emailAddressText (accountProfileEmail profile),
+          profileUsername = Username.usernameText <$> accountProfileUsername profile,
+          profileDisplayName = accountProfileDisplayName profile,
           profileResendPath = renderRoutePath (HarchWeb.RouteRequest ProfileRoute (HarchWeb.requestContext routeRequest)),
           profileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
           profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
@@ -361,6 +368,8 @@ buildProfilePageModel routeRequest profileState =
         { profileHeading = localizedText routeRequest "Profile" "Perfil",
           profileSummary = localizedText routeRequest "You are signed in." "Has iniciado sesión.",
           profileEmail = Email.emailAddressText (accountProfileEmail profile),
+          profileUsername = Username.usernameText <$> accountProfileUsername profile,
+          profileDisplayName = accountProfileDisplayName profile,
           profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
         }
 
@@ -499,10 +508,10 @@ renderProfilePageBody profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderPendingProfileRegion profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
-    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegion profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
+    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction]
 
@@ -522,6 +531,13 @@ profilePageSection heading summary content =
 renderProfileEmail :: Text -> Text
 renderProfileEmail emailAddress =
   Text.concat ["<p data-profile-email=\"true\">", emailAddress, "</p>"]
+
+renderProfileIdentity :: Maybe Text -> Maybe Text -> Text
+renderProfileIdentity maybeUsername maybeDisplayName =
+  Text.concat
+    [ maybe Text.empty (\username -> Text.concat ["<p data-profile-username=\"true\">", username, "</p>"]) maybeUsername,
+      maybe Text.empty (\displayName -> Text.concat ["<p data-profile-display-name=\"true\">", displayName, "</p>"]) maybeDisplayName
+    ]
 
 renderHighlights :: [Text] -> Text
 renderHighlights highlights =

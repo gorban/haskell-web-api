@@ -7749,6 +7749,8 @@ spec = do
                 "Profile"
                 "Verify your email address before continuing."
                 "person@example.test"
+                (Just "person_01")
+                (Just "Person Example")
                 "/profile"
                 "Resend verification email"
                 (CallToAction "Sign out" LogoutRoute "/logout")

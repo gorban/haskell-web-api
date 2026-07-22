@@ -11,6 +11,7 @@ import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
+import HarchWeb.Username qualified as Username
 import Test.Hspec
 import WebApi.Account
   ( AccountProfile (..),
@@ -65,8 +66,8 @@ spec =
           unavailableAccountWorkflow
           (HarchWeb.RouteRequest SecondRoute defaultRequestContext)
       responsePageBody signedOutResponse `shouldSatisfy` containsAll ["Sign in to view and manage your profile.", "href=\"/login\"", "href=\"/register\""]
-      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-email=\"true\">person@example.test", "id=\"profile-region\"", "data-harch-control", "value=\"resend-verification\"", "Resend verification email", "href=\"/logout\""]
-      responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
+      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "id=\"profile-region\"", "data-harch-control", "value=\"resend-verification\"", "Resend verification email", "href=\"/logout\""]
+      responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
       responsePageBody spanishPendingResponse `shouldSatisfy` containsAll ["Verifica tu dirección de correo antes de continuar.", "href=\"/es/logout\""]
       responsePageBody spanishAuthenticatedResponse `shouldSatisfy` containsAll ["Has iniciado sesión.", "href=\"/es/logout\""]
       responsePageBody unavailableResponse `shouldSatisfy` containsAll ["Your profile is temporarily unavailable.", "href=\"/login\""]
@@ -149,8 +150,8 @@ spec =
           registrationAction = CallToAction "Create account" RegistrationRoute "/register"
           signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
           signedOutModel = SignedOutProfilePage "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" "/profile" "Resend verification email" signOutAction
-          authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" signOutAction
+          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing "/profile" "Resend verification email" signOutAction
+          authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
           unavailableModel = UnavailableProfilePage "Profile" "Your profile is temporarily unavailable." signInAction
           models =
             [ (signedOutModel, "SignedOutProfilePage"),
@@ -333,10 +334,10 @@ opaqueSession expiresAtNanoseconds =
     Nothing -> error "expected a valid CSRF token"
 
 pendingProfile :: AccountProfile
-pendingProfile = AccountProfile accountId emailAddress Nothing Nothing False
+pendingProfile = AccountProfile accountId emailAddress (Username.mkUsername "person_01") (Just "Person Example") False
 
 verifiedProfile :: AccountProfile
-verifiedProfile = AccountProfile accountId emailAddress Nothing Nothing True
+verifiedProfile = AccountProfile accountId emailAddress (Username.mkUsername "person_01") (Just "Person Example") True
 
 mismatchedProfile :: AccountProfile
 mismatchedProfile = AccountProfile otherAccountId emailAddress Nothing Nothing True
