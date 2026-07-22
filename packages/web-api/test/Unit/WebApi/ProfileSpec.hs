@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.WebApi.ProfileSpec (spec) where
@@ -7,15 +8,17 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account (AccountId, mkAccountId)
-import HarchWeb.Email (EmailAddress, mkEmailAddress)
+import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import Test.Hspec
 import WebApi.Account
   ( AccountProfile (..),
     AccountProfileStore (..),
+    AccountStore (..),
     AccountStoreError (..),
   )
+import WebApi.AccountPages (handleAccountAction)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -62,7 +65,7 @@ spec =
           unavailableAccountWorkflow
           (HarchWeb.RouteRequest SecondRoute defaultRequestContext)
       responsePageBody signedOutResponse `shouldSatisfy` containsAll ["Sign in to view and manage your profile.", "href=\"/login\"", "href=\"/register\""]
-      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
+      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-email=\"true\">person@example.test", "id=\"profile-region\"", "data-harch-control", "value=\"resend-verification\"", "Resend verification email", "href=\"/logout\""]
       responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
       responsePageBody spanishPendingResponse `shouldSatisfy` containsAll ["Verifica tu dirección de correo antes de continuar.", "href=\"/es/logout\""]
       responsePageBody spanishAuthenticatedResponse `shouldSatisfy` containsAll ["Has iniciado sesión.", "href=\"/es/logout\""]
@@ -78,12 +81,62 @@ spec =
       responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"]
       responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
 
+    it "resends pending-profile verification through a localized client-action patch" $ do
+      let actionRequest requestContext fields =
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientActionMethod = "POST",
+                HarchWeb.clientActionPath =
+                  case WebApi.Route.requestLocale requestContext of
+                    WebApi.Route.English -> "/profile"
+                    WebApi.Route.Spanish -> "/es/profile",
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionContext = requestContext
+              }
+          store replacementResult =
+            AccountStore
+              { createPendingAccount = \_ -> error "unexpected account creation",
+                replaceEmailVerification = \_ -> pure replacementResult,
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          workflow replacementResult emailDelivery sessionResult loadedProfile now =
+            unavailableAccountWorkflow
+              { accountWorkflowStore = store replacementResult,
+                accountWorkflowEmailDelivery = emailDelivery,
+                accountWorkflowClock = pure now,
+                accountWorkflowSessionStore = sessionStore sessionResult,
+                accountWorkflowProfileStore = profileStore loadedProfile,
+                accountWorkflowVerificationUrl = \_ _ -> "https://account.example.test/verify"
+              }
+          delivery = EmailDelivery (\_ -> pure ())
+          pendingWorkflow = workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150
+          expect workflowValue request expectedStatus expectedText = do
+            actionResult <- handleAccountAction workflowValue request
+            case actionResult of
+              Nothing -> expectationFailure "expected a profile client-action response"
+              Just response -> do
+                HarchWeb.clientActionStatus response `shouldBe` expectedStatus
+                HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId)
+                HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml)
+      expect pendingWorkflow (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
+      expect pendingWorkflow (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
+      expect pendingWorkflow (actionRequest sessionRequestContext []) 422 "Choose a profile action"
+      expect pendingWorkflow (actionRequest defaultRequestContext [("intent", "resend-verification")]) 403 "Sign in before"
+      expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "already verified"
+      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "profile state changed"
+      expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 502 "could not send"
+      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+      expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
+
     it "keeps every profile page model comparable and printable" $ do
       let signInAction = CallToAction "Sign in" LoginRoute "/login"
           registrationAction = CallToAction "Create account" RegistrationRoute "/register"
           signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
           signedOutModel = SignedOutProfilePage "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" signOutAction
+          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" "/profile" "Resend verification email" signOutAction
           authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" signOutAction
           unavailableModel = UnavailableProfilePage "Profile" "Your profile is temporarily unavailable." signInAction
           models =

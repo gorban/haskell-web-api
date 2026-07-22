@@ -4,6 +4,7 @@ module WebApi.AccountPages
   ( AccountWorkflow (..),
     RegistrationForm (..),
     VerificationForm (..),
+    PendingProfileForm (..),
     MfaEnrollmentForm (..),
     LoginForm (..),
     emptyRegistrationForm,
@@ -13,6 +14,7 @@ module WebApi.AccountPages
     renderRegistrationRegion,
     renderVerificationPage,
     renderVerificationRegion,
+    renderPendingProfileRegion,
     renderMfaEnrollmentPage,
     renderMfaEnrollmentRegion,
     renderLoginPage,
@@ -42,11 +44,14 @@ import HarchWeb.Session
 import HarchWeb.Totp qualified as Totp
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
-  ( AccountStoreError (..),
+  ( AccountProfile (..),
+    AccountStoreError (..),
     RegistrationError (..),
     RegistrationResult (..),
+    ResendVerificationError (..),
     confirmEmailVerificationAt,
     registerAccountAtWithPasswordHasher,
+    resendEmailVerificationAt,
   )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
@@ -73,6 +78,11 @@ import WebApi.MfaEnrollment
     confirmMfaEnrollment,
     startMfaEnrollment,
   )
+import WebApi.Profile
+  ( ProfileLoadError (..),
+    ProfileState (..),
+    loadProfile,
+  )
 import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
@@ -96,6 +106,14 @@ data VerificationForm = VerificationForm
   { verificationFormToken :: Text,
     verificationFormMessage :: Maybe Text,
     verificationFormIsError :: Bool
+  }
+  deriving (Eq)
+
+data PendingProfileForm = PendingProfileForm
+  { pendingProfileFormEmail :: Text,
+    pendingProfileFormMessage :: Maybe Text,
+    pendingProfileFormIsError :: Bool,
+    pendingProfileFormResendLabel :: Text
   }
   deriving (Eq)
 
@@ -137,6 +155,7 @@ selectedAccountAction actionRequest =
           (accountRoutePath actionRequest EmailVerificationRoute, handleVerification actionRequest),
           (accountRoutePath actionRequest MfaEnrollmentRoute, handleMfaEnrollment actionRequest),
           (accountRoutePath actionRequest LoginRoute, handleLogin actionRequest),
+          (accountRoutePath actionRequest ProfileRoute, handleProfile actionRequest),
           (accountRoutePath actionRequest LogoutRoute, handleLogout actionRequest)
         ]
 
@@ -323,6 +342,68 @@ handleLogout actionRequest =
             Left storeError -> throwClientActionFailure (logoutResponse path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) "account.logout.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
             Right _ -> pure (logoutResponse path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
 
+handleProfile :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleProfile actionRequest = do
+  workflow <- accountWorkflow
+  now <- liftAppIO (accountWorkflowClock workflow)
+  loadedProfile <- liftAppIO (loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now (requestSessionId (HarchWeb.clientActionContext actionRequest)))
+  case loadedProfile of
+    Left loadError -> throwClientActionFailure (profileResponse actionRequest 503 (PendingProfileForm Text.empty (Just (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.")) True (resendLabel actionRequest))) "account.profile.load" (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
+    Right ProfileUnauthenticated -> pure (profileResponse actionRequest 403 (PendingProfileForm Text.empty (Just (localized actionRequest "Sign in before requesting another verification email." "Inicia sesion antes de solicitar otro correo de verificacion.")) True (resendLabel actionRequest)))
+    Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest 409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest "Your email address is already verified." "Tu direccion de correo ya esta verificada.")) True (resendLabel actionRequest)))
+    Right (ProfilePending profile) -> handlePendingProfile actionRequest workflow now profile
+
+handlePendingProfile :: HarchWeb.ClientActionRequest AppRequestContext -> AccountWorkflow -> Word64 -> AccountProfile -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handlePendingProfile actionRequest workflow now profile =
+  case actionField actionRequest "intent" of
+    "resend-verification" -> do
+      resendResult <-
+        liftAppIO $
+          resendEmailVerificationAt
+            (accountWorkflowStore workflow)
+            (accountWorkflowEmailDelivery workflow)
+            (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
+            (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
+            now
+            emailVerificationLifetimeNanoseconds
+            profile
+      interpretProfileResendResult actionRequest profile resendResult
+    _ -> pure (profileResponse actionRequest 422 (pendingProfileForm actionRequest profile (Just (localized actionRequest "Choose a profile action." "Elige una accion de perfil.")) True))
+
+interpretProfileResendResult :: HarchWeb.ClientActionRequest AppRequestContext -> AccountProfile -> Either ResendVerificationError () -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretProfileResendResult actionRequest profile resendResult =
+  let form message isError = pendingProfileForm actionRequest profile (Just message) isError
+   in case resendResult of
+        Right () -> pure (profileResponse actionRequest 202 (form (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False))
+        Left ResendVerificationNoLongerPending -> pure (profileResponse actionRequest 409 (form (localized actionRequest "Your profile state changed. Reload the page before trying again." "El estado de tu perfil ha cambiado. Recarga la pagina antes de intentarlo de nuevo.") True))
+        Left (ResendVerificationDeliveryFailed detail) -> throwClientActionFailure (profileResponse actionRequest 502 (form (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True)) "account.profile.resend.delivery" "EmailDeliveryError" detail
+        Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) "account.profile.resend.store" "AccountStoreError" (accountStoreErrorDetail storeError)
+        Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) "account.profile.resend.clock" "ClockOverflow" "verification expiry overflowed"
+
+pendingProfileForm :: HarchWeb.ClientActionRequest AppRequestContext -> AccountProfile -> Maybe Text -> Bool -> PendingProfileForm
+pendingProfileForm actionRequest profile message isError =
+  PendingProfileForm
+    { pendingProfileFormEmail = Email.emailAddressText (accountProfileEmail profile),
+      pendingProfileFormMessage = message,
+      pendingProfileFormIsError = isError,
+      pendingProfileFormResendLabel = resendLabel actionRequest
+    }
+
+resendLabel :: HarchWeb.ClientActionRequest AppRequestContext -> Text
+resendLabel actionRequest = localized actionRequest "Resend verification email" "Reenviar correo de verificacion"
+
+profileLoadErrorType :: ProfileLoadError -> Text
+profileLoadErrorType loadError =
+  case loadError of
+    ProfileSessionStoreError _ -> "AccountSessionStoreError"
+    ProfileAccountStoreError _ -> "AccountStoreError"
+
+profileLoadErrorDetail :: ProfileLoadError -> Text
+profileLoadErrorDetail loadError =
+  case loadError of
+    ProfileSessionStoreError storeError -> sessionStoreErrorMessage storeError
+    ProfileAccountStoreError storeError -> accountStoreErrorDetail storeError
+
 actionField :: HarchWeb.ClientActionRequest context -> Text -> Text
 actionField actionRequest name =
   case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
@@ -459,6 +540,17 @@ logoutResponse logoutPath status message isError headers =
       HarchWeb.clientActionLogEntries = []
     }
 
+profileResponse :: HarchWeb.ClientActionRequest AppRequestContext -> Int -> PendingProfileForm -> HarchWeb.ClientActionResponse
+profileResponse actionRequest status form =
+  HarchWeb.ClientActionResponse
+    { HarchWeb.clientActionStatus = status,
+      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "profile-region" (renderPendingProfileRegion (accountRoutePath actionRequest ProfileRoute) form)],
+      HarchWeb.clientActionFocusId = Nothing,
+      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionObservabilityAttributes = [],
+      HarchWeb.clientActionLogEntries = []
+    }
+
 renderMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentPage mfaEnrollmentPath form =
   Text.concat
@@ -501,6 +593,20 @@ renderLoginRegion loginPath form =
       "\" method=\"post\"><label for=\"login-email\">Email address</label><input id=\"login-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
       escapeHtml (loginFormEmail form),
       "\"><label for=\"login-password\">Password</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">Verification method</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">Authenticator code</option><option value=\"recovery\">Recovery code</option></select><label for=\"login-code\">Verification code</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">Sign in</button></form></section>"
+    ]
+
+renderPendingProfileRegion :: Text -> PendingProfileForm -> Text
+renderPendingProfileRegion profilePath form =
+  Text.concat
+    [ "<section id=\"profile-region\" aria-live=\"polite\">",
+      renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
+      "<p data-profile-email=\"true\">",
+      escapeHtml (pendingProfileFormEmail form),
+      "</p><form data-harch-action=\"true\" data-harch-control action=\"",
+      escapeHtml profilePath,
+      "\" method=\"post\"><input name=\"intent\" type=\"hidden\" value=\"resend-verification\"><button type=\"submit\">",
+      escapeHtml (pendingProfileFormResendLabel form),
+      "</button></form></section>"
     ]
 
 renderLogoutPage :: Text -> Text

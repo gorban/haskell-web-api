@@ -339,6 +339,7 @@ unavailableAccountWorkflow =
     { accountWorkflowStore =
         AccountStore
           { createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
+            replaceEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
             findEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
             consumeEmailVerification = \_ _ -> pure (Left (AccountStoreUnavailable "account persistence is not configured"))
           },

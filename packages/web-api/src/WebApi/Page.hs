@@ -29,12 +29,14 @@ import WebApi.Account (AccountProfile (..))
 import WebApi.AccountPages
   ( LoginForm (..),
     MfaEnrollmentForm (..),
+    PendingProfileForm (..),
     RegistrationForm (..),
     VerificationForm (..),
     emptyRegistrationForm,
     renderLoginPage,
     renderLogoutPage,
     renderMfaEnrollmentPage,
+    renderPendingProfileRegion,
     renderRegistrationPage,
     renderVerificationPage,
   )
@@ -108,6 +110,8 @@ data ProfilePageModel
       { profileHeading :: Text,
         profileSummary :: Text,
         profileEmail :: Text,
+        profileResendPath :: Text,
+        profileResendLabel :: Text,
         profileSignOutAction :: CallToAction
       }
   | AuthenticatedProfilePage
@@ -149,11 +153,13 @@ instance Eq AppPageModel where
         && leftSummary == rightSummary
         && leftSignInAction == rightSignInAction
         && leftRegistrationAction == rightRegistrationAction
-  ProfilePage PendingProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileEmail = leftEmail, profileSignOutAction = leftSignOutAction}
-    == ProfilePage PendingProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileEmail = rightEmail, profileSignOutAction = rightSignOutAction} =
+  ProfilePage PendingProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileEmail = leftEmail, profileResendPath = leftResendPath, profileResendLabel = leftResendLabel, profileSignOutAction = leftSignOutAction}
+    == ProfilePage PendingProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileEmail = rightEmail, profileResendPath = rightResendPath, profileResendLabel = rightResendLabel, profileSignOutAction = rightSignOutAction} =
       leftHeading == rightHeading
         && leftSummary == rightSummary
         && leftEmail == rightEmail
+        && leftResendPath == rightResendPath
+        && leftResendLabel == rightResendLabel
         && leftSignOutAction == rightSignOutAction
   ProfilePage AuthenticatedProfilePage {profileHeading = leftHeading, profileSummary = leftSummary, profileEmail = leftEmail, profileSignOutAction = leftSignOutAction}
     == ProfilePage AuthenticatedProfilePage {profileHeading = rightHeading, profileSummary = rightSummary, profileEmail = rightEmail, profileSignOutAction = rightSignOutAction} =
@@ -220,8 +226,8 @@ showProfilePage precedence profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       showParen (precedence > 10) (showString "SignedOutProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileSignInAction . showChar ' ' . shows profileRegistrationAction)
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
-      showParen (precedence > 10) (showString "PendingProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileSignOutAction)
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileResendPath, profileResendLabel, profileSignOutAction} ->
+      showParen (precedence > 10) (showString "PendingProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileResendPath . showChar ' ' . shows profileResendLabel . showChar ' ' . shows profileSignOutAction)
     AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
       showParen (precedence > 10) (showString "AuthenticatedProfilePage " . shows profileHeading . showChar ' ' . shows profileSummary . showChar ' ' . shows profileEmail . showChar ' ' . shows profileSignOutAction)
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
@@ -342,6 +348,8 @@ buildProfilePageModel routeRequest profileState =
         { profileHeading = localizedText routeRequest "Profile" "Perfil",
           profileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
           profileEmail = Email.emailAddressText (accountProfileEmail profile),
+          profileResendPath = renderRoutePath (HarchWeb.RouteRequest ProfileRoute (HarchWeb.requestContext routeRequest)),
+          profileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
           profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
         }
     ProfileAuthenticated profile ->
@@ -484,8 +492,8 @@ renderProfilePageBody profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileResendPath, profileResendLabel, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderPendingProfileRegion profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
     AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileSignOutAction} ->
       profilePageSection profileHeading profileSummary [renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->

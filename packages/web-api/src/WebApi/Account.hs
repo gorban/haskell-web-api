@@ -6,11 +6,13 @@ module WebApi.Account
     AccountProfile (..),
     AccountProfileStore (..),
     PendingAccount (..),
+    ResendVerificationError (..),
     RegistrationError (..),
     RegistrationResult (..),
     confirmEmailVerificationAt,
     registerAccountAt,
     registerAccountAtWithPasswordHasher,
+    resendEmailVerificationAt,
   )
 where
 
@@ -46,6 +48,7 @@ import HarchWeb.Password
 data AccountStoreError
   = AccountStoreUnavailable Text
   | AccountStoreCorruptData Text
+  deriving (Eq, Show)
 
 -- | The safe account data required by authenticated page surfaces. Password
 -- hashes, verification tokens, and other credentials never cross this seam.
@@ -69,6 +72,7 @@ data PendingAccount = PendingAccount
 
 data AccountStore = AccountStore
   { createPendingAccount :: PendingAccount -> IO (Either AccountStoreError Bool),
+    replaceEmailVerification :: StoredEmailVerification -> IO (Either AccountStoreError Bool),
     findEmailVerification :: EmailVerificationTokenDigest -> IO (Either AccountStoreError (Maybe StoredEmailVerification)),
     consumeEmailVerification :: EmailVerificationTokenDigest -> Word64 -> IO (Either AccountStoreError (Maybe AccountId))
   }
@@ -82,6 +86,13 @@ data RegistrationError
 data RegistrationResult
   = RegistrationCreated AccountId
   | RegistrationAlreadyRegistered
+
+data ResendVerificationError
+  = ResendVerificationStoreError AccountStoreError
+  | ResendVerificationDeliveryFailed Text
+  | ResendVerificationClockOverflow
+  | ResendVerificationNoLongerPending
+  deriving (Eq, Show)
 
 registerAccountAt ::
   PasswordHashingPolicy ->
@@ -158,6 +169,35 @@ confirmEmailVerificationAt accountStore now token = do
                   then Right (EmailVerificationAccepted accountId emailAddress)
                   else Left (AccountStoreCorruptData "email verification was consumed for a different account")
         validationResult -> pure (Right validationResult)
+
+resendEmailVerificationAt ::
+  AccountStore ->
+  EmailDelivery ->
+  EmailLocale ->
+  (EmailVerificationToken -> Text) ->
+  Word64 ->
+  Word64 ->
+  AccountProfile ->
+  IO (Either ResendVerificationError ())
+resendEmailVerificationAt accountStore emailDelivery locale renderVerificationUrl now verificationLifetime profile =
+  if accountProfileEmailVerified profile
+    then pure (Left ResendVerificationNoLongerPending)
+    else case addNanoseconds now verificationLifetime of
+      Nothing -> pure (Left ResendVerificationClockOverflow)
+      Just expiresAt -> do
+        token <- generateEmailVerificationToken
+        let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
+        replacementResult <- replaceEmailVerification accountStore verification
+        case replacementResult of
+          Left storeError -> pure (Left (ResendVerificationStoreError storeError))
+          Right False -> pure (Left ResendVerificationNoLongerPending)
+          Right True -> do
+            deliveryResult <-
+              try (deliverEmail emailDelivery (verificationEmail locale (accountProfileEmail profile) (renderVerificationUrl token))) :: IO (Either SomeException ())
+            pure $
+              case deliveryResult of
+                Left deliveryError -> Left (ResendVerificationDeliveryFailed (Text.pack (displayException deliveryError)))
+                Right () -> Right ()
 
 addNanoseconds :: Word64 -> Word64 -> Maybe Word64
 addNanoseconds now duration =

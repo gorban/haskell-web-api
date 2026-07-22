@@ -48,7 +48,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -2690,6 +2690,7 @@ spec = do
               { createPendingAccount = \pendingAccount -> do
                   modifyIORef' pendingAccountsReference (<> [pendingAccount])
                   pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -2731,6 +2732,7 @@ spec = do
       let accountStore =
             AccountStore
               { createPendingAccount = \_ -> error "password hashing should stop before persistence",
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -2749,6 +2751,7 @@ spec = do
           existingStore =
             AccountStore
               { createPendingAccount = \_ -> pure (Right False),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -2761,11 +2764,50 @@ spec = do
         (\case Left (RegistrationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
       readIORef deliveredMessagesReference `shouldReturn` []
 
+    it "rotates a pending account's verification token before resending its localized email" $ do
+      storedVerificationReference <- newIORef Nothing
+      deliveredMessagesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          pendingProfile = AccountProfile accountId emailAddress False
+          verifiedProfile = AccountProfile accountId emailAddress True
+          successfulStore =
+            AccountStore
+              { createPendingAccount = \_ -> error "unexpected account creation",
+                replaceEmailVerification = \verification -> writeIORef storedVerificationReference (Just verification) >> pure (Right True),
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          unavailableStore = successfulStore {replaceEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
+          noLongerPendingStore = successfulStore {replaceEmailVerification = \_ -> pure (Right False)}
+          delivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
+          failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
+          resend store emailDelivery profile now lifetime =
+            resendEmailVerificationAt store emailDelivery Email.EmailSpanish (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token) now lifetime profile
+      resend successfulStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Right () -> True; _ -> False)
+      storedVerification <- readIORef storedVerificationReference
+      deliveredMessages <- readIORef deliveredMessagesReference
+      case (storedVerification, deliveredMessages) of
+        (Just verification, [message]) -> do
+          Account.storedVerificationAccountId verification `shouldBe` accountId
+          Account.storedVerificationEmail verification `shouldBe` emailAddress
+          Account.storedVerificationExpiresAtNanoseconds verification `shouldBe` 300
+          Email.emailMessageRecipient message `shouldBe` emailAddress
+          Email.emailMessageSubject message `shouldBe` "Verifica tu correo electronico"
+          Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
+        _ -> expectationFailure "expected a rotated verification and one email"
+      resend unavailableStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
+      resend noLongerPendingStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
+      resend successfulStore failingDelivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> "SMTP unavailable" `Text.isInfixOf` detail; _ -> False)
+      resend successfulStore delivery pendingProfile maxBound 1 >>= (`shouldSatisfy` \case Left ResendVerificationClockOverflow -> True; _ -> False)
+      resend successfulStore delivery verifiedProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
+
     it "reports delivery failures after the pending account has been stored and rejects overflowing expiry calculations" $ do
       pendingAccountsReference <- newIORef []
       let accountStore =
             AccountStore
               { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
@@ -2787,6 +2829,7 @@ spec = do
           accountStore =
             AccountStore
               { createPendingAccount = \_ -> error "unexpected account creation",
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \digest ->
                   if digest == Account.emailVerificationTokenDigest token
                     then pure (Right (Just storedVerification))
@@ -2812,6 +2855,7 @@ spec = do
           storeWith lookupResult consumptionResult =
             AccountStore
               { createPendingAccount = \_ -> error "unexpected account creation",
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumptionResult
               }
@@ -3044,6 +3088,7 @@ spec = do
                   do
                     pendingAccountEmail pendingAccount `shouldBe` emailAddress
                     pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure (Right (Just storedVerification)),
                 consumeEmailVerification = \_ _ -> pure (Right (Just accountId))
               }
@@ -3187,6 +3232,7 @@ spec = do
           store createResult lookupResult consumeResult =
             AccountStore
               { createPendingAccount = \_ -> pure createResult,
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumeResult
               }
@@ -3663,6 +3709,9 @@ spec = do
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
         (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
       assertAccountStoreSuccess
+        (replaceEmailVerification accountStore (pendingAccountVerification pendingAccount))
+        id
+      assertAccountStoreSuccess
         (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
         (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
       recordedQueries <- readIORef recordedQueriesReference
@@ -3690,6 +3739,9 @@ spec = do
       assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) pendingAccount) (isUnavailable "connection failed")
       assertAccountStoreSuccess (createPendingAccount (storeFor (Right [])) pendingAccount) not
       assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) pendingAccount) (isCorrupt "unexpected pending-account result: [[\"other_account\"]]")
+      assertAccountStoreError (replaceEmailVerification (storeFor (Left "connection failed")) (pendingAccountVerification pendingAccount)) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (replaceEmailVerification (storeFor (Right [])) (pendingAccountVerification pendingAccount)) not
+      assertAccountStoreError (replaceEmailVerification (storeFor (Right [["other_account"]])) (pendingAccountVerification pendingAccount)) (isCorrupt "unexpected email-verification replacement result: [[\"other_account\"]]")
       assertAccountStoreError (findEmailVerification (storeFor (Left "connection failed")) (Account.emailVerificationTokenDigest token)) (isUnavailable "connection failed")
       assertAccountStoreSuccess (findEmailVerification (storeFor (Right [])) (Account.emailVerificationTokenDigest token)) (\case Nothing -> True; Just _ -> False)
       assertAccountStoreError (findEmailVerification (storeFor (Right [["invalid id", "person@example.test", "500"]])) (Account.emailVerificationTokenDigest token)) (isCorrupt "email verification has an invalid account id")

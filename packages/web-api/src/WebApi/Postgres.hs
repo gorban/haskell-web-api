@@ -217,6 +217,7 @@ buildRuntimePostgresAccountStoreWithRunner ::
 buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
   AccountStore
     { createPendingAccount = createAccount,
+      replaceEmailVerification = replaceVerification,
       findEmailVerification = findVerification,
       consumeEmailVerification = consumeVerification
     }
@@ -236,6 +237,20 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
                 Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount))
               ]
         liftEither (decodeCreatedAccount pendingAccount rows)
+
+    replaceVerification verification =
+      runExceptT $ do
+        rows <-
+          runStoreQuery AccountStoreUnavailable $
+            runQuery
+              databaseConfig
+              replaceEmailVerificationQuery
+              [ accountIdText (storedVerificationAccountId verification),
+                emailVerificationTokenDigestText (storedVerificationTokenDigest verification),
+                emailAddressText (storedVerificationEmail verification),
+                Text.pack (show (storedVerificationExpiresAtNanoseconds verification))
+              ]
+        liftEither (decodeReplacedVerification verification rows)
 
     findVerification tokenDigest =
       runExceptT $ do
@@ -298,6 +313,14 @@ decodeCreatedAccount pendingAccount rows =
     [[createdAccountId]]
       | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right True
     _ -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
+
+decodeReplacedVerification :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError Bool
+decodeReplacedVerification verification rows =
+  case rows of
+    [] -> Right False
+    [[accountIdValue]]
+      | accountIdValue == accountIdText (storedVerificationAccountId verification) -> Right True
+    _ -> Left (AccountStoreCorruptData ("unexpected email-verification replacement result: " <> Text.pack (show rows)))
 
 decodeStoredVerification :: EmailVerificationTokenDigest -> [[Text]] -> Either AccountStoreError (Maybe StoredEmailVerification)
 decodeStoredVerification tokenDigest rows =
@@ -902,6 +925,10 @@ secondHighlightsQuery locale =
 createPendingAccountQuery :: Text
 createPendingAccountQuery =
   "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, $3, $6) ON CONFLICT (email_normalized) DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
+
+replaceEmailVerificationQuery :: Text
+replaceEmailVerificationQuery =
+  "WITH pending_account AS (SELECT account_id FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NULL FOR UPDATE), removed_verifications AS (DELETE FROM web_api.email_verifications WHERE account_id IN (SELECT account_id FROM pending_account)) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $2, account_id, $3, $4 FROM pending_account RETURNING account_id;"
 
 findEmailVerificationQuery :: Text
 findEmailVerificationQuery =
