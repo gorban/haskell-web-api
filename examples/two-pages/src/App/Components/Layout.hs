@@ -5,17 +5,18 @@ module App.Components.Layout
   )
 where
 
-import App.Routes (TwoPageRoute)
+import App.Routes (TwoPageRoute (..))
 import HarchWeb
   ( AssetPath (..),
     HtmlAttribute (..),
-    Page,
+    Page (..),
     PageShell (..),
+    RuntimeDescriptor (..),
     stylesheet,
   )
 
 twoPageShell :: Page TwoPageRoute () -> PageShell TwoPageRoute ()
-twoPageShell _ =
+twoPageShell page =
   PageShell
     { shellBodyAttributes =
         [ HtmlAttribute
@@ -38,5 +39,8 @@ twoPageShell _ =
             }
         ],
       shellStylesheets = [stylesheet (AssetPath "/assets/two-pages.css")],
-      shellRuntimeDescriptors = []
+      shellRuntimeDescriptors =
+        case pageRoute page of
+          LiveDataRoute -> [DeferredModule "two-pages-live-data" "/assets/live-data.js"]
+          _ -> []
     }

@@ -7,6 +7,7 @@ Start here. This is the smallest example we want new users to copy first:
 - two pages,
 - SSR for direct loads and reloads,
 - progressive enhancement for same-origin navigation,
+- an SSR-first live-data page with an optional `EventSource` enhancement,
 - a shared layout component,
 - no database, telemetry, HTTPS, or reverse proxy yet.
 
@@ -33,6 +34,7 @@ Then visit:
 
 1. `http://127.0.0.1:8080/`
 2. `http://127.0.0.1:8080/second`
+3. `http://127.0.0.1:8080/live-data`
 
 The current composition root is still lower-level than the long-term `harch` / page-discovery goal,
 but it already shows the intended workflow:
@@ -97,6 +99,9 @@ examples.
    browser reload.
 4. Using Back and Forward keeps the app navigable.
 5. Disabling JavaScript still leaves both pages fully usable through normal links.
+6. `/live-data` starts with complete server-rendered status text. Its small deferred module opens
+   a same-origin SSE connection only after the page is usable, then replaces that status when an
+   event arrives. Browsers without JavaScript retain the rendered status rather than a blank area.
 
 ## Real-browser tests
 

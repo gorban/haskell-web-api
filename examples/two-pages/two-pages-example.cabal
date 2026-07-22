@@ -27,6 +27,7 @@ library
     App.App
     App.Components.Layout
     App.Pages.Home
+    App.Pages.LiveData
     App.Pages.NotFound
     App.Pages.Second
     App.Routes

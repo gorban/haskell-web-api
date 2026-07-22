@@ -3,7 +3,7 @@
 module App.Pages.Home (homePage) where
 
 import App.Routes (TwoPageRoute (..), routeHref)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import HarchWeb
   ( CssClass (..),
     Page (..),
@@ -29,6 +29,9 @@ homePage routeRequest =
               "<p><a href=\"",
               routeHref SecondRoute,
               "\" data-page-link=\"true\">Go to the second page</a></p>",
+              "<p><a href=\"",
+              routeHref LiveDataRoute,
+              "\" data-page-link=\"true\">See live updates</a></p>",
               "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">",
               "<label for=\"subscription-email\">Email address</label>",
               "<input id=\"subscription-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required>",

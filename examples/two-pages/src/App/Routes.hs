@@ -8,7 +8,7 @@ module App.Routes
 where
 
 import Data.Text (Text)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import HarchWeb
   ( RouteCodec (..),
     RouteRequest (..),
@@ -17,11 +17,15 @@ import HarchWeb
 data TwoPageRoute
   = HomeRoute
   | SecondRoute
+  | LiveDataRoute
+  | LiveDataEventsRoute
   | NotFoundRoute
 
 instance Eq TwoPageRoute where
   HomeRoute == HomeRoute = True
   SecondRoute == SecondRoute = True
+  LiveDataRoute == LiveDataRoute = True
+  LiveDataEventsRoute == LiveDataEventsRoute = True
   NotFoundRoute == NotFoundRoute = True
   _ == _ = False
 
@@ -33,6 +37,8 @@ instance Show TwoPageRoute where
       case route of
         HomeRoute -> "HomeRoute"
         SecondRoute -> "SecondRoute"
+        LiveDataRoute -> "LiveDataRoute"
+        LiveDataEventsRoute -> "LiveDataEventsRoute"
         NotFoundRoute -> "NotFoundRoute"
 
   showList routes =
@@ -51,6 +57,8 @@ routeCodec =
         case routePath path of
           "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
           "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
+          "/live-data" -> Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()}
+          "/live-data/events" -> Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()}
           _ -> Nothing,
       renderRoute = \routeRequest -> routeHref (requestRoute routeRequest),
       notFoundRequest = \() -> RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
@@ -61,6 +69,8 @@ routeHref route =
   case route of
     HomeRoute -> "/"
     SecondRoute -> "/second"
+    LiveDataRoute -> "/live-data"
+    LiveDataEventsRoute -> "/live-data/events"
     NotFoundRoute -> "/404"
 
 routePath :: Text -> Text

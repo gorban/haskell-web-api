@@ -4,13 +4,13 @@ module Unit.AppSpec (spec) where
 
 import App.App (buildApplication, twoPageServerConfig, twoPageSite)
 import App.Routes (TwoPageRoute (..), routeHref)
-import qualified App.Routes as ExampleRoutes
-import qualified Data.ByteString as ByteString
-import qualified Data.ByteString.Builder as Builder
-import qualified Data.ByteString.Lazy as LazyByteString
+import App.Routes qualified as ExampleRoutes
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
-import qualified Data.Text as Text
-import qualified Data.Text.Encoding as TextEncoding
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
   ( ClientActionRequest (..),
     ListenerConfig (..),
@@ -40,16 +40,16 @@ import HarchWeb
     tracingExporter,
     trustForwardedHeaders,
   )
-import qualified HarchWeb
+import HarchWeb qualified
 import HarchWeb.Site
   ( siteName,
     siteRequestPolicy,
     siteRoutes,
     siteStaticAssets,
   )
-import qualified Network.HTTP.Types as Http
-import qualified Network.Wai as Wai
-import qualified Network.Wai.Internal as WaiInternal
+import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
+import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
 
 spec :: Spec
@@ -58,7 +58,7 @@ spec =
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
         siteName twoPageSite `shouldBe` "two-pages-example"
-        length (siteRoutes twoPageSite) `shouldBe` 3
+        length (siteRoutes twoPageSite) `shouldBe` 5
         staticAssetRoots (siteStaticAssets twoPageSite)
           `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
         staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes
@@ -97,22 +97,31 @@ spec =
       it "parses and renders the supported two-page routes" $ do
         eqViaDictionary HomeRoute HomeRoute `shouldBe` True
         eqViaDictionary HomeRoute SecondRoute `shouldBe` False
+        eqViaDictionary LiveDataRoute LiveDataEventsRoute `shouldBe` False
         neqViaDictionary HomeRoute SecondRoute `shouldBe` True
         showViaDictionary HomeRoute `shouldBe` "HomeRoute"
         showViaDictionary SecondRoute `shouldBe` "SecondRoute"
+        showViaDictionary LiveDataRoute `shouldBe` "LiveDataRoute"
+        showViaDictionary LiveDataEventsRoute `shouldBe` "LiveDataEventsRoute"
         showViaDictionary NotFoundRoute `shouldBe` "NotFoundRoute"
         showsPrecViaDictionary 0 HomeRoute "" `shouldBe` "HomeRoute"
         showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]"
-        showListViaDictionary [HomeRoute, SecondRoute] "" `shouldBe` "[HomeRoute, SecondRoute]"
+        showListViaDictionary [HomeRoute, SecondRoute, LiveDataRoute] "" `shouldBe` "[HomeRoute, SecondRoute, LiveDataRoute]"
         parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
+        parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()}
+        parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/"
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second"
+        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataRoute, requestContext = ()} `shouldBe` "/live-data"
+        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()} `shouldBe` "/live-data/events"
         renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NotFoundRoute, requestContext = ()} `shouldBe` "/404"
         routeHref HomeRoute `shouldBe` "/"
         routeHref SecondRoute `shouldBe` "/second"
+        routeHref LiveDataRoute `shouldBe` "/live-data"
+        routeHref LiveDataEventsRoute `shouldBe` "/live-data/events"
         routeHref NotFoundRoute `shouldBe` "/404"
         notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
         parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
@@ -129,8 +138,9 @@ spec =
         Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
         Text.isInfixOf "<link rel=\"stylesheet\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True
         Text.isInfixOf "<section data-page=\"home\" class=\"harch-home-root\">" responseBody `shouldBe` True
-        Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav>" responseBody `shouldBe` True
+        Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/live-data\" data-page-link=\"true\">Live updates</a></nav>" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
+        Text.isInfixOf "<a href=\"/live-data\" data-page-link=\"true\">See live updates</a>" responseBody `shouldBe` True
         Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True
         Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True
         Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
@@ -145,6 +155,22 @@ spec =
         Text.isInfixOf "<title>Second</title>" responseBody `shouldBe` True
         Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" responseBody `shouldBe` True
         Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Back home</a>" responseBody `shouldBe` True
+
+      it "renders the live-data page before the optional EventSource enhancement starts" $ do
+        response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["live-data"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        responseBody <- readResponseBody response
+        Text.isInfixOf "<title>Live updates</title>" responseBody `shouldBe` True
+        Text.isInfixOf "This complete status is rendered on the server before any live connection starts." responseBody `shouldBe` True
+        Text.isInfixOf "<p id=\"live-data-status\" data-live-data-status role=\"status\">Waiting for an update.</p>" responseBody `shouldBe` True
+        Text.isInfixOf "<script type=\"module\" src=\"/assets/live-data.js\" defer></script>" responseBody `shouldBe` True
+
+      it "streams the live-data update with event-stream headers" $ do
+        response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["live-data", "events"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8"
+        lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache"
+        readResponseBody response `shouldReturn` "event: update\nid: example-1\ndata: The live update arrived.\n\n"
 
       it "renders not-found responses through the same shell with a 404 status" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["missing"])
@@ -173,6 +199,14 @@ spec =
         lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/css; charset=utf-8"
         responseBody <- readResponseBody response
         Text.isInfixOf ".harch-home-root" responseBody `shouldBe` True
+
+      it "serves the deferred live-data enhancement as a same-origin static asset" $ do
+        response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "live-data.js"])
+        Wai.responseStatus response `shouldBe` Http.status200
+        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8"
+        responseBody <- readResponseBody response
+        Text.isInfixOf "new EventSource" responseBody `shouldBe` True
+        Text.isInfixOf "eventSource.close()" responseBody `shouldBe` True
 
       it "returns validation patches for captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example"]

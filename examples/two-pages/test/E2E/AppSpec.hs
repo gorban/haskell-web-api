@@ -85,6 +85,18 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "preserves the server-rendered live status until the optional EventSource module updates it" $
+      withBrowserAndServer $ \browser server -> do
+        let liveDataUrl = localServerBaseUrl server <> "/live-data"
+        ( runBrowserScenario browser $ do
+            visitWithoutScripts liveDataUrl
+            assertText (byRole Heading) (`shouldBe` "Live updates")
+            assertText (css "#live-data-status") (`shouldBe` "Waiting for an update.")
+            visit liveDataUrl
+            assertText (css "#live-data-status") (`shouldBe` "The live update arrived.")
+          )
+          `shouldReturn` Right ()
+
 withBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
 withBrowserAndServer action = do
   loadedConfig <- loadPlaywrightBrowserConfig

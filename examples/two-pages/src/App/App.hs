@@ -9,6 +9,7 @@ where
 
 import App.Components.Layout (twoPageShell)
 import App.Pages.Home (homePage)
+import App.Pages.LiveData (liveDataPage)
 import App.Pages.NotFound (notFoundPage)
 import App.Pages.Second (secondPage)
 import App.Routes (TwoPageRoute (..), routeCodec)
@@ -23,14 +24,18 @@ import HarchWeb
     RegionPatch (..),
     RequestPolicyConfig (..),
     ServerConfig (..),
+    ServerSentEvent (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
+    eventStreamResponse,
+    serverSentEventSourceFromList,
   )
 import HarchWeb.Site
   ( Site (..),
+    SiteRoute (..),
     buildSiteApplication,
     pageSiteRoute,
     simpleSite,
@@ -48,12 +53,26 @@ twoPageSite =
       twoPageShell
       [ pageSiteRoute HomeRoute (Just "Home") homePage,
         pageSiteRoute SecondRoute (Just "Second") secondPage,
+        pageSiteRoute LiveDataRoute (Just "Live updates") liveDataPage,
+        liveDataEventsRoute,
         pageSiteRoute NotFoundRoute Nothing notFoundPage
       ]
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
       siteHandleClientAction = twoPageClientAction
+    }
+
+liveDataEventsRoute :: SiteRoute TwoPageRoute ()
+liveDataEventsRoute =
+  SiteRoute
+    { siteRouteValue = LiveDataEventsRoute,
+      siteRouteNavigationLabel = Nothing,
+      siteRouteResponse = \_ -> do
+        eventSource <-
+          serverSentEventSourceFromList
+            [ServerSentEvent (Just "update") (Just "example-1") "The live update arrived."]
+        pure (eventStreamResponse eventSource)
     }
 
 twoPageClientAction :: ClientActionRequest () -> IO (Maybe ClientActionResponse)
