@@ -1,6 +1,6 @@
 # middleware-auth-jwt
 
-**Status:** In progress
+**Status:** Working
 
 Show the desired app authoring model for:
 
@@ -9,14 +9,22 @@ Show the desired app authoring model for:
 - host-only secure session cookies and synchronizer CSRF tokens,
 - application-owned session lookup and invalidation.
 
+This repository deliberately uses opaque server-side sessions rather than JWT
+cookies: browser cookies contain only a random identifier, while principal,
+expiry, invalidation, and CSRF state remain server-side.
+
 Current repo alignment:
 
 - `HarchWeb.Session` supplies typed opaque session identifiers, expiry validation, invalidation
   seams, strict cookie rendering, same-origin return paths, and CSRF token comparison;
-- the application supplies a cryptographically secure token generator and durable session store;
-- credential verification, password hashing, throttling, rate limiting, and audit hooks remain
-  follow-up work before this becomes a complete login example.
+- the application supplies cryptographically secure token generation, PostgreSQL-backed session
+  persistence, credential verification, Argon2id hashing, bounded login throttling/rate limiting,
+  and audit hooks;
+- `packages/web-api` provides the working localized registration, login, logout, and session-backed
+  profile flow, including browser coverage for authenticated profile rendering and logout.
 
-Suggested snippet:
+See the working composition points:
 
-- [src/App/Middleware/Auth.hs.md](src/App/Middleware/Auth.hs.md)
+- [session primitives](../../packages/harch-web/src/HarchWeb/Session.hs)
+- [session-backed profile resolution](../../packages/web-api/src/WebApi/Profile.hs)
+- [account actions and safe response handling](../../packages/web-api/src/WebApi/AccountPages.hs)
