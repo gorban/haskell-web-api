@@ -56,6 +56,7 @@ module HarchWeb
     ResolvedNavigationItem (..),
     RuntimeDescriptor (..),
     RuntimeNonce (..),
+    ServerSentEvent (..),
     RouteCodec (..),
     RouteRequest (..),
     RuntimeAcmeBindPlan (..),
@@ -150,12 +151,14 @@ module HarchWeb
     renderAcmeResponseBody,
     renderDocument,
     renderDocumentWithNonce,
+    renderServerSentEvent,
     runRequestMiddlewarePipeline,
     responseHeaderText,
     responseDiagnostics,
     redirectResponse,
     responseKind,
     responseStatusCode,
+    serverSentEventContentType,
     requestHostWithoutPort,
     routeHref,
     loadReloadingTlsCredentials,
@@ -620,6 +623,17 @@ data ResponseBody = ResponseBody
     responseBody :: Text,
     responseObservabilityAttributes :: [Observability.ObservabilityAttribute],
     responseLogEntries :: [Text]
+  }
+  deriving (Eq, Show)
+
+-- | One event in a server-sent event stream. Event names and identifiers are
+-- rendered as single protocol fields; embedded line breaks are discarded so a
+-- value cannot inject another SSE field. Payload data may contain line breaks
+-- and is rendered as one @data:@ field per line.
+data ServerSentEvent = ServerSentEvent
+  { serverSentEventName :: Maybe Text,
+    serverSentEventId :: Maybe Text,
+    serverSentEventData :: Text
   }
   deriving (Eq, Show)
 
@@ -3041,6 +3055,31 @@ listenerSocketHints =
 
 renderAttributes :: [HtmlAttribute] -> Text
 renderAttributes = Text.concat . map renderAttribute
+
+serverSentEventContentType :: Text
+serverSentEventContentType = "text/event-stream; charset=utf-8"
+
+renderServerSentEvent :: ServerSentEvent -> Text
+renderServerSentEvent ServerSentEvent {serverSentEventName, serverSentEventId, serverSentEventData} =
+  Text.concat
+    ( maybeToList (renderSseField "event" <$> serverSentEventName)
+        <> maybeToList (renderSseField "id" <$> serverSentEventId)
+        <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (nonEmptyLines serverSentEventData)
+        <> ["\n"]
+    )
+
+renderSseField :: Text -> Text -> Text
+renderSseField fieldName fieldValue =
+  fieldName <> ": " <> Text.filter (`notElem` ['\r', '\n']) fieldValue <> "\n"
+
+renderSseDataLine :: Text -> Text
+renderSseDataLine line = "data: " <> line <> "\n"
+
+nonEmptyLines :: Text -> [Text]
+nonEmptyLines value =
+  case Text.splitOn "\n" value of
+    [] -> [Text.empty]
+    linesValue -> linesValue
 
 liveRegionAttributes :: LiveRegion -> [HtmlAttribute]
 liveRegionAttributes liveRegion =
