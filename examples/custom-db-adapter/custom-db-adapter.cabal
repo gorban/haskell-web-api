@@ -1,0 +1,27 @@
+cabal-version: 3.14
+name: custom-db-adapter
+version: 0.1.0.0
+synopsis: Alternative adapter example for HarchWeb.Database
+license: BSD-2-Clause-Patent
+build-type: Simple
+extra-doc-files: README.md
+
+common common
+  ghc-options: -Wall
+  default-language: GHC2024
+
+library
+  import: common
+  exposed-modules: App.Effects.Database
+  hs-source-dirs: src
+  build-depends: base ^>=4.22.0.0, harch-web, text
+
+test-suite custom-db-adapter-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options:
+    -rtsopts
+    -threaded
+  build-depends: base ^>=4.22.0.0, harch-web, hspec, text, custom-db-adapter

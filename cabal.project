@@ -1,4 +1,5 @@
 packages:
+  examples/custom-db-adapter/
   examples/two-pages/
   packages/core/
   packages/harch-web/

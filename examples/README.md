@@ -22,7 +22,7 @@ The design target and alignment analysis live in [../docs/design-guidance.md](..
 | --- | --- | --- |
 | [two-pages](two-pages/README.md) | Working | The first thing a new user should copy: two SSR pages plus progressive enhancement. |
 | [postgres-effects](postgres-effects/README.md) | Current | Add a real PostgreSQL-backed effect and the migration environment needed for it. |
-| [custom-db-adapter](custom-db-adapter/README.md) | Iterative | Show the desired seam for swapping in another database technology. |
+| [custom-db-adapter](custom-db-adapter/README.md) | Working | Build and test a typed non-PostgreSQL database interpreter. |
 | [logging-and-telemetry](logging-and-telemetry/README.md) | Current | Turn on logs/traces locally and show how to inspect them. |
 | [testing](testing/README.md) | Current | Show app-level unit, integration, e2e, and coverage workflows. |
 | [https-provided-certificate](https-provided-certificate/README.md) | Current | Run HTTPS directly with a provided certificate/key pair. |
