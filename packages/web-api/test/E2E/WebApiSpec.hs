@@ -77,6 +77,31 @@ spec =
             )
             `shouldReturn` Right ()
 
+    it "serves the app-home profile landing through SSR and enhanced navigation" $
+      withBrowserApp $ \browser appConfig ->
+        HarchWeb.withLocalTestServer (buildApp appConfig) $ \server -> do
+          let secondUrl = HarchWeb.localServerBaseUrl server <> "/second"
+              profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
+              spanishProfileUrl = HarchWeb.localServerBaseUrl server <> "/es/profile"
+          runBrowserScenario
+            browser
+            ( do
+                visit secondUrl
+                click (byRole Link `named` "Profile")
+                assertUrl (`shouldBe` profileUrl)
+                assertText (byRole Heading) (`shouldBe` "Profile")
+                assertText (byText "Sign in to view and manage your profile.") (`shouldBe` "Sign in to view and manage your profile.")
+                assertMetrics $ \metrics ->
+                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                visitWithoutScripts profileUrl
+                assertText (byRole Heading) (`shouldBe` "Profile")
+                assertText (within (css "#app-main") (byText "Create account")) (`shouldBe` "Create account")
+                visitWithoutScripts spanishProfileUrl
+                assertText (byRole Heading) (`shouldBe` "Perfil")
+                assertText (byText "Inicia sesión para ver y administrar tu perfil.") (`shouldBe` "Inicia sesión para ver y administrar tu perfil.")
+            )
+            `shouldReturn` Right ()
+
 withBrowserApp :: (BrowserConfig -> AppConfig -> IO a) -> IO a
 withBrowserApp action = do
   loadedConfig <- loadPlaywrightBrowserConfig
