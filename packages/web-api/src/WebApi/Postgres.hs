@@ -40,6 +40,7 @@ import Control.Monad.Except (ExceptT (ExceptT), liftEither, runExceptT, withExce
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty qualified as NonEmpty
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -67,6 +68,7 @@ import HarchWeb.Session
     mkCsrfToken,
     sessionIdText,
   )
+import HarchWeb.Username (mkUsername, usernameText)
 import System.Environment (getEnvironment)
 import System.Exit (ExitCode (..))
 import System.Process (env, proc, readCreateProcessWithExitCode)
@@ -234,7 +236,9 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
                 passwordHashText (pendingAccountPasswordHash pendingAccount),
                 emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
                 Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
-                Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount))
+                Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount)),
+                maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
+                fromMaybe Text.empty (pendingAccountDisplayName pendingAccount)
               ]
         liftEither (decodeCreatedAccount pendingAccount rows)
 
@@ -298,13 +302,22 @@ decodeAccountProfileRows :: AccountId -> [[Text]] -> Either AccountStoreError (M
 decodeAccountProfileRows accountId rows =
   case rows of
     [] -> Right Nothing
-    [[accountIdValue, emailAddressValue, verifiedAtValue]] -> do
+    [[accountIdValue, emailAddressValue, usernameValue, displayNameValue, verifiedAtValue]] -> do
       returnedAccountId <- maybe (Left (AccountStoreCorruptData "account profile lookup has an invalid account id")) Right (mkAccountId accountIdValue)
       emailAddress <- maybe (Left (AccountStoreCorruptData "account profile lookup has an invalid email address")) Right (mkEmailAddress emailAddressValue)
+      maybeUsername <-
+        if Text.null usernameValue
+          then Right Nothing
+          else Just <$> maybe (Left (AccountStoreCorruptData "account profile lookup has an invalid username")) Right (mkUsername usernameValue)
       if returnedAccountId == accountId
-        then Right (Just (AccountProfile returnedAccountId emailAddress (verifiedAtValue /= "")))
+        then Right (Just (AccountProfile returnedAccountId emailAddress maybeUsername (nonEmptyText displayNameValue) (verifiedAtValue /= "")))
         else Left (AccountStoreCorruptData "account profile lookup returned a different account id")
     _ -> Left (AccountStoreCorruptData ("unexpected account profile lookup result: " <> Text.pack (show rows)))
+
+nonEmptyText :: Text -> Maybe Text
+nonEmptyText value
+  | Text.null value = Nothing
+  | otherwise = Just value
 
 decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError Bool
 decodeCreatedAccount pendingAccount rows =
@@ -612,7 +625,10 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
         "ALTER DATABASE " <> sqlIdentifier (databaseName migrationDatabaseConfig) <> " OWNER TO " <> sqlIdentifier (databaseUser migrationDatabaseConfig) <> ";",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_content" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, summary TEXT NOT NULL, PRIMARY KEY (route_slug, locale));",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "page_highlights" <> " (route_slug TEXT NOT NULL, locale TEXT NOT NULL, position INTEGER NOT NULL, highlight TEXT NOT NULL, PRIMARY KEY (route_slug, locale, position));",
-        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "accounts" <> " (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "accounts" <> " (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, username TEXT, display_name TEXT, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+        "ALTER TABLE " <> qualifiedTableName "accounts" <> " ADD COLUMN IF NOT EXISTS username TEXT;",
+        "ALTER TABLE " <> qualifiedTableName "accounts" <> " ADD COLUMN IF NOT EXISTS display_name TEXT;",
+        "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_unique ON " <> qualifiedTableName "accounts" <> " (lower(username)) WHERE username IS NOT NULL;",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "email_verifications" <> " (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_totp" <> " (account_id TEXT PRIMARY KEY REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_recovery_codes" <> " (account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
@@ -924,7 +940,7 @@ secondHighlightsQuery locale =
 
 createPendingAccountQuery :: Text
 createPendingAccountQuery =
-  "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds) VALUES ($1, $2, $3, $6) ON CONFLICT (email_normalized) DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
+  "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES ($1, $2, $3, $6, NULLIF($7, ''), NULLIF($8, '')) ON CONFLICT DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
 
 replaceEmailVerificationQuery :: Text
 replaceEmailVerificationQuery =
@@ -944,7 +960,7 @@ findAccountCredentialByEmailQuery =
 
 findAccountProfileQuery :: Text
 findAccountProfileQuery =
-  "SELECT account_id, email_normalized, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE account_id = $1;"
+  "SELECT account_id, email_normalized, COALESCE(username, ''), COALESCE(display_name, ''), COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE account_id = $1;"
 
 saveUnconfirmedTotpEnrollmentQuery :: Text
 saveUnconfirmedTotpEnrollmentQuery =

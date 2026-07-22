@@ -12,6 +12,8 @@ module WebApi.Account
     confirmEmailVerificationAt,
     registerAccountAt,
     registerAccountAtWithPasswordHasher,
+    registerAccountWithIdentityAt,
+    registerAccountWithIdentityAtWithPasswordHasher,
     resendEmailVerificationAt,
   )
 where
@@ -44,6 +46,7 @@ import HarchWeb.Password
     PasswordHashingPolicy,
     hashPassword,
   )
+import HarchWeb.Username (Username)
 
 data AccountStoreError
   = AccountStoreUnavailable Text
@@ -55,6 +58,8 @@ data AccountStoreError
 data AccountProfile = AccountProfile
   { accountProfileId :: AccountId,
     accountProfileEmail :: EmailAddress,
+    accountProfileUsername :: Maybe Username,
+    accountProfileDisplayName :: Maybe Text,
     accountProfileEmailVerified :: Bool
   }
 
@@ -65,6 +70,8 @@ newtype AccountProfileStore = AccountProfileStore
 data PendingAccount = PendingAccount
   { pendingAccountId :: AccountId,
     pendingAccountEmail :: EmailAddress,
+    pendingAccountUsername :: Maybe Username,
+    pendingAccountDisplayName :: Maybe Text,
     pendingAccountPasswordHash :: PasswordHash,
     pendingAccountVerification :: StoredEmailVerification,
     pendingAccountCreatedAtNanoseconds :: Word64
@@ -120,7 +127,40 @@ registerAccountAtWithPasswordHasher ::
   EmailAddress ->
   Password ->
   IO (Either RegistrationError RegistrationResult)
-registerAccountAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime emailAddress password =
+registerAccountAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime =
+  registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime Nothing Nothing
+
+registerAccountWithIdentityAt ::
+  PasswordHashingPolicy ->
+  AccountStore ->
+  EmailDelivery ->
+  EmailLocale ->
+  (EmailVerificationToken -> Text) ->
+  Word64 ->
+  Word64 ->
+  Maybe Username ->
+  Maybe Text ->
+  EmailAddress ->
+  Password ->
+  IO (Either RegistrationError RegistrationResult)
+registerAccountWithIdentityAt =
+  registerAccountWithIdentityAtWithPasswordHasher hashPassword
+
+registerAccountWithIdentityAtWithPasswordHasher ::
+  (PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)) ->
+  PasswordHashingPolicy ->
+  AccountStore ->
+  EmailDelivery ->
+  EmailLocale ->
+  (EmailVerificationToken -> Text) ->
+  Word64 ->
+  Word64 ->
+  Maybe Username ->
+  Maybe Text ->
+  EmailAddress ->
+  Password ->
+  IO (Either RegistrationError RegistrationResult)
+registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime maybeUsername maybeDisplayName emailAddress password =
   case addNanoseconds now verificationLifetime of
     Nothing -> pure (Left RegistrationClockOverflow)
     Just expiresAt -> do
@@ -134,6 +174,8 @@ registerAccountAtWithPasswordHasher passwordHasher passwordHashingPolicy account
                 PendingAccount
                   { pendingAccountId = accountId,
                     pendingAccountEmail = emailAddress,
+                    pendingAccountUsername = maybeUsername,
+                    pendingAccountDisplayName = maybeDisplayName,
                     pendingAccountPasswordHash = passwordHash,
                     pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
                     pendingAccountCreatedAtNanoseconds = now

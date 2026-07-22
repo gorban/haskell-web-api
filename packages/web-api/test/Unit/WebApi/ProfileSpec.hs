@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.WebApi.ProfileSpec (spec) where
@@ -188,7 +187,7 @@ assertProfileResult action matches = do
     then pure ()
     else expectationFailure "unexpected profile-resolution result"
 
-equalValues :: Eq value => value -> value -> Bool
+equalValues :: (Eq value) => value -> value -> Bool
 equalValues = (==)
 {-# NOINLINE equalValues #-}
 
@@ -334,13 +333,13 @@ opaqueSession expiresAtNanoseconds =
     Nothing -> error "expected a valid CSRF token"
 
 pendingProfile :: AccountProfile
-pendingProfile = AccountProfile accountId emailAddress False
+pendingProfile = AccountProfile accountId emailAddress Nothing Nothing False
 
 verifiedProfile :: AccountProfile
-verifiedProfile = AccountProfile accountId emailAddress True
+verifiedProfile = AccountProfile accountId emailAddress Nothing Nothing True
 
 mismatchedProfile :: AccountProfile
-mismatchedProfile = AccountProfile otherAccountId emailAddress True
+mismatchedProfile = AccountProfile otherAccountId emailAddress Nothing Nothing True
 
 accountId :: AccountId
 accountId = requiredAccountId "account_01"

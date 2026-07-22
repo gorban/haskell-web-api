@@ -3,12 +3,12 @@
 
 {-# E2E_SPEC #-}
 
+import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
-import Data.Text (Text)
 import System.IO.Temp (withSystemTempDirectory)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
@@ -209,7 +209,7 @@ localizedRegistrationWorkflow =
     }
 
 pendingProfile :: AccountProfile
-pendingProfile = AccountProfile pendingProfileAccountId pendingProfileEmail False
+pendingProfile = AccountProfile pendingProfileAccountId pendingProfileEmail Nothing Nothing False
 
 pendingProfileSession :: Session.OpaqueSession Account.AccountId
 pendingProfileSession =

@@ -705,7 +705,7 @@ renderPendingProfileRegion profilePath form =
       renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
       "<p data-profile-email=\"true\">",
       escapeHtml (pendingProfileFormEmail form),
-      "</p><form data-harch-action=\"true\" data-harch-control action=\"",
+      "</p><form data-profile-resend=\"true\" data-harch-action=\"true\" data-harch-control action=\"",
       escapeHtml profilePath,
       "\" method=\"post\"><input name=\"intent\" type=\"hidden\" value=\"resend-verification\"><button type=\"submit\">",
       escapeHtml (pendingProfileFormResendLabel form),

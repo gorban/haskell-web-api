@@ -31,6 +31,7 @@ import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret qualified as Secret
 import HarchWeb.Session qualified as Session
 import HarchWeb.Totp qualified as Totp
+import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import Network.Socket qualified as NetworkSocket
@@ -48,7 +49,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -74,11 +75,11 @@ import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), 
 pureApplication :: HarchWeb.Application AppRoute AppRequestContext
 pureApplication = buildApp defaultAppConfig
 
-equalValues :: Eq value => value -> value -> Bool
+equalValues :: (Eq value) => value -> value -> Bool
 equalValues = (==)
 {-# NOINLINE equalValues #-}
 
-renderedValue :: Show value => value -> String
+renderedValue :: (Show value) => value -> String
 renderedValue = show
 {-# NOINLINE renderedValue #-}
 
@@ -2736,6 +2737,39 @@ spec = do
           Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
         _ -> expectationFailure "expected exactly one pending account and verification email"
 
+    it "persists typed account identity without changing verification delivery" $ do
+      pendingAccountsReference <- newIORef []
+      let accountStore =
+            AccountStore
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          username = fromMaybe (error "expected username") (Username.mkUsername "person_01")
+          emailAddress = requiredEmailAddress "person@example.test"
+      assertRegistrationResult
+        ( registerAccountWithIdentityAt
+            testPasswordHashingPolicy
+            accountStore
+            (Email.EmailDelivery (\_ -> pure ()))
+            Email.EmailEnglish
+            (const "https://account.example.test/verify")
+            100
+            200
+            (Just username)
+            (Just "Person Example")
+            emailAddress
+            (Password.mkPassword "correct horse battery staple")
+        )
+        (\case Right (RegistrationCreated _) -> True; _ -> False)
+      pendingAccounts <- readIORef pendingAccountsReference
+      case pendingAccounts of
+        [pendingAccount] -> do
+          pendingAccountUsername pendingAccount `shouldBe` Just username
+          pendingAccountDisplayName pendingAccount `shouldBe` Just "Person Example"
+        _ -> expectationFailure "expected exactly one pending account"
+
     it "covers password-hashing failures and account-workflow value representations" $ do
       let accountStore =
             AccountStore
@@ -2792,8 +2826,8 @@ spec = do
       deliveredMessagesReference <- newIORef []
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
-          pendingProfile = AccountProfile accountId emailAddress False
-          verifiedProfile = AccountProfile accountId emailAddress True
+          pendingProfile = AccountProfile accountId emailAddress Nothing Nothing False
+          verifiedProfile = AccountProfile accountId emailAddress Nothing Nothing True
           successfulStore =
             AccountStore
               { createPendingAccount = \_ -> error "unexpected account creation",
@@ -3733,28 +3767,32 @@ spec = do
       recordedQueriesReference <- newIORef []
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
+          username = fromMaybe (error "Expected username") (Username.mkUsername "person_01")
           token = requiredVerificationToken (Text.replicate 43 "a")
           passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
           pendingAccount =
             PendingAccount
               { pendingAccountId = accountId,
                 pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Just username,
+                pendingAccountDisplayName = Just "Person Example",
                 pendingAccountPasswordHash = passwordHash,
                 pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
                 pendingAccountCreatedAtNanoseconds = 100
               }
-          runner config sql parameters = config `seq` do
-            modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
-            pure $
-              if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
-                then Right [["account_01"]]
-                else
-                  if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
-                    then Right [["account_01", "person@example.test", "500"]]
-                    else
-                      if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
-                        then Right [["account_01"]]
-                        else Left "unexpected query"
+          runner config sql parameters =
+            config `seq` do
+              modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
+              pure $
+                if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
+                  then Right [["account_01"]]
+                  else
+                    if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
+                      then Right [["account_01", "person@example.test", "500"]]
+                      else
+                        if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
+                          then Right [["account_01"]]
+                          else Left "unexpected query"
           accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
       assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) id
       assertAccountStoreSuccess
@@ -3773,6 +3811,8 @@ spec = do
       Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) queryText `shouldBe` False
       Text.isInfixOf (Password.passwordHashText passwordHash) parameterText `shouldBe` True
       Text.isInfixOf (Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token)) parameterText `shouldBe` True
+      Text.isInfixOf (Username.usernameText username) parameterText `shouldBe` True
+      Text.isInfixOf "Person Example" parameterText `shouldBe` True
 
     it "maps malformed account-store query results to application-owned errors" $ do
       let accountId = requiredAccountId "account_01"
@@ -3783,6 +3823,8 @@ spec = do
             PendingAccount
               { pendingAccountId = accountId,
                 pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
                 pendingAccountPasswordHash = passwordHash,
                 pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
                 pendingAccountCreatedAtNanoseconds = 100
@@ -3808,29 +3850,35 @@ spec = do
     it "loads safe account profiles and rejects malformed profile rows" $ do
       let accountId = requiredAccountId "account_01"
           profileStoreFor result = buildRuntimePostgresAccountProfileStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
-          expectedProfile = AccountProfile accountId (requiredEmailAddress "person@example.test") True
+          username = fromMaybe (error "expected username") (Username.mkUsername "person_01")
+          expectedProfile = AccountProfile accountId (requiredEmailAddress "person@example.test") (Just username) (Just "Person Example") True
       assertAccountStoreSuccess
-        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "500"]])) accountId)
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "person_01", "Person Example", "500"]])) accountId)
         ( \case
             Just profile ->
               accountProfileId profile == accountProfileId expectedProfile
                 && accountProfileEmail profile == accountProfileEmail expectedProfile
+                && accountProfileUsername profile == accountProfileUsername expectedProfile
+                && accountProfileDisplayName profile == accountProfileDisplayName expectedProfile
                 && accountProfileEmailVerified profile == accountProfileEmailVerified expectedProfile
             Nothing -> False
         )
       accountProfileId expectedProfile `shouldBe` accountId
       accountProfileEmail expectedProfile `shouldBe` requiredEmailAddress "person@example.test"
+      accountProfileUsername expectedProfile `shouldBe` Just username
+      accountProfileDisplayName expectedProfile `shouldBe` Just "Person Example"
       accountProfileEmailVerified expectedProfile `shouldBe` True
       assertAccountStoreSuccess
-        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", ""]])) accountId)
+        (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "", "", ""]])) accountId)
         (\case Just profile -> not (accountProfileEmailVerified profile); Nothing -> False)
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [])) accountId)
         (\case Nothing -> True; Just _ -> False)
       assertAccountStoreError (findAccountProfile (profileStoreFor (Left "connection failed")) accountId) (isUnavailable "connection failed")
-      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["invalid id", "person@example.test", ""]])) accountId) (isCorrupt "account profile lookup has an invalid account id")
-      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "invalid email", ""]])) accountId) (isCorrupt "account profile lookup has an invalid email address")
-      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["invalid id", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid account id")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "invalid email", "", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid email address")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "invalid username", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid username")
+      assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: [[\"account_01\"]]")
       buildRuntimePostgresAccountProfileStore postgresTestConfig `seq` pure ()
 
@@ -4242,6 +4290,8 @@ spec = do
             PendingAccount
               { pendingAccountId = accountId,
                 pendingAccountEmail = emailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
                 pendingAccountPasswordHash = passwordHash,
                 pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
                 pendingAccountCreatedAtNanoseconds = 100
@@ -4308,7 +4358,10 @@ spec = do
         `shouldSatisfy` \statements ->
           all
             (`elem` statements)
-            [ "CREATE TABLE IF NOT EXISTS web_api.accounts (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+            [ "CREATE TABLE IF NOT EXISTS web_api.accounts (account_id TEXT PRIMARY KEY, email_normalized TEXT NOT NULL UNIQUE, username TEXT, display_name TEXT, password_hash TEXT NOT NULL, email_verified_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+              "ALTER TABLE web_api.accounts ADD COLUMN IF NOT EXISTS username TEXT;",
+              "ALTER TABLE web_api.accounts ADD COLUMN IF NOT EXISTS display_name TEXT;",
+              "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_unique ON web_api.accounts (lower(username)) WHERE username IS NOT NULL;",
               "CREATE TABLE IF NOT EXISTS web_api.email_verifications (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
               "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
               "CREATE TABLE IF NOT EXISTS web_api.account_recovery_codes (account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
