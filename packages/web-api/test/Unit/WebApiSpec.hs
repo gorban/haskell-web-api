@@ -58,7 +58,7 @@ import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
-import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..))
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -2784,6 +2784,22 @@ spec = do
       assertRegistrationResult
         (registerAccountAtWithPasswordHasher (\_ _ -> pure Nothing) testPasswordHashingPolicy accountStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
         (\case Left RegistrationPasswordHashingFailed -> True; _ -> False)
+      pendingAccountsReference <- newIORef []
+      let successfulStore =
+            AccountStore
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+      assertRegistrationResult
+        (registerAccountAtWithPasswordHasher Password.hashPassword testPasswordHashingPolicy successfulStore (Email.EmailDelivery (\_ -> pure ())) Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (\case Right (RegistrationCreated _) -> True; _ -> False)
+      readIORef pendingAccountsReference >>= \case
+        [pendingAccount] -> do
+          pendingAccountUsername pendingAccount `shouldBe` Nothing
+          pendingAccountDisplayName pendingAccount `shouldBe` Nothing
+        _ -> expectationFailure "expected one pending account"
       Account.accountIdText accountId `shouldBe` "account_01"
       equalValues (AccountStoreUnavailable "database unavailable") (AccountStoreUnavailable "database unavailable") `shouldBe` True
       equalValues (AccountStoreCorruptData "malformed account") (AccountStoreCorruptData "malformed account") `shouldBe` True
@@ -3176,7 +3192,7 @@ spec = do
               { createPendingAccount = \pendingAccount ->
                   do
                     pendingAccountUsername pendingAccount `shouldBe` Just (fromMaybe (error "expected username") (Username.mkUsername "person_01"))
-                    pendingAccountDisplayName pendingAccount `shouldBe` Just "Person Example"
+                    pendingAccountDisplayName pendingAccount `shouldSatisfy` (`elem` [Nothing, Just "Person Example"])
                     pendingAccountEmail pendingAccount `shouldBe` emailAddress
                     pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
@@ -3223,6 +3239,8 @@ spec = do
         Nothing -> False
       invalidUsernameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "no!"), ("email", "person@example.test"), ("password", "correct horse battery staple")] English)
       invalidUsernameResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Use a username"
+      spanishInvalidUsernameResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "no!"), ("email", "person@example.test"), ("password", "correct horse battery staple")] Spanish)
+      spanishInvalidUsernameResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Usa un nombre de usuario"
       invalidEmailResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "not-an-email"), ("password", "correct horse battery staple")] English)
       invalidEmailResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-email") "Enter a valid email address."
       spanishInvalidEmailResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "not-an-email"), ("password", "correct horse battery staple")] Spanish)
@@ -3231,11 +3249,13 @@ spec = do
       invalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Use a password with at least 12 characters."
       spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "short")] Spanish)
       spanishInvalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Usa una contrasena"
+      emptyDisplayNameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", ""), ("password", "correct horse battery staple")] English)
+      emptyDisplayNameResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Check your inbox"
       createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")] Spanish)
       createdResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Revisa tu bandeja de entrada"
       deliveredMessages <- readIORef deliveredMessagesReference
       deliveredMessages `shouldSatisfy` \case
-        [message] -> "https://account.example.test/es/verify?token=" `Text.isInfixOf` Email.emailMessageBody message
+        [_, message] -> "https://account.example.test/es/verify?token=" `Text.isInfixOf` Email.emailMessageBody message
         _ -> False
       unconfiguredAction <-
         HarchWeb.handleClientAction
@@ -3274,6 +3294,10 @@ spec = do
       assertMfaUnavailable (consumeRecoveryCodeHash unconfiguredMfaStore accountId "hash" 0)
       let unconfiguredCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow
       findAccountCredentialByEmail unconfiguredCredentialStore (requiredEmailAddress "person@example.test")
+        >>= \case
+          Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
+          _ -> expectationFailure "expected unavailable account credentials"
+      findAccountCredentialByUsername unconfiguredCredentialStore (fromMaybe (error "expected valid username") (Username.mkUsername "person_01"))
         >>= \case
           Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
           _ -> expectationFailure "expected unavailable account credentials"
@@ -3515,7 +3539,7 @@ spec = do
               }
           workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
             unavailableAccountWorkflow
-              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\_ -> pure credentialResult),
+              { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\receivedUsername -> receivedUsername `seq` pure credentialResult),
                 accountWorkflowMfaStore =
                   MfaStore
                     { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
@@ -3537,7 +3561,8 @@ spec = do
           validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
           validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
-          usernameFields = [("email", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          usernameFields = [("email", ""), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          emailUsernameFields = [("email", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
           recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
           recoveryHash = fromMaybe (error "expected a recovery-code hash") (RecoveryCode.hashRecoveryCodeWithSalt testPasswordHashingPolicy "0123456789abcdef" recoveryCode)
@@ -3585,6 +3610,17 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction validWorkflow (loginRequest defaultRequestContext usernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      usernameLoginResult <-
+        beginPasswordLoginWithIdentifier
+          (accountWorkflowCredentialStore validWorkflow)
+          (accountWorkflowMfaStore validWorkflow)
+          (LoginUsername (fromMaybe (error "expected valid username") (Username.mkUsername "person_01")))
+          password
+      case usernameLoginResult of
+        PasswordLoginMfaRequired receivedAccountId -> receivedAccountId `shouldBe` accountId
+        _ -> expectationFailure "expected MFA to be required for a valid username login"
       handleAccountAction (workflowFor (Left (AccountCredentialStoreUnavailable "down")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
       handleAccountAction (workflowFor (Left (AccountCredentialStoreCorruptData "bad credential")) (Right Nothing) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
@@ -3883,7 +3919,7 @@ spec = do
       accountProfileEmailVerified expectedProfile `shouldBe` True
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "", "", ""]])) accountId)
-        (\case Just profile -> not (accountProfileEmailVerified profile); Nothing -> False)
+        (\case Just profile -> not (accountProfileEmailVerified profile) && accountProfileUsername profile == Nothing && accountProfileDisplayName profile == Nothing; Nothing -> False)
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [])) accountId)
         (\case Nothing -> True; Just _ -> False)
@@ -7760,6 +7796,20 @@ spec = do
             )
         )
         `shouldSatisfy` Text.isInfixOf "data-profile-resend=\"true\""
+      let anonymousProfile =
+            renderPageBody
+              ( ProfilePage
+                  ( AuthenticatedProfilePage
+                      "Profile"
+                      "Signed in."
+                      "person@example.test"
+                      Nothing
+                      Nothing
+                      (CallToAction "Sign out" LogoutRoute "/logout")
+                  )
+              )
+      anonymousProfile `shouldNotSatisfy` Text.isInfixOf "data-profile-username"
+      anonymousProfile `shouldNotSatisfy` Text.isInfixOf "data-profile-display-name"
 
     it "renders the second page with distinct content while the shared shell stays the same" $ do
       homeShell <- renderedShell defaultAppConfig HomeRoute

@@ -1466,12 +1466,18 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication eventApplication) (waiRequest ["events"])
       Wai.responseStatus response `shouldBe` Http.status200
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8"
       lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache"
       lookup "X-Accel-Buffering" (Wai.responseHeaders response) `shouldBe` Just "no"
       lookup "Content-Security-Policy" (Wai.responseHeaders response) `shouldSatisfy` (/= Nothing)
       readResponseBody response
         `shouldReturn` "event: page-update\nid: 1\ndata: first\n\nid: 2\ndata: second\n\n"
+
+      emptyEventSource <- serverSentEventSourceFromList []
+      let emptyEventApplication = eventApplication {renderResponse = \_ -> pure (eventStreamResponse emptyEventSource)}
+      emptyResponse <- performWaiRequest (toWaiApplication emptyEventApplication) (waiRequest ["events"])
+      readResponseBody emptyResponse `shouldReturn` ""
 
     it "does not run app middleware for framework static responses" $ do
       middlewareRan <- newIORef False

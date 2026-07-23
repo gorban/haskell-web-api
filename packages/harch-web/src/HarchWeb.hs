@@ -724,7 +724,7 @@ instance (Show route, Show context) => Show (Response route context) where
       PageResponse page -> showParen (precedence > 10) (showString "PageResponse " . showsPrec 11 page)
       PageResponseWithMetadata responseBodyValue page -> showParen (precedence > 10) (showString "PageResponseWithMetadata " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 page)
       BodyResponse responseBodyValue -> showParen (precedence > 10) (showString "BodyResponse " . showsPrec 11 responseBodyValue)
-      RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . showsPrec 11 location)
+      RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . shows location)
       ClientActionBodyResponse actionResponse -> showParen (precedence > 10) (showString "ClientActionBodyResponse " . showsPrec 11 actionResponse)
       EventStreamResponse responseBodyValue _ -> showParen (precedence > 10) (showString "EventStreamResponse " . showsPrec 11 responseBodyValue . showString " <event-source>")
 
@@ -3134,10 +3134,7 @@ renderSseDataLine :: Text -> Text
 renderSseDataLine line = "data: " <> line <> "\n"
 
 nonEmptyLines :: Text -> [Text]
-nonEmptyLines value =
-  case Text.splitOn "\n" value of
-    [] -> [Text.empty]
-    linesValue -> linesValue
+nonEmptyLines = Text.splitOn "\n"
 
 liveRegionAttributes :: LiveRegion -> [HtmlAttribute]
 liveRegionAttributes liveRegion =
@@ -3247,12 +3244,10 @@ toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
   where
     streamEvents write flush = do
       maybeEvent <- nextServerSentEvent eventSource
-      case maybeEvent of
-        Nothing -> pure ()
-        Just event -> do
-          write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
-          flush
-          streamEvents write flush
+      for_ maybeEvent $ \event -> do
+        write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
+        flush
+        streamEvents write flush
 
 isClientActionRequest :: Wai.Request -> Bool
 isClientActionRequest request =
