@@ -3919,7 +3919,7 @@ spec = do
       accountProfileEmailVerified expectedProfile `shouldBe` True
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "", "", ""]])) accountId)
-        (\case Just profile -> not (accountProfileEmailVerified profile) && accountProfileUsername profile == Nothing && accountProfileDisplayName profile == Nothing; Nothing -> False)
+        (\case Just profile -> not (accountProfileEmailVerified profile) && isNothing (accountProfileUsername profile) && isNothing (accountProfileDisplayName profile); Nothing -> False)
       assertAccountStoreSuccess
         (findAccountProfile (profileStoreFor (Right [])) accountId)
         (\case Nothing -> True; Just _ -> False)

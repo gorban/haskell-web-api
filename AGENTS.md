@@ -19,3 +19,20 @@
 - Keep observability failure codes stable and low-cardinality. Detailed causes stay in private logs; HTTP server spans leave expected 4xx outcomes unset and mark 5xx responses as errors.
 - Treat complexity metrics as review signals. Exhaustive folds over closed ADTs and encoding tables may remain branch-heavy when they are total, direct, and tested; error forwarding, mixed responsibilities, and deep nesting should be refactored.
 - In tests, keep dependent actions fail-fast. Aggregate only independent expectations over the same observation, using the shared `expectAll` helper.
+
+# CI-equivalent checks
+
+Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL and Jaeger prerequisites are available, then seed the test database and run:
+
+```sh
+cabal run haskell-web-api-db -- migrate-and-seed
+./generate-code-coverage.sh
+./.github/scripts/formatting-checks.sh
+./tools/check-vscode-ormolu-formatter.sh
+cabal build all -O2 --ghc-options=-Werror
+cabal test all -O2 --test-options="--skip Unit"
+```
+
+The coverage script cleans and rebuilds all packages, runs Unit tests package by package, and requires 100% coverage for every package. Do not run another Cabal command while it is active.
+
+📦
