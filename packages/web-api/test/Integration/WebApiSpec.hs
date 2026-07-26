@@ -7,6 +7,7 @@ import Control.Concurrent (threadDelay)
 import Control.Exception (finally)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, socket, tupleToHostAddress)
@@ -53,15 +54,19 @@ spec = do
                   terminateProcess processHandle
                   _ <- waitForProcess processHandle
                   hClose outputHandle
-            responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-            runningExitCode `shouldBe` Nothing
-            readFile outputPath
-              `shouldReturn` unlines
-                [ "Loaded config file: ./.env",
-                  "Config file missing: ./.env.local",
-                  "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
-                  "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
-                ]
+            output <- readFile outputPath
+            expectAll
+              ( (responseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                  :| [ runningExitCode `shouldBe` Nothing,
+                       output
+                         `shouldBe` unlines
+                           [ "Loaded config file: ./.env",
+                             "Config file missing: ./.env.local",
+                             "Parsed listener config: http://127.0.0.1:" <> show unusedPort,
+                             "HTTP Server listening at http://127.0.0.1:" <> show unusedPort
+                           ]
+                     ]
+              )
 
     it "defaults plain HTTP traffic to HTTPS redirects when both HTTP and manual TLS listeners are configured" $
       withUnusedLoopbackPort $ \httpPort ->
@@ -101,19 +106,23 @@ spec = do
                       terminateProcess processHandle
                       _ <- waitForProcess processHandle
                       hClose outputHandle
-                redirectHeaders `shouldContain` "308 Permanent Redirect"
-                redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status")
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                    ]
+                output <- readFile outputPath
+                expectAll
+                  ( (redirectHeaders `shouldContain` "308 Permanent Redirect")
+                      :| [ redirectHeaders `shouldContain` ("Location: https://127.0.0.1:" <> show httpsPort <> "/api/status"),
+                           httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                           runningExitCode `shouldBe` Nothing,
+                           output
+                             `shouldBe` unlines
+                               [ "Loaded config file: ./.env",
+                                 "Config file missing: ./.env.local",
+                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                               ]
+                         ]
+                  )
 
     it "lets REDIRECT_HTTP_TO_HTTPS=false keep both HTTP and HTTPS listeners serving traffic" $
       withUnusedLoopbackPort $ \httpPort ->
@@ -154,18 +163,22 @@ spec = do
                       terminateProcess processHandle
                       _ <- waitForProcess processHandle
                       hClose outputHandle
-                httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}"
-                runningExitCode `shouldBe` Nothing
-                readFile outputPath
-                  `shouldReturn` unlines
-                    [ "Loaded config file: ./.env",
-                      "Config file missing: ./.env.local",
-                      "Parsed listener config: http://127.0.0.1:" <> show httpPort,
-                      "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
-                      "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
-                      "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
-                    ]
+                output <- readFile outputPath
+                expectAll
+                  ( (httpResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}")
+                      :| [ httpsResponseText `shouldBe` "{\"status\":\"ok\",\"locale\":\"en\"}",
+                           runningExitCode `shouldBe` Nothing,
+                           output
+                             `shouldBe` unlines
+                               [ "Loaded config file: ./.env",
+                                 "Config file missing: ./.env.local",
+                                 "Parsed listener config: http://127.0.0.1:" <> show httpPort,
+                                 "Parsed listener config: https://127.0.0.1:" <> show httpsPort,
+                                 "HTTP Server listening at http://127.0.0.1:" <> show httpPort,
+                                 "HTTPS Server listening at https://127.0.0.1:" <> show httpsPort
+                               ]
+                         ]
+                  )
 
   describe "database integration" $ do
     it
@@ -290,8 +303,10 @@ spec = do
           loadHomePageData runtimePostgresEffect defaultRequestContext
             >>= \case
               Left (HomePageDataError errorMessage) -> do
-                errorMessage `shouldSatisfy` (not . Text.null)
-                errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")
+                expectAll
+                  ( (errorMessage `shouldSatisfy` (not . Text.null))
+                      :| [errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")]
+                  )
               Left otherError ->
                 expectationFailure ("expected HomePageDataError, got " <> show otherError)
               Right homePageData ->
