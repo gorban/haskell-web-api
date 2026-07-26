@@ -12,7 +12,9 @@ cp "$repo_root/tools/haskell-quality-report.sh" "$fixture_root/tools/haskell-qua
 
 printf '%s\n' 'Either Left Right' 'Custom Rejected Accepted' >"$fixture_root/tools/haskell-quality-monads.conf"
 printf '%s\n' 'module Fixture where' 'forward value = case value of Left problem -> Left problem; Right result -> Right result' 'forwardCustom value = case value of Rejected problem -> Rejected problem; Accepted result -> Accepted result' >"$fixture_root/packages/core/src/Fixture.hs"
-printf '%s\n' 'module Spec where' 'spec = pure ()' 'helper value = if value then 1 else 2' >"$fixture_root/packages/core/test/Spec.hs"
+printf '%s\n' 'module Alpha (alpha, alphaPair) where' 'import Beta' 'alpha value = beta value' 'alphaPair first second = first + second' >"$fixture_root/packages/core/src/Alpha.hs"
+printf '%s\n' 'module Beta (beta) where' 'import Alpha' 'beta value = value' >"$fixture_root/packages/core/src/Beta.hs"
+printf '%s\n' 'module Spec where' 'import Alpha' 'spec = alpha 1' 'helper value = if value then 1 else 2' >"$fixture_root/packages/core/test/Spec.hs"
 printf '%s\n' 'module Vendor where' 'vendored value = case value of Left problem -> Left problem; Right result -> Right result' >"$fixture_root/packages/hspec-expectations-match/src/Vendor.hs"
 
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$*" >>"$QUALITY_ARGON_CALLS"' 'printf "%s\\n" "fixture/Production.hs" "  1:1 productionHotspot - 12" "  2:1 spec - 120" "  3:1 helperHotspot - 9"' >"$fixture_root/bin/argon"
@@ -30,6 +32,12 @@ if printf '%s' "$report_output" | rg -q 'spec - 120'; then
 fi
 printf '%s' "$report_output" | rg -q 'Either \(Left/Right\)'
 printf '%s' "$report_output" | rg -q 'Custom \(Rejected/Accepted\)'
+printf '%s' "$report_output" | rg -q 'Module-health report: production \(advisory\)'
+printf '%s' "$report_output" | rg -q 'Module-health report: test \(advisory\)'
+printf '%s' "$report_output" | rg -q 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'
+printf '%s' "$report_output" | rg -q 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+1[[:space:]]+2'
+printf '%s' "$report_output" | rg -q 'packages/core/test/Spec.hs'
+printf '%s' "$report_output" | rg -q 'Alpha -> Beta -> Alpha'
 if printf '%s' "$report_output" | rg -q 'Vendor.hs'; then
   printf '%s\n' 'quality report did not exclude vendored code' >&2
   exit 1

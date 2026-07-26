@@ -159,16 +159,20 @@ GHC 9.10.3 because that revision's dependencies do not currently resolve with th
 9.14 toolchain. The report requires `argon`, `hlint`, and `rg` on `PATH`.
 
 The report treats production functions at complexity 8 or greater as review candidates and prints
-scores above 10 first. It reports tests separately, omits the vendored `hspec-expectations-match`
-fork, and filters top-level Hspec `spec` declarations because their declarative nesting is not
-comparable to ordinary function control flow. Constructor-plumbing matches are intentionally
-heuristic: review each result and promote only established project patterns to
+scores above 10 first. It also prints advisory production and test module-health tables covering
+physical lines, top-level declarations, imports, explicit exports, maximum positional arity, local
+fan-in/fan-out, and local import cycles. It reports tests separately, omits the vendored
+`hspec-expectations-match` fork, and filters top-level Hspec `spec` declarations because their
+declarative nesting is not comparable to ordinary function control flow. Constructor-plumbing
+matches are intentionally heuristic: review each result and promote only established project
+patterns to
 [HLint hints](https://github.com/ndmitchell/hlint#customizing-the-hints) or shared combinators. Add
 project-specific failure/success constructor pairs to
 `tools/haskell-quality-monads.conf`.
 
-The fixture check exercises threshold arguments, Hspec and vendored exclusions, and both built-in
-and app-defined constructor pairs without installing Argon.
+The fixture check exercises threshold arguments, every module-health column, fan-in/fan-out and
+cycle detection, Hspec and vendored exclusions, and both built-in and app-defined constructor pairs
+without installing Argon.
 
 Useful additional GHC warnings to evaluate after the advisory backlog is clean include
 `-Wcompat`, `-Wincomplete-uni-patterns`, `-Wincomplete-record-updates`, `-Wpartial-fields`, and
