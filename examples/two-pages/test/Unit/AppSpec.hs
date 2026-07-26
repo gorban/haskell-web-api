@@ -9,6 +9,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
@@ -51,162 +52,198 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec =
   describe "Unit.App" $ do
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
-        siteName twoPageSite `shouldBe` "two-pages-example"
-        length (siteRoutes twoPageSite) `shouldBe` 5
-        staticAssetRoots (siteStaticAssets twoPageSite)
-          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
-        staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes
-        staticCacheControlSeconds (siteStaticAssets twoPageSite) `shouldBe` Nothing
-        redirectHttpToHttps (siteRequestPolicy twoPageSite) `shouldBe` False
-        httpsRedirectPort (siteRequestPolicy twoPageSite) `shouldBe` Nothing
-        strictTransportSecurity (siteRequestPolicy twoPageSite) `shouldBe` Nothing
-        trustForwardedHeaders (siteRequestPolicy twoPageSite) `shouldBe` False
-        corsPolicy (siteRequestPolicy twoPageSite) `shouldBe` defaultCorsPolicyConfig
-        responseSecurityHeaders (siteRequestPolicy twoPageSite) `shouldBe` defaultResponseSecurityHeadersConfig
+        expectAll
+          ( (siteName twoPageSite `shouldBe` "two-pages-example")
+              :| [ length (siteRoutes twoPageSite) `shouldBe` 5,
+                   staticAssetRoots (siteStaticAssets twoPageSite)
+                     `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
+                   staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes,
+                   staticCacheControlSeconds (siteStaticAssets twoPageSite) `shouldBe` Nothing,
+                   redirectHttpToHttps (siteRequestPolicy twoPageSite) `shouldBe` False,
+                   httpsRedirectPort (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
+                   strictTransportSecurity (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
+                   trustForwardedHeaders (siteRequestPolicy twoPageSite) `shouldBe` False,
+                   corsPolicy (siteRequestPolicy twoPageSite) `shouldBe` defaultCorsPolicyConfig,
+                   responseSecurityHeaders (siteRequestPolicy twoPageSite) `shouldBe` defaultResponseSecurityHeadersConfig
+                 ]
+          )
 
       it "uses a minimal local server config without extra deployment concerns" $ do
-        listenerConfigs twoPageServerConfig
-          `shouldBe` [ ListenerConfig
-                         { listenerHost = "127.0.0.1",
-                           listenerPort = 8080,
-                           listenerScheme = HarchWeb.Http,
-                           listenerTls = Nothing,
-                           listenerAcme = Nothing
-                         }
-                     ]
-        staticAssetRoots (staticAssets twoPageServerConfig)
-          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
-        staticAssetContentTypes (staticAssets twoPageServerConfig) `shouldBe` defaultStaticAssetContentTypes
-        staticCacheControlSeconds (staticAssets twoPageServerConfig) `shouldBe` Nothing
-        redirectHttpToHttps (requestPolicy twoPageServerConfig) `shouldBe` False
-        httpsRedirectPort (requestPolicy twoPageServerConfig) `shouldBe` Nothing
-        strictTransportSecurity (requestPolicy twoPageServerConfig) `shouldBe` Nothing
-        trustForwardedHeaders (requestPolicy twoPageServerConfig) `shouldBe` False
-        corsPolicy (requestPolicy twoPageServerConfig) `shouldBe` defaultCorsPolicyConfig
-        responseSecurityHeaders (requestPolicy twoPageServerConfig) `shouldBe` defaultResponseSecurityHeadersConfig
-        tracingExporter (observability twoPageServerConfig) `shouldBe` Nothing
-        metricsExporter (observability twoPageServerConfig) `shouldBe` Nothing
+        expectAll
+          ( ( listenerConfigs twoPageServerConfig
+                `shouldBe` [ ListenerConfig
+                               { listenerHost = "127.0.0.1",
+                                 listenerPort = 8080,
+                                 listenerScheme = HarchWeb.Http,
+                                 listenerTls = Nothing,
+                                 listenerAcme = Nothing
+                               }
+                           ]
+            )
+              :| [ staticAssetRoots (staticAssets twoPageServerConfig)
+                     `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
+                   staticAssetContentTypes (staticAssets twoPageServerConfig) `shouldBe` defaultStaticAssetContentTypes,
+                   staticCacheControlSeconds (staticAssets twoPageServerConfig) `shouldBe` Nothing,
+                   redirectHttpToHttps (requestPolicy twoPageServerConfig) `shouldBe` False,
+                   httpsRedirectPort (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
+                   strictTransportSecurity (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
+                   trustForwardedHeaders (requestPolicy twoPageServerConfig) `shouldBe` False,
+                   corsPolicy (requestPolicy twoPageServerConfig) `shouldBe` defaultCorsPolicyConfig,
+                   responseSecurityHeaders (requestPolicy twoPageServerConfig) `shouldBe` defaultResponseSecurityHeadersConfig,
+                   tracingExporter (observability twoPageServerConfig) `shouldBe` Nothing,
+                   metricsExporter (observability twoPageServerConfig) `shouldBe` Nothing
+                 ]
+          )
 
     describe "routeCodec" $
       it "parses and renders the supported two-page routes" $ do
-        eqViaDictionary HomeRoute HomeRoute `shouldBe` True
-        eqViaDictionary HomeRoute SecondRoute `shouldBe` False
-        eqViaDictionary LiveDataRoute LiveDataEventsRoute `shouldBe` False
-        neqViaDictionary HomeRoute SecondRoute `shouldBe` True
-        showViaDictionary HomeRoute `shouldBe` "HomeRoute"
-        showViaDictionary SecondRoute `shouldBe` "SecondRoute"
-        showViaDictionary LiveDataRoute `shouldBe` "LiveDataRoute"
-        showViaDictionary LiveDataEventsRoute `shouldBe` "LiveDataEventsRoute"
-        showViaDictionary NotFoundRoute `shouldBe` "NotFoundRoute"
-        showsPrecViaDictionary 0 HomeRoute "" `shouldBe` "HomeRoute"
-        showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]"
-        showListViaDictionary [HomeRoute, SecondRoute, LiveDataRoute] "" `shouldBe` "[HomeRoute, SecondRoute, LiveDataRoute]"
-        parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/"
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second"
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataRoute, requestContext = ()} `shouldBe` "/live-data"
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()} `shouldBe` "/live-data/events"
-        renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NotFoundRoute, requestContext = ()} `shouldBe` "/404"
-        routeHref HomeRoute `shouldBe` "/"
-        routeHref SecondRoute `shouldBe` "/second"
-        routeHref LiveDataRoute `shouldBe` "/live-data"
-        routeHref LiveDataEventsRoute `shouldBe` "/live-data/events"
-        routeHref NotFoundRoute `shouldBe` "/404"
-        notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
-        parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
+        expectAll
+          ( (eqViaDictionary HomeRoute HomeRoute `shouldBe` True)
+              :| [ eqViaDictionary HomeRoute SecondRoute `shouldBe` False,
+                   eqViaDictionary LiveDataRoute LiveDataEventsRoute `shouldBe` False,
+                   neqViaDictionary HomeRoute SecondRoute `shouldBe` True,
+                   showViaDictionary HomeRoute `shouldBe` "HomeRoute",
+                   showViaDictionary SecondRoute `shouldBe` "SecondRoute",
+                   showViaDictionary LiveDataRoute `shouldBe` "LiveDataRoute",
+                   showViaDictionary LiveDataEventsRoute `shouldBe` "LiveDataEventsRoute",
+                   showViaDictionary NotFoundRoute `shouldBe` "NotFoundRoute",
+                   showsPrecViaDictionary 0 HomeRoute "" `shouldBe` "HomeRoute",
+                   showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
+                   showListViaDictionary [HomeRoute, SecondRoute, LiveDataRoute] "" `shouldBe` "[HomeRoute, SecondRoute, LiveDataRoute]",
+                   parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = HomeRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataRoute, requestContext = ()} `shouldBe` "/live-data",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()} `shouldBe` "/live-data/events",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NotFoundRoute, requestContext = ()} `shouldBe` "/404",
+                   routeHref HomeRoute `shouldBe` "/",
+                   routeHref SecondRoute `shouldBe` "/second",
+                   routeHref LiveDataRoute `shouldBe` "/live-data",
+                   routeHref LiveDataEventsRoute `shouldBe` "/live-data/events",
+                   routeHref NotFoundRoute `shouldBe` "/404",
+                   notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = NotFoundRoute, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
+                 ]
+          )
 
     describe "buildApplication" $ do
       it "renders the home page with shared navigation and the enhancement runtime" $ do
         let application = buildApplication
-        appName application `shouldBe` "two-pages-example"
-        staticAssetRoots (applicationStaticAssets application)
-          `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}]
         response <- performWaiRequest (toWaiApplication application) (waiRequest [])
-        Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
-        Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True
-        Text.isInfixOf "<link rel=\"stylesheet\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True
-        Text.isInfixOf "<section data-page=\"home\" class=\"harch-home-root\">" responseBody `shouldBe` True
-        Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/live-data\" data-page-link=\"true\">Live updates</a></nav>" responseBody `shouldBe` True
-        Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True
-        Text.isInfixOf "<a href=\"/live-data\" data-page-link=\"true\">See live updates</a>" responseBody `shouldBe` True
-        Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True
-        Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True
-        Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
-        Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True
-        Text.isInfixOf "event.preventDefault()" responseBody `shouldBe` True
-        Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+        expectAll
+          ( (appName application `shouldBe` "two-pages-example")
+              :| [ staticAssetRoots (applicationStaticAssets application)
+                     `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
+                   Wai.responseStatus response `shouldBe` Http.status200,
+                   Text.isInfixOf "<title>Home</title>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<link rel=\"stylesheet\" href=\"/assets/two-pages.css\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<section data-page=\"home\" class=\"harch-home-root\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/live-data\" data-page-link=\"true\">Live updates</a></nav>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<a href=\"/live-data\" data-page-link=\"true\">See live updates</a>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True,
+                   Text.isInfixOf "event.preventDefault()" responseBody `shouldBe` True,
+                   Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+                 ]
+          )
 
       it "renders the second page as full SSR HTML with bootstrap hooks" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["second"])
-        Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
-        Text.isInfixOf "<title>Second</title>" responseBody `shouldBe` True
-        Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" responseBody `shouldBe` True
-        Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Back home</a>" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "<title>Second</title>" responseBody `shouldBe` True,
+                   Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Back home</a>" responseBody `shouldBe` True
+                 ]
+          )
 
       it "renders the live-data page before the optional EventSource enhancement starts" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["live-data"])
-        Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
-        Text.isInfixOf "<title>Live updates</title>" responseBody `shouldBe` True
-        Text.isInfixOf "This complete status is rendered on the server before any live connection starts." responseBody `shouldBe` True
-        Text.isInfixOf "<p id=\"live-data-status\" data-live-data-status role=\"status\">Waiting for an update.</p>" responseBody `shouldBe` True
-        Text.isInfixOf "<script type=\"module\" src=\"/assets/live-data.js\" defer></script>" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "<title>Live updates</title>" responseBody `shouldBe` True,
+                   Text.isInfixOf "This complete status is rendered on the server before any live connection starts." responseBody `shouldBe` True,
+                   Text.isInfixOf "<p id=\"live-data-status\" data-live-data-status role=\"status\">Waiting for an update.</p>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<script type=\"module\" src=\"/assets/live-data.js\" defer></script>" responseBody `shouldBe` True
+                 ]
+          )
 
       it "streams the live-data update with event-stream headers" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["live-data", "events"])
-        Wai.responseStatus response `shouldBe` Http.status200
-        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8"
-        lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache"
-        readResponseBody response `shouldReturn` "event: update\nid: example-1\ndata: The live update arrived.\n\n"
+        responseBody <- readResponseBody response
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8",
+                   lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache",
+                   responseBody `shouldBe` "event: update\nid: example-1\ndata: The live update arrived.\n\n"
+                 ]
+          )
 
       it "renders not-found responses through the same shell with a 404 status" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["missing"])
-        Wai.responseStatus response `shouldBe` Http.status404
         responseBody <- readResponseBody response
-        Text.isInfixOf "<title>Not Found</title>" responseBody `shouldBe` True
-        Text.isInfixOf "<section data-page=\"not-found\">" responseBody `shouldBe` True
-        Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a>" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status404)
+              :| [ Text.isInfixOf "<title>Not Found</title>" responseBody `shouldBe` True,
+                   Text.isInfixOf "<section data-page=\"not-found\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "<a href=\"/\" data-page-link=\"true\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a>" responseBody `shouldBe` True
+                 ]
+          )
 
       it "serves the navigation runtime through an unlabeled site route" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "navigation.js"])
-        Wai.responseStatus response `shouldBe` Http.status200
-        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8"
         responseBody <- readResponseBody response
-        Text.isInfixOf "navigateTo" responseBody `shouldBe` True
-        Text.isInfixOf "handlePopState" responseBody `shouldBe` True
-        Text.isInfixOf "data-page-link=\"true\"" responseBody `shouldBe` True
-        Text.isInfixOf "window.location.assign" responseBody `shouldBe` True
-        Text.isInfixOf "X-Harch-Action" responseBody `shouldBe` True
-        Text.isInfixOf "actionUrl.origin !== window.location.origin" responseBody `shouldBe` True
-        Text.isInfixOf "drainCapturedActions" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8",
+                   Text.isInfixOf "navigateTo" responseBody `shouldBe` True,
+                   Text.isInfixOf "handlePopState" responseBody `shouldBe` True,
+                   Text.isInfixOf "data-page-link=\"true\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "window.location.assign" responseBody `shouldBe` True,
+                   Text.isInfixOf "X-Harch-Action" responseBody `shouldBe` True,
+                   Text.isInfixOf "actionUrl.origin !== window.location.origin" responseBody `shouldBe` True,
+                   Text.isInfixOf "drainCapturedActions" responseBody `shouldBe` True
+                 ]
+          )
 
       it "serves the typed stylesheet through the configured static asset root" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "two-pages.css"])
-        Wai.responseStatus response `shouldBe` Http.status200
-        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/css; charset=utf-8"
         responseBody <- readResponseBody response
-        Text.isInfixOf ".harch-home-root" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/css; charset=utf-8",
+                   Text.isInfixOf ".harch-home-root" responseBody `shouldBe` True
+                 ]
+          )
 
       it "serves the deferred live-data enhancement as a same-origin static asset" $ do
         response <- performWaiRequest (toWaiApplication buildApplication) (waiRequest ["assets", "live-data.js"])
-        Wai.responseStatus response `shouldBe` Http.status200
-        lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8"
         responseBody <- readResponseBody response
-        Text.isInfixOf "new EventSource" responseBody `shouldBe` True
-        Text.isInfixOf "eventSource.close()" responseBody `shouldBe` True
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/javascript; charset=utf-8",
+                   Text.isInfixOf "new EventSource" responseBody `shouldBe` True,
+                   Text.isInfixOf "eventSource.close()" responseBody `shouldBe` True
+                 ]
+          )
 
       it "returns validation patches for captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example"]
@@ -219,10 +256,7 @@ spec =
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
-        Wai.responseStatus response `shouldBe` Http.status422
         responseBody <- readResponseBody response
-        Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True
-        Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True
         directResponse <-
           HarchWeb.handleClientAction
             buildApplication
@@ -230,12 +264,18 @@ spec =
               { clientActionMethod = "POST",
                 clientActionPath = "/actions/subscribe",
                 clientActionFields = [("email", "ada@example")],
-                clientActionCsrfToken = Nothing,
-                clientActionContext = ()
+              clientActionCsrfToken = Nothing,
+              clientActionContext = ()
               }
-        fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just []
-        fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just []
-        fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status422)
+              :| [ Text.isInfixOf "Enter a valid email address." responseBody `shouldBe` True,
+                   Text.isInfixOf "\"focusId\":\"subscription-email\"" responseBody `shouldBe` True,
+                   fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+                 ]
+          )
 
       it "returns a success patch for valid captured subscription actions" $ do
         actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example.com"]
@@ -248,10 +288,7 @@ spec =
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
-        Wai.responseStatus response `shouldBe` Http.status200
         responseBody <- readResponseBody response
-        Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True
-        Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True
         directResponse <-
           HarchWeb.handleClientAction
             buildApplication
@@ -259,12 +296,18 @@ spec =
               { clientActionMethod = "POST",
                 clientActionPath = "/actions/subscribe",
                 clientActionFields = [("email", "ada@example.com")],
-                clientActionCsrfToken = Nothing,
-                clientActionContext = ()
+              clientActionCsrfToken = Nothing,
+              clientActionContext = ()
               }
-        fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just []
-        fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just []
-        fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "Thanks. Your subscription request is ready." responseBody `shouldBe` True,
+                   Text.isInfixOf "\"focusId\":null" responseBody `shouldBe` True,
+                   fmap HarchWeb.clientActionHeaders directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionObservabilityAttributes directResponse `shouldBe` Just [],
+                   fmap HarchWeb.clientActionLogEntries directResponse `shouldBe` Just []
+                 ]
+          )
 
       it "leaves unrelated client actions for other app routes" $
         HarchWeb.handleClientAction
