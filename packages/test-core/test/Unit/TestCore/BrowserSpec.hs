@@ -177,6 +177,20 @@ spec = do
           )
           `shouldReturn` Right ()
 
+    it "retains the individual observation assertion helpers" $
+      withFakeRunner "normal" $ \config -> do
+        attributeResult <- runBrowserScenario config (assertAttribute (byLabel "Email address") "aria-busy" (`shouldBe` Just "false"))
+        visibilityResult <- runBrowserScenario config (assertVisible (within (byRole Navigation) (byRole Link `named` "Home")) (`shouldBe` True))
+        urlResult <- runBrowserScenario config (assertUrl (`shouldBe` "http://localhost/"))
+        metricsResult <- runBrowserScenario config (assertMetrics (`shouldBe` BrowserMetrics 1 0 1))
+        expectAll
+          ( (attributeResult `shouldBe` Right ())
+              :| [ visibilityResult `shouldBe` Right (),
+                   urlResult `shouldBe` Right (),
+                   metricsResult `shouldBe` Right ()
+                 ]
+          )
+
     it "times out with the last callback failure instead of sleeping indefinitely" $
       withFakeRunner "never-match" $ \config -> do
         result <- runBrowserScenario config (assertText (byRole Heading) (`shouldBe` "Home"))
