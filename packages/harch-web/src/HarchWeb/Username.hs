@@ -20,7 +20,7 @@ mkUsername :: Text -> Maybe Username
 mkUsername value
   | Text.length value < 3 || Text.length value > 20 = Nothing
   | Text.all isUsernameCharacter value = Just (Username value)
-  | otherwise = Nothing
+mkUsername _ = Nothing
 
 isUsernameCharacter :: Char -> Bool
 isUsernameCharacter character =

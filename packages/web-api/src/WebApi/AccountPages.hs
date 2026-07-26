@@ -876,9 +876,8 @@ validPassword :: Text -> Bool
 validPassword password = Text.length password >= 12
 
 nonEmptyText :: Text -> Maybe Text
-nonEmptyText value
-  | Text.null value = Nothing
-  | otherwise = Just value
+nonEmptyText "" = Nothing
+nonEmptyText value = Just value
 
 renderMessage :: Maybe Text -> Bool -> Text
 renderMessage maybeMessage isError =

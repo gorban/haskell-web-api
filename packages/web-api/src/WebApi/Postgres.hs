@@ -319,9 +319,8 @@ decodeAccountProfileRows accountId rows =
     _ -> Left (AccountStoreCorruptData ("unexpected account profile lookup result: " <> Text.pack (show rows)))
 
 nonEmptyText :: Text -> Maybe Text
-nonEmptyText value
-  | Text.null value = Nothing
-  | otherwise = Just value
+nonEmptyText "" = Nothing
+nonEmptyText value = Just value
 
 decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError Bool
 decodeCreatedAccount pendingAccount rows =

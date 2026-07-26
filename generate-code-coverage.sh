@@ -176,6 +176,20 @@ EOF
       rm -rf "$dest"
       mkdir -p "$dest"
       cp -r "$pkg_hpc_dir"/. "$dest"/
+
+      # The TIX also records the test-suite entry point. Keep its MIX files
+      # beside the package report so aggregate reporting never has to search
+      # mixes left behind by a different package's coverage build.
+      while IFS= read -r component_mix_dir; do
+        [ -z "$component_mix_dir" ] && continue
+        staged_component_mix="$dest/components/${component_mix_dir#dist-newstyle/}"
+        mkdir -p "$(dirname "$staged_component_mix")"
+        cp -r "$component_mix_dir" "$staged_component_mix"
+      done < <(
+        find dist-newstyle -type d -path '*/extra-compilation-artifacts/hpc/vanilla/mix' -print \
+          | awk -v package="$pkg" 'index($0, "/" package "-")' \
+          | sort
+      )
     fi
   else
     printf '\n\033[33mSkipping coverage for: %s (coverage: False in cabal.project)\033[0m\n' "$pkg"
@@ -204,6 +218,9 @@ while IFS= read -r tixfile; do
   [ -z "$tixfile" ] && continue
   aggregate_tix_paths+=("$tixfile")
 done < <(find "$coverage_staging_dir" -path '*/tix/*.tix' -type f -print | sort)
+# Each staged MIX directory is from the same coverage build as the staged TIX
+# files. Do not search the live build tree: it contains incompatible mixes from
+# the individual package runs.
 while IFS= read -r mixdir; do
   [ -z "$mixdir" ] && continue
   \cp -Rf "$mixdir"/. "$mix_cache_dir"/
@@ -211,7 +228,7 @@ while IFS= read -r mixdir; do
     hpc_search_dirs+=("$mixdir")
   fi
   copied_mix=true
-done < <(find dist-newstyle -type d -name mix -print)
+done < <(find "$coverage_staging_dir" -type d -name mix -print | sort)
 if [ -d "$hpc_work_dir" ] && find "$hpc_work_dir" -mindepth 1 -print -quit >/dev/null 2>&1; then
   \cp -Rf "$hpc_work_dir"/. "$mix_cache_dir"/
   while IFS= read -r extra_mix; do
@@ -354,6 +371,13 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
     spec_module="${spec_module//\//.}"
     report_args+=("--exclude=$spec_module")
   done < <(find packages examples -path "*/test/*Spec.hs" -type f -print | sort)
+  # Test source modules are excluded above. Each test suite also contributes a
+  # generated Main module, which has no application coverage contract.
+  while IFS= read -r test_main_mix; do
+    [ -z "$test_main_mix" ] && continue
+    test_component_package="$(basename "$(dirname "$test_main_mix")")"
+    report_args+=("--exclude=$test_component_package:Main")
+  done < <(find "$coverage_staging_dir" -path '*/components/*/mix/*-tests/Main.mix' -type f -print | sort)
 
   echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
