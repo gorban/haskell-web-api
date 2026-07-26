@@ -2816,6 +2816,13 @@ spec = do
       renderedValue (ResendVerificationDeliveryFailed "SMTP unavailable") `shouldBe` "ResendVerificationDeliveryFailed \"SMTP unavailable\""
       renderedValue ResendVerificationClockOverflow `shouldBe` "ResendVerificationClockOverflow"
       renderedValue ResendVerificationNoLongerPending `shouldBe` "ResendVerificationNoLongerPending"
+      expectAll
+        ( ((AccountStoreUnavailable "database unavailable" /= AccountStoreCorruptData "database unavailable") `shouldBe` True)
+            :| [ show [AccountStoreUnavailable "database unavailable"] `shouldBe` "[AccountStoreUnavailable \"database unavailable\"]",
+                 (ResendVerificationStoreError (AccountStoreUnavailable "database unavailable") /= ResendVerificationDeliveryFailed "database unavailable") `shouldBe` True,
+                 show [ResendVerificationStoreError (AccountStoreUnavailable "database unavailable")] `shouldBe` "[ResendVerificationStoreError (AccountStoreUnavailable \"database unavailable\")]"
+               ]
+        )
 
     it "does not send an email when registration is already present or persistence fails" $ do
       deliveredMessagesReference <- newIORef []

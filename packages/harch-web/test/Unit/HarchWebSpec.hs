@@ -1088,6 +1088,10 @@ spec = do
           otherScopedCssClass = ScopedCssClass otherScopedCssScope "title"
           globalCssClass = GlobalCssClass "visually-hidden"
           otherGlobalCssClass = GlobalCssClass "other-global"
+          liveRegion = PoliteStatus
+          otherLiveRegion = AssertiveAlert
+          serverSentEvent = ServerSentEvent {serverSentEventName = Just "status", serverSentEventId = Just "42", serverSentEventData = "Ready"}
+          otherServerSentEvent = ServerSentEvent {serverSentEventName = Nothing, serverSentEventId = Just "43", serverSentEventData = "Waiting"}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
@@ -1180,6 +1184,17 @@ spec = do
       (shell /= otherShell) `shouldBe` True
       show shell `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       show [shell] `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
+      expectAll
+        ( ((liveRegion == liveRegion) `shouldBe` True)
+            :| [ (liveRegion /= otherLiveRegion) `shouldBe` True,
+                 show liveRegion `shouldBe` "PoliteStatus",
+                 show [liveRegion] `shouldBe` "[PoliteStatus]",
+                 (serverSentEvent == serverSentEvent) `shouldBe` True,
+                 (serverSentEvent /= otherServerSentEvent) `shouldBe` True,
+                 show serverSentEvent `shouldBe` "ServerSentEvent {serverSentEventName = Just \"status\", serverSentEventId = Just \"42\", serverSentEventData = \"Ready\"}",
+                 show [serverSentEvent] `shouldBe` "[ServerSentEvent {serverSentEventName = Just \"status\", serverSentEventId = Just \"42\", serverSentEventData = \"Ready\"}]"
+               ]
+        )
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
       show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"

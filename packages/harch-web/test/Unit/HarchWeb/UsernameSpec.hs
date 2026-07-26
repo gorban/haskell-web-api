@@ -2,8 +2,10 @@
 
 module Unit.HarchWeb.UsernameSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Username (mkUsername, usernameText)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec =
@@ -19,3 +21,15 @@ spec =
       mkUsername "eve@example.test" `shouldBe` Nothing
       mkUsername "José" `shouldBe` Nothing
       mkUsername "eve name" `shouldBe` Nothing
+
+    it "exercises the opaque username's derived instances" $
+      case (mkUsername "eve_42-dev", mkUsername "other_user") of
+        (Just username, Just otherUsername) ->
+          expectAll
+            ( ((username == username) `shouldBe` True)
+                :| [ (username /= otherUsername) `shouldBe` True,
+                     show username `shouldBe` "Username {usernameText = \"eve_42-dev\"}",
+                     show [username] `shouldBe` "[Username {usernameText = \"eve_42-dev\"}]"
+                   ]
+            )
+        _ -> expectationFailure "known-valid usernames unexpectedly failed to parse"

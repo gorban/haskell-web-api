@@ -312,11 +312,12 @@ SCRIPT
   )
 
   categories=(
+    "Top-level declarations"
     "Alternatives"
     "Expressions"
   )
   for idx in "${!categories[@]}"; do
-    fraction="${fractions[$((idx + 1))]:-}"
+    fraction="${fractions[$idx]:-}"
     if [ -z "$fraction" ]; then
       continue
     fi

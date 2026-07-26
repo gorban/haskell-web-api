@@ -30,3 +30,13 @@ main = hspec $ describe "Unit.memory database adapter" $ do
     let effect = buildMemoryDatabaseEffect database
     fmap databaseResultValue (runDatabaseEffect effect (SavePost (Post "First")))
       `shouldReturn` Left (DuplicatePostTitle "First")
+
+  it "renders its closed adapter values" $ do
+    let firstPost = Post "First"
+    postTitle firstPost `shouldBe` "First"
+    show firstPost `shouldBe` "Post {postTitle = \"First\"}"
+    firstPost `shouldNotBe` Post "Second"
+    showList [firstPost] "" `shouldBe` "[Post {postTitle = \"First\"}]"
+    show (DuplicatePostTitle "First") `shouldBe` "DuplicatePostTitle \"First\""
+    DuplicatePostTitle "First" `shouldNotBe` DuplicatePostTitle "Second"
+    showList [DuplicatePostTitle "First"] "" `shouldBe` "[DuplicatePostTitle \"First\"]"
