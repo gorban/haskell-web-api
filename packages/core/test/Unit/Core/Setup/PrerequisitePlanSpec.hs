@@ -5,6 +5,7 @@
 import Core.Setup.Prerequisite qualified as Prerequisite
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
 import Core.Setup.PrerequisitePlan qualified as PrerequisitePlan
+import Data.List.NonEmpty (NonEmpty (..))
 
 spec = do
   describe "planSetupPrerequisites" $ do
@@ -113,42 +114,28 @@ spec = do
             tracingPlan
               { PrerequisitePlan.tracingAutostartPlan = Just PrerequisitePlan.defaultContainerAutostartPlan
               }
-      PrerequisitePlan.autostartRuntimes PrerequisitePlan.defaultContainerAutostartPlan
-        `shouldBe` [PrerequisitePlan.PodmanRuntime, PrerequisitePlan.DockerRuntime]
-      PrerequisitePlan.PodmanRuntime `shouldBe` PrerequisitePlan.PodmanRuntime
-      PrerequisitePlan.PodmanRuntime `shouldNotBe` PrerequisitePlan.DockerRuntime
-      PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` PrerequisitePlan.defaultContainerAutostartPlan
-      PrerequisitePlan.defaultContainerAutostartPlan
-        `shouldNotBe` PrerequisitePlan.ContainerAutostartPlan
-          { PrerequisitePlan.autostartRuntimes = [PrerequisitePlan.DockerRuntime]
-          }
-      databasePlan `shouldBe` databasePlan
-      databasePlan `shouldNotBe` otherDatabasePlan
-      tracingPlan `shouldBe` tracingPlan
-      tracingPlan `shouldNotBe` otherTracingPlan
-      appPlan `shouldBe` appPlan
-      appPlan
-        `shouldNotBe` PrerequisitePlan.AppPrerequisitePlan
-          { PrerequisitePlan.databasePrerequisitePlan = databasePlan,
-            PrerequisitePlan.tracingPrerequisitePlan = Nothing
-          }
-      show PrerequisitePlan.PodmanRuntime `shouldBe` "PodmanRuntime"
-      showsPrec 11 PrerequisitePlan.PodmanRuntime ""
-        `shouldBe` "PodmanRuntime"
-      show [PrerequisitePlan.PodmanRuntime] `shouldBe` "[PodmanRuntime]"
-      show PrerequisitePlan.defaultContainerAutostartPlan
-        `shouldBe` "ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}"
-      show databasePlan
-        `shouldBe` "DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}"
-      show tracingPlan
-        `shouldBe` "TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing}"
-      show appPlan
-        `shouldBe` "AppPrerequisitePlan {databasePrerequisitePlan = DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}, tracingPrerequisitePlan = Just (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})}"
-      show [PrerequisitePlan.defaultContainerAutostartPlan]
-        `shouldBe` "[ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}]"
-      show [databasePlan]
-        `shouldBe` "[DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}]"
-      show [tracingPlan]
-        `shouldBe` "[TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing}]"
-      show [appPlan]
-        `shouldBe` "[AppPrerequisitePlan {databasePrerequisitePlan = DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}, tracingPrerequisitePlan = Just (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})}]"
+      expectAll
+        ( (PrerequisitePlan.autostartRuntimes PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` [PrerequisitePlan.PodmanRuntime, PrerequisitePlan.DockerRuntime])
+            :| [ PrerequisitePlan.PodmanRuntime `shouldBe` PrerequisitePlan.PodmanRuntime,
+                 PrerequisitePlan.PodmanRuntime `shouldNotBe` PrerequisitePlan.DockerRuntime,
+                 PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` PrerequisitePlan.defaultContainerAutostartPlan,
+                 PrerequisitePlan.defaultContainerAutostartPlan `shouldNotBe` PrerequisitePlan.ContainerAutostartPlan {PrerequisitePlan.autostartRuntimes = [PrerequisitePlan.DockerRuntime]},
+                 databasePlan `shouldBe` databasePlan,
+                 databasePlan `shouldNotBe` otherDatabasePlan,
+                 tracingPlan `shouldBe` tracingPlan,
+                 tracingPlan `shouldNotBe` otherTracingPlan,
+                 appPlan `shouldBe` appPlan,
+                 appPlan `shouldNotBe` PrerequisitePlan.AppPrerequisitePlan {PrerequisitePlan.databasePrerequisitePlan = databasePlan, PrerequisitePlan.tracingPrerequisitePlan = Nothing},
+                 show PrerequisitePlan.PodmanRuntime `shouldBe` "PodmanRuntime",
+                 showsPrec 11 PrerequisitePlan.PodmanRuntime "" `shouldBe` "PodmanRuntime",
+                 show [PrerequisitePlan.PodmanRuntime] `shouldBe` "[PodmanRuntime]",
+                 show PrerequisitePlan.defaultContainerAutostartPlan `shouldBe` "ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}",
+                 show databasePlan `shouldBe` "DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}",
+                 show tracingPlan `shouldBe` "TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing}",
+                 show appPlan `shouldBe` "AppPrerequisitePlan {databasePrerequisitePlan = DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}, tracingPrerequisitePlan = Just (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})}",
+                 show [PrerequisitePlan.defaultContainerAutostartPlan] `shouldBe` "[ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]}]",
+                 show [databasePlan] `shouldBe` "[DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}]",
+                 show [tracingPlan] `shouldBe` "[TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing}]",
+                 show [appPlan] `shouldBe` "[AppPrerequisitePlan {databasePrerequisitePlan = DatabasePrerequisitePlan {databaseCheckEndpoint = TcpEndpoint {tcpEndpointHost = \"db.internal\", tcpEndpointPort = 6543}, databaseAutostartPlan = Just (ContainerAutostartPlan {autostartRuntimes = [PodmanRuntime,DockerRuntime]})}, tracingPrerequisitePlan = Just (TracingPrerequisitePlan {tracingCheckEndpoint = \"http://127.0.0.1:4318\", tracingAutostartPlan = Nothing})}]"
+               ]
+        )

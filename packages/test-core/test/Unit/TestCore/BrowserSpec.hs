@@ -25,13 +25,16 @@ data FieldState = FieldState
 
 spec = do
   describe "browser configuration" $ do
-    it "uses the bundled Playwright runner defaults" $ do
-      browserRunnerCommand defaultPlaywrightBrowserConfig `shouldBe` "node"
-      browserRunnerArguments defaultPlaywrightBrowserConfig `shouldBe` ["packages/test-core/playwright-runner/runner.cjs"]
-      browserHeadless defaultPlaywrightBrowserConfig `shouldBe` True
-      browserPauseOnFailure defaultPlaywrightBrowserConfig `shouldBe` False
-      browserTimeoutMilliseconds defaultPlaywrightBrowserConfig `shouldBe` 10000
-      browserArtifactDirectory defaultPlaywrightBrowserConfig `shouldBe` "test-results/playwright"
+    it "uses the bundled Playwright runner defaults" $
+      expectAll
+        ( (browserRunnerCommand defaultPlaywrightBrowserConfig `shouldBe` "node")
+            :| [ browserRunnerArguments defaultPlaywrightBrowserConfig `shouldBe` ["packages/test-core/playwright-runner/runner.cjs"],
+                 browserHeadless defaultPlaywrightBrowserConfig `shouldBe` True,
+                 browserPauseOnFailure defaultPlaywrightBrowserConfig `shouldBe` False,
+                 browserTimeoutMilliseconds defaultPlaywrightBrowserConfig `shouldBe` 10000,
+                 browserArtifactDirectory defaultPlaywrightBrowserConfig `shouldBe` "test-results/playwright"
+               ]
+        )
 
     it "parses runner, timeout, artifact, and browser overrides" $
       parseBrowserConfig
