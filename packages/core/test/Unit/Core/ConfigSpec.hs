@@ -5,6 +5,7 @@
 
 import Control.Exception (finally)
 import Core.Config qualified as CoreConfig
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import System.Directory (createDirectory, removePathForcibly)
 import System.IO (hClose, hPutStr)
@@ -32,17 +33,19 @@ spec = do
           ]
 
     it "rejects malformed override lines with the original line content" $ do
-      CoreConfig.parseConfigOverridesFile
-        ( Text.unlines
-            [ "APP_TITLE_PREFIX=custom-app",
-              "BROKEN_LINE"
-            ]
+      expectAll
+        ( ( CoreConfig.parseConfigOverridesFile
+              ( Text.unlines
+                  [ "APP_TITLE_PREFIX=custom-app",
+                    "BROKEN_LINE"
+                  ]
+              )
+              `shouldBe` Left (CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE")
+          )
+            :| [ CoreConfig.parseConfigOverridesFile "   =value" `shouldBe` Left (CoreConfig.InvalidConfigOverridesLine 1 "   =value"),
+                 show (CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE") `shouldBe` "InvalidConfigOverridesLine 2 \"BROKEN_LINE\""
+               ]
         )
-        `shouldBe` Left (CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE")
-      CoreConfig.parseConfigOverridesFile "   =value"
-        `shouldBe` Left (CoreConfig.InvalidConfigOverridesLine 1 "   =value")
-      show (CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE")
-        `shouldBe` "InvalidConfigOverridesLine 2 \"BROKEN_LINE\""
 
   describe "loadConfigOverridesFile" $ do
     it "returns no overrides when the file does not exist" $
@@ -80,10 +83,10 @@ spec = do
 
     it "uses the last declaration within each layer" $ do
       let committedDefaults = [("KEY", "first"), ("KEY", "second")]
-      CoreConfig.lookupConfigValue "KEY" committedDefaults [] []
-        `shouldBe` Just "second"
-      CoreConfig.lookupConfigValue "MISSING" committedDefaults [] []
-        `shouldBe` Nothing
+      expectAll
+        ( (CoreConfig.lookupConfigValue "KEY" committedDefaults [] [] `shouldBe` Just "second")
+            :| [CoreConfig.lookupConfigValue "MISSING" committedDefaults [] [] `shouldBe` Nothing]
+        )
 
   describe "parsePositiveInt" $ do
     it "accepts positive integers" $
@@ -91,42 +94,45 @@ spec = do
         `shouldBe` Right 5001
 
     it "rejects zero, negatives, and non-numeric values" $ do
-      CoreConfig.parsePositiveInt "PORT" "0"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "0")
-      CoreConfig.parsePositiveInt "PORT" "-1"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "-1")
-      CoreConfig.parsePositiveInt "PORT" "abc"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "abc")
+      expectAll
+        ( (CoreConfig.parsePositiveInt "PORT" "0" `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "0"))
+            :| [ CoreConfig.parsePositiveInt "PORT" "-1" `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "-1"),
+                 CoreConfig.parsePositiveInt "PORT" "abc" `shouldBe` Left (CoreConfig.InvalidConfigValue "PORT" "abc")
+               ]
+        )
 
   describe "parseNonNegativeInt" $ do
     it "accepts zero and positive integers" $ do
-      CoreConfig.parseNonNegativeInt "CACHE" "0"
-        `shouldBe` Right 0
-      CoreConfig.parseNonNegativeInt "CACHE" "60"
-        `shouldBe` Right 60
+      expectAll
+        ( (CoreConfig.parseNonNegativeInt "CACHE" "0" `shouldBe` Right 0)
+            :| [CoreConfig.parseNonNegativeInt "CACHE" "60" `shouldBe` Right 60]
+        )
 
     it "rejects negatives and non-numeric values" $ do
-      CoreConfig.parseNonNegativeInt "CACHE" "-1"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "-1")
-      CoreConfig.parseNonNegativeInt "CACHE" "nope"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "nope")
+      expectAll
+        ( (CoreConfig.parseNonNegativeInt "CACHE" "-1" `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "-1"))
+            :| [CoreConfig.parseNonNegativeInt "CACHE" "nope" `shouldBe` Left (CoreConfig.InvalidConfigValue "CACHE" "nope")]
+        )
 
   describe "parseBoolean" $ do
     it "accepts common truthy and falsey values" $ do
-      CoreConfig.parseBoolean "FLAG" "true" `shouldBe` Right True
-      CoreConfig.parseBoolean "FLAG" "TRUE" `shouldBe` Right True
-      CoreConfig.parseBoolean "FLAG" "1" `shouldBe` Right True
-      CoreConfig.parseBoolean "FLAG" "yes" `shouldBe` Right True
-      CoreConfig.parseBoolean "FLAG" "false" `shouldBe` Right False
-      CoreConfig.parseBoolean "FLAG" "FALSE" `shouldBe` Right False
-      CoreConfig.parseBoolean "FLAG" "0" `shouldBe` Right False
-      CoreConfig.parseBoolean "FLAG" "no" `shouldBe` Right False
+      expectAll
+        ( (CoreConfig.parseBoolean "FLAG" "true" `shouldBe` Right True)
+            :| [ CoreConfig.parseBoolean "FLAG" "TRUE" `shouldBe` Right True,
+                 CoreConfig.parseBoolean "FLAG" "1" `shouldBe` Right True,
+                 CoreConfig.parseBoolean "FLAG" "yes" `shouldBe` Right True,
+                 CoreConfig.parseBoolean "FLAG" "false" `shouldBe` Right False,
+                 CoreConfig.parseBoolean "FLAG" "FALSE" `shouldBe` Right False,
+                 CoreConfig.parseBoolean "FLAG" "0" `shouldBe` Right False,
+                 CoreConfig.parseBoolean "FLAG" "no" `shouldBe` Right False
+               ]
+        )
 
     it "rejects invalid boolean values explicitly" $ do
-      CoreConfig.parseBoolean "FLAG" "sometimes"
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "sometimes")
-      CoreConfig.parseBoolean "FLAG" ""
-        `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "")
+      expectAll
+        ( (CoreConfig.parseBoolean "FLAG" "sometimes" `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "sometimes"))
+            :| [CoreConfig.parseBoolean "FLAG" "" `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "")]
+        )
 
   describe "parseDelimitedTexts" $ do
     it "parses comma-delimited values" $
@@ -158,10 +164,10 @@ spec = do
               ("LISTENER_BAD_HOST", "ignored"),
               ("LISTENER_1", "ignored")
             ]
-      CoreConfig.declaredIndices "LISTENER_" entries
-        `shouldBe` [1, 2]
-      CoreConfig.declaredIndices "SERVER_" entries
-        `shouldBe` []
+      expectAll
+        ( (CoreConfig.declaredIndices "LISTENER_" entries `shouldBe` [1, 2])
+            :| [CoreConfig.declaredIndices "SERVER_" entries `shouldBe` []]
+        )
 
   describe "indexedConfigKey" $ do
     it "builds indexed configuration keys predictably" $
@@ -174,25 +180,20 @@ spec = do
           invalidPort = CoreConfig.InvalidConfigValue "PORT" "abc"
           brokenLine = CoreConfig.InvalidConfigOverridesLine 2 "BROKEN_LINE"
           unreadableFile = CoreConfig.UnreadableConfigOverridesFile "permission denied"
-      show (CoreConfig.MissingConfigValue "PORT")
-        `shouldBe` "MissingConfigValue \"PORT\""
-      show (CoreConfig.InvalidConfigValue "PORT" "abc")
-        `shouldBe` "InvalidConfigValue \"PORT\" \"abc\""
-      show unreadableFile
-        `shouldBe` "UnreadableConfigOverridesFile \"permission denied\""
-      showsPrec 11 missingPort ""
-        `shouldBe` "(MissingConfigValue \"PORT\")"
-      showsPrec 11 invalidPort ""
-        `shouldBe` "(InvalidConfigValue \"PORT\" \"abc\")"
-      show [missingPort]
-        `shouldBe` "[MissingConfigValue \"PORT\"]"
-      show [brokenLine]
-        `shouldBe` "[InvalidConfigOverridesLine 2 \"BROKEN_LINE\"]"
-      show [unreadableFile]
-        `shouldBe` "[UnreadableConfigOverridesFile \"permission denied\"]"
-      missingPort `shouldBe` missingPort
-      missingPort `shouldNotBe` invalidPort
-      brokenLine `shouldBe` brokenLine
-      brokenLine `shouldNotBe` CoreConfig.InvalidConfigOverridesLine 3 "OTHER_LINE"
-      unreadableFile `shouldBe` unreadableFile
-      unreadableFile `shouldNotBe` brokenLine
+      expectAll
+        ( (show (CoreConfig.MissingConfigValue "PORT") `shouldBe` "MissingConfigValue \"PORT\"")
+            :| [ show (CoreConfig.InvalidConfigValue "PORT" "abc") `shouldBe` "InvalidConfigValue \"PORT\" \"abc\"",
+                 show unreadableFile `shouldBe` "UnreadableConfigOverridesFile \"permission denied\"",
+                 showsPrec 11 missingPort "" `shouldBe` "(MissingConfigValue \"PORT\")",
+                 showsPrec 11 invalidPort "" `shouldBe` "(InvalidConfigValue \"PORT\" \"abc\")",
+                 show [missingPort] `shouldBe` "[MissingConfigValue \"PORT\"]",
+                 show [brokenLine] `shouldBe` "[InvalidConfigOverridesLine 2 \"BROKEN_LINE\"]",
+                 show [unreadableFile] `shouldBe` "[UnreadableConfigOverridesFile \"permission denied\"]",
+                 missingPort `shouldBe` missingPort,
+                 missingPort `shouldNotBe` invalidPort,
+                 brokenLine `shouldBe` brokenLine,
+                 brokenLine `shouldNotBe` CoreConfig.InvalidConfigOverridesLine 3 "OTHER_LINE",
+                 unreadableFile `shouldBe` unreadableFile,
+                 unreadableFile `shouldNotBe` brokenLine
+               ]
+        )

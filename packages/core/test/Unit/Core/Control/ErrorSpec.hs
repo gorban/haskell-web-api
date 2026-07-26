@@ -1,6 +1,7 @@
 {-# SPEC #-}
 
 import Control.Monad.Except (runExceptT, throwError)
+import Data.List.NonEmpty (NonEmpty (..))
 
 spec = describe "handleError" $ do
   it "returns the value when computation succeeds" $ do
@@ -17,9 +18,13 @@ spec = describe "handleError" $ do
     result `shouldBe` expectedError
 
   it "lifts present optional values and explains missing ones" $ do
-    runExceptT (fromMaybeError "missing" (Just "present")) `shouldReturn` Right "present"
-    runExceptT (fromMaybeError "missing" (Nothing :: Maybe String)) `shouldReturn` Left "missing"
+    expectAll
+      ( (runExceptT (fromMaybeError "missing" (Just "present")) `shouldReturn` Right "present")
+          :| [runExceptT (fromMaybeError "missing" (Nothing :: Maybe String)) `shouldReturn` Left "missing"]
+      )
 
   it "continues only when a required condition holds" $ do
-    runExceptT (guardError "rejected" True) `shouldReturn` Right ()
-    runExceptT (guardError "rejected" False) `shouldReturn` Left "rejected"
+    expectAll
+      ( (runExceptT (guardError "rejected" True) `shouldReturn` Right ())
+          :| [runExceptT (guardError "rejected" False) `shouldReturn` Left "rejected"]
+      )
