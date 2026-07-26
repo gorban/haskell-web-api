@@ -15,6 +15,7 @@ import HarchWeb.RecoveryCode (RecoveryCode, hashRecoveryCodeWithSalt, mkRecovery
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkSecretEncryptionKey)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment
   ( MfaEnrollmentConfirmation (..),
@@ -109,9 +110,10 @@ spec = do
       confirmationCalls <- readIORef confirmationCallsReference
       case confirmationCalls of
         [(receivedAccountId, hashes, now)] -> do
-          receivedAccountId `shouldBe` accountId
-          length hashes `shouldBe` 8
-          now `shouldBe` 500
+          expectAll
+            ( (receivedAccountId `shouldBe` accountId)
+                :| [length hashes `shouldBe` 8, now `shouldBe` 500]
+            )
         _ -> expectationFailure "expected one confirmation call"
 
     it "rejects missing, corrupt, already-confirmed, invalid-code, hash, and store outcomes" $ do
@@ -156,13 +158,16 @@ spec = do
     it "keeps enrollment results comparable without rendering their secrets" $ do
       let secret = requiredTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
           recoveryCode = requiredRecoveryCode "0123456789ABCDEF0123"
-      sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentInvalidCode `shouldBe` True
-      sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentNotFound `shouldBe` False
-      MfaEnrollmentInvalidCode /= MfaEnrollmentNotFound `shouldBe` True
-      sameMfaEnrollmentStart (MfaEnrollmentStart secret) (MfaEnrollmentStart secret) `shouldBe` True
-      MfaEnrollmentStart secret /= MfaEnrollmentStart (requiredTotpSecret "KRUGS4ZANFZSAYJAON2HE2LOM4XXXXXX") `shouldBe` True
-      sameMfaEnrollmentConfirmation (MfaEnrollmentConfirmation (recoveryCode :| [])) (MfaEnrollmentConfirmation (recoveryCode :| [])) `shouldBe` True
-      MfaEnrollmentConfirmation (recoveryCode :| []) /= MfaEnrollmentConfirmation (requiredRecoveryCode "ABCDEF0123456789ABCD" :| []) `shouldBe` True
+      expectAll
+        ( (sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentInvalidCode `shouldBe` True)
+            :| [ sameMfaEnrollmentError MfaEnrollmentInvalidCode MfaEnrollmentNotFound `shouldBe` False,
+                 MfaEnrollmentInvalidCode /= MfaEnrollmentNotFound `shouldBe` True,
+                 sameMfaEnrollmentStart (MfaEnrollmentStart secret) (MfaEnrollmentStart secret) `shouldBe` True,
+                 MfaEnrollmentStart secret /= MfaEnrollmentStart (requiredTotpSecret "KRUGS4ZANFZSAYJAON2HE2LOM4XXXXXX") `shouldBe` True,
+                 sameMfaEnrollmentConfirmation (MfaEnrollmentConfirmation (recoveryCode :| [])) (MfaEnrollmentConfirmation (recoveryCode :| [])) `shouldBe` True,
+                 MfaEnrollmentConfirmation (recoveryCode :| []) /= MfaEnrollmentConfirmation (requiredRecoveryCode "ABCDEF0123456789ABCD" :| []) `shouldBe` True
+               ]
+        )
 
 shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do
