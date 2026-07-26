@@ -146,6 +146,7 @@ test-suite harch-web-tests
     pem,
     process,
     temporary,
+    test-core,
     text,
     time,
     tls,

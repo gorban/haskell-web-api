@@ -12,6 +12,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (isHexDigit)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -34,6 +35,7 @@ import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Posix.Signals (raiseSignal, sigINT, sigTERM)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import Text.Read (readMaybe)
 
 data TestContext = TestContext
@@ -3984,61 +3986,64 @@ spec = do
           } <-
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
-        requestMethod `shouldBe` "POST"
-        requestPath `shouldBe` "/v1/traces"
-        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
-        lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token"
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"service.name\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"sample-app\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"telemetry.sdk.language\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_CLIENT\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-second-page-summary\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-home-page-summary\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-health-check\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.phase\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"request-policy\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"route-match\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"render-response\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.name\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.query.template\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.start_monotonic_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.start_offset_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.duration_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.start_offset_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.duration_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.start_offset_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.duration_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.start_offset_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.duration_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.start_monotonic_ns\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.duration_ns\""
-        Text.count "\"name\":\"GET /known\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"HarchWeb request policy\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"HarchWeb route match\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"HarchWeb render response\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1
-        Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1
-        Text.count "\"key\":\"db.system\"" requestBodyText `shouldBe` 3
-        Text.count "\"key\":\"db.operation.name\"" requestBodyText `shouldBe` 3
-        Text.count "\"key\":\"db.query.template\"" requestBodyText `shouldBe` 3
-        Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1
-        Text.count "\"kind\":\"SPAN_KIND_INTERNAL\"" requestBodyText `shouldBe` 3
-        Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 3
-        extractQuotedJsonField "traceId" requestBodyText
-          `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId)
-        extractQuotedJsonField "spanId" requestBodyText
-          `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
+        expectAll
+          ( (requestMethod `shouldBe` "POST")
+              :| [ requestPath `shouldBe` "/v1/traces",
+                   lookup Http.hContentType requestHeaders `shouldBe` Just "application/json",
+                   lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"service.name\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"sample-app\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"telemetry.sdk.language\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /known\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_CLIENT\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"parentSpanId\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb request policy\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb route match\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"HarchWeb render response\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-second-page-summary\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-home-page-summary\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB load-health-check\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.span.phase\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"request-policy\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"route-match\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"render-response\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"exception.type\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.operation.name\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"db.query.template\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.start_monotonic_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.start_offset_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.request-policy.duration_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.start_offset_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.route-match.duration_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.start_offset_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.phase.render-response.duration_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.start_offset_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.span.duration_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.start_monotonic_ns\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"db.operation.duration_ns\"",
+                   Text.count "\"name\":\"GET /known\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"HarchWeb request policy\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"HarchWeb route match\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"HarchWeb render response\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"key\":\"db.system\"" requestBodyText `shouldBe` 3,
+                   Text.count "\"key\":\"db.operation.name\"" requestBodyText `shouldBe` 3,
+                   Text.count "\"key\":\"db.query.template\"" requestBodyText `shouldBe` 3,
+                   Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"kind\":\"SPAN_KIND_INTERNAL\"" requestBodyText `shouldBe` 3,
+                   Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 3,
+                   extractQuotedJsonField "traceId" requestBodyText
+                     `shouldSatisfy` maybe False (\traceId -> Text.length traceId == 32 && Text.all isHexDigit traceId),
+                   extractQuotedJsonField "spanId" requestBodyText
+                     `shouldSatisfy` maybe False (\spanId -> Text.length spanId == 16 && Text.all isHexDigit spanId)
+                 ]
+          )
         expectPlausibleEpochNanoTimestamps requestBodyText
         let startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
             endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
@@ -4069,29 +4074,35 @@ spec = do
               healthCheckDbDuration
               ]
             ) -> do
-              rootDuration `shouldBe` 5000000
-              rootEnd - rootStart `shouldBe` rootDuration
-              requestPolicyStart - rootStart `shouldBe` 0
-              requestPolicyDuration `shouldBe` 250000
-              requestPolicyEnd `shouldBe` requestPolicyStart + requestPolicyDuration
-              routeMatchStart - rootStart `shouldBe` 500000
-              routeMatchDuration `shouldBe` 750000
-              routeMatchEnd `shouldBe` routeMatchStart + routeMatchDuration
-              renderResponseStart - rootStart `shouldBe` 1500000
-              renderResponseDuration `shouldBe` 3000000
-              renderResponseEnd `shouldBe` renderResponseStart + renderResponseDuration
-              secondPageDbStart - rootStart `shouldBe` 2000000
-              secondPageDbDuration `shouldBe` 1250000
-              secondPageDbEnd `shouldBe` secondPageDbStart + secondPageDbDuration
-              homePageDbStart `shouldBe` rootStart
-              homePageDbDuration `shouldBe` rootDuration
-              homePageDbEnd `shouldBe` rootEnd
-              healthCheckDbStart `shouldBe` rootStart
-              healthCheckDbDuration `shouldBe` rootDuration
-              healthCheckDbEnd `shouldBe` rootEnd
-              mapM_
-                (`shouldSatisfy` (<= rootEnd))
-                [requestPolicyEnd, routeMatchEnd, renderResponseEnd, secondPageDbEnd, homePageDbEnd, healthCheckDbEnd]
+              expectAll
+                ( (rootDuration `shouldBe` 5000000)
+                    :| [ rootEnd - rootStart `shouldBe` rootDuration,
+                         requestPolicyStart - rootStart `shouldBe` 0,
+                         requestPolicyDuration `shouldBe` 250000,
+                         requestPolicyEnd `shouldBe` requestPolicyStart + requestPolicyDuration,
+                         routeMatchStart - rootStart `shouldBe` 500000,
+                         routeMatchDuration `shouldBe` 750000,
+                         routeMatchEnd `shouldBe` routeMatchStart + routeMatchDuration,
+                         renderResponseStart - rootStart `shouldBe` 1500000,
+                         renderResponseDuration `shouldBe` 3000000,
+                         renderResponseEnd `shouldBe` renderResponseStart + renderResponseDuration,
+                         secondPageDbStart - rootStart `shouldBe` 2000000,
+                         secondPageDbDuration `shouldBe` 1250000,
+                         secondPageDbEnd `shouldBe` secondPageDbStart + secondPageDbDuration,
+                         homePageDbStart `shouldBe` rootStart,
+                         homePageDbDuration `shouldBe` rootDuration,
+                         homePageDbEnd `shouldBe` rootEnd,
+                         healthCheckDbStart `shouldBe` rootStart,
+                         healthCheckDbDuration `shouldBe` rootDuration,
+                         healthCheckDbEnd `shouldBe` rootEnd,
+                         requestPolicyEnd `shouldSatisfy` (<= rootEnd),
+                         routeMatchEnd `shouldSatisfy` (<= rootEnd),
+                         renderResponseEnd `shouldSatisfy` (<= rootEnd),
+                         secondPageDbEnd `shouldSatisfy` (<= rootEnd),
+                         homePageDbEnd `shouldSatisfy` (<= rootEnd),
+                         healthCheckDbEnd `shouldSatisfy` (<= rootEnd)
+                       ]
+                )
           _ ->
             expectationFailure "expected rooted OTLP timing data for one request span, three phase spans, and three DB spans"
 
@@ -4208,13 +4219,16 @@ spec = do
             startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
             endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
             durations = zipWith (-) endTimes startTimes
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /health\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB ping-database\""
-        Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1
-        Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 1
-        startTimes `shouldSatisfy` ((== 2) . length)
-        endTimes `shouldSatisfy` ((== 2) . length)
-        durations `shouldBe` [2000, 2000]
+        expectAll
+          ( (requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"GET /health\"")
+              :| [ requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"DB ping-database\"",
+                   Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1,
+                   Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 1,
+                   startTimes `shouldSatisfy` ((== 2) . length),
+                   endTimes `shouldSatisfy` ((== 2) . length),
+                   durations `shouldBe` [2000, 2000]
+                 ]
+          )
         case startTimes of
           [rootStart, childStart] -> rootStart `shouldBe` childStart
           _ -> expectationFailure "expected root and child OTLP spans"
@@ -4281,22 +4295,25 @@ spec = do
           } <-
           readMVar capturedRequestReference
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
-        requestMethod `shouldBe` "POST"
-        requestPath `shouldBe` "/v1/traces"
-        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
-        lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token"
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
-        expectPlausibleEpochNanoTimestamps requestBodyText
         let startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
             endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
-        startTimes `shouldSatisfy` ((== 1) . length)
-        endTimes `shouldSatisfy` ((== 1) . length)
-        zipWith (-) endTimes startTimes `shouldBe` [1000]
+        expectAll
+          ( (requestMethod `shouldBe` "POST")
+              :| [ requestPath `shouldBe` "/v1/traces",
+                   lookup Http.hContentType requestHeaders `shouldBe` Just "application/json",
+                   lookup "authorization" requestHeaders `shouldBe` Just "Bearer sample-token",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION insecure-connection-denied\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"InsecureConnectionDenied\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\"",
+                   expectPlausibleEpochNanoTimestamps requestBodyText,
+                   startTimes `shouldSatisfy` ((== 1) . length),
+                   endTimes `shouldSatisfy` ((== 1) . length),
+                   zipWith (-) endTimes startTimes `shouldBe` [1000]
+                 ]
+          )
 
     it "posts OTLP trace payloads for prematurely closed connection observability" $
       withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
@@ -4332,21 +4349,24 @@ spec = do
         let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
             startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" requestBodyText
             endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" requestBodyText
-        requestMethod `shouldBe` "POST"
-        requestPath `shouldBe` "/v1/traces"
-        lookup Http.hContentType requestHeaders `shouldBe` Just "application/json"
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION client-closed-connection-prematurely\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\""
-        requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"ClientClosedConnectionPrematurely\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.connection.event\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"client-closed-connection-prematurely\""
-        requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\""
-        expectPlausibleEpochNanoTimestamps requestBodyText
-        startTimes `shouldSatisfy` ((== 1) . length)
-        endTimes `shouldSatisfy` ((== 1) . length)
-        zipWith (-) endTimes startTimes `shouldBe` [1000]
+        expectAll
+          ( (requestMethod `shouldBe` "POST")
+              :| [ requestPath `shouldBe` "/v1/traces",
+                   lookup Http.hContentType requestHeaders `shouldBe` Just "application/json",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"name\":\"CONNECTION client-closed-connection-prematurely\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_INTERNAL\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"kind\":\"SPAN_KIND_SERVER\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"network.peer.address\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"ClientClosedConnectionPrematurely\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"harch.connection.event\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"client-closed-connection-prematurely\"",
+                   requestBodyText `shouldSatisfy` Text.isInfixOf "\"STATUS_CODE_ERROR\"",
+                   expectPlausibleEpochNanoTimestamps requestBodyText,
+                   startTimes `shouldSatisfy` ((== 1) . length),
+                   endTimes `shouldSatisfy` ((== 1) . length),
+                   zipWith (-) endTimes startTimes `shouldBe` [1000]
+                 ]
+          )
 
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
@@ -4888,11 +4908,14 @@ spec = do
               `shouldThrow` (\exception -> "user error (Failed to launch certbot for ACME listener on 127.0.0.1:5443:" `isPrefixOf` show (exception :: IOError))
             logEntries <- readIORef logEntriesReference
             case logEntries of
-              [registeredLog, launchLog, failureLog, unregisterLog] -> do
-                registeredLog `shouldBe` "ACME certbot webroot registered for listener 127.0.0.1:5443"
-                launchLog `shouldBe` "Launching certbot for ACME listener on 127.0.0.1:5443"
-                failureLog `shouldSatisfy` Text.isPrefixOf "Failed to launch certbot for ACME listener on 127.0.0.1:5443: "
-                unregisterLog `shouldBe` "ACME certbot webroot unregistered for listener 127.0.0.1:5443"
+              [registeredLog, launchLog, failureLog, unregisterLog] ->
+                expectAll
+                  ( (registeredLog `shouldBe` "ACME certbot webroot registered for listener 127.0.0.1:5443")
+                      :| [ launchLog `shouldBe` "Launching certbot for ACME listener on 127.0.0.1:5443",
+                           failureLog `shouldSatisfy` Text.isPrefixOf "Failed to launch certbot for ACME listener on 127.0.0.1:5443: ",
+                           unregisterLog `shouldBe` "ACME certbot webroot unregistered for listener 127.0.0.1:5443"
+                         ]
+                  )
               _ ->
                 expectationFailure ("Expected four ACME certbot lifecycle logs, got: " <> show logEntries)
 
@@ -6319,11 +6342,14 @@ expectPlausibleEpochNanoTimestamps bodyText = do
   startTimes `shouldSatisfy` (not . null)
   length startTimes `shouldBe` length endTimes
   mapM_
-    ( \(startTimeUnixNano, endTimeUnixNano) -> do
-        startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano)
-        endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano)
-        startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano)
-        (endTimeUnixNano - startTimeUnixNano) `shouldSatisfy` (>= 1000)
+    ( \(startTimeUnixNano, endTimeUnixNano) ->
+        expectAll
+          ( (startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano))
+              :| [ endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano),
+                   startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano),
+                   (endTimeUnixNano - startTimeUnixNano) `shouldSatisfy` (>= 1000)
+                 ]
+          )
     )
     (zip startTimes endTimes)
 
