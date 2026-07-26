@@ -6,6 +6,7 @@ module Unit.WebApi.LoginSpec (spec) where
 import Control.Monad (unless)
 import Data.ByteString qualified as ByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -17,6 +18,7 @@ import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkSecretEnc
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import HarchWeb.Username (mkUsername)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
@@ -77,9 +79,10 @@ spec = do
                 confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \receivedAccountId -> receivedAccountId `seq` pure (Right [recoveryCodeHashText recoveryCodeHash]),
                 consumeRecoveryCodeHash = \receivedAccountId receivedHash receivedNow -> do
-                  receivedAccountId `shouldBe` accountId
-                  receivedHash `shouldBe` recoveryCodeHashText recoveryCodeHash
-                  receivedNow `shouldBe` 500
+                  expectAll
+                    ( (receivedAccountId `shouldBe` accountId)
+                        :| [receivedHash `shouldBe` recoveryCodeHashText recoveryCodeHash, receivedNow `shouldBe` 500]
+                    )
                   writeIORef consumedHashReference (Just receivedHash)
                   pure (Right True)
               }
@@ -149,27 +152,32 @@ spec = do
       completeWith (storeFor (Right [recoveryCodeHashText recoveryCodeHash]) (Left (MfaStoreCorruptData "recovery consumption failed"))) `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreCorruptData "recovery consumption failed")
 
     it "keeps login outcomes and credential-store errors comparable" $ do
-      AccountCredentialStoreUnavailable "unavailable" == AccountCredentialStoreUnavailable "unavailable" `shouldBe` True
-      AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True
-      AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True
-      PasswordLoginRejected == PasswordLoginRejected `shouldBe` True
-      PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True
-      PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True
-      PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True
       let totpProof = TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))
           recoveryProof = RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))
-      totpProof /= recoveryProof `shouldBe` True
-      PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True
-      PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True
-      PasswordMfaLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True
-      PasswordMfaLoginCorruptEnrollment /= PasswordMfaLoginRejected `shouldBe` True
+      expectAll
+        ( (AccountCredentialStoreUnavailable "unavailable" == AccountCredentialStoreUnavailable "unavailable" `shouldBe` True)
+            :| [ AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True,
+                 AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True,
+                 PasswordLoginRejected == PasswordLoginRejected `shouldBe` True,
+                 PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True,
+                 PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
+                 PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
+                 totpProof /= recoveryProof `shouldBe` True,
+                 PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True,
+                 PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True,
+                 PasswordMfaLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
+                 PasswordMfaLoginCorruptEnrollment /= PasswordMfaLoginRejected `shouldBe` True
+               ]
+        )
 
   describe "runtime PostgreSQL credential lookup" $ do
     it "uses an email parameter and decodes verified credentials" $ do
       let store = buildRuntimePostgresAccountCredentialStoreWithRunner runner databaseConfig
           runner _ query parameters = do
-            query `shouldBe` "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;"
-            parameters `shouldBe` ["person@example.test"]
+            expectAll
+              ( (query `shouldBe` "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE email_normalized = $1;")
+                  :| [parameters `shouldBe` ["person@example.test"]]
+              )
             pure (Right [["account_01", encodedPasswordHash, "500"]])
       findAccountCredentialByEmail store emailAddress `shouldSatisfyEqual` \case
         Right (Just credential) ->
@@ -182,8 +190,10 @@ spec = do
       let username = required "username" (mkUsername "person_01")
           store = buildRuntimePostgresAccountCredentialStoreWithRunner runner databaseConfig
           runner _ query parameters = do
-            query `shouldBe` "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE lower(username) = lower($1);"
-            parameters `shouldBe` ["person_01"]
+            expectAll
+              ( (query `shouldBe` "SELECT account_id, password_hash, COALESCE(email_verified_at_nanoseconds::TEXT, '') FROM web_api.accounts WHERE lower(username) = lower($1);")
+                  :| [parameters `shouldBe` ["person_01"]]
+              )
             pure (Right [["account_01", encodedPasswordHash, "500"]])
       findAccountCredentialByUsername store username `shouldSatisfyEqual` \case
         Right (Just credential) -> accountCredentialId credential == accountId

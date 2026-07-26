@@ -6,6 +6,7 @@ module Unit.WebApi.SessionSpec (spec) where
 import Control.Exception (evaluate)
 import Control.Monad (unless)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId, mkAccountId)
@@ -17,6 +18,7 @@ import HarchWeb.Session
     mkSessionId,
   )
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, runPostgresMigrationsForRuntime)
@@ -105,8 +107,10 @@ spec = do
       loadAccountSession (buildRuntimePostgresAccountSessionStore defaultRealPostgresConfig) unknownSessionId `shouldReturnEqual` Right Nothing
 
     it "keeps the account-session errors comparable without exposing persistence details" $ do
-      AccountSessionStoreUnavailable == AccountSessionStoreUnavailable `shouldBe` True
-      AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True
+      expectAll
+        ( (AccountSessionStoreUnavailable == AccountSessionStoreUnavailable `shouldBe` True)
+            :| [AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True]
+        )
 
   describe "account-session issuance" $ do
     it "generates and persists an opaque session after authentication succeeds" $ do
@@ -121,10 +125,14 @@ spec = do
       case issuedSessionResult of
         Left _ -> expectationFailure "expected session issuance to succeed"
         Right issuedSession -> do
-          sessionPrincipal issuedSession `shouldBe` accountId
-          sessionIssuedAtNanoseconds issuedSession `shouldBe` 100
-          sessionExpiresAtNanoseconds issuedSession `shouldBe` 28800000000100
-          readIORef savedSessionReference `shouldReturn` Just issuedSession
+          savedSession <- readIORef savedSessionReference
+          expectAll
+            ( (sessionPrincipal issuedSession `shouldBe` accountId)
+                :| [ sessionIssuedAtNanoseconds issuedSession `shouldBe` 100,
+                     sessionExpiresAtNanoseconds issuedSession `shouldBe` 28800000000100,
+                     savedSession `shouldBe` Just issuedSession
+                   ]
+            )
 
     it "preserves storage failures and refuses collisions or overflowing expirations" $ do
       let store result =

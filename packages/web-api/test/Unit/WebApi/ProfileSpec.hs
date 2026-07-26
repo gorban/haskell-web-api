@@ -2,6 +2,7 @@
 
 module Unit.WebApi.ProfileSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -13,6 +14,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Username qualified as Username
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import WebApi.Account
   ( AccountProfile (..),
     AccountProfileStore (..),
@@ -65,22 +67,25 @@ spec =
           defaultDatabaseEffect
           unavailableAccountWorkflow
           (HarchWeb.RouteRequest SecondRoute defaultRequestContext)
-      responsePageBody signedOutResponse `shouldSatisfy` containsAll ["Sign in to view and manage your profile.", "href=\"/login\"", "href=\"/register\""]
-      responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "id=\"profile-region\"", "data-harch-control", "value=\"resend-verification\"", "Resend verification email", "href=\"/logout\""]
-      responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""]
-      responsePageBody spanishPendingResponse `shouldSatisfy` containsAll ["Verifica tu dirección de correo antes de continuar.", "href=\"/es/logout\""]
-      responsePageBody spanishAuthenticatedResponse `shouldSatisfy` containsAll ["Has iniciado sesión.", "href=\"/es/logout\""]
-      responsePageBody unavailableResponse `shouldSatisfy` containsAll ["Your profile is temporarily unavailable.", "href=\"/login\""]
-      responsePageBody spanishUnavailableResponse `shouldSatisfy` containsAll ["Tu perfil no está disponible temporalmente.", "href=\"/es/login\""]
-      responseStatus unavailableResponse `shouldBe` 500
-      responsePageTitle authenticatedResponse `shouldBe` "web-api: Profile"
-      responsePageTitle unavailableResponse `shouldBe` "web-api: Profile"
-      responsePageBody unavailableResponse `shouldSatisfy` (not . Text.isInfixOf "AccountSessionStoreUnavailable")
-      responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountSessionStoreError"
-      responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountSessionStoreError"]
-      responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError"
-      responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"]
-      responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
+      expectAll
+        ( (responsePageBody signedOutResponse `shouldSatisfy` containsAll ["Sign in to view and manage your profile.", "href=\"/login\"", "href=\"/register\""])
+            :| [ responsePageBody pendingResponse `shouldSatisfy` containsAll ["Verify your email address before continuing.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "id=\"profile-region\"", "data-harch-control", "value=\"resend-verification\"", "Resend verification email", "href=\"/logout\""],
+                 responsePageBody authenticatedResponse `shouldSatisfy` containsAll ["You are signed in.", "data-profile-username=\"true\">person_01", "data-profile-display-name=\"true\">Person Example", "data-profile-email=\"true\">person@example.test", "href=\"/logout\""],
+                 responsePageBody spanishPendingResponse `shouldSatisfy` containsAll ["Verifica tu dirección de correo antes de continuar.", "href=\"/es/logout\""],
+                 responsePageBody spanishAuthenticatedResponse `shouldSatisfy` containsAll ["Has iniciado sesión.", "href=\"/es/logout\""],
+                 responsePageBody unavailableResponse `shouldSatisfy` containsAll ["Your profile is temporarily unavailable.", "href=\"/login\""],
+                 responsePageBody spanishUnavailableResponse `shouldSatisfy` containsAll ["Tu perfil no está disponible temporalmente.", "href=\"/es/login\""],
+                 responseStatus unavailableResponse `shouldBe` 500,
+                 responsePageTitle authenticatedResponse `shouldBe` "web-api: Profile",
+                 responsePageTitle unavailableResponse `shouldBe` "web-api: Profile",
+                 responsePageBody unavailableResponse `shouldSatisfy` (not . Text.isInfixOf "AccountSessionStoreUnavailable"),
+                 responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountSessionStoreError",
+                 responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountSessionStoreError"],
+                 responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
+                 responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
+                 responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
+               ]
+        )
 
     it "resends pending-profile verification through a localized client-action patch" $ do
       let actionRequest requestContext fields =
@@ -119,11 +124,14 @@ spec =
             actionResult <- handleAccountAction workflowValue request
             case actionResult of
               Nothing -> expectationFailure "expected a profile client-action response"
-              Just response -> do
-                HarchWeb.clientActionStatus response `shouldBe` expectedStatus
-                HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId)
-                HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml)
-                length (show response) `shouldSatisfy` (> 0)
+              Just response ->
+                expectAll
+                  ( (HarchWeb.clientActionStatus response `shouldBe` expectedStatus)
+                      :| [ HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId),
+                           HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml),
+                           length (show response) `shouldSatisfy` (> 0)
+                         ]
+                  )
       expect pendingWorkflow (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
       expect pendingWorkflow (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
       expect pendingWorkflow (actionRequest sessionRequestContext []) 422 "Choose a profile action"
@@ -161,25 +169,28 @@ spec =
             ]
       mapM_ (assertProfilePageModel . fst) models
       mapM_ assertProfilePageModelShow models
-      ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False
-      equalValues
-        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-        `shouldBe` True
-      equalValues
-        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-        (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
-        `shouldBe` False
-      equalValues
-        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-        (PendingProfileForm "person@example.test" Nothing True "Resend verification email")
-        `shouldBe` False
-      equalValues
-        (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-        (PendingProfileForm "person@example.test" Nothing False "Send again")
-        `shouldBe` False
-      renderPendingProfileRegion "/profile" (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
-        `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
+      expectAll
+        ( (ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False)
+            :| [ equalValues
+                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                   `shouldBe` True,
+                 equalValues
+                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                   (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+                   `shouldBe` False,
+                 equalValues
+                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                   (PendingProfileForm "person@example.test" Nothing True "Resend verification email")
+                   `shouldBe` False,
+                 equalValues
+                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                   (PendingProfileForm "person@example.test" Nothing False "Send again")
+                   `shouldBe` False,
+                 renderPendingProfileRegion "/profile" (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+                   `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
+               ]
+        )
 
 assertProfileResult :: IO (Either ProfileLoadError ProfileState) -> (Either ProfileLoadError ProfileState -> Bool) -> Expectation
 assertProfileResult action matches = do

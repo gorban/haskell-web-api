@@ -9,6 +9,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb.Account (AccountId, generateAccountId, mkAccountId)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Mfa
@@ -100,10 +101,13 @@ spec = do
       let pendingEnrollment = StoredTotpEnrollment "encrypted-envelope" Nothing
           confirmedEnrollment = StoredTotpEnrollment "other-envelope" (Just 500)
           unavailableError = MfaStoreUnavailable "database unavailable"
-      pendingEnrollment == pendingEnrollment `shouldBe` True
-      pendingEnrollment /= confirmedEnrollment `shouldBe` True
-      unavailableError == unavailableError `shouldBe` True
-      unavailableError /= MfaStoreCorruptData "database unavailable" `shouldBe` True
+      expectAll
+        ( (pendingEnrollment == pendingEnrollment `shouldBe` True)
+            :| [ pendingEnrollment /= confirmedEnrollment `shouldBe` True,
+                 unavailableError == unavailableError `shouldBe` True,
+                 unavailableError /= MfaStoreCorruptData "database unavailable" `shouldBe` True
+               ]
+        )
 
     it "executes the native libpq MFA adapter against a migrated PostgreSQL database" $ do
       ensureDefaultPostgresAvailable
