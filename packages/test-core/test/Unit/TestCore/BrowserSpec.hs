@@ -56,20 +56,19 @@ spec = do
             }
 
     it "accepts the supported boolean aliases and rejects invalid overrides" $ do
-      parseBrowserConfig [] `shouldBe` Right defaultPlaywrightBrowserConfig
-      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "true")]) `shouldBe` Right True
-      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "1")]) `shouldBe` Right True
-      fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "0")]) `shouldBe` Right False
-      fmap browserPauseOnFailure (parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "no")]) `shouldBe` Right False
-      browserRunnerArguments <$> parseBrowserConfig [("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", " , ")] `shouldBe` Right []
-      parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "maybe")]
-        `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_HEADLESS: maybe"
-      parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "sometimes")]
-        `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_PAUSE_ON_FAILURE: sometimes"
-      parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "0")]
-        `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: 0"
-      parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "later")]
-        `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: later"
+      expectAll
+        ( (parseBrowserConfig [] `shouldBe` Right defaultPlaywrightBrowserConfig)
+            :| [ fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "true")]) `shouldBe` Right True,
+                 fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "1")]) `shouldBe` Right True,
+                 fmap browserHeadless (parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "0")]) `shouldBe` Right False,
+                 fmap browserPauseOnFailure (parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "no")]) `shouldBe` Right False,
+                 browserRunnerArguments <$> parseBrowserConfig [("TEST_CORE_BROWSER_RUNNER_ARGUMENTS", " , ")] `shouldBe` Right [],
+                 parseBrowserConfig [("TEST_CORE_BROWSER_HEADLESS", "maybe")] `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_HEADLESS: maybe",
+                 parseBrowserConfig [("TEST_CORE_BROWSER_PAUSE_ON_FAILURE", "sometimes")] `shouldBe` Left "Invalid boolean for TEST_CORE_BROWSER_PAUSE_ON_FAILURE: sometimes",
+                 parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "0")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: 0",
+                 parseBrowserConfig [("TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS", "later")] `shouldBe` Left "Invalid positive integer for TEST_CORE_BROWSER_TIMEOUT_MILLISECONDS: later"
+               ]
+        )
 
     it "resolves the bundled runner and applies environment overrides"
       $ withEnvironment
@@ -82,12 +81,15 @@ spec = do
           case loaded of
             Left loadError -> expectationFailure loadError >> fail "unreachable"
             Right loadedConfig -> pure loadedConfig
-        browserRunnerCommand config `shouldBe` "node"
-        browserRunnerArguments config `shouldSatisfy` \case
-          [runnerArgument] -> "runner.cjs" `Text.isSuffixOf` Text.pack runnerArgument
-          _ -> False
-        browserHeadless config `shouldBe` False
-        browserTimeoutMilliseconds config `shouldBe` 3210
+        expectAll
+          ( (browserRunnerCommand config `shouldBe` "node")
+              :| [ browserRunnerArguments config `shouldSatisfy` \case
+                     [runnerArgument] -> "runner.cjs" `Text.isSuffixOf` Text.pack runnerArgument
+                     _ -> False,
+                   browserHeadless config `shouldBe` False,
+                   browserTimeoutMilliseconds config `shouldBe` 3210
+                 ]
+          )
 
     it "reports a missing bundled runner when no repository ancestor contains it" $
       withSystemTempDirectory "browser-config" $ \tempDirectory ->
@@ -152,10 +154,13 @@ spec = do
                 <*> currentUrl
             appliedScenario = applyScenario (mapScenario (+) (pure 1)) (pure 2)
             scenarioValue = combineScenario (+) appliedScenario (pure 0) :: BrowserScenario Int
-        Aeson.toJSONList locators `shouldSatisfy` (not . null . show)
-        Aeson.omitField (byRole Button) `shouldBe` False
-        LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncoding (byRole Button))) `shouldSatisfy` (> 0)
-        LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncodingList locators)) `shouldSatisfy` (> 0)
+        expectAll
+          ( (Aeson.toJSONList locators `shouldSatisfy` (not . null . show))
+              :| [ Aeson.omitField (byRole Button) `shouldBe` False,
+                   LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncoding (byRole Button))) `shouldSatisfy` (> 0),
+                   LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncodingList locators)) `shouldSatisfy` (> 0)
+                 ]
+          )
         runBrowserScenario
           config
           ( do
@@ -309,36 +314,39 @@ spec = do
           config = defaultPlaywrightBrowserConfig
           processError = BrowserRunnerProcessError (ExitFailure 4) "out" "err"
           assertionError = BrowserAssertionFailed "failed" ["trace.zip"]
-      enhancedNavigationFetchCount metrics `shouldBe` 1
-      hardNavigationCount metrics `shouldBe` 2
-      mutationRequestCount metrics `shouldBe` 3
-      metrics `shouldNotBe` otherMetrics
-      show [metrics] `shouldContain'` "BrowserMetrics"
-      (Aeson.eitherDecode "[{\"enhancedNavigationFetchCount\":1,\"hardNavigationCount\":2,\"mutationRequestCount\":3}]" :: Either String [BrowserMetrics]) `shouldBe` Right [metrics]
-      (Aeson.eitherDecode "null" :: Either String BrowserMetrics) `shouldSatisfy` \case
-        Left message -> "BrowserMetrics" `Text.isInfixOf` Text.pack message
-        Right _ -> False
-      show metrics `shouldBe` "BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 2, mutationRequestCount = 3}"
-      (Aeson.omittedField :: Maybe BrowserMetrics) `shouldBe` Nothing
-      config `shouldNotBe` config {browserHeadless = False}
-      show config `shouldContain'` "BrowserConfig"
-      show [config] `shouldContain'` "BrowserConfig"
-      processError `shouldBe` BrowserRunnerProcessError (ExitFailure 4) "out" "err"
-      assertionError `shouldBe` BrowserAssertionFailed "failed" ["trace.zip"]
-      let errors =
+          errors =
             [ BrowserRunnerLaunchError "launch",
               processError,
               BrowserRunnerProtocolError "protocol",
               BrowserCommandFailed 4 "command" ["trace.zip"],
               assertionError
             ]
-      errors `shouldBe` errors
-      BrowserRunnerLaunchError "one" `shouldNotBe` BrowserRunnerLaunchError "two"
-      BrowserRunnerProcessError ExitSuccess "out" "err" `shouldNotBe` processError
-      BrowserRunnerProtocolError "one" `shouldNotBe` BrowserRunnerProtocolError "two"
-      BrowserCommandFailed 1 "one" [] `shouldNotBe` BrowserCommandFailed 2 "two" []
-      BrowserAssertionFailed "one" [] `shouldNotBe` BrowserAssertionFailed "two" []
-      show errors `shouldContain'` "BrowserRunnerLaunchError"
+      expectAll
+        ( (enhancedNavigationFetchCount metrics `shouldBe` 1)
+            :| [ hardNavigationCount metrics `shouldBe` 2,
+                 mutationRequestCount metrics `shouldBe` 3,
+                 metrics `shouldNotBe` otherMetrics,
+                 show [metrics] `shouldContain'` "BrowserMetrics",
+                 (Aeson.eitherDecode "[{\"enhancedNavigationFetchCount\":1,\"hardNavigationCount\":2,\"mutationRequestCount\":3}]" :: Either String [BrowserMetrics]) `shouldBe` Right [metrics],
+                 (Aeson.eitherDecode "null" :: Either String BrowserMetrics) `shouldSatisfy` \case
+                   Left message -> "BrowserMetrics" `Text.isInfixOf` Text.pack message
+                   Right _ -> False,
+                 show metrics `shouldBe` "BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 2, mutationRequestCount = 3}",
+                 (Aeson.omittedField :: Maybe BrowserMetrics) `shouldBe` Nothing,
+                 config `shouldNotBe` config {browserHeadless = False},
+                 show config `shouldContain'` "BrowserConfig",
+                 show [config] `shouldContain'` "BrowserConfig",
+                 processError `shouldBe` BrowserRunnerProcessError (ExitFailure 4) "out" "err",
+                 assertionError `shouldBe` BrowserAssertionFailed "failed" ["trace.zip"],
+                 errors `shouldBe` errors,
+                 BrowserRunnerLaunchError "one" `shouldNotBe` BrowserRunnerLaunchError "two",
+                 BrowserRunnerProcessError ExitSuccess "out" "err" `shouldNotBe` processError,
+                 BrowserRunnerProtocolError "one" `shouldNotBe` BrowserRunnerProtocolError "two",
+                 BrowserCommandFailed 1 "one" [] `shouldNotBe` BrowserCommandFailed 2 "two" [],
+                 BrowserAssertionFailed "one" [] `shouldNotBe` BrowserAssertionFailed "two" [],
+                 show errors `shouldContain'` "BrowserRunnerLaunchError"
+               ]
+        )
   where
     combineObservation :: (a -> b -> c) -> BrowserObservation a -> BrowserObservation b -> BrowserObservation c
     combineObservation = liftA2

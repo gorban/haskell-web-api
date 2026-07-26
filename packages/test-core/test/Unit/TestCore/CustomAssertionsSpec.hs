@@ -31,8 +31,10 @@ spec = do
     it "reports independent assertion failures in their original order" $ do
       result <- try $ expectAll ((1 `shouldBe` (2 :: Int)) :| ["alpha" `shouldContain'` "beta"])
       message <- $([|result|] `shouldMatch` [p|Left (HUnitFailure _ (Reason message))|])
-      message `shouldSatisfy` ("1) expected: 2" `isInfixOf`)
-      message `shouldSatisfy` ("2) expected to contain: beta" `isInfixOf`)
+      expectAll
+        ( (message `shouldSatisfy` ("1) expected: 2" `isInfixOf`))
+            :| [message `shouldSatisfy` ("2) expected to contain: beta" `isInfixOf`)]
+        )
 
     it "preserves assertion prefaces while aggregating failures" $ do
       result <- try $ expectAll (throwIO (HUnitFailure Nothing (ExpectedButGot (Just "context") "expected" "actual")) :| [])
