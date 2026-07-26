@@ -14,6 +14,7 @@ module TestCore.Browser
     BrowserRunnerError (..),
     BrowserScenario,
     Locator,
+    assertAll,
     assertAttribute,
     assertEventually,
     assertFocused,
@@ -72,6 +73,7 @@ import Data.ByteString.Lazy.Char8 qualified as LazyByteStringChar8
 import Data.Char (toLower)
 import Data.Functor ((<&>))
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import Data.List.NonEmpty (NonEmpty)
 import Data.Maybe (fromJust, fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -86,6 +88,7 @@ import System.IO (BufferMode (LineBuffering), Handle, hClose, hFlush, hSetBuffer
 import System.Process (CreateProcess (..), ProcessHandle, StdStream (..), createProcess, proc, terminateProcess, waitForProcess)
 import Test.HUnit.Lang (HUnitFailure)
 import Test.Hspec (Expectation)
+import TestCore.CustomAssertions (expectAll)
 import Text.Read (readMaybe)
 
 data BrowserConfig = BrowserConfig
@@ -671,6 +674,13 @@ assertEventually observation expectation = do
                 else do
                   liftScenarioIO (threadDelay 25000)
                   retryUntil session startedAt (Just failureMessage)
+
+-- | Retry one composed observation, then report every independent expectation
+-- against that observation. Keep browser actions and dependent checks outside
+-- this helper so they remain fail-fast.
+assertAll :: BrowserObservation a -> (a -> NonEmpty Expectation) -> BrowserScenario ()
+assertAll observation expectations =
+  assertEventually observation (expectAll . expectations)
 
 assertText :: Locator -> (Text -> Expectation) -> BrowserScenario ()
 assertText locator = assertEventually (textContent locator)

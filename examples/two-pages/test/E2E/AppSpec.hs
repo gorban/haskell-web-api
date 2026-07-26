@@ -4,6 +4,7 @@
 {-# E2E_SPEC #-}
 
 import App.App (buildApplication)
+import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb (LocalTestServer (..), withLocalTestServer)
 
 spec =
@@ -14,14 +15,23 @@ spec =
             secondUrl = localServerBaseUrl server <> "/second"
         ( runBrowserScenario browser $ do
             visit homeUrl
-            assertText (byRole Heading) (`shouldBe` "Home")
-            assertAttribute (css "link[rel='stylesheet']") "href" (`shouldBe` Just "/assets/two-pages.css")
-            assertAttribute (css "section[data-page='home']") "class" (`shouldBe` Just "harch-home-root")
+            assertAll
+              ((,,) <$> textContent (byRole Heading) <*> attributeValue (css "link[rel='stylesheet']") "href" <*> attributeValue (css "section[data-page='home']") "class")
+              ( \(heading, stylesheetHref, homeClass) ->
+                  (heading `shouldBe` "Home")
+                    :| [ stylesheetHref `shouldBe` Just "/assets/two-pages.css",
+                         homeClass `shouldBe` Just "harch-home-root"
+                       ]
+              )
             click (byRole Link `named` "Go to the second page")
-            assertUrl (`shouldBe` secondUrl)
-            assertText (byRole Heading) (`shouldBe` "Second")
-            assertMetrics $ \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+              ( \(url, heading, metrics) ->
+                  (url `shouldBe` secondUrl)
+                    :| [ heading `shouldBe` "Second",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                       ]
+              )
           )
           `shouldReturn` Right ()
 
@@ -34,11 +44,13 @@ spec =
             click (byRole Link `named` "Go to the second page")
             assertUrl (`shouldBe` secondUrl)
             historyBack
-            assertUrl (`shouldBe` homeUrl)
-            assertText (byRole Heading) (`shouldBe` "Home")
+            assertAll
+              ((,) <$> currentUrl <*> textContent (byRole Heading))
+              (\(url, heading) -> (url `shouldBe` homeUrl) :| [heading `shouldBe` "Home"])
             historyForward
-            assertUrl (`shouldBe` secondUrl)
-            assertText (byRole Heading) (`shouldBe` "Second")
+            assertAll
+              ((,) <$> currentUrl <*> textContent (byRole Heading))
+              (\(url, heading) -> (url `shouldBe` secondUrl) :| [heading `shouldBe` "Second"])
           )
           `shouldReturn` Right ()
 
@@ -52,19 +64,29 @@ spec =
             visit homeUrl
             fill emailField "ada@example"
             submit subscriptionForm
-            assertUrl (`shouldBe` homeUrl)
-            assertValue emailField (`shouldBe` "ada@example")
-            assertMetrics $ \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 0}|])
+            assertAll
+              ((,,) <$> currentUrl <*> inputValue emailField <*> browserMetrics)
+              ( \(url, email, metrics) ->
+                  (url `shouldBe` homeUrl)
+                    :| [ email `shouldBe` "ada@example",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 0}|])
+                       ]
+              )
             releaseRequestsMatching "**/assets/navigation.js"
-            assertText (css "#subscription-result") (`shouldBe` "Enter a valid email address.")
-            assertFocused emailField (`shouldBe` True)
-            assertValue emailField (`shouldBe` "ada@example")
+            assertAll
+              ((,,) <$> textContent (css "#subscription-result") <*> isFocused emailField <*> inputValue emailField)
+              ( \(result, focused, email) ->
+                  (result `shouldBe` "Enter a valid email address.")
+                    :| [focused `shouldBe` True, email `shouldBe` "ada@example"]
+              )
             fill emailField "ada@example.com"
             submit subscriptionForm
-            assertText (css "#subscription-result") (`shouldBe` "Thanks. Your subscription request is ready.")
-            assertMetrics $ \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 2}|])
+            assertAll
+              ((,) <$> textContent (css "#subscription-result") <*> browserMetrics)
+              ( \(result, metrics) ->
+                  (result `shouldBe` "Thanks. Your subscription request is ready.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 0, mutationRequestCount = 2}|])]
+              )
           )
           `shouldReturn` Right ()
 
@@ -78,10 +100,14 @@ spec =
             assertText (byRole Heading) (`shouldBe` "Second")
             visitWithoutScripts homeUrl
             click (byRole Link `named` "Go to the second page")
-            assertUrl (`shouldBe` secondUrl)
-            assertText (byRole Heading) (`shouldBe` "Second")
-            assertMetrics $ \metrics ->
-              $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+            assertAll
+              ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+              ( \(url, heading, metrics) ->
+                  (url `shouldBe` secondUrl)
+                    :| [ heading `shouldBe` "Second",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1}|])
+                       ]
+              )
           )
           `shouldReturn` Right ()
 
@@ -90,8 +116,12 @@ spec =
         let liveDataUrl = localServerBaseUrl server <> "/live-data"
         ( runBrowserScenario browser $ do
             visitWithoutScripts liveDataUrl
-            assertText (byRole Heading) (`shouldBe` "Live updates")
-            assertText (css "#live-data-status") (`shouldBe` "Waiting for an update.")
+            assertAll
+              ((,) <$> textContent (byRole Heading) <*> textContent (css "#live-data-status"))
+              ( \(heading, status) ->
+                  (heading `shouldBe` "Live updates")
+                    :| [status `shouldBe` "Waiting for an update."]
+              )
             visit liveDataUrl
             assertText (css "#live-data-status") (`shouldBe` "The live update arrived.")
           )

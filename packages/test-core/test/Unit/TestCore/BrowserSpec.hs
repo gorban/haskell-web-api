@@ -8,6 +8,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as AesonEncoding
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (traverse_)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import System.Directory (withCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
@@ -108,12 +109,16 @@ spec = do
               submit (byRole Form `named` "Registration")
               blockRequestsMatching "**/enhancements.js"
               releaseRequestsMatching "**/enhancements.js"
-              assertEventually fieldState $ \actual ->
-                actual `shouldBe` FieldState "person@example.com" True
-              assertAttribute emailField "aria-busy" (`shouldBe` Just "false")
-              assertVisible (within (byRole Navigation) (byRole Link `named` "Home")) (`shouldBe` True)
-              assertUrl (`shouldBe` "http://localhost/")
-              assertMetrics (`shouldBe` BrowserMetrics 1 0 1)
+              assertAll
+                ((,,,,) <$> fieldState <*> attributeValue emailField "aria-busy" <*> isVisible (within (byRole Navigation) (byRole Link `named` "Home")) <*> currentUrl <*> browserMetrics)
+                ( \(actualFieldState, busyAttribute, homeLinkVisible, url, metrics) ->
+                    (actualFieldState `shouldBe` FieldState "person@example.com" True)
+                      :| [ busyAttribute `shouldBe` Just "false",
+                           homeLinkVisible `shouldBe` True,
+                           url `shouldBe` "http://localhost/",
+                           metrics `shouldBe` BrowserMetrics 1 0 1
+                         ]
+                )
               historyBack
               historyForward
               reload

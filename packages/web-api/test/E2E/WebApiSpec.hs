@@ -3,6 +3,7 @@
 
 {-# E2E_SPEC #-}
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
@@ -27,8 +28,9 @@ spec =
             browser
             ( do
                 visit homeUrl
-                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
-                assertText (byRole Heading) (`shouldBe` "Site under construction")
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
             )
             `shouldReturn` Right ()
 
@@ -43,8 +45,9 @@ spec =
                 visit secondUrl
                 assertText (byRole Heading) (`shouldBe` "Second")
                 visitWithoutScripts homeUrl
-                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces"))
-                assertText (byRole Heading) (`shouldBe` "Site under construction")
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/spaces")) :| [heading `shouldBe` "Site under construction"])
             )
             `shouldReturn` Right ()
 
@@ -56,8 +59,9 @@ spec =
             browser
             ( do
                 visitWithoutScripts spanishHomeUrl
-                assertUrl (`shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces"))
-                assertText (byRole Heading) (`shouldBe` "Sitio en construcción")
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` (HarchWeb.localServerBaseUrl server <> "/es/spaces")) :| [heading `shouldBe` "Sitio en construcción"])
             )
             `shouldReturn` Right ()
 
@@ -72,17 +76,23 @@ spec =
             browser
             ( do
                 visit homeUrl
-                assertUrl (`shouldBe` spacesUrl)
-                assertText (byRole Heading) (`shouldBe` "Site under construction")
+                assertAll
+                  ((,) <$> currentUrl <*> textContent (byRole Heading))
+                  (\(url, heading) -> (url `shouldBe` spacesUrl) :| [heading `shouldBe` "Site under construction"])
                 visit secondUrl
                 click (byRole Link `named` "Spaces")
-                assertUrl (`shouldBe` spacesUrl)
-                assertText (byRole Heading) (`shouldBe` "Site under construction")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                assertAll
+                  ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+                  ( \(url, heading, metrics) ->
+                      (url `shouldBe` spacesUrl)
+                        :| [ heading `shouldBe` "Site under construction",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
                 visitWithoutScripts spanishSpacesUrl
-                assertText (byRole Heading) (`shouldBe` "Sitio en construcción")
-                assertText (byText "Sigan este espacio.") (`shouldBe` "Sigan este espacio.")
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "Sigan este espacio."))
+                  (\(heading, body) -> (heading `shouldBe` "Sitio en construcción") :| [body `shouldBe` "Sigan este espacio."])
             )
             `shouldReturn` Right ()
 
@@ -97,17 +107,23 @@ spec =
             ( do
                 visit secondUrl
                 click (byRole Link `named` "Profile")
-                assertUrl (`shouldBe` profileUrl)
-                assertText (byRole Heading) (`shouldBe` "Profile")
-                assertText (byText "Sign in to view and manage your profile.") (`shouldBe` "Sign in to view and manage your profile.")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                assertAll
+                  ((,,,) <$> currentUrl <*> textContent (byRole Heading) <*> textContent (byText "Sign in to view and manage your profile.") <*> browserMetrics)
+                  ( \(url, heading, body, metrics) ->
+                      (url `shouldBe` profileUrl)
+                        :| [ heading `shouldBe` "Profile",
+                             body `shouldBe` "Sign in to view and manage your profile.",
+                             $([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 1, hardNavigationCount = 0}|])
+                           ]
+                  )
                 visitWithoutScripts profileUrl
-                assertText (byRole Heading) (`shouldBe` "Profile")
-                assertText (within (css "#app-main") (byText "Create account")) (`shouldBe` "Create account")
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (within (css "#app-main") (byText "Create account")))
+                  (\(heading, createAccount) -> (heading `shouldBe` "Profile") :| [createAccount `shouldBe` "Create account"])
                 visitWithoutScripts spanishProfileUrl
-                assertText (byRole Heading) (`shouldBe` "Perfil")
-                assertText (byText "Inicia sesión para ver y administrar tu perfil.") (`shouldBe` "Inicia sesión para ver y administrar tu perfil.")
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "Inicia sesión para ver y administrar tu perfil."))
+                  (\(heading, body) -> (heading `shouldBe` "Perfil") :| [body `shouldBe` "Inicia sesión para ver y administrar tu perfil."])
             )
             `shouldReturn` Right ()
 
@@ -124,9 +140,12 @@ spec =
                 fill (byLabel "Direccion de correo") "person@example.test"
                 fill (byLabel "Contrasena") "correct horse battery staple"
                 click (byRole Button `named` "Crear cuenta")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
-                assertText (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") (`shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.")
+                assertAll
+                  ((,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."))
+                  ( \(metrics, message) ->
+                      ($([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|]))
+                        :| [message `shouldBe` "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."]
+                  )
             )
             `shouldReturn` Right ()
 
@@ -139,12 +158,16 @@ spec =
             ( do
                 setCookie profileUrl sessionCookieName sessionToken
                 visit profileUrl
-                assertText (byRole Heading) (`shouldBe` "Profile")
-                assertText (byText "person@example.test") (`shouldBe` "person@example.test")
+                assertAll
+                  ((,) <$> textContent (byRole Heading) <*> textContent (byText "person@example.test"))
+                  (\(heading, email) -> (heading `shouldBe` "Profile") :| [email `shouldBe` "person@example.test"])
                 click (byRole Button `named` "Resend verification email")
-                assertText (byText "Check your inbox for a verification link.") (`shouldBe` "Check your inbox for a verification link.")
-                assertMetrics $ \metrics ->
-                  $([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])
+                assertAll
+                  ((,) <$> textContent (byText "Check your inbox for a verification link.") <*> browserMetrics)
+                  ( \(message, metrics) ->
+                      (message `shouldBe` "Check your inbox for a verification link.")
+                        :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {mutationRequestCount = 1}|])]
+                  )
             )
             `shouldReturn` Right ()
 
