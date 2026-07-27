@@ -7,6 +7,7 @@ import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
 import Control.Monad (unless)
 import Data.ByteString qualified as ByteString
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word16)
@@ -14,6 +15,7 @@ import HarchWeb.Email
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 sampleRecipient :: EmailAddress
 sampleRecipient = required "sample recipient" (mkEmailAddress "ada@example.test")
@@ -31,54 +33,66 @@ spec :: Spec
 spec = do
   describe "EmailAddress" $ do
     it "accepts safe mailbox values and rejects ambiguous envelope addresses" $ do
-      emailAddressText sampleRecipient `shouldBe` "ada@example.test"
-      mkEmailAddress "A1._+-@Example-1.test" `shouldSatisfy` (/= Nothing)
-      sampleRecipient /= sampleSender `shouldBe` True
-      show sampleRecipient `shouldBe` "EmailAddress \"ada@example.test\""
-      show [sampleRecipient] `shouldBe` "[EmailAddress \"ada@example.test\"]"
-      mkEmailAddress "@example.test" `shouldBe` Nothing
-      mkEmailAddress "ada@" `shouldBe` Nothing
-      mkEmailAddress "ada.example.test" `shouldBe` Nothing
-      mkEmailAddress "ada@example@test" `shouldBe` Nothing
-      mkEmailAddress "ada space@example.test" `shouldBe` Nothing
-      mkEmailAddress "ada@example test" `shouldBe` Nothing
+      expectAll
+        ( (emailAddressText sampleRecipient `shouldBe` "ada@example.test")
+            :| [ mkEmailAddress "A1._+-@Example-1.test" `shouldSatisfy` (/= Nothing),
+                 sampleRecipient /= sampleSender `shouldBe` True,
+                 show sampleRecipient `shouldBe` "EmailAddress \"ada@example.test\"",
+                 show [sampleRecipient] `shouldBe` "[EmailAddress \"ada@example.test\"]",
+                 mkEmailAddress "@example.test" `shouldBe` Nothing,
+                 mkEmailAddress "ada@" `shouldBe` Nothing,
+                 mkEmailAddress "ada.example.test" `shouldBe` Nothing,
+                 mkEmailAddress "ada@example@test" `shouldBe` Nothing,
+                 mkEmailAddress "ada space@example.test" `shouldBe` Nothing,
+                 mkEmailAddress "ada@example test" `shouldBe` Nothing
+               ]
+        )
 
   describe "EmailMessage" $ do
     it "keeps header injection out of application-authored messages" $ do
-      emailMessageRecipient sampleMessage `shouldBe` sampleRecipient
-      emailMessageSubject sampleMessage `shouldBe` "Account verification"
-      emailMessageBody sampleMessage `shouldBe` ".first\nsecond\r\n.third"
-      sampleMessage /= required "different message" (mkEmailMessage sampleRecipient "Different" "body") `shouldBe` True
-      show sampleMessage `shouldBe` "EmailMessage {emailMessageRecipient = EmailAddress \"ada@example.test\", emailMessageSubject = \"Account verification\", emailMessageBody = \".first\\nsecond\\r\\n.third\"}"
-      show [sampleMessage] `shouldContain` "EmailMessage"
-      mkEmailMessage sampleRecipient "Bcc: attacker@example.test\r\n" "body" `shouldBe` Nothing
-      mkEmailMessage sampleRecipient "Bcc: attacker@example.test\n" "body" `shouldBe` Nothing
-      mkEmailMessage sampleRecipient "Sena\241" "body" `shouldBe` Nothing
+      expectAll
+        ( (emailMessageRecipient sampleMessage `shouldBe` sampleRecipient)
+            :| [ emailMessageSubject sampleMessage `shouldBe` "Account verification",
+                 emailMessageBody sampleMessage `shouldBe` ".first\nsecond\r\n.third",
+                 sampleMessage /= required "different message" (mkEmailMessage sampleRecipient "Different" "body") `shouldBe` True,
+                 show sampleMessage `shouldBe` "EmailMessage {emailMessageRecipient = EmailAddress \"ada@example.test\", emailMessageSubject = \"Account verification\", emailMessageBody = \".first\\nsecond\\r\\n.third\"}",
+                 show [sampleMessage] `shouldContain` "EmailMessage",
+                 mkEmailMessage sampleRecipient "Bcc: attacker@example.test\r\n" "body" `shouldBe` Nothing,
+                 mkEmailMessage sampleRecipient "Bcc: attacker@example.test\n" "body" `shouldBe` Nothing,
+                 mkEmailMessage sampleRecipient "Sena\241" "body" `shouldBe` Nothing
+               ]
+        )
 
   describe "verificationEmail" $ do
     it "renders localized English and Spanish verification content" $ do
       let englishEmail = verificationEmail EmailEnglish sampleRecipient "https://account.example.test/verify/en"
           spanishEmail = verificationEmail EmailSpanish sampleRecipient "https://account.example.test/verify/es"
-      EmailEnglish /= EmailSpanish `shouldBe` True
-      show EmailEnglish `shouldBe` "EmailEnglish"
-      show [EmailEnglish, EmailSpanish] `shouldBe` "[EmailEnglish,EmailSpanish]"
-      emailMessageRecipient englishEmail `shouldBe` sampleRecipient
-      emailMessageSubject englishEmail `shouldBe` "Verify your email address"
-      emailMessageBody englishEmail `shouldBe` "Open this link to verify your email address:\nhttps://account.example.test/verify/en"
-      emailMessageRecipient spanishEmail `shouldBe` sampleRecipient
-      emailMessageSubject spanishEmail `shouldBe` "Verifica tu correo electronico"
-      emailMessageBody spanishEmail `shouldBe` "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/verify/es"
+      expectAll
+        ( (EmailEnglish /= EmailSpanish `shouldBe` True)
+            :| [ show EmailEnglish `shouldBe` "EmailEnglish",
+                 show [EmailEnglish, EmailSpanish] `shouldBe` "[EmailEnglish,EmailSpanish]",
+                 emailMessageRecipient englishEmail `shouldBe` sampleRecipient,
+                 emailMessageSubject englishEmail `shouldBe` "Verify your email address",
+                 emailMessageBody englishEmail `shouldBe` "Open this link to verify your email address:\nhttps://account.example.test/verify/en",
+                 emailMessageRecipient spanishEmail `shouldBe` sampleRecipient,
+                 emailMessageSubject spanishEmail `shouldBe` "Verifica tu correo electronico",
+                 emailMessageBody spanishEmail `shouldBe` "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/verify/es"
+               ]
+        )
 
   describe "SmtpConfig" $ do
     it "requires a resolved host, nonzero port, and header-safe HELO name" $ do
-      isJust (mkSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender) `shouldBe` True
-      isNothing (mkSmtpConfig "" 2525 "account.example.test" sampleSender) `shouldBe` True
-      isNothing (mkSmtpConfig "127.0.0.1" 0 "account.example.test" sampleSender) `shouldBe` True
-      isNothing (mkSmtpConfig "127.0.0.1" 2525 "account\r\n.example.test" sampleSender) `shouldBe` True
-      isJust (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password") `shouldBe` True
-      isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "" "smtp-password") `shouldBe` True
-      isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user\r" "smtp-password") `shouldBe` True
-      isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password\NUL") `shouldBe` True
+      expectAll
+        ( (isJust (mkSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender) `shouldBe` True)
+            :| [ isNothing (mkSmtpConfig "" 2525 "account.example.test" sampleSender) `shouldBe` True,
+                 isNothing (mkSmtpConfig "127.0.0.1" 0 "account.example.test" sampleSender) `shouldBe` True,
+                 isNothing (mkSmtpConfig "127.0.0.1" 2525 "account\r\n.example.test" sampleSender) `shouldBe` True,
+                 isJust (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password") `shouldBe` True,
+                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "" "smtp-password") `shouldBe` True,
+                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user\r" "smtp-password") `shouldBe` True,
+                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password\NUL") `shouldBe` True
+               ]
+        )
 
   describe "deliverSmtpEmail" $ do
     it "fails clearly when its resolver has no usable SMTP address" $ do
@@ -105,8 +119,10 @@ spec = do
         result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
         case result of
           Left failure -> do
-            displayException failure `shouldContain` "Unexpected SMTP response:"
-            length (displayException failure) `shouldSatisfy` (> 0)
+            expectAll
+              ( (displayException failure `shouldContain` "Unexpected SMTP response:")
+                  :| [length (displayException failure) `shouldSatisfy` (> 0)]
+              )
           Right () -> expectationFailure "expected an SMTP command rejection"
       pure ()
 
