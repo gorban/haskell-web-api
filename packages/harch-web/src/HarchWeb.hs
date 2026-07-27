@@ -190,8 +190,7 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (replicateM, unless, void)
-import Control.Monad.Except (ExceptT, runExceptT, throwError)
-import Control.Monad.IO.Class (liftIO)
+import Control.Monad.Except (runExceptT)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
@@ -201,7 +200,7 @@ import Data.Either (lefts)
 import Data.Foldable (for_)
 import Data.Functor (($>))
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
-import Data.List (find, intercalate, maximumBy)
+import Data.List (find, intercalate)
 import Data.List.NonEmpty (NonEmpty ((:|)))
 import Data.Maybe (catMaybes, fromMaybe, isNothing, listToMaybe, mapMaybe, maybeToList)
 import Data.String (fromString)
@@ -239,19 +238,15 @@ import HarchWeb.Security
     ResponseSecurityHeadersConfig (..),
     StrictTransportSecurityConfig (..),
     applyRequestPathPrefix,
-    corsPreflightResponse,
     defaultContentSecurityPolicy,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
-    externalRequestPath,
-    httpsRedirectResponse,
     prependRequestLogContext,
     requestContextObservabilityAttributes,
     requestHostWithoutPort,
     requestLogContextFields,
     requestPathPrefix,
     requestPolicyResponseHeaders,
-    requestRedirectLocation,
     requestScheme,
     requestTraceContext,
     socketAddressText,
@@ -274,6 +269,7 @@ import HarchWeb.Server
     applyResponseHeaders,
     eventStreamResponse,
     isClientActionRequest,
+    navigationRuntimeResponse,
     parseClientActionFields,
     redirectResponse,
     renderServerSentEvent,
@@ -281,10 +277,10 @@ import HarchWeb.Server
     responseKind,
     responsePolicyHeaders,
     responseStatusCode,
+    runEarlyRequestStages,
     runRequestMiddlewarePipeline,
     serverSentEventContentType,
     serverSentEventSourceFromList,
-    toWaiBodyResponse,
     toWaiResponse,
   )
 import HarchWeb.StaticAssets
@@ -311,7 +307,7 @@ import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Handler.WarpTLS qualified as WarpTLS
 import System.Directory (copyFile, createDirectoryIfMissing, doesFileExist, getModificationTime, removePathForcibly)
 import System.Exit (ExitCode (..))
-import System.FilePath (splitDirectories, takeExtension, (</>))
+import System.FilePath ((</>))
 import System.IO (Handle, hFlush, hPutStrLn)
 import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.IO.Unsafe (unsafePerformIO)
@@ -548,20 +544,6 @@ navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
 navigationRuntimeScriptSource pathPrefix runtime =
   applyRequestPathPrefix pathPrefix (navigationRuntimePath runtime)
 
-navigationRuntimeResponse :: NavigationRuntime -> Text -> Maybe ResponseBody
-navigationRuntimeResponse runtime requestPath =
-  if requestPath == navigationRuntimePath runtime
-    then
-      Just
-        ResponseBody
-          { responseStatus = 200,
-            responseContentType = "application/javascript; charset=utf-8",
-            responseBody = navigationRuntimeScript runtime,
-            responseObservabilityAttributes = [],
-            responseLogEntries = []
-          }
-    else Nothing
-
 defaultNavigationRuntimeScript :: Text
 defaultNavigationRuntimeScript =
   Text.unlines
@@ -742,33 +724,14 @@ toWaiApplication webApplication request respond = do
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
       requestPath = waiRequestPath requestPolicyConfig request
   policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
-  earlyResult <- runExceptT (evaluateEarlyRequestStages webApplication requestPolicyConfig policyResponseHeaders request requestPath)
+  earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
   case earlyResult of
-    Left EarlyResponse {earlyResponsePath, earlyResponseValue} -> do
+    Left (earlyResponsePath, earlyResponseValue) -> do
       responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
       reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
       respond earlyResponseValue
     Right () ->
       handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath
-
-data EarlyResponse = EarlyResponse
-  { earlyResponsePath :: Text,
-    earlyResponseValue :: Wai.Response
-  }
-
-evaluateEarlyRequestStages :: Application route context -> RequestPolicyConfig -> [Http.Header] -> Wai.Request -> Text -> ExceptT EarlyResponse IO ()
-evaluateEarlyRequestStages webApplication requestPolicyConfig policyResponseHeaders request requestPath = do
-  for_ (corsPreflightResponse requestPolicyConfig request) $ \response ->
-    throwEarly (externalRequestPath requestPolicyConfig request) response
-  for_ (requestRedirectLocation requestPolicyConfig request) $ \redirectLocation ->
-    throwEarly (externalRequestPath requestPolicyConfig request) (httpsRedirectResponse redirectLocation)
-  for_ (applicationNavigationRuntime webApplication >>= (`navigationRuntimeResponse` requestPath)) $ \runtimeResponseBody ->
-    throwEarly requestPath (toWaiBodyResponse [] runtimeResponseBody)
-  maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath)
-  for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
-    throwEarly (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath) staticResponse
-  where
-    throwEarly path = throwError . EarlyResponse path . applyResponseHeaders policyResponseHeaders
 
 handleRoutedRequest :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> IO Wai.ResponseReceived
 handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath = do
@@ -2718,119 +2681,6 @@ reportEarlyRequestObservability webApplication request requestStartedAt requestC
           )
    in Observability.forceRequestObservability requestObservability `seq`
         reportRequestObservability webApplication requestObservability
-
-serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe (Text, Wai.Response))
-serveStaticAssetResponse staticAssetsConfig requestPath =
-  case matchStaticAssetRoot staticAssetsConfig requestPath of
-    Nothing -> pure Nothing
-    Just (matchedRoot, relativeAssetPath) ->
-      case sanitizeStaticAssetPath relativeAssetPath of
-        Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
-        Just safeAssetPath -> do
-          case staticAssetContentType staticAssetsConfig safeAssetPath of
-            Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
-            Just assetContentType -> do
-              let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
-              assetExists <- doesFileExist assetFilePath
-              case assetExists of
-                True -> do
-                  assetContents <- ByteString.readFile assetFilePath
-                  pure
-                    ( Just
-                        ( staticAssetRoutePath matchedRoot,
-                          Wai.responseLBS
-                            Http.status200
-                            (staticAssetHeaders staticAssetsConfig assetContentType)
-                            (LazyByteString.fromStrict assetContents)
-                        )
-                    )
-                False -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
-
-staticAssetRoutePath :: StaticAssetRoot -> Text
-staticAssetRoutePath staticRoot =
-  case staticUrlPrefix staticRoot of
-    "/" -> "/*"
-    staticPrefix -> staticPrefix <> "/*"
-
-matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, FilePath)
-matchStaticAssetRoot staticAssetsConfig requestPath =
-  case matchedRoots of
-    [] -> Nothing
-    _ -> Just (maximumBy compareStaticPrefixLength matchedRoots)
-  where
-    matchedRoots =
-      [ (staticRoot, Text.unpack assetPath)
-      | staticRoot <- staticAssetRoots staticAssetsConfig,
-        Just assetPath <- [stripStaticPrefix (staticUrlPrefix staticRoot) requestPath]
-      ]
-
-    compareStaticPrefixLength (leftRoot, _) (rightRoot, _) =
-      compare (Text.length (staticUrlPrefix leftRoot)) (Text.length (staticUrlPrefix rightRoot))
-
-stripStaticPrefix :: Text -> Text -> Maybe Text
-stripStaticPrefix configuredPrefix requestPath =
-  let normalizedPrefix = normalizeStaticAssetRoutePrefix configuredPrefix
-   in if Text.null normalizedPrefix
-        then
-          if requestPath == "/"
-            then Just Text.empty
-            else Text.stripPrefix "/" requestPath
-        else
-          if requestPath == normalizedPrefix
-            then Just Text.empty
-            else
-              Text.stripPrefix
-                (normalizedPrefix <> "/")
-                requestPath
-
-normalizeStaticAssetRoutePrefix :: Text -> Text
-normalizeStaticAssetRoutePrefix prefix =
-  fromMaybe prefix (Text.stripSuffix "/" prefix)
-
-sanitizeStaticAssetPath :: FilePath -> Maybe FilePath
-sanitizeStaticAssetPath assetPath =
-  case splitDirectories assetPath of
-    [] -> Nothing
-    segments ->
-      if all isSafeSegment segments
-        then Just assetPath
-        else Nothing
-  where
-    isSafeSegment segment =
-      not (null segment)
-        && segment /= "."
-        && segment /= ".."
-        && not (isHiddenStaticAssetSegment segment)
-
-isHiddenStaticAssetSegment :: FilePath -> Bool
-isHiddenStaticAssetSegment segment =
-  case segment of
-    '.' : _ -> True
-    _ -> False
-
-staticAssetHeaders :: StaticAssetsConfig -> Text -> Http.ResponseHeaders
-staticAssetHeaders staticAssetsConfig assetContentType =
-  (Http.hContentType, TextEncoding.encodeUtf8 assetContentType)
-    : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
-
-staticCacheControlHeaderValue :: StaticAssetsConfig -> Maybe Text
-staticCacheControlHeaderValue staticAssetsConfig =
-  fmap
-    (\seconds -> Text.pack ("public, max-age=" <> show seconds))
-    (staticCacheControlSeconds staticAssetsConfig)
-
-staticAssetContentType :: StaticAssetsConfig -> FilePath -> Maybe Text
-staticAssetContentType staticAssetsConfig assetFilePath =
-  lookup (Text.pack (takeExtension assetFilePath)) (staticAssetContentTypes staticAssetsConfig)
-
-missingStaticAssetResponse :: StaticAssetsConfig -> Wai.Response
-missingStaticAssetResponse staticAssetsConfig =
-  Wai.responseLBS
-    Http.status404
-    ( (Http.hContentType, TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
-        : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
-    )
-    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 "Not Found"))
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do
