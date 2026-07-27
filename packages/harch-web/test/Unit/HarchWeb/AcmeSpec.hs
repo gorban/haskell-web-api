@@ -170,45 +170,70 @@ spec = do
         )
 
     it "covers certbot argument helpers and certificate-name selection branches" $ do
-      runtimeCertbotArguments (runtimeAcmePlanWith certbotConfigValue)
-        `shouldBe` certbotArguments
-          CertbotConfig
-            { certbotExecutable = "certbot",
-              certbotArguments =
-                [ "certonly",
-                  "--webroot",
-                  "--http-01-port",
-                  "8080",
-                  "--domain=cli.example.com",
-                  "--cert-name=cli-cert"
-                ]
-            }
-      runtimeCertbotArguments (runtimeAcmePlanWith inProcessConfig) `shouldBe` certbotArguments (case certbotBackend of config -> config)
-      certbotOptionValues "--cert-name" ["certonly", "--cert-name", "named-cert"]
-        `shouldBe` ["named-cert"]
-      certbotOptionValues "--domain" ["--domain=cli.example.com", "--domain", "other.example.com"]
-        `shouldBe` ["other.example.com", "cli.example.com"]
-      certbotHasOption "--http-01-port" (runtimeCertbotArguments (runtimeAcmePlanWith certbotConfigValue))
-        `shouldBe` True
-      certbotHasOption "--missing" ["certonly"] `shouldBe` False
-      splitCertbotDomainValue " example.com , www.example.com ,, "
-        `shouldBe` ["example.com", "www.example.com"]
-      firstCertbotDomain ["-d", "one.example.com", "--domains=two.example.com,three.example.com"]
-        `shouldBe` Just "one.example.com"
-      (certbotBackend == certbotBackend) `shouldBe` True
-      (certbotBackend == CertbotConfig "other-certbot" []) `shouldBe` False
-      certbotBackend
-        `shouldBe` CertbotConfig
-          { certbotExecutable = "certbot",
-            certbotArguments =
-              [ "certonly",
-                "--webroot",
-                "--http-01-port",
-                "8080",
-                "--domain=cli.example.com",
-                "--cert-name=cli-cert"
-              ]
-          }
+      let configWithDomainArgument =
+            certbotConfigValue
+              { acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = ["certonly", "--domains=domain.example.com"]
+                    },
+                acmeDomains = []
+              }
+          configWithDefaultDomain =
+            certbotConfigValue
+              { acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = ["certonly"]
+                    }
+              }
+          configWithoutCertificateName =
+            inProcessConfig
+              { acmeDomains = [],
+                acmeCertbotConfig =
+                  CertbotConfig
+                    { certbotExecutable = "certbot",
+                      certbotArguments = []
+                    }
+              }
+      expectAll
+        ( ( runtimeCertbotArguments (runtimeAcmePlanWith certbotConfigValue)
+              `shouldBe` certbotArguments
+                CertbotConfig
+                  { certbotExecutable = "certbot",
+                    certbotArguments =
+                      [ "certonly",
+                        "--webroot",
+                        "--http-01-port",
+                        "8080",
+                        "--domain=cli.example.com",
+                        "--cert-name=cli-cert"
+                      ]
+                  }
+          )
+            :| [ runtimeCertbotArguments (runtimeAcmePlanWith inProcessConfig) `shouldBe` certbotArguments (case certbotBackend of config -> config),
+                 certbotOptionValues "--cert-name" ["certonly", "--cert-name", "named-cert"] `shouldBe` ["named-cert"],
+                 certbotOptionValues "--domain" ["--domain=cli.example.com", "--domain", "other.example.com"] `shouldBe` ["other.example.com", "cli.example.com"],
+                 certbotHasOption "--http-01-port" (runtimeCertbotArguments (runtimeAcmePlanWith certbotConfigValue)) `shouldBe` True,
+                 certbotHasOption "--missing" ["certonly"] `shouldBe` False,
+                 splitCertbotDomainValue " example.com , www.example.com ,, " `shouldBe` ["example.com", "www.example.com"],
+                 firstCertbotDomain ["-d", "one.example.com", "--domains=two.example.com,three.example.com"] `shouldBe` Just "one.example.com",
+                 (certbotBackend == certbotBackend) `shouldBe` True,
+                 (certbotBackend == CertbotConfig "other-certbot" []) `shouldBe` False,
+                 certbotBackend
+                   `shouldBe` CertbotConfig
+                     { certbotExecutable = "certbot",
+                       certbotArguments =
+                         [ "certonly",
+                           "--webroot",
+                           "--http-01-port",
+                           "8080",
+                           "--domain=cli.example.com",
+                           "--cert-name=cli-cert"
+                         ]
+                     }
+               ]
+        )
       evaluate
         ( certbotConfigValue
             == certbotConfigValue
@@ -220,42 +245,13 @@ spec = do
               }
         )
         `shouldReturn` False
-      certbotCertificateName (runtimeAcmePlanWith certbotConfigValue) `shouldBe` Right "cli-cert"
-      certbotCertificateName
-        ( runtimeAcmePlanWith
-            certbotConfigValue
-              { acmeCertbotConfig =
-                  CertbotConfig
-                    { certbotExecutable = "certbot",
-                      certbotArguments = ["certonly", "--domains=domain.example.com"]
-                    },
-                acmeDomains = []
-              }
+      expectAll
+        ( (certbotCertificateName (runtimeAcmePlanWith certbotConfigValue) `shouldBe` Right "cli-cert")
+            :| [ certbotCertificateName (runtimeAcmePlanWith configWithDomainArgument) `shouldBe` Right "domain.example.com",
+                 certbotCertificateName (runtimeAcmePlanWith configWithDefaultDomain) `shouldBe` Right "example.com",
+                 certbotCertificateName (runtimeAcmePlanWith configWithoutCertificateName) `shouldSatisfy` isLeftWith "requires ACME domains or certbot arguments"
+               ]
         )
-        `shouldBe` Right "domain.example.com"
-      certbotCertificateName
-        ( runtimeAcmePlanWith
-            certbotConfigValue
-              { acmeCertbotConfig =
-                  CertbotConfig
-                    { certbotExecutable = "certbot",
-                      certbotArguments = ["certonly"]
-                    }
-              }
-        )
-        `shouldBe` Right "example.com"
-      certbotCertificateName
-        ( runtimeAcmePlanWith
-            inProcessConfig
-              { acmeDomains = [],
-                acmeCertbotConfig =
-                  CertbotConfig
-                    { certbotExecutable = "certbot",
-                      certbotArguments = []
-                    }
-              }
-        )
-        `shouldSatisfy` isLeftWith "requires ACME domains or certbot arguments"
 
     it "prepares ACME runtime plans as manual TLS listeners after certificate acquisition" $ do
       withSystemTempDirectory "harch-web-certbot-shared" $ \sharedDirectory ->
