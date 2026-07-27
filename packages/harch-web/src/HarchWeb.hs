@@ -218,6 +218,20 @@ import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, routeHref)
+import HarchWeb.StaticAssets
+  ( AssetPath (..),
+    CssClass (..),
+    CssScope (..),
+    StaticAssetRoot (..),
+    StaticAssetsConfig (..),
+    Stylesheet (..),
+    cssClassText,
+    cssScope,
+    defaultStaticAssetContentTypes,
+    staticAssetHref,
+    staticAssetHrefWithPrefix,
+    stylesheet,
+  )
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
@@ -313,29 +327,6 @@ instance Show ListenerConfig where
           (\acmeConfig -> showString ", listenerAcme = " . shows acmeConfig)
           (listenerAcme listenerConfig)
         . showString "}"
-
-data StaticAssetRoot = StaticAssetRoot
-  { staticUrlPrefix :: Text,
-    staticDirectory :: FilePath
-  }
-  deriving (Eq, Show)
-
-data StaticAssetsConfig = StaticAssetsConfig
-  { staticAssetRoots :: [StaticAssetRoot],
-    staticAssetContentTypes :: [(Text, Text)],
-    staticCacheControlSeconds :: Maybe Int
-  }
-  deriving (Eq, Show)
-
-defaultStaticAssetContentTypes :: [(Text, Text)]
-defaultStaticAssetContentTypes =
-  [ (".css", "text/css; charset=utf-8"),
-    (".html", "text/html; charset=utf-8"),
-    (".js", "application/javascript; charset=utf-8"),
-    (".json", "application/json; charset=utf-8"),
-    (".svg", "image/svg+xml"),
-    (".txt", "text/plain; charset=utf-8")
-  ]
 
 data OtlpExporter = OtlpExporter
   { otlpEndpoint :: Text,
@@ -543,45 +534,6 @@ newtype RuntimeNonce = RuntimeNonce
   { runtimeNonceValue :: Text
   }
   deriving (Eq, Show)
-
--- | A route-aware reference to an app-owned static file. This stays distinct
--- from filesystem paths so components only pass browser-visible asset URLs.
-newtype AssetPath = AssetPath
-  { assetPathText :: Text
-  }
-  deriving (Eq, Show)
-
--- | An external stylesheet declaration. Inline CSS remains intentionally
--- absent so the default CSP can keep @style-src 'self'@.
-newtype Stylesheet = Stylesheet
-  { stylesheetAsset :: AssetPath
-  }
-  deriving (Eq, Show)
-
--- | A stable namespace for styles authored by one page or component.
-newtype CssScope = CssScope
-  { cssScopeName :: Text
-  }
-  deriving (Eq, Show)
-
--- | A rendered CSS class can either be deliberately global or tied to a
--- component scope.
-data CssClass
-  = ScopedCssClass CssScope Text
-  | GlobalCssClass Text
-  deriving (Eq, Show)
-
-stylesheet :: AssetPath -> Stylesheet
-stylesheet = Stylesheet
-
-cssScope :: Text -> CssScope
-cssScope = CssScope
-
-cssClassText :: CssClass -> Text
-cssClassText cssClass =
-  case cssClass of
-    ScopedCssClass (CssScope scopeName) localName -> "harch-" <> scopeName <> "-" <> localName
-    GlobalCssClass className -> className
 
 data ResolvedNavigationItem route = ResolvedNavigationItem
   { navigationLabel :: Text,
@@ -838,25 +790,6 @@ runRequestMiddlewarePipeline middleware request = go middleware
       case result of
         ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
         HaltMiddleware haltedRequestContext responseBody -> pure (HaltMiddleware haltedRequestContext responseBody)
-
-staticAssetHref :: StaticAssetRoot -> FilePath -> Text
-staticAssetHref =
-  staticAssetHrefWithPrefix Text.empty
-
-staticAssetHrefWithPrefix :: Text -> StaticAssetRoot -> FilePath -> Text
-staticAssetHrefWithPrefix pathPrefix staticRoot assetPath =
-  let normalizedPrefix = normalizeStaticPrefix (staticUrlPrefix staticRoot)
-      normalizedAssetPath = trimLeadingSlash (Text.pack assetPath)
-      assetHref =
-        if Text.null normalizedPrefix
-          then "/" <> normalizedAssetPath
-          else
-            Text.concat
-              [ normalizedPrefix,
-                "/",
-                normalizedAssetPath
-              ]
-   in applyRequestPathPrefix pathPrefix assetHref
 
 defaultNavigationRuntime :: NavigationRuntime
 defaultNavigationRuntime =
@@ -3947,7 +3880,7 @@ matchStaticAssetRoot staticAssetsConfig requestPath =
 
 stripStaticPrefix :: Text -> Text -> Maybe Text
 stripStaticPrefix configuredPrefix requestPath =
-  let normalizedPrefix = normalizeStaticPrefix configuredPrefix
+  let normalizedPrefix = normalizeStaticAssetRoutePrefix configuredPrefix
    in if Text.null normalizedPrefix
         then
           if requestPath == "/"
@@ -3960,6 +3893,10 @@ stripStaticPrefix configuredPrefix requestPath =
               Text.stripPrefix
                 (normalizedPrefix <> "/")
                 requestPath
+
+normalizeStaticAssetRoutePrefix :: Text -> Text
+normalizeStaticAssetRoutePrefix prefix =
+  fromMaybe prefix (Text.stripSuffix "/" prefix)
 
 sanitizeStaticAssetPath :: FilePath -> Maybe FilePath
 sanitizeStaticAssetPath assetPath =
@@ -4005,19 +3942,6 @@ missingStaticAssetResponse staticAssetsConfig =
         : maybe [] (\cacheHeader -> [(Http.hCacheControl, TextEncoding.encodeUtf8 cacheHeader)]) (staticCacheControlHeaderValue staticAssetsConfig)
     )
     (LazyByteString.fromStrict (TextEncoding.encodeUtf8 "Not Found"))
-
-normalizeStaticPrefix :: Text -> Text
-normalizeStaticPrefix prefix =
-  case Text.stripSuffix "/" prefix of
-    Just trimmedPrefix ->
-      if Text.null trimmedPrefix
-        then Text.empty
-        else trimmedPrefix
-    Nothing -> prefix
-
-trimLeadingSlash :: Text -> Text
-trimLeadingSlash assetPath =
-  fromMaybe assetPath (Text.stripPrefix "/" assetPath)
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do

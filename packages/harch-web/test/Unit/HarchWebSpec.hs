@@ -1313,6 +1313,10 @@ spec = do
         `shouldBe` "/app"
       staticAssetHrefWithPrefix "/app" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
         `shouldBe` "/app/assets/app.js"
+      staticAssetHrefWithPrefix "/" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+        `shouldBe` "/assets/app.js"
+      staticAssetHrefWithPrefix "app/" (StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}) "app.js"
+        `shouldBe` "/app/assets/app.js"
 
   describe "buildNavigation" $
     it "resolves hrefs and active state from the current page context" $
@@ -1810,6 +1814,19 @@ spec = do
       response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))) redirectRequest
       Wai.responseStatus response `shouldBe` Http.status308
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
+
+    it "keeps forwarded path prefixes in HTTPS redirects for the root route" $ do
+      let redirectRequest =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = "/app",
+                Wai.requestHeaders =
+                  [ ("Host", "app.example.com"),
+                    ("X-Forwarded-Prefix", "app")
+                  ]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app"
 
     it "does not redirect ACME http-01 challenge paths" $ do
       let requestPolicyConfig =
@@ -3203,6 +3220,22 @@ spec = do
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/app.js") "console.log('asset');"
         response <- performWaiRequest (toWaiApplication staticApplication) prefixedRequest
+        Wai.responseStatus response `shouldBe` Http.status200
+        readResponseBody response `shouldReturn` "console.log('asset');"
+
+    it "normalizes a trailing slash in static asset route prefixes" $
+      withSystemTempDirectory "harch-web-static-prefix-slash" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets/", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/app.js") "console.log('asset');"
+        response <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "app.js"])
         Wai.responseStatus response `shouldBe` Http.status200
         readResponseBody response `shouldReturn` "console.log('asset');"
 

@@ -72,6 +72,7 @@ library
     HarchWeb.Secret
     HarchWeb.Session
     HarchWeb.Site
+    HarchWeb.StaticAssets
     HarchWeb.Totp
     HarchWeb.Username
 
