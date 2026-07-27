@@ -71,6 +71,7 @@ library
     HarchWeb.RecoveryCode
     HarchWeb.Routing
     HarchWeb.Secret
+    HarchWeb.Security
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.StaticAssets
