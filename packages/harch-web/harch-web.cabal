@@ -80,6 +80,7 @@ library
     HarchWeb.Username
 
   other-modules:
+    HarchWeb.Acme.Challenge
     HarchWeb.Server.Config
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls

@@ -188,7 +188,7 @@ module HarchWeb
 where
 
 import Control.Applicative ((<|>))
-import Control.Concurrent (MVar, ThreadId, killThread, modifyMVar_, newEmptyMVar, newMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
+import Control.Concurrent (ThreadId, killThread, newEmptyMVar, newMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, evaluate, finally, onException, try)
 import Control.Monad (replicateM, unless, void)
 import Data.Bits (shiftR, xor)
@@ -208,6 +208,19 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
+import HarchWeb.Acme.Challenge
+  ( AcmeChallengeStore (..),
+    ActiveAcmeChallenge (..),
+    acmeChallengeResponseForRequest,
+    acmeChallengeRoutePath,
+    acmeHttp01ChallengeToken,
+    matchesRuntimeAcmeChallenge,
+    registerAcmeChallenges,
+    registerCertbotAcmeChallengeWebroot,
+    unregisterAcmeChallenges,
+    unregisterCertbotAcmeChallengeWebroot,
+    validAcmeHttp01ChallengeToken,
+  )
 import HarchWeb.Document
   ( Document (..),
     HtmlAttribute (..),
@@ -239,8 +252,6 @@ import HarchWeb.Security
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     requestHostWithoutPort,
-    requestPathPrefix,
-    waiRequestPath,
   )
 import HarchWeb.Server
   ( Application (..),
@@ -673,14 +684,6 @@ runtimeAcmeBindPlans startupPlan =
   | acmePlan <- acmeBindPlans startupPlan
   ]
 
-data ActiveAcmeChallenge = ActiveAcmeChallenge
-  { activeAcmeChallengeDomain :: Text,
-    activeAcmeChallengeToken :: Text,
-    activeAcmeChallengeResponse :: Text
-  }
-
-newtype AcmeChallengeStore = AcmeChallengeStore (MVar [ActiveAcmeChallenge])
-
 startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO [RunningAcmeRuntimeServer]
 startAcmeRuntimeServers acmePlans waiApplication connectionReporter applicationLogger =
   connectionReporter `seq` applicationLogger `seq` go [] acmePlans
@@ -930,109 +933,6 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
         challengeResponse
       respond challengeResponse
     Nothing -> toWaiApplication webApplication request respond
-
-acmeChallengeResponseForRequest :: RequestPolicyConfig -> AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
-acmeChallengeResponseForRequest requestPolicyConfig (AcmeChallengeStore challengeStore) request = do
-  challenges <- readMVar challengeStore
-  case fmap
-    ( Wai.responseLBS
-        Http.ok200
-        [("Content-Type", "text/plain; charset=utf-8")]
-        . LazyByteString.fromStrict
-        . TextEncoding.encodeUtf8
-        . activeAcmeChallengeResponse
-    )
-    (find (matchesRuntimeAcmeChallenge requestPolicyConfig request) challenges) of
-    Just challengeResponse ->
-      pure (Just challengeResponse)
-    Nothing ->
-      certbotAcmeChallengeResponseForRequest requestPolicyConfig request
-
-matchesRuntimeAcmeChallenge :: RequestPolicyConfig -> Wai.Request -> ActiveAcmeChallenge -> Bool
-matchesRuntimeAcmeChallenge requestPolicyConfig request challenge =
-  case acmeHttp01ChallengeToken requestPolicyConfig request of
-    Just challengeToken ->
-      challengeToken == activeAcmeChallengeToken challenge
-        && maybe True (== activeAcmeChallengeDomain challenge) (requestHostWithoutPort request)
-    Nothing -> False
-
-acmeHttp01ChallengeToken :: RequestPolicyConfig -> Wai.Request -> Maybe Text
-acmeHttp01ChallengeToken requestPolicyConfig request =
-  Text.stripPrefix "/.well-known/acme-challenge/" (waiRequestPath requestPolicyConfig request)
-
-acmeChallengeRoutePath :: RequestPolicyConfig -> Wai.Request -> Text
-acmeChallengeRoutePath requestPolicyConfig request =
-  applyRequestPathPrefix
-    (requestPathPrefix requestPolicyConfig request)
-    "/.well-known/acme-challenge/*"
-
-registerAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
-registerAcmeChallenges (AcmeChallengeStore challengeStore) newChallenges =
-  modifyMVar_ challengeStore (pure . (newChallenges <>))
-
-unregisterAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
-unregisterAcmeChallenges (AcmeChallengeStore challengeStore) completedChallenges =
-  modifyMVar_ challengeStore (pure . filter (not . (`sameActiveAcmeChallengeAny` completedChallenges)))
-
-{-# NOINLINE certbotAcmeChallengeWebrootDirectories #-}
-certbotAcmeChallengeWebrootDirectories :: MVar [FilePath]
-certbotAcmeChallengeWebrootDirectories =
-  unsafePerformIO (newMVar [])
-
-registerCertbotAcmeChallengeWebroot :: FilePath -> IO ()
-registerCertbotAcmeChallengeWebroot webrootDirectory =
-  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . (webrootDirectory :))
-
-unregisterCertbotAcmeChallengeWebroot :: FilePath -> IO ()
-unregisterCertbotAcmeChallengeWebroot webrootDirectory =
-  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . filter (/= webrootDirectory))
-
-certbotAcmeChallengeResponseForRequest :: RequestPolicyConfig -> Wai.Request -> IO (Maybe Wai.Response)
-certbotAcmeChallengeResponseForRequest requestPolicyConfig request =
-  case acmeHttp01ChallengeToken requestPolicyConfig request >>= validAcmeHttp01ChallengeToken of
-    Nothing ->
-      pure Nothing
-    Just challengeToken -> do
-      webrootDirectories <- readMVar certbotAcmeChallengeWebrootDirectories
-      maybeChallengeFile <-
-        firstExistingFile
-          [ webrootDirectory </> ".well-known" </> "acme-challenge" </> Text.unpack challengeToken
-          | webrootDirectory <- webrootDirectories
-          ]
-      pure
-        ( fmap
-            (\challengeFile -> Wai.responseFile Http.ok200 [("Content-Type", "text/plain; charset=utf-8")] challengeFile Nothing)
-            maybeChallengeFile
-        )
-
-validAcmeHttp01ChallengeToken :: Text -> Maybe Text
-validAcmeHttp01ChallengeToken challengeToken
-  | Text.null challengeToken = Nothing
-  | Text.any (\character -> character == '/' || character == '\\') challengeToken = Nothing
-  | challengeToken == "." || challengeToken == ".." = Nothing
-  | Text.isInfixOf ".." challengeToken = Nothing
-validAcmeHttp01ChallengeToken challengeToken = Just challengeToken
-
-firstExistingFile :: [FilePath] -> IO (Maybe FilePath)
-firstExistingFile candidatePaths =
-  case candidatePaths of
-    [] ->
-      pure Nothing
-    candidatePath : remainingPaths -> do
-      candidateExists <- doesFileExist candidatePath
-      if candidateExists
-        then pure (Just candidatePath)
-        else firstExistingFile remainingPaths
-
-sameActiveAcmeChallengeAny :: ActiveAcmeChallenge -> [ActiveAcmeChallenge] -> Bool
-sameActiveAcmeChallengeAny candidate =
-  any (sameActiveAcmeChallenge candidate)
-
-sameActiveAcmeChallenge :: ActiveAcmeChallenge -> ActiveAcmeChallenge -> Bool
-sameActiveAcmeChallenge left right =
-  activeAcmeChallengeDomain left == activeAcmeChallengeDomain right
-    && activeAcmeChallengeToken left == activeAcmeChallengeToken right
-    && activeAcmeChallengeResponse left == activeAcmeChallengeResponse right
 
 certbotCertificateName :: RuntimeAcmeBindPlan -> Either String Text
 certbotCertificateName runtimeAcmePlan =
