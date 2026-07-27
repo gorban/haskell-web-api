@@ -192,11 +192,9 @@ import Control.Exception (IOException, SomeException, bracket, bracket_, display
 import Control.Monad (replicateM, unless, void)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Bifunctor (bimap)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
-import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (digitToInt, isDigit, toLower)
 import Data.Either (lefts)
@@ -210,7 +208,6 @@ import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64, Word8)
@@ -271,10 +268,23 @@ import HarchWeb.Server
     RequestMiddleware (..),
     Response (..),
     ResponseBody (..),
+    ResponseDiagnostics (..),
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,
+    eventStreamResponse,
+    isClientActionRequest,
+    parseClientActionFields,
+    redirectResponse,
+    renderServerSentEvent,
+    responseDiagnostics,
+    responseKind,
+    responseStatusCode,
     runRequestMiddlewarePipeline,
+    serverSentEventContentType,
+    serverSentEventSourceFromList,
+    toWaiBodyResponse,
+    toWaiResponse,
   )
 import HarchWeb.StaticAssets
   ( AssetPath (..),
@@ -293,7 +303,6 @@ import HarchWeb.StaticAssets
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
-import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Socket qualified as Socket
 import Network.TLS qualified as TLS
 import Network.Wai qualified as Wai
@@ -468,82 +477,6 @@ data ListenerStartupError
   | InvalidListenerTlsConfiguration ListenerConfig
   | InvalidListenerAcmeConfiguration ListenerConfig
   deriving (Eq, Show)
-
-data ResponseDiagnostics = ResponseDiagnostics
-  { diagnosticObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    diagnosticLogEntries :: [Text]
-  }
-
-redirectResponse :: Int -> Text -> Response route context
-redirectResponse status =
-  RedirectResponse
-    ResponseBody
-      { responseStatus = status,
-        responseContentType = "text/plain; charset=utf-8",
-        responseBody = "",
-        responseObservabilityAttributes = [],
-        responseLogEntries = []
-      }
-
-eventStreamResponse :: ServerSentEventSource -> Response route context
-eventStreamResponse =
-  EventStreamResponse
-    ResponseBody
-      { responseStatus = 200,
-        responseContentType = serverSentEventContentType,
-        responseBody = Text.empty,
-        responseObservabilityAttributes = [],
-        responseLogEntries = []
-      }
-
-serverSentEventSourceFromList :: [ServerSentEvent] -> IO ServerSentEventSource
-serverSentEventSourceFromList events = do
-  eventsReference <- newIORef events
-  pure $
-    ServerSentEventSource $
-      atomicModifyIORef' eventsReference $ \case
-        [] -> ([], Nothing)
-        event : remainingEvents -> (remainingEvents, Just event)
-
-responseDiagnostics :: Response route context -> ResponseDiagnostics
-responseDiagnostics response =
-  case response of
-    PageResponse _ -> ResponseDiagnostics [] []
-    PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-    BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
-    RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-    ClientActionBodyResponse actionResponse -> responseBodyDiagnostics (clientActionResponseBody actionResponse)
-    EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-
-responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
-responseBodyDiagnostics responseBodyValue =
-  ResponseDiagnostics
-    { diagnosticObservabilityAttributes = responseObservabilityAttributes responseBodyValue,
-      diagnosticLogEntries = responseLogEntries responseBodyValue
-    }
-
-responseStatusCode :: (Eq route) => Application route context -> Response route context -> Int
-responseStatusCode webApplication response =
-  case response of
-    PageResponse page ->
-      if isNotFoundPage webApplication page
-        then 404
-        else 200
-    PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
-    BodyResponse responseBodyValue -> responseStatus responseBodyValue
-    RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
-    ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
-    EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
-
-responseKind :: Response route context -> Observability.ResponseKind
-responseKind response =
-  case response of
-    PageResponse _ -> Observability.PageResponseKind
-    PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-    BodyResponse _ -> Observability.BodyResponseKind
-    RedirectResponse _ _ -> Observability.BodyResponseKind
-    ClientActionBodyResponse _ -> Observability.BodyResponseKind
-    EventStreamResponse _ _ -> Observability.BodyResponseKind
 
 data LocalTestServer = LocalTestServer
   { localServerHost :: Text,
@@ -2716,131 +2649,9 @@ listenerSocketHints =
       Socket.addrSocketType = Socket.Stream
     }
 
-serverSentEventContentType :: Text
-serverSentEventContentType = "text/event-stream; charset=utf-8"
-
-renderServerSentEvent :: ServerSentEvent -> Text
-renderServerSentEvent ServerSentEvent {serverSentEventName, serverSentEventId, serverSentEventData} =
-  Text.concat
-    ( maybeToList (renderSseField "event" <$> serverSentEventName)
-        <> maybeToList (renderSseField "id" <$> serverSentEventId)
-        <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (nonEmptyLines serverSentEventData)
-        <> ["\n"]
-    )
-
-renderSseField :: Text -> Text -> Text
-renderSseField fieldName fieldValue =
-  fieldName <> ": " <> Text.filter (`notElem` ['\r', '\n']) fieldValue <> "\n"
-
-renderSseDataLine :: Text -> Text
-renderSseDataLine line = "data: " <> line <> "\n"
-
-nonEmptyLines :: Text -> [Text]
-nonEmptyLines = Text.splitOn "\n"
-
-toWaiResponse :: (Eq route) => Http.ResponseHeaders -> RuntimeNonce -> Application route context -> Response route context -> Wai.Response
-toWaiResponse additionalHeaders runtimeNonce webApplication response =
-  case response of
-    PageResponse page ->
-      Wai.responseLBS
-        (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
-    PageResponseWithMetadata pageResponseBodyValue page ->
-      let !pageStatusMessage = ByteString.empty
-          !pageStatusMessageLength = ByteString.length pageStatusMessage
-          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
-       in Wai.responseLBS
-            pageStatus
-            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
-    BodyResponse responseBodyValue ->
-      toWaiBodyResponse additionalHeaders responseBodyValue
-    RedirectResponse responseBodyValue location ->
-      toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
-    ClientActionBodyResponse actionResponse ->
-      toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
-    EventStreamResponse responseBodyValue eventSource ->
-      toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
-
-toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
-toWaiBodyResponse additionalHeaders responseBodyValue =
-  Wai.responseLBS
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
-    (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
-    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
-
-toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
-toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
-  Wai.responseStream
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
-    ( additionalHeaders
-        <> [ (Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue)),
-             ("Cache-Control", "no-cache"),
-             ("X-Accel-Buffering", "no")
-           ]
-    )
-    streamEvents
-  where
-    streamEvents write flush = do
-      maybeEvent <- nextServerSentEvent eventSource
-      for_ maybeEvent $ \event -> do
-        write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
-        flush
-        streamEvents write flush
-
-isClientActionRequest :: Wai.Request -> Bool
-isClientActionRequest request =
-  lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
-
-parseClientActionFields :: LazyByteString.ByteString -> [(Text, Text)]
-parseClientActionFields requestBody =
-  map
-    (bimap decodeActionField (maybe "" decodeActionField))
-    (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
-
-decodeActionField :: ByteString.ByteString -> Text
-decodeActionField =
-  TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
-
-clientActionResponseBody :: ClientActionResponse -> ResponseBody
-clientActionResponseBody actionResponse =
-  ResponseBody
-    { responseStatus = clientActionStatus actionResponse,
-      responseContentType = "application/json; charset=utf-8",
-      responseBody =
-        TextEncoding.decodeUtf8
-          ( LazyByteString.toStrict
-              ( jsonObjectBytes
-                  [ ( "patches",
-                      jsonArrayBytes
-                        ( map
-                            ( \RegionPatch {regionPatchId = patchId, regionPatchHtml = patchHtml} ->
-                                jsonObjectBytes
-                                  [ ("id", jsonStringBytes patchId),
-                                    ("html", jsonStringBytes patchHtml)
-                                  ]
-                            )
-                            (clientActionPatches actionResponse)
-                        )
-                    ),
-                    ("focusId", maybe "null" jsonStringBytes (clientActionFocusId actionResponse))
-                  ]
-              )
-          ),
-      responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
-      responseLogEntries = clientActionLogEntries actionResponse
-    }
-
 applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
 applyResponseHeaders additionalHeaders =
   Wai.mapResponseHeaders (additionalHeaders <>)
-
-isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
-isNotFoundPage webApplication page =
-  let pageRequestContext = pageContext page
-   in pageRequestContext `seq`
-        pageRoute page == requestRoute (notFoundRequest (routeCodec webApplication) pageRequestContext)
 
 responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> RuntimeNonce -> Response route context -> Http.ResponseHeaders
 responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
@@ -2894,9 +2705,6 @@ listenerSchemeText listenerScheme =
   case listenerScheme of
     Http -> "http"
     Https -> "https"
-
-htmlContentType :: Text
-htmlContentType = "text/html; charset=utf-8"
 
 reportEarlyRequestObservability ::
   (Eq route) =>

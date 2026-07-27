@@ -19,6 +19,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Server qualified as Server
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
@@ -1592,6 +1593,36 @@ spec = do
         `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
       capturedLogEntries <- readIORef logEntriesReference
       capturedLogEntries `shouldSatisfy` any (Text.isInfixOf "private registration failure detail")
+
+    it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
+      let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t"
+          observabilityAttribute = Observability.ObservabilityAttribute "action.outcome" (Observability.TextAttribute "rejected")
+          responseBodyValue =
+            Server.clientActionResponseBody
+              ClientActionResponse
+                { clientActionStatus = 422,
+                  clientActionPatches = [RegionPatch ("first " <> escapedText) escapedText, RegionPatch "second" escapedText],
+                  clientActionFocusId = Just escapedText,
+                  clientActionHeaders = [],
+                  clientActionObservabilityAttributes = [observabilityAttribute],
+                  clientActionLogEntries = ["private action diagnostic"]
+                }
+          encodedResponse = responseBody responseBodyValue
+      expectAll
+        ( (responseStatus responseBodyValue `shouldBe` 422)
+            :| [ responseContentType responseBodyValue `shouldBe` "application/json; charset=utf-8",
+                 responseObservabilityAttributes responseBodyValue `shouldBe` [observabilityAttribute],
+                 responseLogEntries responseBodyValue `shouldBe` ["private action diagnostic"],
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "},{",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\\"",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\\\",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\b",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\f",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\n",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\r",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\t"
+               ]
+        )
 
     it "falls back to the SSR response when an action is not handled" $ do
       actionBodyChunks <- newIORef []

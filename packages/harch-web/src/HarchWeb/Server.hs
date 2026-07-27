@@ -1,4 +1,7 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed application, request, response, and middleware contracts.
 --
@@ -14,20 +17,46 @@ module HarchWeb.Server
     RequestMiddleware (..),
     Response (..),
     ResponseBody (..),
+    ResponseDiagnostics (..),
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,
+    clientActionResponseBody,
+    eventStreamResponse,
+    isClientActionRequest,
+    parseClientActionFields,
+    redirectResponse,
+    renderServerSentEvent,
+    responseDiagnostics,
+    responseKind,
+    responseStatusCode,
+    serverSentEventContentType,
     runRequestMiddlewarePipeline,
+    serverSentEventSourceFromList,
+    toWaiBodyResponse,
+    toWaiResponse,
   )
 where
 
+import Data.Bifunctor (bimap)
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as ByteStringBuilder
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Foldable (for_)
+import Data.IORef (atomicModifyIORef', newIORef)
+import Data.Maybe (maybeToList)
 import Data.Text (Text)
+import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb.Document (Document, NavigationRuntime, Page)
+import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Routing (RouteCodec, RouteRequest)
+import HarchWeb.Routing (RouteCodec (..), RouteRequest (..))
 import HarchWeb.Security (RequestPolicyConfig)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.HTTP.Types qualified as Http
+import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
 data ResponseBody = ResponseBody
@@ -55,6 +84,11 @@ data ServerSentEvent = ServerSentEvent
 -- is equally useful for deterministic integration tests and one-shot updates.
 newtype ServerSentEventSource = ServerSentEventSource
   { nextServerSentEvent :: IO (Maybe ServerSentEvent)
+  }
+
+data ResponseDiagnostics = ResponseDiagnostics
+  { diagnosticObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    diagnosticLogEntries :: [Text]
   }
 
 -- | A typed application-owned request middleware. Middleware runs after
@@ -150,6 +184,77 @@ data Application route context = Application
 application :: Application route context -> Application route context
 application = id
 
+redirectResponse :: Int -> Text -> Response route context
+redirectResponse status =
+  RedirectResponse
+    ResponseBody
+      { responseStatus = status,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "",
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
+
+eventStreamResponse :: ServerSentEventSource -> Response route context
+eventStreamResponse =
+  EventStreamResponse
+    ResponseBody
+      { responseStatus = 200,
+        responseContentType = "text/event-stream; charset=utf-8",
+        responseBody = Text.empty,
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
+
+serverSentEventSourceFromList :: [ServerSentEvent] -> IO ServerSentEventSource
+serverSentEventSourceFromList events = do
+  eventsReference <- newIORef events
+  pure $
+    ServerSentEventSource $
+      atomicModifyIORef' eventsReference $ \case
+        [] -> ([], Nothing)
+        event : remainingEvents -> (remainingEvents, Just event)
+
+responseDiagnostics :: Response route context -> ResponseDiagnostics
+responseDiagnostics response =
+  case response of
+    PageResponse _ -> ResponseDiagnostics [] []
+    PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
+    RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    ClientActionBodyResponse actionResponse ->
+      ResponseDiagnostics
+        (clientActionObservabilityAttributes actionResponse)
+        (clientActionLogEntries actionResponse)
+    EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+
+responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
+responseBodyDiagnostics responseBodyValue =
+  ResponseDiagnostics
+    { diagnosticObservabilityAttributes = responseObservabilityAttributes responseBodyValue,
+      diagnosticLogEntries = responseLogEntries responseBodyValue
+    }
+
+responseStatusCode :: (Eq route) => Application route context -> Response route context -> Int
+responseStatusCode webApplication response =
+  case response of
+    PageResponse page -> if isNotFoundPage webApplication page then 404 else 200
+    PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
+    BodyResponse responseBodyValue -> responseStatus responseBodyValue
+    RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
+    ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
+    EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
+
+responseKind :: Response route context -> Observability.ResponseKind
+responseKind response =
+  case response of
+    PageResponse _ -> Observability.PageResponseKind
+    PageResponseWithMetadata _ _ -> Observability.PageResponseKind
+    BodyResponse _ -> Observability.BodyResponseKind
+    RedirectResponse _ _ -> Observability.BodyResponseKind
+    ClientActionBodyResponse _ -> Observability.BodyResponseKind
+    EventStreamResponse _ _ -> Observability.BodyResponseKind
+
 -- | Run middleware in declaration order. The first middleware sees the
 -- request first; a halt short-circuits the remaining middleware.
 runRequestMiddlewarePipeline :: [RequestMiddleware context] -> Wai.Request -> context -> IO (MiddlewareResult context)
@@ -161,3 +266,123 @@ runRequestMiddlewarePipeline middleware request = go middleware
       case result of
         ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
         HaltMiddleware haltedRequestContext responseBodyValue -> pure (HaltMiddleware haltedRequestContext responseBodyValue)
+
+renderServerSentEvent :: ServerSentEvent -> Text
+renderServerSentEvent ServerSentEvent {serverSentEventName, serverSentEventId, serverSentEventData} =
+  Text.concat
+    ( maybeToList (renderSseField "event" <$> serverSentEventName)
+        <> maybeToList (renderSseField "id" <$> serverSentEventId)
+        <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (Text.splitOn "\n" serverSentEventData)
+        <> ["\n"]
+    )
+
+renderSseField :: Text -> Text -> Text
+renderSseField fieldName fieldValue = fieldName <> ": " <> Text.filter (`notElem` ['\r', '\n']) fieldValue <> "\n"
+
+renderSseDataLine :: Text -> Text
+renderSseDataLine line = "data: " <> line <> "\n"
+
+toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Document.RuntimeNonce -> Application route context -> Response route context -> Wai.Response
+toWaiResponse additionalHeaders runtimeNonce webApplication response =
+  case response of
+    PageResponse page ->
+      Wai.responseLBS
+        (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
+        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
+        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+    PageResponseWithMetadata pageResponseBodyValue page ->
+      let !pageStatusMessage = ByteString.empty
+          !pageStatusMessageLength = ByteString.length pageStatusMessage
+          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
+       in Wai.responseLBS
+            pageStatus
+            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+    BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
+    RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
+    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
+    EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
+
+toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
+toWaiBodyResponse additionalHeaders responseBodyValue =
+  Wai.responseLBS
+    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
+    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
+toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
+  Wai.responseStream
+    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    ( additionalHeaders
+        <> [ (Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue)),
+             ("Cache-Control", "no-cache"),
+             ("X-Accel-Buffering", "no")
+           ]
+    )
+    streamEvents
+  where
+    streamEvents write flush = do
+      maybeEvent <- nextServerSentEvent eventSource
+      for_ maybeEvent $ \event -> do
+        write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
+        flush
+        streamEvents write flush
+
+isClientActionRequest :: Wai.Request -> Bool
+isClientActionRequest request = lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
+
+parseClientActionFields :: LazyByteString.ByteString -> [(Text, Text)]
+parseClientActionFields requestBody =
+  map (bimap decodeActionField (maybe "" decodeActionField)) (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
+
+decodeActionField :: ByteString.ByteString -> Text
+decodeActionField = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
+
+clientActionResponseBody :: ClientActionResponse -> ResponseBody
+clientActionResponseBody actionResponse =
+  ResponseBody
+    { responseStatus = clientActionStatus actionResponse,
+      responseContentType = "application/json; charset=utf-8",
+      responseBody = renderClientActionResponse actionResponse,
+      responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
+      responseLogEntries = clientActionLogEntries actionResponse
+    }
+
+renderClientActionResponse :: ClientActionResponse -> Text
+renderClientActionResponse actionResponse =
+  "{\"patches\":["
+    <> Text.intercalate "," (map renderPatch (clientActionPatches actionResponse))
+    <> "],\"focusId\":"
+    <> maybe "null" jsonString (clientActionFocusId actionResponse)
+    <> "}"
+  where
+    renderPatch RegionPatch {regionPatchId, regionPatchHtml} =
+      "{\"id\":" <> jsonString regionPatchId <> ",\"html\":" <> jsonString regionPatchHtml <> "}"
+
+jsonString :: Text -> Text
+jsonString textValue = "\"" <> Text.concatMap escapeJsonCharacter textValue <> "\""
+
+escapeJsonCharacter :: Char -> Text
+escapeJsonCharacter character =
+  case character of
+    '"' -> "\\\""
+    '\\' -> "\\\\"
+    '\b' -> "\\b"
+    '\f' -> "\\f"
+    '\n' -> "\\n"
+    '\r' -> "\\r"
+    '\t' -> "\\t"
+    _ -> Text.singleton character
+
+isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
+isNotFoundPage webApplication page =
+  let pageRequestContext = Document.pageContext page
+   in pageRequestContext `seq`
+        Document.pageRoute page == requestRoute (notFoundRequest (routeCodec webApplication) pageRequestContext)
+
+htmlContentType :: Text
+htmlContentType = "text/html; charset=utf-8"
+
+serverSentEventContentType :: Text
+serverSentEventContentType = "text/event-stream; charset=utf-8"
