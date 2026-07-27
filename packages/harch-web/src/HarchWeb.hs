@@ -251,7 +251,6 @@ import HarchWeb.Security
     requestLogContextFields,
     requestPathPrefix,
     requestPolicyResponseHeaders,
-    requestPolicyResponseHeadersWithNonce,
     requestRedirectLocation,
     requestScheme,
     requestTraceContext,
@@ -272,6 +271,7 @@ import HarchWeb.Server
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,
+    applyResponseHeaders,
     eventStreamResponse,
     isClientActionRequest,
     parseClientActionFields,
@@ -279,6 +279,7 @@ import HarchWeb.Server
     renderServerSentEvent,
     responseDiagnostics,
     responseKind,
+    responsePolicyHeaders,
     responseStatusCode,
     runRequestMiddlewarePipeline,
     serverSentEventContentType,
@@ -2648,24 +2649,6 @@ listenerSocketHints =
       Socket.addrFamily = Socket.AF_INET,
       Socket.addrSocketType = Socket.Stream
     }
-
-applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
-applyResponseHeaders additionalHeaders =
-  Wai.mapResponseHeaders (additionalHeaders <>)
-
-responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> RuntimeNonce -> Response route context -> Http.ResponseHeaders
-responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
-  requestPolicyResponseHeadersWithNonce
-    requestPolicyConfig
-    request
-    ( case response of
-        PageResponse _ -> Just runtimeNonce
-        PageResponseWithMetadata _ _ -> Just runtimeNonce
-        BodyResponse _ -> Nothing
-        RedirectResponse _ _ -> Nothing
-        ClientActionBodyResponse _ -> Nothing
-        EventStreamResponse _ _ -> Nothing
-    )
 
 requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
 requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =

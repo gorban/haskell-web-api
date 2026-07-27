@@ -21,6 +21,7 @@ module HarchWeb.Server
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,
+    applyResponseHeaders,
     clientActionResponseBody,
     eventStreamResponse,
     isClientActionRequest,
@@ -29,6 +30,7 @@ module HarchWeb.Server
     renderServerSentEvent,
     responseDiagnostics,
     responseKind,
+    responsePolicyHeaders,
     responseStatusCode,
     serverSentEventContentType,
     runRequestMiddlewarePipeline,
@@ -53,7 +55,7 @@ import HarchWeb.Document (Document, NavigationRuntime, Page)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..))
-import HarchWeb.Security (RequestPolicyConfig)
+import HarchWeb.Security (RequestPolicyConfig, requestPolicyResponseHeadersWithNonce)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
@@ -183,6 +185,24 @@ data Application route context = Application
 
 application :: Application route context -> Application route context
 application = id
+
+applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
+applyResponseHeaders additionalHeaders =
+  Wai.mapResponseHeaders (additionalHeaders <>)
+
+responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Document.RuntimeNonce -> Response route context -> Http.ResponseHeaders
+responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
+  requestPolicyResponseHeadersWithNonce
+    requestPolicyConfig
+    request
+    ( case response of
+        PageResponse _ -> Just runtimeNonce
+        PageResponseWithMetadata _ _ -> Just runtimeNonce
+        BodyResponse _ -> Nothing
+        RedirectResponse _ _ -> Nothing
+        ClientActionBodyResponse _ -> Nothing
+        EventStreamResponse _ _ -> Nothing
+    )
 
 redirectResponse :: Int -> Text -> Response route context
 redirectResponse status =
