@@ -7,6 +7,7 @@ import Control.Exception (SomeException, displayException, try)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -35,6 +36,7 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 data SampleRoute
   = HomeRoute
@@ -66,16 +68,19 @@ spec = do
             Observability.buildConnectionObservability
               "CONNECTION sample"
               []
-      siteName sampleSite `shouldBe` "sample"
-      HarchWeb.appName siteApplication `shouldBe` "sample"
-      HarchWeb.staticAssetRoots (siteStaticAssets sampleSite) `shouldBe` []
-      HarchWeb.staticAssetContentTypes (siteStaticAssets sampleSite) `shouldBe` HarchWeb.defaultStaticAssetContentTypes
-      HarchWeb.staticCacheControlSeconds (siteStaticAssets sampleSite) `shouldBe` Nothing
-      fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js"
-      siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` ""
-      HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing
-      HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig
-      length (siteRequestMiddleware sampleSite) `shouldBe` 0
+      expectAll
+        ( (siteName sampleSite `shouldBe` "sample")
+            :| [ HarchWeb.appName siteApplication `shouldBe` "sample",
+                 HarchWeb.staticAssetRoots (siteStaticAssets sampleSite) `shouldBe` [],
+                 HarchWeb.staticAssetContentTypes (siteStaticAssets sampleSite) `shouldBe` HarchWeb.defaultStaticAssetContentTypes,
+                 HarchWeb.staticCacheControlSeconds (siteStaticAssets sampleSite) `shouldBe` Nothing,
+                 fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js",
+                 siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` "",
+                 HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing,
+                 HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig,
+                 length (siteRequestMiddleware sampleSite) `shouldBe` 0
+               ]
+        )
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
       siteHandleClientAction sampleSite ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
         `shouldReturn` Nothing
