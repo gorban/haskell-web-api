@@ -61,6 +61,7 @@ library
     HarchWeb.Account
     HarchWeb.Database
     HarchWeb.DevSmtp
+    HarchWeb.Document
     HarchWeb.Email
     HarchWeb.Gmail
     HarchWeb.GoogleWorkspace
