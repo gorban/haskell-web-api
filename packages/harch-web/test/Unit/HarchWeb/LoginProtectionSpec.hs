@@ -3,8 +3,10 @@
 module Unit.HarchWeb.LoginProtectionSpec (spec) where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.LoginProtection
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 policy :: LoginProtectionPolicy
 policy = LoginProtectionPolicy 2 100 50
@@ -13,28 +15,37 @@ spec :: Spec
 spec = do
   describe "LoginProtectionPolicy" $ do
     it "has a secure default and exposes stable diagnostics" $ do
-      defaultLoginProtectionPolicy `shouldBe` LoginProtectionPolicy 5 900000000000 900000000000
-      defaultLoginProtectionPolicy /= policy `shouldBe` True
-      show defaultLoginProtectionPolicy `shouldBe` "LoginProtectionPolicy {loginProtectionMaximumFailures = 5, loginProtectionWindowNanoseconds = 900000000000, loginProtectionLockoutNanoseconds = 900000000000}"
-      show [defaultLoginProtectionPolicy] `shouldContain` "LoginProtectionPolicy"
+      expectAll
+        ( (defaultLoginProtectionPolicy `shouldBe` LoginProtectionPolicy 5 900000000000 900000000000)
+            :| [ defaultLoginProtectionPolicy /= policy `shouldBe` True,
+                 show defaultLoginProtectionPolicy `shouldBe` "LoginProtectionPolicy {loginProtectionMaximumFailures = 5, loginProtectionWindowNanoseconds = 900000000000, loginProtectionLockoutNanoseconds = 900000000000}",
+                 show [defaultLoginProtectionPolicy] `shouldContain` "LoginProtectionPolicy"
+               ]
+        )
 
   describe "evaluateLoginAttempt" $ do
     it "permits requests below the failure threshold and ignores successful or expired attempts" $ do
-      evaluateLoginAttempt policy 100 [] `shouldBe` LoginPermitted
-      evaluateLoginAttempt policy 100 [LoginAttempt 99 False] `shouldBe` LoginPermitted
-      evaluateLoginAttempt policy 100 [LoginAttempt 99 True, LoginAttempt 0 False] `shouldBe` LoginPermitted
-      evaluateLoginAttempt policy 100 [LoginAttempt 101 False] `shouldBe` LoginPermitted
-      LoginAttempt 1 False /= LoginAttempt 1 True `shouldBe` True
-      show (LoginAttempt 1 False) `shouldBe` "LoginAttempt {loginAttemptAtNanoseconds = 1, loginAttemptSucceeded = False}"
-      show [LoginAttempt 1 False] `shouldContain` "LoginAttempt"
+      expectAll
+        ( (evaluateLoginAttempt policy 100 [] `shouldBe` LoginPermitted)
+            :| [ evaluateLoginAttempt policy 100 [LoginAttempt 99 False] `shouldBe` LoginPermitted,
+                 evaluateLoginAttempt policy 100 [LoginAttempt 99 True, LoginAttempt 0 False] `shouldBe` LoginPermitted,
+                 evaluateLoginAttempt policy 100 [LoginAttempt 101 False] `shouldBe` LoginPermitted,
+                 LoginAttempt 1 False /= LoginAttempt 1 True `shouldBe` True,
+                 show (LoginAttempt 1 False) `shouldBe` "LoginAttempt {loginAttemptAtNanoseconds = 1, loginAttemptSucceeded = False}",
+                 show [LoginAttempt 1 False] `shouldContain` "LoginAttempt"
+               ]
+        )
 
     it "throttles at the failure threshold until the newest relevant failure expires" $ do
-      evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140
-      evaluateLoginAttempt policy 141 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted
-      evaluateLoginAttempt policy 161 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted
-      LoginPermitted /= LoginThrottledUntil 140 `shouldBe` True
-      show (LoginThrottledUntil 140) `shouldBe` "LoginThrottledUntil 140"
-      show [LoginPermitted, LoginThrottledUntil 140] `shouldBe` "[LoginPermitted,LoginThrottledUntil 140]"
+      expectAll
+        ( (evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140)
+            :| [ evaluateLoginAttempt policy 141 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted,
+                 evaluateLoginAttempt policy 161 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted,
+                 LoginPermitted /= LoginThrottledUntil 140 `shouldBe` True,
+                 show (LoginThrottledUntil 140) `shouldBe` "LoginThrottledUntil 140",
+                 show [LoginPermitted, LoginThrottledUntil 140] `shouldBe` "[LoginPermitted,LoginThrottledUntil 140]"
+               ]
+        )
 
   describe "AuthenticationAuditSink" $ do
     it "leaves audit delivery application-owned" $ do
