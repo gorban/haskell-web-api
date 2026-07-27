@@ -175,12 +175,16 @@ spec = do
                 Observability.traceContextParentSpanId = "00f067aa0ba902b7",
                 Observability.traceContextState = Nothing
               }
-      Observability.forceRequestObservability
-        (Observability.withRequestTraceContext traceContextWithState requestObservability)
-        `shouldBe` ()
-      Observability.forceRequestObservability
-        (Observability.withRequestTraceContext traceContextWithoutState requestObservability)
-        `shouldBe` ()
+      expectAll
+        ( ( Observability.forceRequestObservability
+              (Observability.withRequestTraceContext traceContextWithState requestObservability)
+              `shouldBe` ()
+          )
+            :| [ Observability.forceRequestObservability
+                   (Observability.withRequestTraceContext traceContextWithoutState requestObservability)
+                   `shouldBe` ()
+               ]
+        )
 
   describe "requestSpanName" $ do
     it "uses the request method with the canonical route path" $
