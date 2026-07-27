@@ -81,6 +81,7 @@ library
 
   other-modules:
     HarchWeb.Acme.Certbot.Options
+    HarchWeb.Acme.Certbot.Runtime
     HarchWeb.Acme.Challenge
     HarchWeb.Server.Config
     HarchWeb.Server.Transport
