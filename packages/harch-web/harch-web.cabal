@@ -68,6 +68,7 @@ library
     HarchWeb.Observability
     HarchWeb.Password
     HarchWeb.RecoveryCode
+    HarchWeb.Routing
     HarchWeb.Secret
     HarchWeb.Session
     HarchWeb.Site

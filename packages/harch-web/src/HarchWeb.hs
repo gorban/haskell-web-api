@@ -217,6 +217,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, routeHref)
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
@@ -488,12 +489,6 @@ data ListenerStartupError
   = DuplicateListenerEndpoint ListenerEndpoint
   | InvalidListenerTlsConfiguration ListenerConfig
   | InvalidListenerAcmeConfiguration ListenerConfig
-  deriving (Eq, Show)
-
-data RouteRequest route context = RouteRequest
-  { requestRoute :: route,
-    requestContext :: context
-  }
   deriving (Eq, Show)
 
 data Page route context = Page
@@ -799,12 +794,6 @@ responseKind response =
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
     EventStreamResponse _ _ -> Observability.BodyResponseKind
 
-data RouteCodec route context = RouteCodec
-  { parseRoute :: context -> Text -> Maybe (RouteRequest route context),
-    renderRoute :: RouteRequest route context -> Text,
-    notFoundRequest :: context -> RouteRequest route context
-  }
-
 data Application route context = Application
   { appName :: Text,
     defaultRequestContext :: context,
@@ -849,10 +838,6 @@ runRequestMiddlewarePipeline middleware request = go middleware
       case result of
         ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
         HaltMiddleware haltedRequestContext responseBody -> pure (HaltMiddleware haltedRequestContext responseBody)
-
-routeHref :: RouteCodec route context -> context -> route -> Text
-routeHref codec context route =
-  renderRoute codec RouteRequest {requestRoute = route, requestContext = context}
 
 staticAssetHref :: StaticAssetRoot -> FilePath -> Text
 staticAssetHref =
@@ -1188,9 +1173,6 @@ renderStylesheets =
       ( \Stylesheet {stylesheetAsset = AssetPath assetPath} ->
           "<link rel=\"stylesheet\" href=\"" <> assetPath <> "\">"
       )
-
-matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route context
-matchRoute codec context path = fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
 
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
 toWaiApplication webApplication request respond = do
