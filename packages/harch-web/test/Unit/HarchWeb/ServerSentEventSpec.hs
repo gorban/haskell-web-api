@@ -2,6 +2,7 @@
 
 module Unit.HarchWeb.ServerSentEventSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb
   ( ClientActionResponse (..),
     Response (..),
@@ -14,6 +15,7 @@ import HarchWeb
     serverSentEventSourceFromList,
   )
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec =
@@ -26,10 +28,10 @@ spec =
         `shouldBe` "event: page-update\nid: 42\ndata: Ready\n\n"
 
     it "renders every payload line as a data field and keeps an empty payload observable" $ do
-      renderServerSentEvent (ServerSentEvent Nothing Nothing "first\nsecond")
-        `shouldBe` "data: first\ndata: second\n\n"
-      renderServerSentEvent (ServerSentEvent Nothing Nothing "")
-        `shouldBe` "data: \n\n"
+      expectAll
+        ( (renderServerSentEvent (ServerSentEvent Nothing Nothing "first\nsecond") `shouldBe` "data: first\ndata: second\n\n")
+            :| [renderServerSentEvent (ServerSentEvent Nothing Nothing "") `shouldBe` "data: \n\n"]
+        )
 
     it "removes line breaks from protocol fields without turning them into injected fields" $
       renderServerSentEvent (ServerSentEvent (Just "page\nupdate") (Just "4\r\n2") "ok\r\nnow")
@@ -52,10 +54,11 @@ spec =
           actionResponse = ClientActionResponse 200 [] Nothing [] [] []
           streamResponse = eventStreamResponse firstSource :: Response () ()
           clientActionResponse = ClientActionBodyResponse actionResponse :: Response () ()
-      streamResponse `shouldBe` eventStreamResponse secondSource
-      clientActionResponse `shouldBe` clientActionResponse
-      streamResponse `shouldNotBe` BodyResponse responseBodyValue
-      showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) ""
-        `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = 204, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/next\")"
-      showsPrec 11 clientActionResponse ""
-        `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = 200, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
+      expectAll
+        ( (streamResponse `shouldBe` eventStreamResponse secondSource)
+            :| [ clientActionResponse `shouldBe` clientActionResponse,
+                 streamResponse `shouldNotBe` BodyResponse responseBodyValue,
+                 showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = 204, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/next\")",
+                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = 200, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
+               ]
+        )
