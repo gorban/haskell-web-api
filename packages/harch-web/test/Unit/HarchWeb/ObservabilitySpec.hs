@@ -2,8 +2,10 @@
 
 module Unit.HarchWeb.ObservabilitySpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Observability qualified as Observability
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec = do
@@ -45,41 +47,32 @@ spec = do
             Observability.ConnectionObservability
               { Observability.observabilityConnectionSpan = requestSpan
               }
-      Observability.attributeName pageKindAttribute `shouldBe` "harch.response.kind"
-      Observability.attributeValue pageKindAttribute `shouldBe` Observability.TextAttribute "page"
-      Observability.attributeName localeAttribute `shouldBe` "app.locale"
-      Observability.attributeValue localeAttribute `shouldBe` Observability.TextAttribute "fr"
-      Observability.attributeName statusAttribute `shouldBe` "http.response.status_code"
-      Observability.attributeValue statusAttribute `shouldBe` Observability.IntAttribute 200
-      Observability.requestSpanDisplayName requestSpan `shouldBe` "GET /second"
-      Observability.requestSpanAttributes requestSpan `shouldBe` [pageKindAttribute, localeAttribute]
-      Observability.requestDurationMetricName httpServerMetrics `shouldBe` "http.server.request.duration"
-      Observability.activeRequestsMetricName httpServerMetrics `shouldBe` "http.server.active_requests"
-      Observability.httpServerMetricAttributes httpServerMetrics `shouldBe` [statusAttribute]
-      Observability.observabilityRequestSpan requestObservability `shouldBe` requestSpan
-      Observability.observabilityHttpServerMetrics requestObservability `shouldBe` httpServerMetrics
-      Observability.traceContextTraceId
-        Observability.RequestTraceContext
-          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
-            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
-            Observability.traceContextState = Nothing
-          }
-        `shouldBe` "4bf92f3577b34da6a3ce929d0e0e4736"
-      Observability.traceContextParentSpanId
-        Observability.RequestTraceContext
-          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
-            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
-            Observability.traceContextState = Nothing
-          }
-        `shouldBe` "00f067aa0ba902b7"
-      Observability.traceContextState
-        Observability.RequestTraceContext
-          { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
-            Observability.traceContextParentSpanId = "00f067aa0ba902b7",
-            Observability.traceContextState = Nothing
-          }
-        `shouldBe` Nothing
-      Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan
+          traceContextWithoutState =
+            Observability.RequestTraceContext
+              { Observability.traceContextTraceId = "4bf92f3577b34da6a3ce929d0e0e4736",
+                Observability.traceContextParentSpanId = "00f067aa0ba902b7",
+                Observability.traceContextState = Nothing
+              }
+      expectAll
+        ( (Observability.attributeName pageKindAttribute `shouldBe` "harch.response.kind")
+            :| [ Observability.attributeValue pageKindAttribute `shouldBe` Observability.TextAttribute "page",
+                 Observability.attributeName localeAttribute `shouldBe` "app.locale",
+                 Observability.attributeValue localeAttribute `shouldBe` Observability.TextAttribute "fr",
+                 Observability.attributeName statusAttribute `shouldBe` "http.response.status_code",
+                 Observability.attributeValue statusAttribute `shouldBe` Observability.IntAttribute 200,
+                 Observability.requestSpanDisplayName requestSpan `shouldBe` "GET /second",
+                 Observability.requestSpanAttributes requestSpan `shouldBe` [pageKindAttribute, localeAttribute],
+                 Observability.requestDurationMetricName httpServerMetrics `shouldBe` "http.server.request.duration",
+                 Observability.activeRequestsMetricName httpServerMetrics `shouldBe` "http.server.active_requests",
+                 Observability.httpServerMetricAttributes httpServerMetrics `shouldBe` [statusAttribute],
+                 Observability.observabilityRequestSpan requestObservability `shouldBe` requestSpan,
+                 Observability.observabilityHttpServerMetrics requestObservability `shouldBe` httpServerMetrics,
+                 Observability.traceContextTraceId traceContextWithoutState `shouldBe` "4bf92f3577b34da6a3ce929d0e0e4736",
+                 Observability.traceContextParentSpanId traceContextWithoutState `shouldBe` "00f067aa0ba902b7",
+                 Observability.traceContextState traceContextWithoutState `shouldBe` Nothing,
+                 Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan
+               ]
+        )
 
     it "covers derived Eq and Show instances for the observability helper types" $ do
       let pageKindAttribute =
