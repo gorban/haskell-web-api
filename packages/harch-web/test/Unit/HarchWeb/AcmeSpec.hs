@@ -12,6 +12,7 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -28,6 +29,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 import Text.ParserCombinators.ReadP (readP_to_S)
 
 sampleEndpoint :: ListenerEndpoint
@@ -143,26 +145,29 @@ spec = do
                 ("null", JsonNull),
                 ("array", JsonArray [JsonString "value"])
               ]
-      challenge `shouldBe` challenge
-      show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\""
-      directory `shouldBe` directory
-      show directory `shouldContain` "acmeNewNonceUrl = \"https://acme.example/new-nonce\""
-      identifier `shouldBe` identifier
-      show identifier `shouldContain` "acmeIdentifierKind = \"dns\""
-      challengeResponse `shouldBe` challengeResponse
-      show challengeResponse `shouldContain` "acmeChallengeKind = \"http-01\""
-      authorization `shouldBe` authorization
-      show authorization `shouldContain` "acmeAuthorizationIdentifier = AcmeOrderIdentifier"
-      orderResponse `shouldBe` orderResponse
-      show orderResponse `shouldContain` "acmeOrderStatus = \"ready\""
-      jwk `shouldBe` jwk
-      show jwk `shouldContain` "acmeJwkExponent = \"AQAB\""
-      AcmeRequestJwk jwk `shouldBe` AcmeRequestJwk jwk
-      show (AcmeRequestKid "kid-1") `shouldBe` "AcmeRequestKid \"kid-1\""
-      preparedChallenge `shouldBe` preparedChallenge
-      show preparedChallenge `shouldContain` "preparedAcmeChallengeUrl = \"https://acme.example/challenge/1\""
-      jsonValue `shouldBe` jsonValue
-      show jsonValue `shouldContain` "JsonBool True"
+      expectAll
+        ( (challenge `shouldBe` challenge)
+            :| [ show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\"",
+                 directory `shouldBe` directory,
+                 show directory `shouldContain` "acmeNewNonceUrl = \"https://acme.example/new-nonce\"",
+                 identifier `shouldBe` identifier,
+                 show identifier `shouldContain` "acmeIdentifierKind = \"dns\"",
+                 challengeResponse `shouldBe` challengeResponse,
+                 show challengeResponse `shouldContain` "acmeChallengeKind = \"http-01\"",
+                 authorization `shouldBe` authorization,
+                 show authorization `shouldContain` "acmeAuthorizationIdentifier = AcmeOrderIdentifier",
+                 orderResponse `shouldBe` orderResponse,
+                 show orderResponse `shouldContain` "acmeOrderStatus = \"ready\"",
+                 jwk `shouldBe` jwk,
+                 show jwk `shouldContain` "acmeJwkExponent = \"AQAB\"",
+                 AcmeRequestJwk jwk `shouldBe` AcmeRequestJwk jwk,
+                 show (AcmeRequestKid "kid-1") `shouldBe` "AcmeRequestKid \"kid-1\"",
+                 preparedChallenge `shouldBe` preparedChallenge,
+                 show preparedChallenge `shouldContain` "preparedAcmeChallengeUrl = \"https://acme.example/challenge/1\"",
+                 jsonValue `shouldBe` jsonValue,
+                 show jsonValue `shouldContain` "JsonBool True"
+               ]
+        )
 
     it "covers certbot argument helpers and certificate-name selection branches" $ do
       runtimeCertbotArguments (runtimeAcmePlanWith certbotConfigValue)
