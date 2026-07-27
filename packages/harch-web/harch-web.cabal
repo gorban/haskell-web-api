@@ -83,6 +83,7 @@ library
     HarchWeb.Acme.Certbot.Options
     HarchWeb.Acme.Certbot.Runtime
     HarchWeb.Acme.Challenge
+    HarchWeb.Acme.Json
     HarchWeb.Server.Config
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls
