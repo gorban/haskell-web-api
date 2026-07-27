@@ -82,6 +82,7 @@ library
   other-modules:
     HarchWeb.Server.Config
     HarchWeb.Server.Transport
+    HarchWeb.Server.Transport.Tls
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
