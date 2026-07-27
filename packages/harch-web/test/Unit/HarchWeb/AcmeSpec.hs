@@ -347,15 +347,16 @@ spec = do
 
   describe "ACME JSON parsing helpers" $ do
     it "parses JSON values including escapes, booleans, nulls, arrays, and empty collections" $ do
-      parseJsonValue "{}" `shouldBe` Right (JsonObject [])
-      parseJsonValue "[]" `shouldBe` Right (JsonArray [])
-      parseJsonValue " [ \"a\" , \"b\" ] "
-        `shouldBe` Right (JsonArray [JsonString "a", JsonString "b"])
-      parseJsonValue "{\"field\":\"value\"}"
-        `shouldBe` Right (JsonObject [("field", JsonString "value")])
-      parseJsonValue "true" `shouldBe` Right (JsonBool True)
-      parseJsonValue "false" `shouldBe` Right (JsonBool False)
-      parseJsonValue "null" `shouldBe` Right JsonNull
+      expectAll
+        ( (parseJsonValue "{}" `shouldBe` Right (JsonObject []))
+            :| [ parseJsonValue "[]" `shouldBe` Right (JsonArray []),
+                 parseJsonValue " [ \"a\" , \"b\" ] " `shouldBe` Right (JsonArray [JsonString "a", JsonString "b"]),
+                 parseJsonValue "{\"field\":\"value\"}" `shouldBe` Right (JsonObject [("field", JsonString "value")]),
+                 parseJsonValue "true" `shouldBe` Right (JsonBool True),
+                 parseJsonValue "false" `shouldBe` Right (JsonBool False),
+                 parseJsonValue "null" `shouldBe` Right JsonNull
+               ]
+        )
       parseJsonValue "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\\u263a\""
         `shouldBe` Right (JsonString "\"\\/\b\f\n\r\t☺")
       parseJsonValue "\"\\uZZZZ\"" `shouldBe` Left "invalid JSON"
