@@ -2,11 +2,13 @@
 
 module Unit.HarchWeb.AccountSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import HarchWeb.Account
 import HarchWeb.Email (mkEmailAddress)
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec = do
@@ -17,8 +19,10 @@ spec = do
 
     it "generates opaque URL-safe identifiers" $ do
       accountId <- generateAccountId
-      Text.length (accountIdText accountId) `shouldBe` 22
-      mkAccountId (accountIdText accountId) `shouldBe` Just accountId
+      expectAll
+        ( (Text.length (accountIdText accountId) `shouldBe` 22)
+            :| [mkAccountId (accountIdText accountId) `shouldBe` Just accountId]
+        )
 
   describe "EmailVerificationToken" $ do
     it "accepts URL-safe bearer tokens without exposing a constructor" $ do
@@ -27,8 +31,10 @@ spec = do
 
     it "generates a URL-safe 256-bit bearer token" $ do
       token <- generateEmailVerificationToken
-      Text.length (emailVerificationTokenText token) `shouldBe` 43
-      emailVerificationTokenText <$> mkEmailVerificationToken (emailVerificationTokenText token) `shouldBe` Just (emailVerificationTokenText token)
+      expectAll
+        ( (Text.length (emailVerificationTokenText token) `shouldBe` 43)
+            :| [emailVerificationTokenText <$> mkEmailVerificationToken (emailVerificationTokenText token) `shouldBe` Just (emailVerificationTokenText token)]
+        )
 
     it "stores a one-way digest and validates its account, email, and expiry" $ do
       let accountId = required (mkAccountId "account_01")
@@ -36,10 +42,13 @@ spec = do
           token = required (mkEmailVerificationToken validToken)
           otherToken = required (mkEmailVerificationToken (Text.replicate 43 "b"))
           stored = mkStoredEmailVerification accountId emailAddress 500 token
-      emailVerificationTokenDigest token `shouldNotBe` emailVerificationTokenDigest otherToken
-      validateEmailVerificationToken 499 token stored `shouldBe` EmailVerificationAccepted accountId emailAddress
-      validateEmailVerificationToken 499 otherToken stored `shouldBe` EmailVerificationRejected
-      validateEmailVerificationToken 500 token stored `shouldBe` EmailVerificationExpired
+      expectAll
+        ( (emailVerificationTokenDigest token `shouldNotBe` emailVerificationTokenDigest otherToken)
+            :| [ validateEmailVerificationToken 499 token stored `shouldBe` EmailVerificationAccepted accountId emailAddress,
+                 validateEmailVerificationToken 499 otherToken stored `shouldBe` EmailVerificationRejected,
+                 validateEmailVerificationToken 500 token stored `shouldBe` EmailVerificationExpired
+               ]
+        )
 
     it "covers the persistence-facing value representations without rendering bearer tokens" $ do
       let accountId = required (mkAccountId "account_01")
@@ -48,26 +57,29 @@ spec = do
           digest = emailVerificationTokenDigest token
           stored = mkStoredEmailVerification accountId emailAddress 500 token
           accepted = EmailVerificationAccepted accountId emailAddress
-      accountId == accountId `shouldBe` True
-      digest == digest `shouldBe` True
-      emailVerificationTokenDigestText digest `shouldBe` "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA"
-      stored == stored `shouldBe` True
-      accepted == accepted `shouldBe` True
-      [accountId] == [accountId] `shouldBe` True
-      [digest] == [digest] `shouldBe` True
-      [stored] == [stored] `shouldBe` True
-      [accepted] == [accepted] `shouldBe` True
-      accountId /= required (mkAccountId "account_02") `shouldBe` True
-      stored /= mkStoredEmailVerification accountId emailAddress 501 token `shouldBe` True
-      accepted /= EmailVerificationRejected `shouldBe` True
-      show accountId `shouldBe` "AccountId \"account_01\""
-      show digest `shouldBe` "EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\""
-      show stored `shouldBe` "StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}"
-      show accepted `shouldBe` "EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")"
-      show [accountId] `shouldBe` "[AccountId \"account_01\"]"
-      show [digest] `shouldBe` "[EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\"]"
-      show [stored] `shouldBe` "[StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}]"
-      show [accepted] `shouldBe` "[EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")]"
+      expectAll
+        ( (accountId == accountId `shouldBe` True)
+            :| [ digest == digest `shouldBe` True,
+                 emailVerificationTokenDigestText digest `shouldBe` "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA",
+                 stored == stored `shouldBe` True,
+                 accepted == accepted `shouldBe` True,
+                 [accountId] == [accountId] `shouldBe` True,
+                 [digest] == [digest] `shouldBe` True,
+                 [stored] == [stored] `shouldBe` True,
+                 [accepted] == [accepted] `shouldBe` True,
+                 accountId /= required (mkAccountId "account_02") `shouldBe` True,
+                 stored /= mkStoredEmailVerification accountId emailAddress 501 token `shouldBe` True,
+                 accepted /= EmailVerificationRejected `shouldBe` True,
+                 show accountId `shouldBe` "AccountId \"account_01\"",
+                 show digest `shouldBe` "EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\"",
+                 show stored `shouldBe` "StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}",
+                 show accepted `shouldBe` "EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")",
+                 show [accountId] `shouldBe` "[AccountId \"account_01\"]",
+                 show [digest] `shouldBe` "[EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\"]",
+                 show [stored] `shouldBe` "[StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}]",
+                 show [accepted] `shouldBe` "[EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")]"
+               ]
+        )
 
 validToken :: Text.Text
 validToken = Text.replicate 43 "a"

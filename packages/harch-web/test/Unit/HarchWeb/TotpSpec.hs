@@ -2,37 +2,47 @@
 
 module Unit.HarchWeb.TotpSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import HarchWeb.Totp
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec = do
   describe "TotpSecret" $ do
     it "round-trips canonical Base32 enrollment secrets" $ do
-      renderTotpSecret rfcSecret `shouldBe` "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
-      rfcSecret == rfcSecret `shouldBe` True
-      rfcSecret /= alternateSecret `shouldBe` True
-      fmap (== rfcSecret) (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just True
-      fmap renderTotpSecret (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
-      fmap renderTotpSecret (mkTotpSecret "gezdgnbvgy3tqojqgezdgnbvgy3tqojq") `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"
-      fmap renderTotpSecret (mkTotpSecret "AAAAAAAAAAAAAAAAAAAAAAAAAA") `shouldBe` Just "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+      expectAll
+        ( (renderTotpSecret rfcSecret `shouldBe` "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+            :| [ rfcSecret == rfcSecret `shouldBe` True,
+                 rfcSecret /= alternateSecret `shouldBe` True,
+                 fmap (== rfcSecret) (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just True,
+                 fmap renderTotpSecret (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+                 fmap renderTotpSecret (mkTotpSecret "gezdgnbvgy3tqojqgezdgnbvgy3tqojq") `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
+                 fmap renderTotpSecret (mkTotpSecret "AAAAAAAAAAAAAAAAAAAAAAAAAA") `shouldBe` Just "AAAAAAAAAAAAAAAAAAAAAAAAAA"
+               ]
+        )
 
     it "accepts every canonical Base32 alphabet value" $ do
       map (fmap renderTotpSecret . mkTotpSecret . Text.replicate 32 . Text.singleton) "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
         `shouldBe` map (Just . Text.replicate 32 . Text.singleton) "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
 
     it "rejects empty, malformed, non-canonical, and undersized secrets" $ do
-      isNothing (mkTotpSecret "") `shouldBe` True
-      isNothing (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJ0") `shouldBe` True
-      isNothing (mkTotpSecret "AB") `shouldBe` True
-      isNothing (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBV") `shouldBe` True
+      expectAll
+        ( (isNothing (mkTotpSecret "") `shouldBe` True)
+            :| [ isNothing (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJ0") `shouldBe` True,
+                 isNothing (mkTotpSecret "AB") `shouldBe` True,
+                 isNothing (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBV") `shouldBe` True
+               ]
+        )
 
     it "generates a 160-bit secret suitable for Base32 enrollment" $ do
       secret <- generateTotpSecret
-      Text.length (renderTotpSecret secret) `shouldBe` 32
-      fmap renderTotpSecret (mkTotpSecret (renderTotpSecret secret)) `shouldBe` Just (renderTotpSecret secret)
+      expectAll
+        ( (Text.length (renderTotpSecret secret) `shouldBe` 32)
+            :| [fmap renderTotpSecret (mkTotpSecret (renderTotpSecret secret)) `shouldBe` Just (renderTotpSecret secret)]
+        )
 
   describe "TotpCode" $ do
     it "uses RFC 6238 SHA-1 vectors with six-digit codes" $ do
@@ -43,17 +53,20 @@ spec = do
 
     it "accepts exactly six ASCII digits and validates the current time step" $ do
       let correctCode = required (mkTotpCode "287082")
-      mkTotpCode "287082" `shouldBe` Just correctCode
-      correctCode == correctCode `shouldBe` True
-      correctCode /= required (mkTotpCode "287083") `shouldBe` True
-      show correctCode `shouldBe` "TotpCode \"287082\""
-      show [correctCode] `shouldBe` "[TotpCode \"287082\"]"
-      isNothing (mkTotpCode "28708") `shouldBe` True
-      isNothing (mkTotpCode "2870820") `shouldBe` True
-      isNothing (mkTotpCode "28708a") `shouldBe` True
-      isNothing (mkTotpCode "28708\n") `shouldBe` True
-      validateTotpCode 59 0 rfcSecret correctCode `shouldBe` True
-      validateTotpCode 60 0 rfcSecret correctCode `shouldBe` False
+      expectAll
+        ( (mkTotpCode "287082" `shouldBe` Just correctCode)
+            :| [ correctCode == correctCode `shouldBe` True,
+                 correctCode /= required (mkTotpCode "287083") `shouldBe` True,
+                 show correctCode `shouldBe` "TotpCode \"287082\"",
+                 show [correctCode] `shouldBe` "[TotpCode \"287082\"]",
+                 isNothing (mkTotpCode "28708") `shouldBe` True,
+                 isNothing (mkTotpCode "2870820") `shouldBe` True,
+                 isNothing (mkTotpCode "28708a") `shouldBe` True,
+                 isNothing (mkTotpCode "28708\n") `shouldBe` True,
+                 validateTotpCode 59 0 rfcSecret correctCode `shouldBe` True,
+                 validateTotpCode 60 0 rfcSecret correctCode `shouldBe` False
+               ]
+        )
 
     it "accepts a caller-bounded adjacent-period clock skew" $ do
       let nowSeconds = 60
@@ -61,12 +74,15 @@ spec = do
           currentPeriodCode = totpCode nowSeconds rfcSecret
           followingPeriodCode = totpCode (nowSeconds + 30) rfcSecret
           outsideWindowCode = totpCode (nowSeconds + 60) rfcSecret
-      validateTotpCode nowSeconds 1 rfcSecret previousPeriodCode `shouldBe` True
-      validateTotpCode nowSeconds 1 rfcSecret currentPeriodCode `shouldBe` True
-      validateTotpCode nowSeconds 1 rfcSecret followingPeriodCode `shouldBe` True
-      validateTotpCode nowSeconds 1 rfcSecret outsideWindowCode `shouldBe` False
-      validateTotpCode 0 1 rfcSecret (totpCode 0 rfcSecret) `shouldBe` True
-      validateTotpCode 0 1 rfcSecret (totpCode 30 rfcSecret) `shouldBe` True
+      expectAll
+        ( (validateTotpCode nowSeconds 1 rfcSecret previousPeriodCode `shouldBe` True)
+            :| [ validateTotpCode nowSeconds 1 rfcSecret currentPeriodCode `shouldBe` True,
+                 validateTotpCode nowSeconds 1 rfcSecret followingPeriodCode `shouldBe` True,
+                 validateTotpCode nowSeconds 1 rfcSecret outsideWindowCode `shouldBe` False,
+                 validateTotpCode 0 1 rfcSecret (totpCode 0 rfcSecret) `shouldBe` True,
+                 validateTotpCode 0 1 rfcSecret (totpCode 30 rfcSecret) `shouldBe` True
+               ]
+        )
 
 rfcSecret :: TotpSecret
 rfcSecret = required (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
