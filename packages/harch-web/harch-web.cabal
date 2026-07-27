@@ -72,6 +72,7 @@ library
     HarchWeb.Routing
     HarchWeb.Secret
     HarchWeb.Security
+    HarchWeb.Server
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.StaticAssets
