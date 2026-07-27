@@ -208,6 +208,15 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64, Word8)
 import GHC.Clock (getMonotonicTimeNSec)
+import HarchWeb.Acme.Certbot.Options
+  ( certbotHasFlag,
+    certbotHasOption,
+    certbotNeedsDerivedWebrootAuthenticator,
+    certbotOptionValues,
+    certbotShouldUseWebroot,
+    firstCertbotDomain,
+    splitCertbotDomainValue,
+  )
 import HarchWeb.Acme.Challenge
   ( AcmeChallengeStore (..),
     ActiveAcmeChallenge (..),
@@ -950,80 +959,6 @@ certbotCertificateName runtimeAcmePlan =
     )
     Right
     (listToMaybe (certbotOptionValues "--cert-name" (runtimeCertbotArguments runtimeAcmePlan)))
-
-firstCertbotDomain :: [Text] -> Maybe Text
-firstCertbotDomain arguments =
-  listToMaybe . concatMap splitCertbotDomainValue $
-    certbotOptionValues "-d" arguments
-      <> certbotOptionValues "--domain" arguments
-      <> certbotOptionValues "--domains" arguments
-
-splitCertbotDomainValue :: Text -> [Text]
-splitCertbotDomainValue =
-  filter (not . Text.null) . map Text.strip . Text.splitOn ","
-
-certbotOptionValues :: Text -> [Text] -> [Text]
-certbotOptionValues optionName arguments =
-  [ optionValue
-  | (argument, optionValue) <- zip arguments (drop 1 arguments),
-    argument == optionName
-  ]
-    <> [ optionValue
-       | argument <- arguments,
-         Just optionValue <- [Text.stripPrefix (optionName <> "=") argument]
-       ]
-
-certbotHasOption :: Text -> [Text] -> Bool
-certbotHasOption optionName =
-  not . null . certbotOptionValues optionName
-
-certbotHasFlag :: Text -> [Text] -> Bool
-certbotHasFlag =
-  elem
-
-certbotNeedsDerivedWebrootAuthenticator :: [Text] -> Bool
-certbotNeedsDerivedWebrootAuthenticator configuredArguments =
-  not (certbotHasExplicitAuthenticator configuredArguments)
-    || (certbotHasWebrootPathOption configuredArguments && not (certbotUsesWebrootFlagOrAuthenticator configuredArguments))
-
-certbotShouldUseWebroot :: [Text] -> Bool
-certbotShouldUseWebroot configuredArguments =
-  certbotNeedsDerivedWebrootAuthenticator configuredArguments
-    || certbotUsesWebroot configuredArguments
-
-certbotHasExplicitAuthenticator :: [Text] -> Bool
-certbotHasExplicitAuthenticator configuredArguments =
-  certbotUsesWebroot configuredArguments
-    || any (`certbotHasFlag` configuredArguments) ["--standalone", "--manual", "--apache", "--nginx"]
-    || any ("--dns-" `Text.isPrefixOf`) configuredArguments
-    || any isExplicitAuthenticator (certbotAuthenticatorValues configuredArguments)
-
-certbotAuthenticatorValues :: [Text] -> [Text]
-certbotAuthenticatorValues configuredArguments =
-  certbotOptionValues "-a" configuredArguments
-    <> certbotOptionValues "--authenticator" configuredArguments
-
-isExplicitAuthenticator :: Text -> Bool
-isExplicitAuthenticator authenticator =
-  authenticator `elem` ["standalone", "manual", "apache", "nginx"]
-    || "dns-" `Text.isPrefixOf` authenticator
-
-certbotUsesWebroot :: [Text] -> Bool
-certbotUsesWebroot configuredArguments =
-  certbotUsesWebrootFlagOrAuthenticator configuredArguments
-    || certbotHasWebrootPathOption configuredArguments
-
-certbotUsesWebrootFlagOrAuthenticator :: [Text] -> Bool
-certbotUsesWebrootFlagOrAuthenticator configuredArguments =
-  certbotHasFlag "--webroot" configuredArguments
-    || elem
-      "webroot"
-      (certbotOptionValues "-a" configuredArguments <> certbotOptionValues "--authenticator" configuredArguments)
-
-certbotHasWebrootPathOption :: [Text] -> Bool
-certbotHasWebrootPathOption configuredArguments =
-  certbotHasOption "-w" configuredArguments
-    || certbotHasOption "--webroot-path" configuredArguments
 
 data AcmeDirectoryResponse = AcmeDirectoryResponse
   { acmeNewNonceUrl :: Text,
