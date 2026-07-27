@@ -297,6 +297,7 @@ import HarchWeb.Server.Transport
   ( ReloadingTlsCredentials,
     RunningRuntimeServer,
     ensureRuntimeFileExists,
+    listenerSchemeText,
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     openLoopbackSocket,
@@ -628,7 +629,8 @@ startLocalTestServer :: (Eq route) => Application route context -> IO RunningLoc
 startLocalTestServer webApplication = do
   listeningSocket <- openLoopbackSocket
   localPort <- socketPort listeningSocket
-  let endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
+  let listenerScheme = Http
+      endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
   serverThreadId <-
     endpointHost endpoint `seq`
       startWarpServerOnSocket endpoint listeningSocket (toWaiApplication webApplication)
@@ -639,7 +641,7 @@ startLocalTestServer webApplication = do
             LocalTestServer
               { localServerHost = "127.0.0.1",
                 localServerPort = localPort,
-                localServerBaseUrl = Text.pack ("http://127.0.0.1:" <> show localPort)
+                localServerBaseUrl = listenerSchemeText listenerScheme <> "://127.0.0.1:" <> Text.pack (show localPort)
               },
           runningLocalServerSocket = listeningSocket,
           runningLocalServerThreadId = serverThreadId

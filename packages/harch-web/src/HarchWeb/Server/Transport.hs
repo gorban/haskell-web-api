@@ -12,6 +12,7 @@ module HarchWeb.Server.Transport
   ( ReloadingTlsCredentials,
     RunningRuntimeServer,
     ensureRuntimeFileExists,
+    listenerSchemeText,
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     openListenerSocket,
