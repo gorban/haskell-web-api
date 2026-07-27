@@ -4,9 +4,11 @@
 
 module Unit.HarchWeb.DatabaseSpec (spec) where
 
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Database
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 data SampleDatabaseRequest result where
   LoadDisplayName :: SampleDatabaseRequest Text
@@ -72,16 +74,20 @@ spec = do
           successfulResult = databaseSuccess "Ada"
           failedResult :: DatabaseResult SampleDatabaseError Text
           failedResult = databaseFailure DisplayNameUnavailable
-      successfulResult
-        `shouldBe` DatabaseResult
-          { databaseResultValue = Right "Ada",
-            databaseResultOperations = []
-          }
-      failedResult
-        `shouldBe` DatabaseResult
-          { databaseResultValue = Left DisplayNameUnavailable,
-            databaseResultOperations = []
-          }
+      expectAll
+        ( ( successfulResult
+              `shouldBe` DatabaseResult
+                { databaseResultValue = Right "Ada",
+                  databaseResultOperations = []
+                }
+          )
+            :| [ failedResult
+                   `shouldBe` DatabaseResult
+                     { databaseResultValue = Left DisplayNameUnavailable,
+                       databaseResultOperations = []
+                     }
+               ]
+        )
 
     it "covers result selectors and derived instances" $ do
       let result :: DatabaseResult SampleDatabaseError Int
@@ -96,14 +102,15 @@ spec = do
               { databaseResultValue = Left LoginCountUnavailable,
                 databaseResultOperations = []
               }
-      databaseResultValue result `shouldBe` Right 7
-      databaseResultOperations result `shouldBe` [loginCountOperation]
-      result == result `shouldBe` True
-      result /= otherResult `shouldBe` True
-      show result
-        `shouldBe` "DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}"
-      show [result]
-        `shouldBe` "[DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}]"
+      expectAll
+        ( (databaseResultValue result `shouldBe` Right 7)
+            :| [ databaseResultOperations result `shouldBe` [loginCountOperation],
+                 result == result `shouldBe` True,
+                 result /= otherResult `shouldBe` True,
+                 show result `shouldBe` "DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}",
+                 show [result] `shouldBe` "[DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}]"
+               ]
+        )
 
   describe "DatabaseOperation" $ do
     it "keeps query metadata stable while ignoring volatile timing" $ do
@@ -113,14 +120,15 @@ spec = do
                 databaseOperationEndedAtNanoseconds = Just 999
               }
           differentQuery = loginCountOperation
-      databaseOperationName displayNameOperation `shouldBe` "load-display-name"
-      databaseQueryTemplate displayNameOperation `shouldBe` "SELECT display_name FROM account WHERE id = ?;"
-      databaseOperationStartedAtNanoseconds displayNameOperation `shouldBe` Just 10
-      databaseOperationEndedAtNanoseconds displayNameOperation `shouldBe` Just 20
-      displayNameOperation == sameQueryWithDifferentTiming `shouldBe` True
-      displayNameOperation == differentQuery `shouldBe` False
-      displayNameOperation /= differentQuery `shouldBe` True
-      show displayNameOperation
-        `shouldBe` "DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}"
-      show [displayNameOperation]
-        `shouldBe` "[DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}]"
+      expectAll
+        ( (databaseOperationName displayNameOperation `shouldBe` "load-display-name")
+            :| [ databaseQueryTemplate displayNameOperation `shouldBe` "SELECT display_name FROM account WHERE id = ?;",
+                 databaseOperationStartedAtNanoseconds displayNameOperation `shouldBe` Just 10,
+                 databaseOperationEndedAtNanoseconds displayNameOperation `shouldBe` Just 20,
+                 displayNameOperation == sameQueryWithDifferentTiming `shouldBe` True,
+                 displayNameOperation == differentQuery `shouldBe` False,
+                 displayNameOperation /= differentQuery `shouldBe` True,
+                 show displayNameOperation `shouldBe` "DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}",
+                 show [displayNameOperation] `shouldBe` "[DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}]"
+               ]
+        )
