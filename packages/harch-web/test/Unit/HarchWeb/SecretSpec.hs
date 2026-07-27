@@ -5,20 +5,25 @@ module Unit.HarchWeb.SecretSpec (spec) where
 
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Secret
 import Test.Hspec
+import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec = do
   describe "SecretEncryptionKey" $ do
     it "accepts exactly one 256-bit base64url key" $ do
-      isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True
-      isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True
-      isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True
-      requiredKey == requiredKey `shouldBe` True
-      requiredKey /= otherKey `shouldBe` True
+      expectAll
+        ( (isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True)
+            :| [ isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True,
+                 isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True,
+                 requiredKey == requiredKey `shouldBe` True,
+                 requiredKey /= otherKey `shouldBe` True
+               ]
+        )
 
   describe "AES-256-GCM secret envelopes" $ do
     it "round-trips a versioned encrypted value and rejects altered inputs" $ do
@@ -28,13 +33,16 @@ spec = do
           envelope = requiredEnvelope (encryptSecretWithNonce key nonce plaintext)
       decryptSecret key envelope `shouldBe` Just plaintext
       maybeRandomEnvelope <- encryptSecret key plaintext
-      (maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext
-      decryptSecret key "not-base64" `shouldBe` Nothing
-      decryptSecret key (envelope <> "A") `shouldBe` Nothing
-      decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing
-      decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing
-      decryptSecret otherKey envelope `shouldBe` Nothing
-      encryptSecretWithNonce key "short" plaintext `shouldBe` Nothing
+      expectAll
+        ( ((maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext)
+            :| [ decryptSecret key "not-base64" `shouldBe` Nothing,
+                 decryptSecret key (envelope <> "A") `shouldBe` Nothing,
+                 decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing,
+                 decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing,
+                 decryptSecret otherKey envelope `shouldBe` Nothing,
+                 encryptSecretWithNonce key "short" plaintext `shouldBe` Nothing
+               ]
+        )
 
 isJust :: Maybe value -> Bool
 isJust maybeValue =
