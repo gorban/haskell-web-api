@@ -158,6 +158,7 @@ module HarchWeb
     responseHeaderText,
     responseDiagnostics,
     redirectResponse,
+    reportEarlyRequestObservability,
     responseKind,
     responseStatusCode,
     serverSentEventContentType,
@@ -190,7 +191,6 @@ import Control.Applicative ((<|>))
 import Control.Concurrent (MVar, ThreadId, forkFinally, forkIOWithUnmask, killThread, modifyMVar, modifyMVar_, myThreadId, newEmptyMVar, newMVar, putMVar, readMVar, takeMVar, threadDelay, tryPutMVar)
 import Control.Exception (IOException, SomeException, bracket, bracket_, displayException, evaluate, finally, fromException, onException, throwIO, try)
 import Control.Monad (replicateM, unless, void)
-import Control.Monad.Except (runExceptT)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
@@ -241,17 +241,10 @@ import HarchWeb.Security
     defaultContentSecurityPolicy,
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
-    prependRequestLogContext,
-    requestContextObservabilityAttributes,
     requestHostWithoutPort,
-    requestLogContextFields,
     requestPathPrefix,
-    requestPolicyResponseHeaders,
-    requestScheme,
-    requestTraceContext,
     socketAddressText,
     waiRequestPath,
-    waiRequestRouteTarget,
   )
 import HarchWeb.Server
   ( Application (..),
@@ -266,22 +259,18 @@ import HarchWeb.Server
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,
-    applyResponseHeaders,
     eventStreamResponse,
-    isClientActionRequest,
     navigationRuntimeResponse,
-    parseClientActionFields,
     redirectResponse,
     renderServerSentEvent,
+    reportEarlyRequestObservability,
     responseDiagnostics,
     responseKind,
-    responsePolicyHeaders,
     responseStatusCode,
-    runEarlyRequestStages,
     runRequestMiddlewarePipeline,
     serverSentEventContentType,
     serverSentEventSourceFromList,
-    toWaiResponse,
+    toWaiApplication,
   )
 import HarchWeb.StaticAssets
   ( AssetPath (..),
@@ -716,97 +705,6 @@ defaultNavigationRuntimeScript =
       "  drainCapturedActions();",
       "})();"
     ]
-
-toWaiApplication :: (Eq route) => Application route context -> Wai.Application
-toWaiApplication webApplication request respond = do
-  requestStartedAt <- getMonotonicTimeNSec
-  let requestPolicyConfig = applicationRequestPolicy webApplication
-      policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
-      requestPath = waiRequestPath requestPolicyConfig request
-  policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
-  earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
-  case earlyResult of
-    Left (earlyResponsePath, earlyResponseValue) -> do
-      responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
-      reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
-      respond earlyResponseValue
-    Right () ->
-      handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath
-
-handleRoutedRequest :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> IO Wai.ResponseReceived
-handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath = do
-  middlewareStartedAt <- getMonotonicTimeNSec
-  middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (defaultRequestContext webApplication))
-  middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
-  let requestContext = middlewareResultContext middlewareResult
-      middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt
-  routeMatchingStartedAt <- getMonotonicTimeNSec
-  let routeRequest = matchRoute (routeCodec webApplication) requestContext (waiRequestRouteTarget requestPolicyConfig request)
-  routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
-  renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest webApplication request requestPath routeRequest middlewareResult
-  responseRenderedAt <- response `seq` getMonotonicTimeNSec
-  runtimeNonce <- responseRuntimeNonce response
-  finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response
-
-middlewareResultContext :: MiddlewareResult context -> context
-middlewareResultContext middlewareResult =
-  case middlewareResult of
-    ContinueMiddleware requestContext -> requestContext
-    HaltMiddleware requestContext _ -> requestContext
-
-middlewareTimingEntry :: Application route context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
-middlewareTimingEntry webApplication startedAt completedAt =
-  case applicationRequestMiddleware webApplication of
-    [] -> []
-    _ -> [("middleware", startedAt, completedAt)]
-
-dispatchRoutedRequest :: Application route context -> Wai.Request -> Text -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
-dispatchRoutedRequest _ _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
-dispatchRoutedRequest webApplication request requestPath routeRequest@RouteRequest {requestContext = routedRequestContext} (ContinueMiddleware _) =
-  if isClientActionRequest request
-    then do
-      requestBody <- Wai.strictRequestBody request
-      let actionFields = parseClientActionFields requestBody
-      maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
-      maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
-    else renderResponse webApplication routeRequest
-
-responseRuntimeNonce :: Response route context -> IO RuntimeNonce
-responseRuntimeNonce response =
-  case response of
-    PageResponse _ -> generateRuntimeNonce
-    PageResponseWithMetadata _ _ -> generateRuntimeNonce
-    BodyResponse _ -> pure $! RuntimeNonce ""
-    RedirectResponse _ _ -> pure $! RuntimeNonce ""
-    ClientActionBodyResponse _ -> pure $! RuntimeNonce ""
-    EventStreamResponse _ _ -> pure $! RuntimeNonce ""
-
-finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
-finalizeRoutedResponse webApplication request respond requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest runtimeNonce response = do
-  let requestLogFields = requestLogContextFields requestPolicyConfig request
-      diagnosticValues = responseDiagnostics response
-      contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
-      observabilityValue = buildRoutedRequestObservability webApplication request requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest response diagnosticValues
-  Observability.forceRequestObservability observabilityValue `seq`
-    reportRequestObservability webApplication observabilityValue
-      >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
-      >> respond (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
-
-buildRoutedRequestObservability :: (Eq route) => Application route context -> Wai.Request -> Word64 -> Word64 -> [(Text, Word64, Word64)] -> Word64 -> Word64 -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> RouteRequest route context -> Response route context -> ResponseDiagnostics -> Observability.RequestObservability
-buildRoutedRequestObservability webApplication request requestStartedAt policyEvaluatedAt middlewareTiming routeMatchingStartedAt routeMatchedAt renderStartedAt responseRenderedAt requestPolicyConfig requestPath routeRequest response diagnosticValues =
-  maybe id Observability.withRequestTraceContext (requestTraceContext request) $
-    Observability.buildRequestObservability
-      (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-      (requestScheme requestPolicyConfig request)
-      requestPath
-      (renderRoute (routeCodec webApplication) routeRequest)
-      (responseStatusCode webApplication response)
-      (responseKind response)
-      ( requestContextObservabilityAttributes requestPolicyConfig request
-          <> diagnosticObservabilityAttributes diagnosticValues
-          <> requestTimingObservabilityAttributes requestStartedAt responseRenderedAt ([("request-policy", requestStartedAt, policyEvaluatedAt)] <> middlewareTiming <> [("route-match", routeMatchingStartedAt, routeMatchedAt), ("render-response", renderStartedAt, responseRenderedAt)])
-      )
 
 withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
@@ -2613,25 +2511,6 @@ listenerSocketHints =
       Socket.addrSocketType = Socket.Stream
     }
 
-requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
-requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =
-  intObservabilityAttribute "harch.request.start_monotonic_ns" (fromIntegral requestStartedAt)
-    : intObservabilityAttribute "harch.request.duration_ns" (nanosecondsBetween requestStartedAt requestCompletedAt)
-    : concatMap phaseTimingAttributes phaseTimings
-  where
-    phaseTimingAttributes (phaseName, phaseStartedAt, phaseEndedAt) =
-      [ intObservabilityAttribute
-          ("harch.phase." <> phaseName <> ".start_offset_ns")
-          (nanosecondsBetween requestStartedAt phaseStartedAt),
-        intObservabilityAttribute
-          ("harch.phase." <> phaseName <> ".duration_ns")
-          (nanosecondsBetween phaseStartedAt phaseEndedAt)
-      ]
-
-nanosecondsBetween :: Word64 -> Word64 -> Int
-nanosecondsBetween start end =
-  fromIntegral (end - min start end)
-
 textObservabilityAttribute :: Text -> Text -> Observability.ObservabilityAttribute
 textObservabilityAttribute name value =
   Observability.ObservabilityAttribute
@@ -2651,36 +2530,6 @@ listenerSchemeText listenerScheme =
   case listenerScheme of
     Http -> "http"
     Https -> "https"
-
-reportEarlyRequestObservability ::
-  (Eq route) =>
-  Application route context ->
-  Wai.Request ->
-  Word64 ->
-  Word64 ->
-  Text ->
-  Wai.Response ->
-  IO ()
-reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
-  let requestPolicyConfig = applicationRequestPolicy webApplication
-      requestObservability =
-        maybe
-          id
-          Observability.withRequestTraceContext
-          (requestTraceContext request)
-          ( Observability.buildRequestObservability
-              (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-              (requestScheme requestPolicyConfig request)
-              (waiRequestPath requestPolicyConfig request)
-              routePath
-              (Http.statusCode (Wai.responseStatus response))
-              Observability.BodyResponseKind
-              ( requestContextObservabilityAttributes requestPolicyConfig request
-                  <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt []
-              )
-          )
-   in Observability.forceRequestObservability requestObservability `seq`
-        reportRequestObservability webApplication requestObservability
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
 planServerStartup config = do
