@@ -3,16 +3,22 @@
 module HarchWeb.Observability
   ( ConnectionObservability (..),
     HttpServerMetrics (..),
+    ObservabilityConfig (..),
     ObservabilityAttribute (..),
     ObservabilityAttributeValue (..),
+    ObservabilityStartupPlan (..),
+    OtlpExporter (..),
+    OtlpExporterStartup (..),
     RequestTraceContext (..),
     RequestObservability (..),
     RequestSpan (..),
     ResponseKind (..),
+    TelemetrySignal (..),
     buildConnectionObservability,
     buildRequestObservability,
     forceConnectionObservability,
     forceRequestObservability,
+    planObservabilityStartup,
     requestObservabilityAttributes,
     requestSpanName,
     withRequestTraceContext,
@@ -37,6 +43,53 @@ data ResponseKind
   = PageResponseKind
   | BodyResponseKind
   deriving (Eq, Show)
+
+data OtlpExporter = OtlpExporter
+  { otlpEndpoint :: Text,
+    otlpHeaders :: [(Text, Text)]
+  }
+  deriving (Eq, Show)
+
+data ObservabilityConfig = ObservabilityConfig
+  { tracingExporter :: Maybe OtlpExporter,
+    metricsExporter :: Maybe OtlpExporter
+  }
+  deriving (Eq, Show)
+
+data TelemetrySignal
+  = TracingSignal
+  | MetricsSignal
+  deriving (Eq, Show)
+
+data OtlpExporterStartup = OtlpExporterStartup
+  { startupSignal :: TelemetrySignal,
+    startupEndpoint :: Text,
+    startupHeaders :: [(Text, Text)]
+  }
+  deriving (Eq, Show)
+
+newtype ObservabilityStartupPlan = ObservabilityStartupPlan
+  { startupExporters :: [OtlpExporterStartup]
+  }
+  deriving (Eq, Show)
+
+-- | Convert configured exporters into the stable startup actions that the
+-- server runtime performs. This is pure so applications can validate and
+-- describe observability setup without starting any exporters.
+planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
+planObservabilityStartup observabilityConfig =
+  ObservabilityStartupPlan
+    { startupExporters =
+        maybe [] (pure . buildStartup TracingSignal) (tracingExporter observabilityConfig)
+          ++ maybe [] (pure . buildStartup MetricsSignal) (metricsExporter observabilityConfig)
+    }
+  where
+    buildStartup signal exporter =
+      OtlpExporterStartup
+        { startupSignal = signal,
+          startupEndpoint = otlpEndpoint exporter,
+          startupHeaders = otlpHeaders exporter
+        }
 
 data RequestSpan = RequestSpan
   { requestSpanDisplayName :: Text,

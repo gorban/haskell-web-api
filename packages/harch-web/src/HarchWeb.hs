@@ -555,21 +555,6 @@ intObservabilityAttribute name value =
       Observability.attributeValue = Observability.IntAttribute value
     }
 
-planObservabilityStartup :: ObservabilityConfig -> ObservabilityStartupPlan
-planObservabilityStartup observabilityConfig =
-  ObservabilityStartupPlan
-    { startupExporters =
-        maybe [] (pure . buildStartup TracingSignal) (tracingExporter observabilityConfig)
-          ++ maybe [] (pure . buildStartup MetricsSignal) (metricsExporter observabilityConfig)
-    }
-  where
-    buildStartup signal exporter =
-      OtlpExporterStartup
-        { startupSignal = signal,
-          startupEndpoint = otlpEndpoint exporter,
-          startupHeaders = otlpHeaders exporter
-        }
-
 exportRequestObservabilityToOtlp ::
   Text ->
   OtlpExporter ->

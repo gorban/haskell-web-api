@@ -31,6 +31,13 @@ module HarchWeb.Server.Config
 where
 
 import Data.Text (Text)
+import HarchWeb.Observability
+  ( ObservabilityConfig (..),
+    ObservabilityStartupPlan (..),
+    OtlpExporter (..),
+    OtlpExporterStartup (..),
+    TelemetrySignal (..),
+  )
 import HarchWeb.Security (RequestPolicyConfig)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import System.FilePath ((</>))
@@ -107,35 +114,6 @@ instance Show ListenerConfig where
         . shows (listenerTls listenerConfig)
         . maybe id (\acmeConfig -> showString ", listenerAcme = " . shows acmeConfig) (listenerAcme listenerConfig)
         . showString "}"
-
-data OtlpExporter = OtlpExporter
-  { otlpEndpoint :: Text,
-    otlpHeaders :: [(Text, Text)]
-  }
-  deriving (Eq, Show)
-
-data ObservabilityConfig = ObservabilityConfig
-  { tracingExporter :: Maybe OtlpExporter,
-    metricsExporter :: Maybe OtlpExporter
-  }
-  deriving (Eq, Show)
-
-data TelemetrySignal
-  = TracingSignal
-  | MetricsSignal
-  deriving (Eq, Show)
-
-data OtlpExporterStartup = OtlpExporterStartup
-  { startupSignal :: TelemetrySignal,
-    startupEndpoint :: Text,
-    startupHeaders :: [(Text, Text)]
-  }
-  deriving (Eq, Show)
-
-newtype ObservabilityStartupPlan = ObservabilityStartupPlan
-  { startupExporters :: [OtlpExporterStartup]
-  }
-  deriving (Eq, Show)
 
 data ServerConfig = ServerConfig
   { listenerConfigs :: [ListenerConfig],
