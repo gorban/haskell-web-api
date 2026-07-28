@@ -251,6 +251,16 @@ import HarchWeb.Acme.Json
     parseJsonValue,
     unicodeJsonCharacterParser,
   )
+import HarchWeb.Acme.Protocol.Types
+  ( AcmeAuthorizationResponse (..),
+    AcmeChallengeResponse (..),
+    AcmeDirectoryResponse (..),
+    AcmeJwk (..),
+    AcmeOrderIdentifier (..),
+    AcmeOrderResponse (..),
+    AcmeRequestAuth (..),
+    PreparedAcmeChallenge (..),
+  )
 import HarchWeb.Document
   ( Document (..),
     HtmlAttribute (..),
@@ -704,49 +714,6 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
         challengeResponse
       respond challengeResponse
     Nothing -> toWaiApplication webApplication request respond
-
-data AcmeDirectoryResponse = AcmeDirectoryResponse
-  { acmeNewNonceUrl :: Text,
-    acmeNewAccountUrl :: Text,
-    acmeNewOrderUrl :: Text
-  }
-
-data AcmeOrderIdentifier = AcmeOrderIdentifier
-  { acmeIdentifierKind :: Text,
-    acmeIdentifierValue :: Text
-  }
-
-data AcmeChallengeResponse = AcmeChallengeResponse
-  { acmeChallengeKind :: Text,
-    acmeChallengeUrl :: Text,
-    acmeChallengeTokenValue :: Text
-  }
-
-data AcmeAuthorizationResponse = AcmeAuthorizationResponse
-  { acmeAuthorizationIdentifier :: AcmeOrderIdentifier,
-    acmeAuthorizationChallenges :: [AcmeChallengeResponse]
-  }
-
-data AcmeOrderResponse = AcmeOrderResponse
-  { acmeOrderStatus :: Text,
-    acmeOrderAuthorizations :: Maybe [Text],
-    acmeOrderFinalizeUrl :: Maybe Text,
-    acmeOrderCertificateUrl :: Maybe Text
-  }
-
-data AcmeJwk = AcmeJwk
-  { acmeJwkExponent :: Text,
-    acmeJwkModulus :: Text
-  }
-
-data AcmeRequestAuth
-  = AcmeRequestJwk AcmeJwk
-  | AcmeRequestKid Text
-
-data PreparedAcmeChallenge = PreparedAcmeChallenge
-  { preparedAcmeChallengeRegistration :: ActiveAcmeChallenge,
-    preparedAcmeChallengeUrl :: Text
-  }
 
 parseAcmeDirectoryResponse :: JsonValue -> Either String AcmeDirectoryResponse
 parseAcmeDirectoryResponse value = do
