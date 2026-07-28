@@ -41,7 +41,7 @@ import Text.Read (readMaybe)
 
 data TestContext = TestContext
   { requestLanguage :: Text,
-    requestPathPrefix :: Text
+    testContextPathPrefix :: Text
   }
   deriving (Eq, Show)
 
@@ -61,10 +61,10 @@ data TestRoute
   deriving (Eq, Show)
 
 defaultContext :: TestContext
-defaultContext = TestContext {requestLanguage = "en", requestPathPrefix = ""}
+defaultContext = TestContext {requestLanguage = "en", testContextPathPrefix = ""}
 
 spanishContext :: TestContext
-spanishContext = TestContext {requestLanguage = "es", requestPathPrefix = ""}
+spanishContext = TestContext {requestLanguage = "es", testContextPathPrefix = ""}
 
 sampleCodec :: RouteCodec TestRoute TestContext
 sampleCodec =
@@ -91,7 +91,7 @@ parseSampleRoute routeContext path
 renderSampleRoute :: RouteRequest TestRoute TestContext -> Text
 renderSampleRoute request =
   applyTestPathPrefix
-    (requestPathPrefix (requestContext request))
+    (testContextPathPrefix (requestContext request))
     ( case (requestLanguage (requestContext request), requestRoute request) of
         (language, KnownRoute)
           | language == "es" -> "/es/known"
@@ -111,7 +111,7 @@ applyTestPathPrefix pathPrefix path
 sampleRequestContextFromRequest :: Bool -> Wai.Request -> TestContext -> TestContext
 sampleRequestContextFromRequest trustProxyHeaders request requestContext =
   requestContext
-    { requestPathPrefix =
+    { testContextPathPrefix =
         if trustProxyHeaders
           then
             maybe
@@ -464,11 +464,11 @@ rootPathCodec =
           else Nothing,
       renderRoute = \request ->
         case requestRoute request of
-          KnownRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/"
-          QueryRoute queryString -> applyTestPathPrefix (requestPathPrefix (requestContext request)) ("/query?" <> queryString)
-          DataRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/data"
-          EventStreamRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/events"
-          MissingRoute -> applyTestPathPrefix (requestPathPrefix (requestContext request)) "/404",
+          KnownRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/"
+          QueryRoute queryString -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) ("/query?" <> queryString)
+          DataRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/data"
+          EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
+          MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
     }
 
@@ -1128,12 +1128,12 @@ spec = do
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
-      show request `shouldBe` "RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}"
-      show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}]"
+      show request `shouldBe` "RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
+      show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}]"
       (page == page) `shouldBe` True
       (page /= otherPage) `shouldBe` True
-      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
-      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
+      show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
+      show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
       (attribute == attribute) `shouldBe` True
       (attribute /= otherAttribute) `shouldBe` True
       show attribute `shouldBe` "HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}"
@@ -1205,20 +1205,20 @@ spec = do
       show pageMetadata `shouldBe` "ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
-      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (pageResponseWithMetadata == pageResponseWithMetadata) `shouldBe` True
       (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
-      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
       (redirectResponseValue == redirectResponseValue) `shouldBe` True
       (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
       show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/spaces\""
-      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
-      show clientActionRequest `shouldBe` "ClientActionRequest {clientActionMethod = \"POST\", clientActionPath = \"/actions/subscribe\", clientActionFields = [(\"email\",\"ada@example.com\")], clientActionCsrfToken = Just \"csrf-token\", clientActionContext = TestContext {requestLanguage = \"en\", requestPathPrefix = \"\"}}"
+      show clientActionRequest `shouldBe` "ClientActionRequest {clientActionMethod = \"POST\", clientActionPath = \"/actions/subscribe\", clientActionFields = [(\"email\",\"ada@example.com\")], clientActionCsrfToken = Just \"csrf-token\", clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
       show [clientActionRequest] `shouldContain` "ClientActionRequest {clientActionMethod = \"POST\""
       (regionPatch == regionPatch) `shouldBe` True
       (regionPatch /= otherRegionPatch) `shouldBe` True
@@ -1300,7 +1300,7 @@ spec = do
     it "reuses route rendering for app-provided navigation targets" $ do
       routeHref sampleCodec defaultContext KnownRoute `shouldBe` "/known"
       routeHref sampleCodec spanishContext KnownRoute `shouldBe` "/es/known"
-      routeHref sampleCodec (defaultContext {requestPathPrefix = "/app"}) KnownRoute `shouldBe` "/app/known"
+      routeHref sampleCodec (defaultContext {testContextPathPrefix = "/app"}) KnownRoute `shouldBe` "/app/known"
 
   describe "staticAssetHref" $
     it "renders asset URLs from the configured static prefix" $ do
@@ -1440,10 +1440,10 @@ spec = do
       continuedResult == continuedResult `shouldBe` True
       continuedResult == haltedResult `shouldBe` False
       continuedResult /= haltedResult `shouldBe` True
-      show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"})"
-      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
-      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
-      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", requestPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"})"
+      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
   describe "toWaiApplication" $ do
     it "runs app middleware for dynamic routes while preserving transformed context" $ do
@@ -2836,7 +2836,7 @@ spec = do
                 renderResponse =
                   \request ->
                     pure $
-                      case (requestRoute request, requestLanguage (requestContext request), requestPathPrefix (requestContext request)) of
+                      case (requestRoute request, requestLanguage (requestContext request), testContextPathPrefix (requestContext request)) of
                         (KnownRoute, "es", _) ->
                           PageResponseWithMetadata
                             ResponseBody
