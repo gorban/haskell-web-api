@@ -38,6 +38,7 @@ import HarchWeb
     navigationRuntimeScriptSource,
   )
 import HarchWeb qualified
+import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import Network.Wai qualified as Wai
 
@@ -205,7 +206,7 @@ addFrameworkShellConventions site page shell =
 
 ensureAttribute :: Text -> Text -> [HarchWeb.HtmlAttribute] -> [HarchWeb.HtmlAttribute]
 ensureAttribute name value attributes =
-  if any ((== name) . HarchWeb.attributeName) attributes
+  if any ((== name) . Document.attributeName) attributes
     then attributes
     else
       attributes

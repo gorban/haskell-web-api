@@ -5,6 +5,21 @@
 module HarchWeb
   ( module HarchWeb.Acme,
     module HarchWeb.Document,
+    ConnectionObservability (..),
+    HttpServerMetrics (..),
+    ObservabilityAttribute (ObservabilityAttribute),
+    ObservabilityAttributeValue (..),
+    RequestTraceContext (..),
+    RequestObservability (..),
+    RequestSpan (..),
+    ResponseKind (..),
+    buildConnectionObservability,
+    buildRequestObservability,
+    forceConnectionObservability,
+    forceRequestObservability,
+    requestObservabilityAttributes,
+    requestSpanName,
+    withRequestTraceContext,
     module HarchWeb.Routing,
     module HarchWeb.Security,
     module HarchWeb.Server,
@@ -68,6 +83,7 @@ import HarchWeb.Document
     renderDocument,
     renderDocumentWithNonce,
   )
+import HarchWeb.Observability
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, routeHref)
 import HarchWeb.Security
