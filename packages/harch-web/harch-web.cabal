@@ -90,6 +90,7 @@ library
     HarchWeb.Acme.Protocol.Client
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
+    HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Server.Config
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls
