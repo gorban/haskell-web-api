@@ -192,9 +192,7 @@ import Control.Exception (IOException, SomeException, bracket, evaluate, finally
 import Control.Monad (unless, void)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
-import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.Char (digitToInt, isDigit)
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find, intercalate)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
@@ -203,7 +201,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Data.Word (Word64, Word8)
+import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme.Certbot.Options
   ( certbotHasOption,
@@ -230,6 +228,11 @@ import HarchWeb.Acme.Challenge
     registerAcmeChallenges,
     unregisterAcmeChallenges,
     validAcmeHttp01ChallengeToken,
+  )
+import HarchWeb.Acme.Crypto
+  ( acmeJwkThumbprintBytes,
+    base64urlText,
+    hexTextToByteString,
   )
 import HarchWeb.Acme.Json
   ( JsonValue (..),
@@ -1157,49 +1160,11 @@ buildAcmeKeyAuthorization !runtimeAcmePlan accountJwk challengeToken = do
   thumbprintDigest <- openSslSha256 runtimeAcmePlan (LazyByteString.fromStrict (acmeJwkThumbprintBytes accountJwk))
   pure (challengeToken <> "." <> base64urlText thumbprintDigest)
 
-acmeJwkThumbprintBytes :: AcmeJwk -> ByteString.ByteString
-acmeJwkThumbprintBytes accountJwk =
-  TextEncoding.encodeUtf8 $
-    "{\"e\":\""
-      <> acmeJwkExponent accountJwk
-      <> "\",\"kty\":\"RSA\",\"n\":\""
-      <> acmeJwkModulus accountJwk
-      <> "\"}"
-
 mailtoAcmeContact :: Text -> Text
 mailtoAcmeContact contactAddress =
   if "mailto:" `Text.isPrefixOf` contactAddress
     then contactAddress
     else "mailto:" <> contactAddress
-
-base64urlText :: ByteString.ByteString -> Text
-base64urlText =
-  TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded
-
-hexTextToByteString :: Text -> Either String ByteString.ByteString
-hexTextToByteString hexText =
-  ByteString.pack <$> decodeHexPairs cleanedHex
-  where
-    cleanedHex = filter (not . (`elem` [' ', '\n', '\r', '\t'])) (Text.unpack hexText)
-
-decodeHexPairs :: String -> Either String [Word8]
-decodeHexPairs [] = Right []
-decodeHexPairs [_] = Left "hex string had an odd length"
-decodeHexPairs (firstDigit : secondDigit : remainingDigits) =
-  (:) <$> decodeHexByte firstDigit secondDigit <*> decodeHexPairs remainingDigits
-
-decodeHexByte :: Char -> Char -> Either String Word8
-decodeHexByte firstDigit secondDigit =
-  case (hexDigitValue firstDigit, hexDigitValue secondDigit) of
-    (Just highDigit, Just lowDigit) -> Right (fromIntegral (highDigit * 16 + lowDigit))
-    _ -> Left ("invalid hex digit pair: " <> [firstDigit, secondDigit])
-
-hexDigitValue :: Char -> Maybe Int
-hexDigitValue hexDigit
-  | isDigit hexDigit = Just (digitToInt hexDigit)
-  | 'a' <= hexDigit && hexDigit <= 'f' = Just (digitToInt hexDigit)
-  | 'A' <= hexDigit && hexDigit <= 'F' = Just (digitToInt hexDigit)
-hexDigitValue _ = Nothing
 
 runOpenSslTextCommand :: RuntimeAcmeBindPlan -> [String] -> IO String
 runOpenSslTextCommand !runtimeAcmePlan arguments = do

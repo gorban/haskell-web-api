@@ -83,6 +83,7 @@ library
     HarchWeb.Acme.Certbot.Options
     HarchWeb.Acme.Certbot.Runtime
     HarchWeb.Acme.Challenge
+    HarchWeb.Acme.Crypto
     HarchWeb.Acme.Json
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
