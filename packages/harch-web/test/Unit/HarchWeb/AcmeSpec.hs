@@ -101,7 +101,7 @@ spec = do
     it "exports supported helpers directly" $
       expectAll
         ( (Acme.validAcmeHttp01ChallengeToken "boundary-token" `shouldBe` Just "boundary-token")
-            :| [ Acme.hexTextToByteString "7a" `shouldBe` Right "z" ]
+            :| [Acme.hexTextToByteString "7a" `shouldBe` Right "z"]
         )
 
   describe "ACME helper model coverage" $ do

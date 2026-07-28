@@ -34,6 +34,10 @@ cabal build all -O2 --ghc-options=-Werror
 cabal test all -O2 --test-options="--skip Unit"
 ```
 
+Before the formatting checks, run `.github/scripts/install-formatting-tools.sh` whenever the
+local tools are not known to be the CI-pinned versions; it installs the exact `cabal-gild`, HLint,
+and Ormolu toolchain used by CI.
+
 The coverage script cleans and rebuilds all packages, runs Unit tests package by package, and requires 100% coverage for every package. Do not run another Cabal command while it is active.
 
 📦
