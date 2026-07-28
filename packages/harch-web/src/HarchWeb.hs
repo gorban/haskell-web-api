@@ -188,7 +188,7 @@ module HarchWeb
 where
 
 import Control.Concurrent (ThreadId, killThread, newEmptyMVar, newMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (SomeException, bracket, finally, try)
+import Control.Exception (bracket, finally)
 import Control.Monad (unless, void)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
@@ -265,6 +265,16 @@ import HarchWeb.Acme.OpenSsl
     runOpenSslCommand,
     runOpenSslTextCommand,
     signOpenSslRs256,
+  )
+import HarchWeb.Acme.Protocol.Client
+  ( buildAcmeJwsBody,
+    buildAcmeKeyAuthorization,
+    decodeAcmeJsonResponse,
+    fetchAcmeNonce,
+    performAcmeJwsRequest,
+    performAcmeRequest,
+    renderAcmeResponseBody,
+    responseHeaderText,
   )
 import HarchWeb.Acme.Protocol.Decode
   ( parseAcmeAuthorizationResponse,
@@ -940,159 +950,6 @@ fetchAcmeCertificate !runtimeAcmePlan manager directory accountKeyPath accountKi
       (Just "application/pem-certificate-chain")
       [200]
   pure (HttpClient.responseBody response)
-
-performAcmeJwsRequest ::
-  RuntimeAcmeBindPlan ->
-  HttpClient.Manager ->
-  AcmeDirectoryResponse ->
-  FilePath ->
-  String ->
-  AcmeRequestAuth ->
-  Text ->
-  LazyByteString.ByteString ->
-  Maybe ByteString.ByteString ->
-  [Int] ->
-  IO (HttpClient.Response LazyByteString.ByteString)
-performAcmeJwsRequest !runtimeAcmePlan manager directory accountKeyPath !actionLabel requestAuth endpointUrl payload maybeAcceptHeader expectedStatusCodes = do
-  nonce <- fetchAcmeNonce runtimeAcmePlan manager (acmeNewNonceUrl directory)
-  requestBody <- buildAcmeJwsBody runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload
-  baseRequest <- HttpClient.parseRequest (Text.unpack endpointUrl)
-  let request =
-        baseRequest
-          { HttpClient.method = "POST",
-            HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody,
-            HttpClient.requestHeaders =
-              [("Content-Type", "application/jose+json")]
-                <> maybe [] (\acceptHeader -> [("Accept", acceptHeader)]) maybeAcceptHeader
-          }
-  performAcmeRequest runtimeAcmePlan manager actionLabel request expectedStatusCodes
-
-fetchAcmeNonce :: RuntimeAcmeBindPlan -> HttpClient.Manager -> Text -> IO Text
-fetchAcmeNonce !runtimeAcmePlan manager nonceUrl = do
-  request <- HttpClient.parseRequest (Text.unpack nonceUrl)
-  response <-
-    performAcmeRequest
-      runtimeAcmePlan
-      manager
-      "nonce fetch"
-      (request {HttpClient.method = "HEAD"})
-      [200, 204]
-  maybe
-    ( ioError . userError $
-        "ACME nonce response for listener on "
-          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-          <> " did not include a replay-nonce header."
-    )
-    pure
-    (responseHeaderText "Replay-Nonce" response)
-
-buildAcmeJwsBody :: RuntimeAcmeBindPlan -> FilePath -> AcmeRequestAuth -> Text -> Text -> LazyByteString.ByteString -> IO LazyByteString.ByteString
-buildAcmeJwsBody !runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload = do
-  let protectedBytes =
-        LazyByteString.toStrict $
-          jsonObjectBytes
-            ( [ ("alg", jsonStringBytes "RS256"),
-                ("nonce", jsonStringBytes nonce),
-                ("url", jsonStringBytes endpointUrl)
-              ]
-                <> case requestAuth of
-                  AcmeRequestJwk jwk ->
-                    [ ( "jwk",
-                        jsonObjectBytes
-                          [ ("e", jsonStringBytes (acmeJwkExponent jwk)),
-                            ("kty", jsonStringBytes "RSA"),
-                            ("n", jsonStringBytes (acmeJwkModulus jwk))
-                          ]
-                      )
-                    ]
-                  AcmeRequestKid accountKid ->
-                    [("kid", jsonStringBytes accountKid)]
-            )
-      protectedText = base64urlText protectedBytes
-      payloadText = base64urlText (LazyByteString.toStrict payload)
-      signingInput =
-        LazyByteString.fromStrict
-          (TextEncoding.encodeUtf8 protectedText <> "." <> TextEncoding.encodeUtf8 payloadText)
-  signatureBytes <- signOpenSslRs256 runtimeAcmePlan accountKeyPath signingInput
-  pure $
-    jsonObjectBytes
-      [ ("protected", jsonStringBytes protectedText),
-        ("payload", jsonStringBytes payloadText),
-        ("signature", jsonStringBytes (base64urlText signatureBytes))
-      ]
-
-performAcmeRequest ::
-  RuntimeAcmeBindPlan ->
-  HttpClient.Manager ->
-  String ->
-  HttpClient.Request ->
-  [Int] ->
-  IO (HttpClient.Response LazyByteString.ByteString)
-performAcmeRequest !runtimeAcmePlan manager !actionLabel request expectedStatusCodes = do
-  responseResult <- try (HttpClient.httpLbs request manager) :: IO (Either SomeException (HttpClient.Response LazyByteString.ByteString))
-  response <-
-    either
-      ( \requestError ->
-          ioError . userError $
-            "Failed "
-              <> actionLabel
-              <> " for ACME listener on "
-              <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-              <> ": "
-              <> show requestError
-      )
-      pure
-      responseResult
-  let statusCode = Http.statusCode (HttpClient.responseStatus response)
-  if statusCode `elem` expectedStatusCodes
-    then pure response
-    else
-      ioError . userError $
-        "ACME "
-          <> actionLabel
-          <> " for listener on "
-          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-          <> " failed with status "
-          <> show statusCode
-          <> ".\nbody:\n"
-          <> renderAcmeResponseBody response
-
-decodeAcmeJsonResponse ::
-  RuntimeAcmeBindPlan ->
-  String ->
-  (JsonValue -> Either String a) ->
-  HttpClient.Response LazyByteString.ByteString ->
-  IO a
-decodeAcmeJsonResponse !runtimeAcmePlan !actionLabel decodeJson response =
-  either
-    ( \decodeError ->
-        ioError . userError $
-          "Failed to decode ACME "
-            <> actionLabel
-            <> " response for listener on "
-            <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-            <> ": "
-            <> decodeError
-            <> ".\nbody:\n"
-            <> renderAcmeResponseBody response
-    )
-    pure
-    (parseJsonValue (HttpClient.responseBody response) >>= decodeJson)
-
-responseHeaderText :: Http.HeaderName -> HttpClient.Response body -> Maybe Text
-responseHeaderText headerName response =
-  fmap
-    (Text.strip . TextEncoding.decodeUtf8)
-    (lookup headerName (HttpClient.responseHeaders response))
-
-renderAcmeResponseBody :: HttpClient.Response LazyByteString.ByteString -> String
-renderAcmeResponseBody =
-  Text.unpack . TextEncoding.decodeUtf8 . LazyByteString.toStrict . HttpClient.responseBody
-
-buildAcmeKeyAuthorization :: RuntimeAcmeBindPlan -> AcmeJwk -> Text -> IO Text
-buildAcmeKeyAuthorization !runtimeAcmePlan accountJwk challengeToken = do
-  thumbprintDigest <- openSslSha256 runtimeAcmePlan (LazyByteString.fromStrict (acmeJwkThumbprintBytes accountJwk))
-  pure (challengeToken <> "." <> base64urlText thumbprintDigest)
 
 mailtoAcmeContact :: Text -> Text
 mailtoAcmeContact contactAddress =

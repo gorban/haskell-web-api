@@ -87,6 +87,7 @@ library
     HarchWeb.Acme.Json
     HarchWeb.Acme.KeyMaterial
     HarchWeb.Acme.OpenSsl
+    HarchWeb.Acme.Protocol.Client
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Server.Config
