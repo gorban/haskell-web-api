@@ -41,7 +41,7 @@ module HarchWeb
   )
 where
 
-import Control.Concurrent (ThreadId, killThread, newEmptyMVar, newMVar, takeMVar, tryPutMVar)
+import Control.Concurrent (newEmptyMVar, newMVar, takeMVar, tryPutMVar)
 import Control.Exception (bracket, finally)
 import Control.Monad (void)
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -83,19 +83,16 @@ import HarchWeb.Observability.Otlp qualified as Otlp
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, routeHref)
 import HarchWeb.Security
 import HarchWeb.Server
+import HarchWeb.Server.LocalTest (LocalTestServer (..), withLocalTestServer)
 import HarchWeb.Server.Transport
   ( ReloadingTlsCredentials,
-    listenerSchemeText,
     loadReloadingTlsCredentials,
     loadTlsCredentialSnapshotOrThrowWithLoader,
-    openLoopbackSocket,
     reloadTlsCredentialsIfChanged,
-    socketPort,
     startHttpRuntimeServers,
     startManualTlsRuntimeServerWithStarter,
     startManualTlsRuntimeServers,
     startWarpRuntimeServerOnSocket,
-    startWarpServerOnSocket,
     stopRuntimeServers,
   )
 import HarchWeb.StaticAssets
@@ -112,33 +109,14 @@ import HarchWeb.StaticAssets
     staticAssetHrefWithPrefix,
     stylesheet,
   )
-import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import System.IO (Handle, hFlush, hPutStrLn)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import Text.Read (readMaybe)
 
-data LocalTestServer = LocalTestServer
-  { localServerHost :: Text,
-    localServerPort :: Int,
-    localServerBaseUrl :: Text
-  }
-  deriving (Eq, Show)
-
-data RunningLocalTestServer = RunningLocalTestServer
-  { runningLocalServerInfo :: LocalTestServer,
-    runningLocalServerSocket :: Socket.Socket,
-    runningLocalServerThreadId :: ThreadId
-  }
-
 navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
 navigationRuntimeScriptSource pathPrefix runtime =
   applyRequestPathPrefix pathPrefix (navigationRuntimePath runtime)
-
-withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
-withLocalTestServer webApplication useLocalServer =
-  bracket (startLocalTestServer webApplication) stopLocalTestServer $
-    useLocalServer . runningLocalServerInfo
 
 runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
@@ -175,33 +153,6 @@ runServer outputHandle config webApplication =
                             )
                       )
                 )
-
-startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
-startLocalTestServer webApplication = do
-  listeningSocket <- openLoopbackSocket
-  localPort <- socketPort listeningSocket
-  let listenerScheme = Http
-      endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
-  serverThreadId <-
-    endpointHost endpoint `seq`
-      startWarpServerOnSocket endpoint listeningSocket (toWaiApplication webApplication)
-  localPort `seq`
-    pure
-      RunningLocalTestServer
-        { runningLocalServerInfo =
-            LocalTestServer
-              { localServerHost = "127.0.0.1",
-                localServerPort = localPort,
-                localServerBaseUrl = listenerSchemeText listenerScheme <> "://127.0.0.1:" <> Text.pack (show localPort)
-              },
-          runningLocalServerSocket = listeningSocket,
-          runningLocalServerThreadId = serverThreadId
-        }
-
-stopLocalTestServer :: RunningLocalTestServer -> IO ()
-stopLocalTestServer runningServer = do
-  Socket.close (runningLocalServerSocket runningServer)
-  killThread (runningLocalServerThreadId runningServer)
 
 toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do

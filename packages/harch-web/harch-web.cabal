@@ -94,6 +94,7 @@ library
     HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Observability.Otlp
     HarchWeb.Server.Config
+    HarchWeb.Server.LocalTest
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls
 
