@@ -188,7 +188,7 @@ module HarchWeb
 where
 
 import Control.Concurrent (ThreadId, killThread, newEmptyMVar, newMVar, takeMVar, threadDelay, tryPutMVar)
-import Control.Exception (IOException, SomeException, bracket, evaluate, finally, try)
+import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (unless, void)
 import Data.Bits (shiftR, xor)
 import Data.ByteString qualified as ByteString
@@ -253,6 +253,12 @@ import HarchWeb.Acme.Json
     jsonValueParser,
     parseJsonValue,
     unicodeJsonCharacterParser,
+  )
+import HarchWeb.Acme.OpenSsl
+  ( openSslSha256,
+    runOpenSslCommand,
+    runOpenSslTextCommand,
+    signOpenSslRs256,
   )
 import HarchWeb.Acme.Protocol.Decode
   ( parseAcmeAuthorizationResponse,
@@ -387,14 +393,9 @@ import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
-import System.Directory (removePathForcibly)
-import System.Exit (ExitCode (..))
-import System.FilePath ((</>))
 import System.IO (Handle, hFlush, hPutStrLn)
-import System.IO.Temp (createTempDirectory, getCanonicalTemporaryDirectory)
 import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
-import System.Process (proc, readCreateProcessWithExitCode)
 import Text.Read (readMaybe)
 
 data LocalTestServer = LocalTestServer
@@ -1165,62 +1166,6 @@ mailtoAcmeContact contactAddress =
   if "mailto:" `Text.isPrefixOf` contactAddress
     then contactAddress
     else "mailto:" <> contactAddress
-
-runOpenSslTextCommand :: RuntimeAcmeBindPlan -> [String] -> IO String
-runOpenSslTextCommand !runtimeAcmePlan arguments = do
-  processResult <-
-    try (readCreateProcessWithExitCode (proc "openssl" arguments) "") ::
-      IO (Either IOException (ExitCode, String, String))
-  case processResult of
-    Left launchError ->
-      ioError . userError $
-        "Failed to launch openssl for ACME listener on "
-          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-          <> ": "
-          <> show launchError
-    Right (ExitSuccess, stdoutText, stderrText) -> do
-      void (evaluate (length stderrText))
-      pure stdoutText
-    Right (exitCode, stdoutText, stderrText) ->
-      ioError . userError $
-        "OpenSSL failed for ACME listener on "
-          <> renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan)
-          <> " with exit code "
-          <> show exitCode
-          <> ".\nstdout:\n"
-          <> stdoutText
-          <> "\nstderr:\n"
-          <> stderrText
-
-runOpenSslCommand :: RuntimeAcmeBindPlan -> [String] -> IO ()
-runOpenSslCommand !runtimeAcmePlan arguments =
-  void (runOpenSslTextCommand runtimeAcmePlan arguments)
-
-signOpenSslRs256 :: RuntimeAcmeBindPlan -> FilePath -> LazyByteString.ByteString -> IO ByteString.ByteString
-signOpenSslRs256 !runtimeAcmePlan accountKeyPath signingInput = do
-  temporaryDirectory <- getCanonicalTemporaryDirectory
-  bracket
-    (createTempDirectory temporaryDirectory "harch-web-acme-sign")
-    removePathForcibly
-    $ \signatureDirectory -> do
-      let inputPath = signatureDirectory </> "signing-input.bin"
-          outputPath = signatureDirectory </> "signature.bin"
-      LazyByteString.writeFile inputPath signingInput
-      runOpenSslCommand runtimeAcmePlan ["dgst", "-sha256", "-binary", "-sign", accountKeyPath, "-out", outputPath, inputPath]
-      ByteString.readFile outputPath
-
-openSslSha256 :: RuntimeAcmeBindPlan -> LazyByteString.ByteString -> IO ByteString.ByteString
-openSslSha256 !runtimeAcmePlan inputBytes = do
-  temporaryDirectory <- getCanonicalTemporaryDirectory
-  bracket
-    (createTempDirectory temporaryDirectory "harch-web-acme-sha256")
-    removePathForcibly
-    $ \hashDirectory -> do
-      let inputPath = hashDirectory </> "hash-input.bin"
-          outputPath = hashDirectory </> "hash-output.bin"
-      LazyByteString.writeFile inputPath inputBytes
-      runOpenSslCommand runtimeAcmePlan ["dgst", "-sha256", "-binary", "-out", outputPath, inputPath]
-      ByteString.readFile outputPath
 
 announceRuntimeStartup :: Handle -> ServerStartupPlan -> IO ()
 announceRuntimeStartup outputHandle startupPlan = do
