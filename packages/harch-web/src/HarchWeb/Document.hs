@@ -16,6 +16,8 @@ module HarchWeb.Document
     buildDocument,
     buildNavigation,
     buildPageShell,
+    defaultCaptureKernel,
+    defaultCaptureKernelScript,
     generateRuntimeNonce,
     liveRegionAttributes,
     renderDocument,
@@ -117,6 +119,51 @@ data PageShell route context = PageShell
     shellRuntimeDescriptors :: [RuntimeDescriptor]
   }
   deriving (Eq, Show)
+
+-- | This tiny capture-phase kernel is deliberately inline in the head. It is
+-- installed before any framework control in the body can become interactive;
+-- larger behavior modules consume its queue after they load.
+defaultCaptureKernel :: RuntimeDescriptor
+defaultCaptureKernel =
+  InlineBootstrap
+    { runtimeDescriptorName = "harch-capture-kernel",
+      runtimeDescriptorSource = defaultCaptureKernelScript
+    }
+
+defaultCaptureKernelScript :: Text
+defaultCaptureKernelScript =
+  Text.unlines
+    [ "(() => {",
+      "  const queuedEvents = [];",
+      "  const controlSelector = '[data-harch-control]';",
+      "  const actionSelector = 'form[data-harch-action=\"true\"]';",
+      "  const capture = (event) => {",
+      "    const target = event.target instanceof Element ? event.target.closest(controlSelector) : null;",
+      "    if (target) {",
+      "      if (event.type === 'submit' && target.matches(actionSelector)) {",
+      "        const submitter = event.submitter instanceof HTMLElement ? event.submitter : undefined;",
+      "        const fields = [];",
+      "        new FormData(target, submitter).forEach((value, name) => {",
+      "          if (typeof value === 'string') {",
+      "            fields.push([name, value]);",
+      "          }",
+      "        });",
+      "        queuedEvents.push({ type: 'submit', action: target.action, method: target.method, fields });",
+      "        event.preventDefault();",
+      "      } else {",
+      "        queuedEvents.push({ event, target });",
+      "      }",
+      "      window.dispatchEvent(new Event('harch:capture'));",
+      "    }",
+      "  };",
+      "  ['click', 'input', 'change', 'keydown', 'submit'].forEach((eventName) => {",
+      "    document.addEventListener(eventName, capture, true);",
+      "  });",
+      "  window.__harchCaptureKernel = {",
+      "    drain: () => queuedEvents.splice(0),",
+      "  };",
+      "})();"
+    ]
 
 generateRuntimeNonce :: IO RuntimeNonce
 generateRuntimeNonce =
