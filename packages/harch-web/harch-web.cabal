@@ -95,6 +95,7 @@ library
     HarchWeb.Observability.Otlp
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
+    HarchWeb.Server.Runtime
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls
 
