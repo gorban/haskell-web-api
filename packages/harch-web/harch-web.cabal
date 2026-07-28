@@ -59,6 +59,7 @@ library
   exposed-modules:
     HarchWeb
     HarchWeb.Account
+    HarchWeb.Acme
     HarchWeb.Database
     HarchWeb.DevSmtp
     HarchWeb.Document

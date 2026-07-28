@@ -18,6 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
+import HarchWeb.Acme qualified as Acme
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
@@ -96,6 +97,13 @@ runtimeAcmePlanWith acmeConfig =
 
 spec :: Spec
 spec = do
+  describe "the public HarchWeb.Acme boundary" $ do
+    it "exports supported helpers directly" $
+      expectAll
+        ( (Acme.validAcmeHttp01ChallengeToken "boundary-token" `shouldBe` Just "boundary-token")
+            :| [ Acme.hexTextToByteString "7a" `shouldBe` Right "z" ]
+        )
+
   describe "ACME helper model coverage" $ do
     it "covers derived Eq and Show instances for internal ACME helper types" $ do
       let challenge =
