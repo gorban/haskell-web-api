@@ -45,18 +45,12 @@ where
 
 import Control.Concurrent (ThreadId, killThread, newEmptyMVar, newMVar, takeMVar, tryPutMVar)
 import Control.Exception (bracket, finally)
-import Control.Monad (unless, void)
-import Data.Bits (shiftR, xor)
-import Data.ByteString qualified as ByteString
+import Control.Monad (void)
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.List (find)
 import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
-import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Encoding qualified as TextEncoding
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
@@ -85,6 +79,7 @@ import HarchWeb.Document
   )
 import HarchWeb.Observability
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Observability.Otlp qualified as Otlp
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, routeHref)
 import HarchWeb.Security
 import HarchWeb.Server
@@ -117,13 +112,9 @@ import HarchWeb.StaticAssets
     staticAssetHrefWithPrefix,
     stylesheet,
   )
-import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Client.TLS qualified as HttpClientTls
-import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import System.IO (Handle, hFlush, hPutStrLn)
-import System.IO.Unsafe (unsafePerformIO)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import Text.Read (readMaybe)
 
@@ -561,12 +552,12 @@ exportRequestObservabilityToOtlp ::
   Observability.RequestObservability ->
   IO ()
 exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
-  (generatedTraceId, spanId) <- nextOtlpSpanIdentifiers
+  (generatedTraceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
   let childSpans =
         requestRuntimePhaseChildSpans requestObservability
           <> requestDatabaseChildSpans requestObservability
-  childSpanIds <- mapM (const nextOtlpSpanId) childSpans
-  endTimeUnixNano <- currentUnixTimeNSec
+  childSpanIds <- mapM (const Otlp.nextOtlpSpanId) childSpans
+  endTimeUnixNano <- Otlp.currentUnixTimeNSec
   let rootDurationNanoseconds =
         fromMaybe
           (requestFallbackDurationNanoseconds childSpans)
@@ -604,7 +595,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           "SPAN_KIND_SERVER"
           (otlpRequestSpanStatusFields requestObservability)
           timedChildSpans
-  sendOtlpTraceRequest exporter requestBody
+  Otlp.sendOtlpTraceRequest exporter requestBody
 
 exportConnectionObservabilityToOtlp ::
   Text ->
@@ -612,8 +603,8 @@ exportConnectionObservabilityToOtlp ::
   Observability.ConnectionObservability ->
   IO ()
 exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
-  (traceId, spanId) <- nextOtlpSpanIdentifiers
-  endTimeUnixNano <- currentUnixTimeNSec
+  (traceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
+  endTimeUnixNano <- Otlp.currentUnixTimeNSec
   let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano connectionFallbackDurationNanoseconds
   let requestBody =
         otlpTraceBodyFromSpan
@@ -628,32 +619,7 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
           "SPAN_KIND_INTERNAL"
           otlpErrorStatusFields
           []
-  sendOtlpTraceRequest exporter requestBody
-
-sendOtlpTraceRequest :: OtlpExporter -> LazyByteString.ByteString -> IO ()
-sendOtlpTraceRequest exporter requestBody = do
-  baseRequest <- HttpClient.parseRequest (Text.unpack (otlpEndpoint exporter))
-  response <-
-    HttpClient.httpLbs
-      baseRequest
-        { HttpClient.method = "POST",
-          HttpClient.requestHeaders =
-            (Http.hContentType, "application/json")
-              : map otlpHeader (otlpHeaders exporter),
-          HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody
-        }
-      otlpHttpManager
-  let statusCode = Http.statusCode (HttpClient.responseStatus response)
-  unless (statusCode >= 200 && statusCode < 300) $
-    ioError . userError $
-      "OTLP trace export failed with status "
-        <> show statusCode
-        <> ".\nbody:\n"
-        <> renderAcmeResponseBody response
-
-currentUnixTimeNSec :: IO Word64
-currentUnixTimeNSec =
-  floor . (* 1000000000) <$> getPOSIXTime
+  Otlp.sendOtlpTraceRequest exporter requestBody
 
 otlpTraceBodyFromSpan ::
   Text ->
@@ -1039,54 +1005,3 @@ otlpAttributeValue attributeValue =
         Observability.IntAttribute intValue ->
           ("intValue", jsonStringBytes (Text.pack (show intValue)))
     ]
-
-otlpHeader :: (Text, Text) -> Http.Header
-otlpHeader (headerName, headerValue) =
-  (fromString (Text.unpack headerName), TextEncoding.encodeUtf8 headerValue)
-
-nextOtlpSpanIdentifiers :: IO (Text, Text)
-nextOtlpSpanIdentifiers = do
-  requestSeed <- atomicModifyIORef' otlpSpanSeed (\seed -> let nextSeed = seed + 1 in (nextSeed, nextSeed))
-  monotonicTime <- getMonotonicTimeNSec
-  let traceIdBytes = word64Bytes monotonicTime <> word64Bytes requestSeed
-      spanIdBytes = word64Bytes (monotonicTime `xor` (requestSeed + 0x9e3779b97f4a7c15))
-  pure (otlpIdHexText traceIdBytes, otlpIdHexText spanIdBytes)
-
-nextOtlpSpanId :: IO Text
-nextOtlpSpanId = snd <$> nextOtlpSpanIdentifiers
-
-otlpIdHexText :: ByteString.ByteString -> Text
-otlpIdHexText =
-  Text.concatMap renderHexByte . TextEncoding.decodeLatin1
-  where
-    renderHexByte byte =
-      let byteValue = fromEnum byte
-          highNibble = byteValue `div` 16
-          lowNibble = byteValue `mod` 16
-       in Text.pack [hexDigit highNibble, hexDigit lowNibble]
-
-    hexDigit nibble =
-      "0123456789abcdef" !! nibble
-
-word64Bytes :: Word64 -> ByteString.ByteString
-word64Bytes word =
-  ByteString.pack
-    [ fromIntegral (word `shiftR` 56),
-      fromIntegral (word `shiftR` 48),
-      fromIntegral (word `shiftR` 40),
-      fromIntegral (word `shiftR` 32),
-      fromIntegral (word `shiftR` 24),
-      fromIntegral (word `shiftR` 16),
-      fromIntegral (word `shiftR` 8),
-      fromIntegral word
-    ]
-
-otlpHttpManager :: HttpClient.Manager
-{-# NOINLINE otlpHttpManager #-}
-otlpHttpManager =
-  unsafePerformIO (HttpClient.newManager HttpClientTls.tlsManagerSettings)
-
-otlpSpanSeed :: IORef Word64
-{-# NOINLINE otlpSpanSeed #-}
-otlpSpanSeed =
-  unsafePerformIO (newIORef 0)
