@@ -97,6 +97,7 @@ library
     HarchWeb.Observability.Otlp.Wire
     HarchWeb.Observability.Types
     HarchWeb.PathPrefix
+    HarchWeb.Server.ClientAction
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
     HarchWeb.Server.Response

@@ -47,16 +47,13 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.Bifunctor (bimap)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Maybe (maybeToList)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Document (Document, NavigationRuntime, Page)
@@ -81,13 +78,13 @@ import HarchWeb.Security
     waiRequestPath,
     waiRequestRouteTarget,
   )
+import HarchWeb.Server.ClientAction
 import HarchWeb.Server.Config
 import HarchWeb.Server.Response
 import HarchWeb.Server.Sse
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
 import HarchWeb.StaticAssets (StaticAssetsConfig (..))
 import Network.HTTP.Types qualified as Http
-import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
 planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
@@ -533,52 +530,6 @@ toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
         write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
         flush
         streamEvents write flush
-
-isClientActionRequest :: Wai.Request -> Bool
-isClientActionRequest request = lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
-
-parseClientActionFields :: LazyByteString.ByteString -> [(Text, Text)]
-parseClientActionFields requestBody =
-  map (bimap decodeActionField (maybe "" decodeActionField)) (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
-
-decodeActionField :: ByteString.ByteString -> Text
-decodeActionField = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
-
-clientActionResponseBody :: ClientActionResponse -> ResponseBody
-clientActionResponseBody actionResponse =
-  ResponseBody
-    { responseStatus = clientActionStatus actionResponse,
-      responseContentType = "application/json; charset=utf-8",
-      responseBody = renderClientActionResponse actionResponse,
-      responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
-      responseLogEntries = clientActionLogEntries actionResponse
-    }
-
-renderClientActionResponse :: ClientActionResponse -> Text
-renderClientActionResponse actionResponse =
-  "{\"patches\":["
-    <> Text.intercalate "," (map renderPatch (clientActionPatches actionResponse))
-    <> "],\"focusId\":"
-    <> maybe "null" jsonString (clientActionFocusId actionResponse)
-    <> "}"
-  where
-    renderPatch RegionPatch {regionPatchId, regionPatchHtml} =
-      "{\"id\":" <> jsonString regionPatchId <> ",\"html\":" <> jsonString regionPatchHtml <> "}"
-
-jsonString :: Text -> Text
-jsonString textValue = "\"" <> Text.concatMap escapeJsonCharacter textValue <> "\""
-
-escapeJsonCharacter :: Char -> Text
-escapeJsonCharacter character =
-  case character of
-    '"' -> "\\\""
-    '\\' -> "\\\\"
-    '\b' -> "\\b"
-    '\f' -> "\\f"
-    '\n' -> "\\n"
-    '\r' -> "\\r"
-    '\t' -> "\\t"
-    _ -> Text.singleton character
 
 isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
 isNotFoundPage webApplication page =
