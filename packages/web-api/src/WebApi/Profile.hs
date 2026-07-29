@@ -44,9 +44,10 @@ loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
       maybe (pure ProfileUnauthenticated) loadActiveSession maybeSession
 
     loadActiveSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
-    loadActiveSession opaqueSession
-      | sessionExpiresAtNanoseconds opaqueSession <= nowNanoseconds = pure ProfileUnauthenticated
-      | otherwise = loadProfileForSession opaqueSession
+    loadActiveSession opaqueSession =
+      if sessionExpiresAtNanoseconds opaqueSession <= nowNanoseconds
+        then pure ProfileUnauthenticated
+        else loadProfileForSession opaqueSession
 
     loadProfileForSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
     loadProfileForSession opaqueSession = do
@@ -54,8 +55,11 @@ loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
       maybe (pure ProfileUnauthenticated) (classifyProfile opaqueSession) maybeProfile
 
     classifyProfile :: OpaqueSession AccountId -> AccountProfile -> ExceptT ProfileLoadError IO ProfileState
-    classifyProfile opaqueSession profile
-      | accountProfileId profile /= sessionPrincipal opaqueSession =
-          throwError (ProfileAccountStoreError (AccountStoreCorruptData "account profile lookup returned a different account id"))
-      | accountProfileEmailVerified profile = pure (ProfileAuthenticated profile)
-      | otherwise = pure (ProfilePending profile)
+    classifyProfile opaqueSession profile =
+      if accountProfileId profile /= sessionPrincipal opaqueSession
+        then throwError (ProfileAccountStoreError (AccountStoreCorruptData "account profile lookup returned a different account id"))
+        else
+          pure $
+            if accountProfileEmailVerified profile
+              then ProfileAuthenticated profile
+              else ProfilePending profile
