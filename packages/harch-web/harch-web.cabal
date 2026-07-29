@@ -102,6 +102,7 @@ library
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
     HarchWeb.Server.Response
+    HarchWeb.Server.ResponseRendering
     HarchWeb.Server.Runtime
     HarchWeb.Server.Sse
     HarchWeb.Server.StaticAssets

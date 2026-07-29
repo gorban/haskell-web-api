@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed application, request, response, and middleware contracts.
@@ -46,16 +45,13 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.ByteString qualified as ByteString
-import Data.ByteString.Builder qualified as ByteStringBuilder
-import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
-import HarchWeb.Document (NavigationRuntime, Page)
+import HarchWeb.Document (NavigationRuntime)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, renderRoute)
@@ -70,7 +66,6 @@ import HarchWeb.Security
     requestLogContextFields,
     requestPathPrefix,
     requestPolicyResponseHeaders,
-    requestPolicyResponseHeadersWithNonce,
     requestRedirectLocation,
     requestScheme,
     requestTraceContext,
@@ -81,6 +76,7 @@ import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.Config
 import HarchWeb.Server.Response
+import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.Sse
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
 import Network.HTTP.Types qualified as Http
@@ -193,24 +189,6 @@ firstDuplicate values =
         then Just value
         else firstDuplicate remainingValues
 
-applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
-applyResponseHeaders additionalHeaders =
-  Wai.mapResponseHeaders (additionalHeaders <>)
-
-responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Document.RuntimeNonce -> Response route context -> Http.ResponseHeaders
-responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
-  requestPolicyResponseHeadersWithNonce
-    requestPolicyConfig
-    request
-    ( case response of
-        PageResponse _ -> Just runtimeNonce
-        PageResponseWithMetadata _ _ -> Just runtimeNonce
-        BodyResponse _ -> Nothing
-        RedirectResponse _ _ -> Nothing
-        ClientActionBodyResponse _ -> Nothing
-        EventStreamResponse _ _ -> Nothing
-    )
-
 navigationRuntimeResponse :: NavigationRuntime -> Text -> Maybe ResponseBody
 navigationRuntimeResponse runtime requestPath =
   if requestPath == Document.navigationRuntimePath runtime
@@ -313,16 +291,6 @@ dispatchRoutedRequest webApplication request requestPath routeRequest@RouteReque
       maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
     else renderResponse webApplication routeRequest
 
-responseRuntimeNonce :: Response route context -> IO Document.RuntimeNonce
-responseRuntimeNonce response =
-  case response of
-    PageResponse _ -> Document.generateRuntimeNonce
-    PageResponseWithMetadata _ _ -> Document.generateRuntimeNonce
-    BodyResponse _ -> pure $! Document.RuntimeNonce ""
-    RedirectResponse _ _ -> pure $! Document.RuntimeNonce ""
-    ClientActionBodyResponse _ -> pure $! Document.RuntimeNonce ""
-    EventStreamResponse _ _ -> pure $! Document.RuntimeNonce ""
-
 finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> RequestExecutionTimings -> RequestPolicyConfig -> Text -> RouteRequest route context -> Document.RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
 finalizeRoutedResponse webApplication request respond executionTimings requestPolicyConfig requestPath routeRequest runtimeNonce response = do
   let requestLogFields = requestLogContextFields requestPolicyConfig request
@@ -393,110 +361,3 @@ reportEarlyRequestObservability webApplication request requestStartedAt requestC
             (requestContextObservabilityAttributes requestPolicyConfig request <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt [])
    in Observability.forceRequestObservability requestObservability `seq`
         reportRequestObservability webApplication requestObservability
-
-redirectResponse :: Int -> Text -> Response route context
-redirectResponse status =
-  RedirectResponse
-    ResponseBody
-      { responseStatus = status,
-        responseContentType = "text/plain; charset=utf-8",
-        responseBody = "",
-        responseObservabilityAttributes = [],
-        responseLogEntries = []
-      }
-
-responseDiagnostics :: Response route context -> ResponseDiagnostics
-responseDiagnostics response =
-  case response of
-    PageResponse _ -> ResponseDiagnostics [] []
-    PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-    BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
-    RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-    ClientActionBodyResponse actionResponse ->
-      ResponseDiagnostics
-        (clientActionObservabilityAttributes actionResponse)
-        (clientActionLogEntries actionResponse)
-    EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
-
-responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
-responseBodyDiagnostics responseBodyValue =
-  ResponseDiagnostics
-    { diagnosticObservabilityAttributes = responseObservabilityAttributes responseBodyValue,
-      diagnosticLogEntries = responseLogEntries responseBodyValue
-    }
-
-responseStatusCode :: (Eq route) => Application route context -> Response route context -> Int
-responseStatusCode webApplication response =
-  case response of
-    PageResponse page -> if isNotFoundPage webApplication page then 404 else 200
-    PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
-    BodyResponse responseBodyValue -> responseStatus responseBodyValue
-    RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
-    ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
-    EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
-
-responseKind :: Response route context -> Observability.ResponseKind
-responseKind response =
-  case response of
-    PageResponse _ -> Observability.PageResponseKind
-    PageResponseWithMetadata _ _ -> Observability.PageResponseKind
-    BodyResponse _ -> Observability.BodyResponseKind
-    RedirectResponse _ _ -> Observability.BodyResponseKind
-    ClientActionBodyResponse _ -> Observability.BodyResponseKind
-    EventStreamResponse _ _ -> Observability.BodyResponseKind
-
-toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Document.RuntimeNonce -> Application route context -> Response route context -> Wai.Response
-toWaiResponse additionalHeaders runtimeNonce webApplication response =
-  case response of
-    PageResponse page ->
-      Wai.responseLBS
-        (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
-    PageResponseWithMetadata pageResponseBodyValue page ->
-      let !pageStatusMessage = ByteString.empty
-          !pageStatusMessageLength = ByteString.length pageStatusMessage
-          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
-       in Wai.responseLBS
-            pageStatus
-            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
-    BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
-    RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
-    ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
-    EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
-
-toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
-toWaiBodyResponse additionalHeaders responseBodyValue =
-  Wai.responseLBS
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
-    (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
-    (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
-
-toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
-toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
-  Wai.responseStream
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
-    ( additionalHeaders
-        <> [ (Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue)),
-             ("Cache-Control", "no-cache"),
-             ("X-Accel-Buffering", "no")
-           ]
-    )
-    streamEvents
-  where
-    streamEvents write flush = do
-      maybeEvent <- nextServerSentEvent eventSource
-      for_ maybeEvent $ \event -> do
-        write (ByteStringBuilder.byteString (TextEncoding.encodeUtf8 (renderServerSentEvent event)))
-        flush
-        streamEvents write flush
-
-isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
-isNotFoundPage webApplication page =
-  let pageRequestContext = Document.pageContext page
-   in pageRequestContext `seq`
-        Document.pageRoute page == requestRoute (notFoundRequest (routeCodec webApplication) pageRequestContext)
-
-htmlContentType :: Text
-htmlContentType = "text/html; charset=utf-8"
