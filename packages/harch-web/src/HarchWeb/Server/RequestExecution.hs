@@ -87,6 +87,18 @@ data RequestExecutionTimings = RequestExecutionTimings
     requestResponseRenderedAt :: Word64
   }
 
+-- | Inputs that stay fixed after the framework has accepted a request for
+-- routing. Grouping them keeps the lifecycle helpers focused on their
+-- changing request state rather than plumbing the same environment through
+-- every stage.
+data RoutedRequestExecution route context = RoutedRequestExecution
+  { routedRequestApplication :: Application route context,
+    routedRequestWaiRequest :: Wai.Request,
+    routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
+    routedRequestPolicyConfig :: RequestPolicyConfig,
+    routedRequestPath :: Text
+  }
+
 -- | Adapt a typed application to WAI. Framework-owned early responses,
 -- middleware, route dispatch, and finalization all converge here.
 toWaiApplication :: (Eq route) => Application route context -> Wai.Application
@@ -102,10 +114,23 @@ toWaiApplication webApplication request respond = do
       responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
       reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
       respond earlyResponseValue
-    Right () -> handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath
+    Right () ->
+      handleRoutedRequest
+        RoutedRequestExecution
+          { routedRequestApplication = webApplication,
+            routedRequestWaiRequest = request,
+            routedRequestRespond = respond,
+            routedRequestPolicyConfig = requestPolicyConfig,
+            routedRequestPath = requestPath
+          }
+        requestStartedAt
+        policyEvaluatedAt
 
-handleRoutedRequest :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> Word64 -> Word64 -> RequestPolicyConfig -> Text -> IO Wai.ResponseReceived
-handleRoutedRequest webApplication request respond requestStartedAt policyEvaluatedAt requestPolicyConfig requestPath = do
+handleRoutedRequest :: (Eq route) => RoutedRequestExecution route context -> Word64 -> Word64 -> IO Wai.ResponseReceived
+handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = do
+  let webApplication = routedRequestApplication routedRequestExecution
+      request = routedRequestWaiRequest routedRequestExecution
+      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
   middlewareStartedAt <- getMonotonicTimeNSec
   middlewareResult <- runRequestMiddlewarePipeline (applicationRequestMiddleware webApplication) request (requestContextFromRequest webApplication request (defaultRequestContext webApplication))
   middlewareCompletedAt <- middlewareResult `seq` getMonotonicTimeNSec
@@ -115,7 +140,7 @@ handleRoutedRequest webApplication request respond requestStartedAt policyEvalua
   let routeRequest = matchRoute (routeCodec webApplication) requestContext (waiRequestRouteTarget requestPolicyConfig request)
   routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest webApplication request requestPath routeRequest middlewareResult
+  response <- dispatchRoutedRequest routedRequestExecution routeRequest middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
   runtimeNonce <- responseRuntimeNonce response
   let executionTimings =
@@ -128,7 +153,7 @@ handleRoutedRequest webApplication request respond requestStartedAt policyEvalua
             requestRenderingStartedAt = renderStartedAt,
             requestResponseRenderedAt = responseRenderedAt
           }
-  finalizeRoutedResponse webApplication request respond executionTimings requestPolicyConfig requestPath routeRequest runtimeNonce response
+  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response
 
 middlewareTimingEntry :: Application route context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
 middlewareTimingEntry webApplication startedAt completedAt =
@@ -136,50 +161,61 @@ middlewareTimingEntry webApplication startedAt completedAt =
     [] -> []
     _ -> [("middleware", startedAt, completedAt)]
 
-dispatchRoutedRequest :: Application route context -> Wai.Request -> Text -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
-dispatchRoutedRequest _ _ _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
-dispatchRoutedRequest webApplication request requestPath routeRequest@RouteRequest {requestContext = routedRequestContext} (ContinueMiddleware _) =
-  if isClientActionRequest request
-    then do
-      requestBody <- Wai.strictRequestBody request
-      let actionFields = parseClientActionFields requestBody
-      maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
-      maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
-    else renderResponse webApplication routeRequest
+dispatchRoutedRequest :: RoutedRequestExecution route context -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
+dispatchRoutedRequest _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
+dispatchRoutedRequest routedRequestExecution routeRequest@RouteRequest {requestContext = routedRequestContext} (ContinueMiddleware _) =
+  let webApplication = routedRequestApplication routedRequestExecution
+      request = routedRequestWaiRequest routedRequestExecution
+      requestPath = routedRequestPath routedRequestExecution
+   in if isClientActionRequest request
+        then do
+          requestBody <- Wai.strictRequestBody request
+          let actionFields = parseClientActionFields requestBody
+          maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
+          maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
+        else renderResponse webApplication routeRequest
 
-finalizeRoutedResponse :: (Eq route) => Application route context -> Wai.Request -> (Wai.Response -> IO Wai.ResponseReceived) -> RequestExecutionTimings -> RequestPolicyConfig -> Text -> RouteRequest route context -> Document.RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
-finalizeRoutedResponse webApplication request respond executionTimings requestPolicyConfig requestPath routeRequest runtimeNonce response = do
+finalizeRoutedResponse :: (Eq route) => RoutedRequestExecution route context -> RequestExecutionTimings -> RouteRequest route context -> Document.RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
+finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response = do
+  let webApplication = routedRequestApplication routedRequestExecution
+      request = routedRequestWaiRequest routedRequestExecution
+      respond = routedRequestRespond routedRequestExecution
+      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
   let requestLogFields = requestLogContextFields requestPolicyConfig request
       diagnosticValues = responseDiagnostics response
       contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
-      observabilityValue = buildRoutedRequestObservability webApplication request executionTimings requestPolicyConfig requestPath routeRequest response diagnosticValues
+      observabilityValue = buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
       >> respond (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
 
-buildRoutedRequestObservability :: (Eq route) => Application route context -> Wai.Request -> RequestExecutionTimings -> RequestPolicyConfig -> Text -> RouteRequest route context -> Response route context -> ResponseDiagnostics -> Observability.RequestObservability
-buildRoutedRequestObservability webApplication request executionTimings requestPolicyConfig requestPath routeRequest response diagnosticValues =
-  maybe id Observability.withRequestTraceContext (requestTraceContext request) $
-    Observability.buildRequestObservability
-      (TextEncoding.decodeUtf8 (Wai.requestMethod request))
-      (requestScheme requestPolicyConfig request)
-      requestPath
-      (renderRoute (routeCodec webApplication) routeRequest)
-      (responseStatusCode webApplication response)
-      (responseKind response)
-      ( requestContextObservabilityAttributes requestPolicyConfig request
-          <> diagnosticObservabilityAttributes diagnosticValues
-          <> requestTimingObservabilityAttributes
-            (requestExecutionStartedAt executionTimings)
-            (requestResponseRenderedAt executionTimings)
-            ( [("request-policy", requestExecutionStartedAt executionTimings, requestPolicyEvaluatedAt executionTimings)]
-                <> requestMiddlewareTimings executionTimings
-                <> [ ("route-match", requestRouteMatchingStartedAt executionTimings, requestRouteMatchedAt executionTimings),
-                     ("render-response", requestRenderingStartedAt executionTimings, requestResponseRenderedAt executionTimings)
-                   ]
-            )
-      )
+buildRoutedRequestObservability :: (Eq route) => RoutedRequestExecution route context -> RequestExecutionTimings -> RouteRequest route context -> Response route context -> ResponseDiagnostics -> Observability.RequestObservability
+buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues =
+  let webApplication = routedRequestApplication routedRequestExecution
+      request = routedRequestWaiRequest routedRequestExecution
+      requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
+      requestPath = routedRequestPath routedRequestExecution
+   in maybe id Observability.withRequestTraceContext (requestTraceContext request) $
+        Observability.buildRequestObservability
+          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+          (requestScheme requestPolicyConfig request)
+          requestPath
+          (renderRoute (routeCodec webApplication) routeRequest)
+          (responseStatusCode webApplication response)
+          (responseKind response)
+          ( requestContextObservabilityAttributes requestPolicyConfig request
+              <> diagnosticObservabilityAttributes diagnosticValues
+              <> requestTimingObservabilityAttributes
+                (requestExecutionStartedAt executionTimings)
+                (requestResponseRenderedAt executionTimings)
+                ( [("request-policy", requestExecutionStartedAt executionTimings, requestPolicyEvaluatedAt executionTimings)]
+                    <> requestMiddlewareTimings executionTimings
+                    <> [ ("route-match", requestRouteMatchingStartedAt executionTimings, requestRouteMatchedAt executionTimings),
+                         ("render-response", requestRenderingStartedAt executionTimings, requestResponseRenderedAt executionTimings)
+                       ]
+                )
+          )
 
 requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
 requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =
