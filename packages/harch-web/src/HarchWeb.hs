@@ -1,6 +1,3 @@
-{-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module HarchWeb
   ( module HarchWeb.Acme,
     module HarchWeb.Document,

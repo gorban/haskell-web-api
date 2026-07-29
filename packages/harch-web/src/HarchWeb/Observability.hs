@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module HarchWeb.Observability
   ( module HarchWeb.Observability.Types,
     exportConnectionObservabilityToOtlp,
