@@ -1,7 +1,7 @@
 module Unit.HarchWeb.FacadeSpec (spec) where
 
 import HarchWeb
-import qualified Network.Wai as Wai
+import Network.Wai qualified as Wai
 import System.IO (Handle)
 import Test.Hspec
 
