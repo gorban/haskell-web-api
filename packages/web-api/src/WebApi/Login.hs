@@ -92,25 +92,33 @@ beginPasswordLogin credentialStore mfaStore emailAddress =
   beginPasswordLoginWithIdentifier credentialStore mfaStore (LoginEmailAddress emailAddress)
 
 beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginIdentifier -> Password -> IO PasswordLoginResult
-beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password = do
-  credentialResult <-
-    case identifier of
-      LoginEmailAddress emailAddress -> findAccountCredentialByEmail credentialStore emailAddress
-      LoginUsername username -> findAccountCredentialByUsername credentialStore username
-  case credentialResult of
-    Left storeError -> pure (PasswordLoginCredentialStoreError storeError)
-    Right Nothing -> pure PasswordLoginRejected
-    Right (Just credential)
-      | not (verifyPassword password (accountCredentialPasswordHash credential)) -> pure PasswordLoginRejected
-      | not (accountCredentialEmailVerified credential) -> pure (PasswordLoginEmailVerificationRequired (accountCredentialId credential))
-    Right (Just credential) -> do
-      enrollmentResult <- loadTotpEnrollment mfaStore (accountCredentialId credential)
-      pure $
-        case enrollmentResult of
-          Left storeError -> PasswordLoginMfaStoreError storeError
-          Right Nothing -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
-          Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Nothing}) -> PasswordLoginMfaEnrollmentRequired (accountCredentialId credential)
-          Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Just _}) -> PasswordLoginMfaRequired (accountCredentialId credential)
+beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password =
+  lookupCredential credentialStore identifier
+    >>= either
+      (pure . PasswordLoginCredentialStoreError)
+      (maybe (pure PasswordLoginRejected) (continueWithCredential mfaStore password))
+
+lookupCredential :: AccountCredentialStore -> LoginIdentifier -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
+lookupCredential credentialStore identifier =
+  case identifier of
+    LoginEmailAddress emailAddress -> findAccountCredentialByEmail credentialStore emailAddress
+    LoginUsername username -> findAccountCredentialByUsername credentialStore username
+
+continueWithCredential :: MfaStore -> Password -> AccountCredential -> IO PasswordLoginResult
+continueWithCredential mfaStore password credential
+  | not (verifyPassword password (accountCredentialPasswordHash credential)) = pure PasswordLoginRejected
+  | not (accountCredentialEmailVerified credential) = pure (PasswordLoginEmailVerificationRequired accountId)
+  | otherwise = classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
+  where
+    accountId = accountCredentialId credential
+
+classifyMfaEnrollment :: AccountId -> Either MfaStoreError (Maybe StoredTotpEnrollment) -> PasswordLoginResult
+classifyMfaEnrollment accountId enrollmentResult =
+  case enrollmentResult of
+    Left storeError -> PasswordLoginMfaStoreError storeError
+    Right Nothing -> PasswordLoginMfaEnrollmentRequired accountId
+    Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Nothing}) -> PasswordLoginMfaEnrollmentRequired accountId
+    Right (Just StoredTotpEnrollment {storedTotpConfirmedAtNanoseconds = Just _}) -> PasswordLoginMfaRequired accountId
 
 -- | Performs password validation before examining the supplied second factor.
 -- A recovery code is marked used by its stored hash only after its Argon2id
