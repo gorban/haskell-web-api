@@ -76,13 +76,26 @@ startMfaEnrollmentWith ::
   IO (Either MfaEnrollmentError MfaEnrollmentStart)
 startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
   runExceptT $ do
-    secret <- liftIO generateSecret
-    encryptedSecret <-
-      liftIO (encrypt encryptionKey (TextEncoding.encodeUtf8 (renderTotpSecret secret)))
+    (secret, encryptedSecret) <-
+      liftIO (generateEncryptedSecret generateSecret encrypt encryptionKey)
         >>= fromMaybeError MfaEnrollmentEncryptionFailed
     saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
     guardError MfaEnrollmentAccountIsNotEligible saved
     pure (MfaEnrollmentStart secret)
+
+generateEncryptedSecret ::
+  IO TotpSecret ->
+  (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text)) ->
+  SecretEncryptionKey ->
+  IO (Maybe (TotpSecret, Text))
+generateEncryptedSecret generateSecret encrypt encryptionKey = do
+  secret <- generateSecret
+  encryptedSecret <-
+    encrypt encryptionKey (TextEncoding.encodeUtf8 (renderTotpSecret secret))
+  pure (fmap (pairTotpSecret secret) encryptedSecret)
+
+pairTotpSecret :: TotpSecret -> Text -> (TotpSecret, Text)
+pairTotpSecret = (,)
 
 confirmMfaEnrollment ::
   PasswordHashingPolicy ->
