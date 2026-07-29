@@ -36,7 +36,8 @@ module WebApi.Postgres
 where
 
 import Control.Exception (bracket, evaluate)
-import Control.Monad.Except (ExceptT (ExceptT), liftEither, runExceptT, withExceptT)
+import Control.Monad.Except (ExceptT, liftEither, runExceptT)
+import Core.Control.Error (liftEitherWith)
 import Data.Bifunctor (first)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty qualified as NonEmpty
@@ -290,7 +291,7 @@ buildRuntimePostgresAccountProfileStoreWithRunner runQuery databaseConfig =
       liftEither (decodeAccountProfileRows accountId rows)
 
 runStoreQuery :: (Text -> storeError) -> IO (Either Text value) -> ExceptT storeError IO value
-runStoreQuery mapError = withExceptT mapError . ExceptT
+runStoreQuery = liftEitherWith
 
 decodeAccountCredentialRows :: [[Text]] -> Either AccountCredentialStoreError (Maybe AccountCredential)
 decodeAccountCredentialRows rows =

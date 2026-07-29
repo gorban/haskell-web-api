@@ -28,3 +28,9 @@ spec = describe "handleError" $ do
       ( (runExceptT (guardError "rejected" True) `shouldReturn` Right ())
           :| [runExceptT (guardError "rejected" False) `shouldReturn` Left "rejected"]
       )
+
+  it "lifts effectful Either values while mapping their errors" $ do
+    expectAll
+      ( (runExceptT (liftEitherWith length (pure (Right "value" :: Either String String))) `shouldReturn` Right "value")
+          :| [runExceptT (liftEitherWith length (pure (Left "failed" :: Either String String))) `shouldReturn` Left 6]
+      )

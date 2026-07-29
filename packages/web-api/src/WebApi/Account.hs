@@ -19,9 +19,9 @@ module WebApi.Account
 where
 
 import Control.Exception (SomeException, displayException, try)
-import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError, withExceptT)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Core.Control.Error (fromMaybeError, guardError)
+import Core.Control.Error (fromMaybeError, guardError, liftEitherWith)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -166,11 +166,9 @@ registerAccountWithIdentityAtWithPasswordHasher ::
 registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime maybeUsername maybeDisplayName emailAddress password =
   runExceptT $ do
     expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
-    passwordHash <-
-      liftIO (passwordHasher passwordHashingPolicy password)
+    (passwordHash, accountId, token) <-
+      liftIO (generateRegistrationInputs passwordHasher passwordHashingPolicy password)
         >>= fromMaybeError RegistrationPasswordHashingFailed
-    accountId <- liftIO generateAccountId
-    token <- liftIO generateEmailVerificationToken
     let pendingAccount =
           PendingAccount
             { pendingAccountId = accountId,
@@ -230,7 +228,18 @@ liftAccountStore ::
   (AccountStoreError -> error) ->
   IO (Either AccountStoreError value) ->
   ExceptT error IO value
-liftAccountStore toError = withExceptT toError . ExceptT
+liftAccountStore = liftEitherWith
+
+generateRegistrationInputs ::
+  (PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)) ->
+  PasswordHashingPolicy ->
+  Password ->
+  IO (Maybe (PasswordHash, AccountId, EmailVerificationToken))
+generateRegistrationInputs passwordHasher passwordHashingPolicy password =
+  traverse generateIdentifiers =<< passwordHasher passwordHashingPolicy password
+  where
+    generateIdentifiers passwordHash =
+      (,,) passwordHash <$> generateAccountId <*> generateEmailVerificationToken
 
 deliverVerificationEmail ::
   (Text -> error) ->

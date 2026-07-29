@@ -14,8 +14,9 @@ module WebApi.DatabaseSetup
   )
 where
 
-import Control.Monad.Except (ExceptT (..), runExceptT, withExceptT)
+import Control.Monad.Except (runExceptT)
 import Core.Config (ConfigParseError (..), parsePositiveInt)
+import Core.Control.Error (liftEitherWith)
 import Data.Bifunctor (bimap)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -131,19 +132,19 @@ runDatabaseSetupCommandWith ::
   IO (Either DatabaseSetupError ())
 runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand =
   runExceptT $ do
-    migrationDatabaseConfig <- withExceptT DatabaseSetupConfigLoadError (ExceptT loadMigrationConfig)
-    runtimeDatabaseConfig <- withExceptT DatabaseSetupRuntimeConfigLoadError (ExceptT loadRuntimeConfig)
+    migrationDatabaseConfig <- liftEitherWith DatabaseSetupConfigLoadError loadMigrationConfig
+    runtimeDatabaseConfig <- liftEitherWith DatabaseSetupRuntimeConfigLoadError loadRuntimeConfig
     runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
   where
     runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig =
       case setupCommand of
         MigrateDatabase ->
-          withExceptT DatabaseSetupMigrationError (ExceptT (runMigrations migrationDatabaseConfig runtimeDatabaseConfig))
+          liftEitherWith DatabaseSetupMigrationError (runMigrations migrationDatabaseConfig runtimeDatabaseConfig)
         SeedDatabase ->
-          withExceptT DatabaseSetupSeedError (ExceptT (runSeed migrationDatabaseConfig))
+          liftEitherWith DatabaseSetupSeedError (runSeed migrationDatabaseConfig)
         MigrateAndSeedDatabase ->
-          withExceptT DatabaseSetupMigrationError (ExceptT (runMigrations migrationDatabaseConfig runtimeDatabaseConfig))
-            >> withExceptT DatabaseSetupSeedError (ExceptT (runSeed migrationDatabaseConfig))
+          liftEitherWith DatabaseSetupMigrationError (runMigrations migrationDatabaseConfig runtimeDatabaseConfig)
+            >> liftEitherWith DatabaseSetupSeedError (runSeed migrationDatabaseConfig)
 
 successMessage :: DatabaseSetupCommand -> String
 successMessage setupCommand =

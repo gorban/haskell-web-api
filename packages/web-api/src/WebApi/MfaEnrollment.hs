@@ -9,9 +9,9 @@ module WebApi.MfaEnrollment
   )
 where
 
-import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError, withExceptT)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Core.Control.Error (fromMaybeError, guardError)
+import Core.Control.Error (fromMaybeError, guardError, liftEitherWith)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
@@ -126,7 +126,7 @@ confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId 
           . fromMaybeError MfaEnrollmentRecoveryCodeHashingFailed
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT MfaEnrollmentError IO value
-liftMfaStore = withExceptT MfaEnrollmentStoreError . ExceptT
+liftMfaStore = liftEitherWith MfaEnrollmentStoreError
 
 requireUnconfirmedEnrollment :: StoredTotpEnrollment -> ExceptT MfaEnrollmentError IO Text
 requireUnconfirmedEnrollment enrollment =

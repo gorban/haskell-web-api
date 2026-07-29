@@ -13,8 +13,8 @@ module WebApi.Login
   )
 where
 
-import Control.Monad.Except (ExceptT (ExceptT), runExceptT, withExceptT)
-import Core.Control.Error (fromMaybeError)
+import Control.Monad.Except (ExceptT, runExceptT)
+import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Data.List (find)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
@@ -209,7 +209,7 @@ completeRecoveryCode context accountId suppliedCode = do
       recoveryResult
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT LoginInfrastructureError IO value
-liftMfaStore = withExceptT LoginMfaStoreError . ExceptT
+liftMfaStore = liftEitherWith LoginMfaStoreError
 
 infrastructureFailureResult :: LoginInfrastructureError -> PasswordMfaLoginResult
 infrastructureFailureResult infrastructureError =

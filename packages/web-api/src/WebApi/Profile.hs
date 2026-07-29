@@ -7,7 +7,8 @@ module WebApi.Profile
   )
 where
 
-import Control.Monad.Except (ExceptT (..), runExceptT, throwError, withExceptT)
+import Control.Monad.Except (ExceptT, runExceptT, throwError)
+import Core.Control.Error (liftEitherWith)
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.Session (OpaqueSession (..), SessionId)
@@ -40,7 +41,7 @@ loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
   where
     loadProfileForSessionId :: SessionId -> ExceptT ProfileLoadError IO ProfileState
     loadProfileForSessionId sessionIdValue = do
-      maybeSession <- withExceptT ProfileSessionStoreError (ExceptT (loadAccountSession sessionStore sessionIdValue))
+      maybeSession <- liftEitherWith ProfileSessionStoreError (loadAccountSession sessionStore sessionIdValue)
       maybe (pure ProfileUnauthenticated) loadActiveSession maybeSession
 
     loadActiveSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
@@ -51,7 +52,7 @@ loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
 
     loadProfileForSession :: OpaqueSession AccountId -> ExceptT ProfileLoadError IO ProfileState
     loadProfileForSession opaqueSession = do
-      maybeProfile <- withExceptT ProfileAccountStoreError (ExceptT (findAccountProfile profileStore (sessionPrincipal opaqueSession)))
+      maybeProfile <- liftEitherWith ProfileAccountStoreError (findAccountProfile profileStore (sessionPrincipal opaqueSession))
       maybe (pure ProfileUnauthenticated) (classifyProfile opaqueSession) maybeProfile
 
     classifyProfile :: OpaqueSession AccountId -> AccountProfile -> ExceptT ProfileLoadError IO ProfileState

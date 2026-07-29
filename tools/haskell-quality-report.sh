@@ -312,4 +312,17 @@ rg -n -U --glob '*.hs' --glob '!packages/hspec-expectations-match/**' \
   "${all_paths[@]}" \
   || true
 
+printf '\nManual effect-rail lifting review candidates\n\n'
+rg -n --glob '*.hs' --glob '!packages/hspec-expectations-match/**' \
+  --pcre2 'withExceptT\b[^\n]*\(ExceptT\b' \
+  "${all_paths[@]}" \
+  || true
+
+printf '\nRepeated production string literals (3+ uses; advisory)\n\n'
+rg --no-filename -o --glob '*.hs' --pcre2 '"(?:[^"\\]|\\.)*"' "${production_paths[@]}" \
+  | sort \
+  | uniq -c \
+  | awk '$1 >= 3 { print }' \
+  || true
+
 printf '\nQuality report complete. Findings are advisory and require human review.\n'

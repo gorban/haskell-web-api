@@ -346,40 +346,74 @@ ignoreApplicationLog logEntry =
 unavailableAccountWorkflow :: AccountWorkflow
 unavailableAccountWorkflow =
   AccountWorkflow
-    { accountWorkflowStore =
-        AccountStore
-          { createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
-            replaceEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
-            findEmailVerification = \_ -> pure (Left (AccountStoreUnavailable "account persistence is not configured")),
-            consumeEmailVerification = \_ _ -> pure (Left (AccountStoreUnavailable "account persistence is not configured"))
-          },
+    { accountWorkflowStore = unavailableAccountStore,
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
       accountWorkflowPasswordHasher = Password.hashPassword,
       accountWorkflowClock = pure 0,
-      accountWorkflowMfaStore =
-        MfaStore
-          { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
-            loadTotpEnrollment = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
-            confirmTotpEnrollment = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
-            loadUnusedRecoveryCodeHashes = \_ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured")),
-            consumeRecoveryCodeHash = \_ _ _ -> pure (Left (MfaStoreUnavailable "MFA persistence is not configured"))
-          },
-      accountWorkflowCredentialStore =
-        AccountCredentialStore
-          { findAccountCredentialByEmail = \_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured")),
-            findAccountCredentialByUsername = \_ -> pure (Left (AccountCredentialStoreUnavailable "account credentials are not configured"))
-          },
-      accountWorkflowSessionStore =
-        AccountSessionStore
-          { saveAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
-            loadAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable),
-            invalidateAccountSession = \_ -> pure (Left AccountSessionStoreUnavailable)
-          },
-      accountWorkflowProfileStore =
-        AccountProfileStore
-          { findAccountProfile = \_ -> pure (Left (AccountStoreUnavailable "account profiles are not configured"))
-          },
+      accountWorkflowMfaStore = unavailableMfaStore,
+      accountWorkflowCredentialStore = unavailableAccountCredentialStore,
+      accountWorkflowSessionStore = unavailableAccountSessionStore,
+      accountWorkflowProfileStore = unavailableAccountProfileStore,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
       accountWorkflowTotpClock = pure 0,
       accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
     }
+
+unavailableAccountStore :: AccountStore
+unavailableAccountStore =
+  AccountStore
+    { createPendingAccount = const (unavailableResult accountPersistenceUnavailable),
+      replaceEmailVerification = const (unavailableResult accountPersistenceUnavailable),
+      findEmailVerification = const (unavailableResult accountPersistenceUnavailable),
+      consumeEmailVerification = \_ _ -> unavailableResult accountPersistenceUnavailable
+    }
+
+unavailableMfaStore :: MfaStore
+unavailableMfaStore =
+  MfaStore
+    { saveUnconfirmedTotpEnrollment = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
+      loadTotpEnrollment = const (unavailableResult mfaPersistenceUnavailable),
+      confirmTotpEnrollment = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
+      loadUnusedRecoveryCodeHashes = const (unavailableResult mfaPersistenceUnavailable),
+      consumeRecoveryCodeHash = \_ _ _ -> unavailableResult mfaPersistenceUnavailable
+    }
+
+unavailableAccountCredentialStore :: AccountCredentialStore
+unavailableAccountCredentialStore =
+  AccountCredentialStore
+    { findAccountCredentialByEmail = const (unavailableResult accountCredentialsUnavailable),
+      findAccountCredentialByUsername = const (unavailableResult accountCredentialsUnavailable)
+    }
+
+unavailableAccountSessionStore :: AccountSessionStore
+unavailableAccountSessionStore =
+  AccountSessionStore
+    { saveAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
+      loadAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
+      invalidateAccountSession = const (unavailableResult AccountSessionStoreUnavailable)
+    }
+
+unavailableAccountProfileStore :: AccountProfileStore
+unavailableAccountProfileStore =
+  AccountProfileStore
+    { findAccountProfile = const (unavailableResult accountProfilesUnavailable)
+    }
+
+accountPersistenceUnavailable :: AccountStoreError
+accountPersistenceUnavailable =
+  AccountStoreUnavailable "account persistence is not configured"
+
+mfaPersistenceUnavailable :: MfaStoreError
+mfaPersistenceUnavailable =
+  MfaStoreUnavailable "MFA persistence is not configured"
+
+accountCredentialsUnavailable :: AccountCredentialStoreError
+accountCredentialsUnavailable =
+  AccountCredentialStoreUnavailable "account credentials are not configured"
+
+accountProfilesUnavailable :: AccountStoreError
+accountProfilesUnavailable =
+  AccountStoreUnavailable "account profiles are not configured"
+
+unavailableResult :: error -> IO (Either error value)
+unavailableResult = pure . Left

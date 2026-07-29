@@ -168,7 +168,9 @@ matches are intentionally heuristic: review each result and promote only establi
 patterns to
 [HLint hints](https://github.com/ndmitchell/hlint#customizing-the-hints) or shared combinators. Add
 project-specific failure/success constructor pairs to
-`tools/haskell-quality-monads.conf`.
+`tools/haskell-quality-monads.conf`. It also flags manual `withExceptT`/`ExceptT` lifting and
+repeated production string literals (three or more occurrences); these are review candidates, not
+automatic abstraction requirements.
 
 The fixture check exercises threshold arguments, every module-health column, fan-in/fan-out and
 cycle detection, Hspec and vendored exclusions, and both built-in and app-defined constructor pairs

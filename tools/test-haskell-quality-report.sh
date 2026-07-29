@@ -12,6 +12,7 @@ cp "$repo_root/tools/haskell-quality-report.sh" "$fixture_root/tools/haskell-qua
 
 printf '%s\n' 'Either Left Right' 'Custom Rejected Accepted' >"$fixture_root/tools/haskell-quality-monads.conf"
 printf '%s\n' 'module Fixture where' 'forward value = case value of Left problem -> Left problem; Right result -> Right result' 'forwardCustom value = case value of Rejected problem -> Rejected problem; Accepted result -> Accepted result' >"$fixture_root/packages/core/src/Fixture.hs"
+printf '%s\n' 'module Repeat where' 'manual action = withExceptT Wrap (ExceptT action)' 'first = "repeat"' 'second = "repeat"' 'third = "repeat"' >"$fixture_root/packages/core/src/Repeat.hs"
 printf '%s\n' 'module Alpha (alpha, alphaPair) where' 'import Beta' 'alpha value = beta value' 'alphaPair first second = first + second' >"$fixture_root/packages/core/src/Alpha.hs"
 printf '%s\n' 'module Beta (beta) where' 'import Alpha' 'beta value = value' >"$fixture_root/packages/core/src/Beta.hs"
 printf '%s\n' 'module Spec where' 'import Alpha' 'spec = alpha 1' 'helper value = if value then 1 else 2' >"$fixture_root/packages/core/test/Spec.hs"
@@ -32,6 +33,10 @@ if printf '%s' "$report_output" | rg -q 'spec - 120'; then
 fi
 printf '%s' "$report_output" | rg -q 'Either \(Left/Right\)'
 printf '%s' "$report_output" | rg -q 'Custom \(Rejected/Accepted\)'
+printf '%s' "$report_output" | rg -q 'Manual effect-rail lifting review candidates'
+printf '%s' "$report_output" | rg -q 'Repeat.hs.*withExceptT Wrap \(ExceptT action\)'
+printf '%s' "$report_output" | rg -q 'Repeated production string literals \(3\+ uses; advisory\)'
+printf '%s' "$report_output" | rg -q '3[[:space:]]+"repeat"'
 printf '%s' "$report_output" | rg -q 'Module-health report: production \(advisory\)'
 printf '%s' "$report_output" | rg -q 'Module-health report: test \(advisory\)'
 printf '%s' "$report_output" | rg -q 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'

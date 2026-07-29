@@ -12,6 +12,7 @@
 - Model expected states and failures with precise ADTs and newtypes; prefer total functions and make invalid states unrepresentable where practical.
 - Keep parsing and validation pure. Use `Either` for failure, and reserve `Maybe` for cases where absence is a valid result rather than an explanation being discarded.
 - Use `ExceptT DomainError IO` for multi-step effectful workflows that stop at the first domain failure. Interpret the error once at the public or transport boundary instead of manually forwarding `Left`, `Right`, `Nothing`, or `Just` through nested cases.
+- For a recurring `IO (Either sourceError value)` adapter, use `liftEitherWith` to map its error into the workflow rail. Do not alias `liftIO` merely to hide it; instead, give a cohesive group of IO steps a domain name and lift that operation once.
 - Keep expected business outcomes as ordinary result constructors. Do not turn validation failures, authentication rejection, not-found results, or other expected alternatives into exceptions or infrastructure errors.
 - Catch exceptions only at the `IO` boundary that can explain or recover from them. Public responses must remain safe; detailed causes belong in private structured logs and observability.
 - Introduce a custom Monad newtype only when it names a stable capability stack, such as shared services plus typed request failure. Prefer standard transformers for a single local workflow and avoid polymorphic Monad constraints when no alternate interpreter is useful.
