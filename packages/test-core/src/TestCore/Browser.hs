@@ -413,14 +413,20 @@ parseBrowserConfigWithDefault baseConfig environment = do
 parseOptionalBoolean :: String -> Bool -> Maybe String -> Either String Bool
 parseOptionalBoolean _ fallback Nothing = Right fallback
 parseOptionalBoolean variableName _ (Just value) =
-  case map toLower value of
-    "true" -> Right True
-    "false" -> Right False
-    "1" -> Right True
-    "0" -> Right False
-    "yes" -> Right True
-    "no" -> Right False
-    _ -> Left ("Invalid boolean for " <> variableName <> ": " <> value)
+  maybe
+    (Left ("Invalid boolean for " <> variableName <> ": " <> value))
+    Right
+    (lookup (map toLower value) booleanValues)
+
+booleanValues :: [(String, Bool)]
+booleanValues =
+  [ ("true", True),
+    ("false", False),
+    ("1", True),
+    ("0", False),
+    ("yes", True),
+    ("no", False)
+  ]
 
 parseOptionalPositiveInt :: String -> Int -> Maybe String -> Either String Int
 parseOptionalPositiveInt _ fallback Nothing = Right fallback
