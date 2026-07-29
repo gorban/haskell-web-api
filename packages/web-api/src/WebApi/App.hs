@@ -36,6 +36,7 @@ import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
     AppStartupConfig (..),
+    AppStartupConfigLoadError,
     DatabaseConfig,
     ListenerConfig (..),
     ListenerScheme (..),
@@ -241,14 +242,23 @@ runWithConfig outputHandle appConfig !environmentConfig = do
 run :: Handle -> IO ()
 run outputHandle = do
   configFileStatuses <- loadDefaultStartupConfigFileStatuses
-  startupConfigResult <- loadAppStartupConfig
-  either
-    (\loadError -> ioError (userError ("Failed to load app startup config: " <> show loadError)))
-    ( \AppStartupConfig {startupEnvironmentConfig = environmentConfig, startupAppConfig = appConfig} ->
-        announceConfigFileStatuses outputHandle configFileStatuses
-          >> runWithConfig outputHandle appConfig environmentConfig
-    )
-    startupConfigResult
+  loadAppStartupConfig
+    >>= either throwStartupLoadError (runLoadedStartupConfig outputHandle configFileStatuses)
+
+throwStartupLoadError :: AppStartupConfigLoadError -> IO ()
+throwStartupLoadError loadError =
+  ioError (userError ("Failed to load app startup config: " <> show loadError))
+
+runLoadedStartupConfig :: Handle -> [(FilePath, Bool)] -> AppStartupConfig -> IO ()
+runLoadedStartupConfig
+  outputHandle
+  configFileStatuses
+  AppStartupConfig
+    { startupEnvironmentConfig = environmentConfig,
+      startupAppConfig = appConfig
+    } = do
+    announceConfigFileStatuses outputHandle configFileStatuses
+    runWithConfig outputHandle appConfig environmentConfig
 
 loadDefaultStartupConfigFileStatuses :: IO [(FilePath, Bool)]
 loadDefaultStartupConfigFileStatuses =
