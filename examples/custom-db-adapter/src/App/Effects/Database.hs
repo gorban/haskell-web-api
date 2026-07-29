@@ -15,9 +15,9 @@ import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Text (Text)
 import HarchWeb.Database (DatabaseEffect (..), DatabaseOperation (..), DatabaseResult (..))
 
-data Post = Post {postTitle :: Text} deriving (Eq, Show)
+newtype Post = Post {postTitle :: Text} deriving (Eq, Show)
 
-data BlogDatabaseError = DuplicatePostTitle Text deriving (Eq, Show)
+newtype BlogDatabaseError = DuplicatePostTitle Text deriving (Eq, Show)
 
 data BlogDatabaseRequest result where
   ListPosts :: BlogDatabaseRequest [Post]
