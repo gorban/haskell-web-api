@@ -144,24 +144,28 @@ checkSetupPrerequisitesWith ::
   (TcpEndpoint -> IO Bool) ->
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
   IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
-checkSetupPrerequisitesWith loadConfig checkDatabase checkTracing = do
-  loadedConfig <- loadConfig
-  case loadedConfig of
-    Left loadError -> pure (Left loadError)
-    Right setupConfig -> do
-      let prerequisitePlan = planSetupPrerequisites setupConfig
-          databasePlan = databasePrerequisitePlan prerequisitePlan
-      databaseReachable <- checkDatabase (databaseCheckEndpoint databasePlan)
-      tracingStatus <- traverse (checkTracingPlan checkTracing) (tracingPrerequisitePlan prerequisitePlan)
-      pure $
-        Right
-          SetupPrerequisiteReport
-            { databasePrerequisiteStatus =
-                if databaseReachable
-                  then DatabasePrerequisiteReachable (databaseCheckEndpoint databasePlan)
-                  else DatabasePrerequisiteUnreachable databasePlan,
-              tracingPrerequisiteStatus = tracingStatus
-            }
+checkSetupPrerequisitesWith loadConfig checkDatabase checkTracing =
+  loadConfig >>= either (pure . Left) (checkLoadedSetupConfig checkDatabase checkTracing)
+
+checkLoadedSetupConfig ::
+  (TcpEndpoint -> IO Bool) ->
+  (Text -> IO (Either TracingEndpointParseError Bool)) ->
+  PrerequisiteConfig.SetupPrerequisiteConfig ->
+  IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
+checkLoadedSetupConfig checkDatabase checkTracing setupConfig = do
+  let prerequisitePlan = planSetupPrerequisites setupConfig
+      databasePlan = databasePrerequisitePlan prerequisitePlan
+  databaseReachable <- checkDatabase (databaseCheckEndpoint databasePlan)
+  tracingStatus <- traverse (checkTracingPlan checkTracing) (tracingPrerequisitePlan prerequisitePlan)
+  pure $
+    Right
+      SetupPrerequisiteReport
+        { databasePrerequisiteStatus =
+            if databaseReachable
+              then DatabasePrerequisiteReachable (databaseCheckEndpoint databasePlan)
+              else DatabasePrerequisiteUnreachable databasePlan,
+          tracingPrerequisiteStatus = tracingStatus
+        }
 
 checkTracingPlan ::
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
