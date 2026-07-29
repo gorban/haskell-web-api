@@ -19,6 +19,9 @@ module WebApi.Account
 where
 
 import Control.Exception (SomeException, displayException, try)
+import Control.Monad.Except (ExceptT (ExceptT), runExceptT, throwError, withExceptT)
+import Control.Monad.IO.Class (liftIO)
+import Core.Control.Error (fromMaybeError, guardError)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -161,56 +164,48 @@ registerAccountWithIdentityAtWithPasswordHasher ::
   Password ->
   IO (Either RegistrationError RegistrationResult)
 registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime maybeUsername maybeDisplayName emailAddress password =
-  case addNanoseconds now verificationLifetime of
-    Nothing -> pure (Left RegistrationClockOverflow)
-    Just expiresAt -> do
-      maybePasswordHash <- passwordHasher passwordHashingPolicy password
-      case maybePasswordHash of
-        Nothing -> pure (Left RegistrationPasswordHashingFailed)
-        Just passwordHash -> do
-          accountId <- generateAccountId
-          token <- generateEmailVerificationToken
-          let pendingAccount =
-                PendingAccount
-                  { pendingAccountId = accountId,
-                    pendingAccountEmail = emailAddress,
-                    pendingAccountUsername = maybeUsername,
-                    pendingAccountDisplayName = maybeDisplayName,
-                    pendingAccountPasswordHash = passwordHash,
-                    pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
-                    pendingAccountCreatedAtNanoseconds = now
-                  }
-          creationResult <- createPendingAccount accountStore pendingAccount
-          case creationResult of
-            Left storeError -> pure (Left (RegistrationStoreError storeError))
-            Right False -> pure (Right RegistrationAlreadyRegistered)
-            Right True -> do
-              deliveryResult <-
-                try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ())
-              pure $
-                case deliveryResult of
-                  Left deliveryError -> Left (RegistrationDeliveryFailed (Text.pack (displayException deliveryError)))
-                  Right () -> Right (RegistrationCreated accountId)
+  runExceptT $ do
+    expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
+    passwordHash <-
+      liftIO (passwordHasher passwordHashingPolicy password)
+        >>= fromMaybeError RegistrationPasswordHashingFailed
+    accountId <- liftIO generateAccountId
+    token <- liftIO generateEmailVerificationToken
+    let pendingAccount =
+          PendingAccount
+            { pendingAccountId = accountId,
+              pendingAccountEmail = emailAddress,
+              pendingAccountUsername = maybeUsername,
+              pendingAccountDisplayName = maybeDisplayName,
+              pendingAccountPasswordHash = passwordHash,
+              pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
+              pendingAccountCreatedAtNanoseconds = now
+            }
+    created <- liftAccountStore RegistrationStoreError (createPendingAccount accountStore pendingAccount)
+    if created
+      then do
+        deliverVerificationEmail RegistrationDeliveryFailed emailDelivery locale emailAddress renderVerificationUrl token
+        pure (RegistrationCreated accountId)
+      else pure RegistrationAlreadyRegistered
 
 confirmEmailVerificationAt :: AccountStore -> Word64 -> EmailVerificationToken -> IO (Either AccountStoreError EmailVerificationValidation)
-confirmEmailVerificationAt accountStore now token = do
-  storedResult <- findEmailVerification accountStore (emailVerificationTokenDigest token)
-  case storedResult of
-    Left storeError -> pure (Left storeError)
-    Right Nothing -> pure (Right EmailVerificationRejected)
-    Right (Just storedVerification) ->
+confirmEmailVerificationAt accountStore now token =
+  runExceptT $ do
+    maybeStoredVerification <- liftAccountStore id (findEmailVerification accountStore (emailVerificationTokenDigest token))
+    case maybeStoredVerification of
+      Nothing -> pure EmailVerificationRejected
+      Just storedVerification -> confirmStoredEmailVerification storedVerification
+  where
+    confirmStoredEmailVerification storedVerification =
       case validateEmailVerificationToken now token storedVerification of
-        EmailVerificationAccepted accountId emailAddress -> do
-          consumptionResult <- consumeEmailVerification accountStore (emailVerificationTokenDigest token) now
-          pure $
-            case consumptionResult of
-              Left storeError -> Left storeError
-              Right Nothing -> Right EmailVerificationRejected
-              Right (Just consumedAccountId) ->
-                if consumedAccountId == accountId
-                  then Right (EmailVerificationAccepted accountId emailAddress)
-                  else Left (AccountStoreCorruptData "email verification was consumed for a different account")
-        validationResult -> pure (Right validationResult)
+        acceptedVerification@(EmailVerificationAccepted accountId _) -> do
+          maybeConsumedAccountId <- liftAccountStore id (consumeEmailVerification accountStore (emailVerificationTokenDigest token) now)
+          case maybeConsumedAccountId of
+            Nothing -> pure EmailVerificationRejected
+            Just consumedAccountId -> do
+              guardError (AccountStoreCorruptData "email verification was consumed for a different account") (consumedAccountId == accountId)
+              pure acceptedVerification
+        validationResult -> pure validationResult
 
 resendEmailVerificationAt ::
   AccountStore ->
@@ -222,24 +217,32 @@ resendEmailVerificationAt ::
   AccountProfile ->
   IO (Either ResendVerificationError ())
 resendEmailVerificationAt accountStore emailDelivery locale renderVerificationUrl now verificationLifetime profile =
-  if accountProfileEmailVerified profile
-    then pure (Left ResendVerificationNoLongerPending)
-    else case addNanoseconds now verificationLifetime of
-      Nothing -> pure (Left ResendVerificationClockOverflow)
-      Just expiresAt -> do
-        token <- generateEmailVerificationToken
-        let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
-        replacementResult <- replaceEmailVerification accountStore verification
-        case replacementResult of
-          Left storeError -> pure (Left (ResendVerificationStoreError storeError))
-          Right False -> pure (Left ResendVerificationNoLongerPending)
-          Right True -> do
-            deliveryResult <-
-              try (deliverEmail emailDelivery (verificationEmail locale (accountProfileEmail profile) (renderVerificationUrl token))) :: IO (Either SomeException ())
-            pure $
-              case deliveryResult of
-                Left deliveryError -> Left (ResendVerificationDeliveryFailed (Text.pack (displayException deliveryError)))
-                Right () -> Right ()
+  runExceptT $ do
+    guardError ResendVerificationNoLongerPending (not (accountProfileEmailVerified profile))
+    expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetime)
+    token <- liftIO generateEmailVerificationToken
+    let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
+    replaced <- liftAccountStore ResendVerificationStoreError (replaceEmailVerification accountStore verification)
+    guardError ResendVerificationNoLongerPending replaced
+    deliverVerificationEmail ResendVerificationDeliveryFailed emailDelivery locale (accountProfileEmail profile) renderVerificationUrl token
+
+liftAccountStore ::
+  (AccountStoreError -> error) ->
+  IO (Either AccountStoreError value) ->
+  ExceptT error IO value
+liftAccountStore toError = withExceptT toError . ExceptT
+
+deliverVerificationEmail ::
+  (Text -> error) ->
+  EmailDelivery ->
+  EmailLocale ->
+  EmailAddress ->
+  (EmailVerificationToken -> Text) ->
+  EmailVerificationToken ->
+  ExceptT error IO ()
+deliverVerificationEmail toError emailDelivery locale emailAddress renderVerificationUrl token =
+  liftIO (try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ()))
+    >>= either (throwError . toError . Text.pack . displayException) pure
 
 addNanoseconds :: Word64 -> Word64 -> Maybe Word64
 addNanoseconds now duration =
