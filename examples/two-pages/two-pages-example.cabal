@@ -13,9 +13,15 @@ author: David Bruck
 maintainer: 1393236+gorban@users.noreply.github.com
 copyright: (c) David Bruck
 category: Web
-build-type: Simple
+build-type: Custom
 extra-doc-files:
   README.md
+
+custom-setup
+  setup-depends:
+    base ^>=4.22.0.0,
+    Cabal,
+    directory,
 
 common common
   ghc-options: -Wall
