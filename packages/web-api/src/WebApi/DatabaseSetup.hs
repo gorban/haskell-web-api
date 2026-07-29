@@ -14,6 +14,7 @@ module WebApi.DatabaseSetup
   )
 where
 
+import Control.Monad.Except (ExceptT (..), runExceptT, withExceptT)
 import Core.Config (ConfigParseError (..), parsePositiveInt)
 import Data.Bifunctor (bimap)
 import Data.Text (Text)
@@ -128,29 +129,21 @@ runDatabaseSetupCommandWith ::
   (DatabaseConfig -> IO (Either PostgresRunnerError ())) ->
   DatabaseSetupCommand ->
   IO (Either DatabaseSetupError ())
-runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand = do
-  migrationConfigResult <- loadMigrationConfig
-  case migrationConfigResult of
-    Left loadError -> pure (Left (DatabaseSetupConfigLoadError loadError))
-    Right migrationDatabaseConfig -> do
-      runtimeConfigResult <- loadRuntimeConfig
-      case runtimeConfigResult of
-        Left loadError -> pure (Left (DatabaseSetupRuntimeConfigLoadError loadError))
-        Right runtimeDatabaseConfig ->
-          runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
+runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand =
+  runExceptT $ do
+    migrationDatabaseConfig <- withExceptT DatabaseSetupConfigLoadError (ExceptT loadMigrationConfig)
+    runtimeDatabaseConfig <- withExceptT DatabaseSetupRuntimeConfigLoadError (ExceptT loadRuntimeConfig)
+    runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig
   where
     runCommandWithConfig migrationDatabaseConfig runtimeDatabaseConfig =
       case setupCommand of
         MigrateDatabase ->
-          fmap (either (Left . DatabaseSetupMigrationError) Right) (runMigrations migrationDatabaseConfig runtimeDatabaseConfig)
+          withExceptT DatabaseSetupMigrationError (ExceptT (runMigrations migrationDatabaseConfig runtimeDatabaseConfig))
         SeedDatabase ->
-          fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
-        MigrateAndSeedDatabase -> do
-          migrationsResult <- runMigrations migrationDatabaseConfig runtimeDatabaseConfig
-          case migrationsResult of
-            Left migrationError -> pure (Left (DatabaseSetupMigrationError migrationError))
-            Right () ->
-              fmap (either (Left . DatabaseSetupSeedError) Right) (runSeed migrationDatabaseConfig)
+          withExceptT DatabaseSetupSeedError (ExceptT (runSeed migrationDatabaseConfig))
+        MigrateAndSeedDatabase ->
+          withExceptT DatabaseSetupMigrationError (ExceptT (runMigrations migrationDatabaseConfig runtimeDatabaseConfig))
+            >> withExceptT DatabaseSetupSeedError (ExceptT (runSeed migrationDatabaseConfig))
 
 successMessage :: DatabaseSetupCommand -> String
 successMessage setupCommand =
