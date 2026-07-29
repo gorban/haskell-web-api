@@ -99,6 +99,7 @@ library
     HarchWeb.PathPrefix
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
+    HarchWeb.Server.Response
     HarchWeb.Server.Runtime
     HarchWeb.Server.StaticAssets
     HarchWeb.Server.Transport
