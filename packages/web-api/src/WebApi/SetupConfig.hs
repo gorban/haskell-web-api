@@ -21,7 +21,7 @@ import Core.Config
     lookupConfigValue,
     parseBoolean,
   )
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, first)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -92,19 +92,15 @@ loadAppSetupConfigWithFiles committedDefaultsPath localOverridesPath = do
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppSetupConfig
-      (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
-      committedDefaults
-      (localOverrides <> environmentOverrides) of
-      Left parseError -> Left (AppSetupConfigParseError parseError)
-      Right setupConfig -> Right setupConfig
+    first AppSetupConfigParseError $
+      parseAppSetupConfig
+        (committedEnvDefaults <> committedRuntimeDefaults <> committedSetupDefaults)
+        committedDefaults
+        (localOverrides <> environmentOverrides)
   where
     loadOverridesFile overridesPath =
       fmap
-        ( either
-            (Left . AppSetupOverridesFileError overridesPath)
-            Right
-        )
+        (first (AppSetupOverridesFileError overridesPath))
         (loadConfigOverridesFile overridesPath)
 
 loadEnvironmentOverrides :: IO [(Text, Text)]

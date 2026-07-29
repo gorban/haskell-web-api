@@ -64,7 +64,7 @@ import Core.Config
     parseNonNegativeInt,
     parsePositiveInt,
   )
-import Data.Bifunctor (bimap)
+import Data.Bifunctor (bimap, first)
 import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
@@ -312,16 +312,12 @@ loadAppEnvironmentConfigWithFiles committedDefaultsPath localOverridesPath = do
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppEnvironmentConfig committedEnvDefaults committedDefaults (localOverrides <> environmentOverrides) of
-      Left parseError -> Left (AppEnvironmentConfigParseError parseError)
-      Right environmentConfig -> Right environmentConfig
+    first AppEnvironmentConfigParseError $
+      parseAppEnvironmentConfig committedEnvDefaults committedDefaults (localOverrides <> environmentOverrides)
   where
     loadOverridesFile overridesPath =
       fmap
-        ( either
-            (Left . AppEnvironmentOverridesFileError overridesPath)
-            Right
-        )
+        (first (AppEnvironmentOverridesFileError overridesPath))
         (loadConfigOverridesFile overridesPath)
 
 loadEnvironmentOverrides :: IO [(Text, Text)]
@@ -342,16 +338,12 @@ loadAppStartupConfigWithFiles committedDefaultsPath localOverridesPath = do
   pure $ do
     committedDefaults <- committedDefaultsResult
     localOverrides <- localOverridesResult
-    case parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) committedDefaults (localOverrides <> environmentOverrides) of
-      Left parseError -> Left (AppStartupConfigParseError parseError)
-      Right startupConfig -> Right startupConfig
+    first AppStartupConfigParseError $
+      parseAppStartupConfig (committedEnvDefaults <> committedRuntimeDefaults) committedDefaults (localOverrides <> environmentOverrides)
   where
     loadOverridesFile overridesPath =
       fmap
-        ( either
-            (Left . AppStartupOverridesFileError overridesPath)
-            Right
-        )
+        (first (AppStartupOverridesFileError overridesPath))
         (loadConfigOverridesFile overridesPath)
 
 parseAppEnvironmentConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppEnvironmentConfig
