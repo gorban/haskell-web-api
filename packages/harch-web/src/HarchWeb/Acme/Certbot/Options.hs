@@ -68,7 +68,7 @@ certbotShouldUseWebroot configuredArguments =
 certbotHasExplicitAuthenticator :: [Text] -> Bool
 certbotHasExplicitAuthenticator configuredArguments =
   certbotUsesWebroot configuredArguments
-    || any (`certbotHasFlag` configuredArguments) ["--standalone", "--manual", "--apache", "--nginx"]
+    || any (`certbotHasFlag` configuredArguments) explicitAuthenticatorFlags
     || any ("--dns-" `Text.isPrefixOf`) configuredArguments
     || any isExplicitAuthenticator (certbotAuthenticatorValues configuredArguments)
 
@@ -79,8 +79,14 @@ certbotAuthenticatorValues configuredArguments =
 
 isExplicitAuthenticator :: Text -> Bool
 isExplicitAuthenticator authenticator =
-  authenticator `elem` ["standalone", "manual", "apache", "nginx"]
+  authenticator `elem` explicitAuthenticatorNames
     || "dns-" `Text.isPrefixOf` authenticator
+
+explicitAuthenticatorNames :: [Text]
+explicitAuthenticatorNames = ["standalone", "manual", "apache", "nginx"]
+
+explicitAuthenticatorFlags :: [Text]
+explicitAuthenticatorFlags = ("--" <>) <$> explicitAuthenticatorNames
 
 certbotUsesWebroot :: [Text] -> Bool
 certbotUsesWebroot configuredArguments =
