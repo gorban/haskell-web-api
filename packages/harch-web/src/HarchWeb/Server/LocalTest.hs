@@ -14,7 +14,9 @@ import Control.Concurrent (ThreadId, killThread)
 import Control.Exception (bracket)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.Server (Application, ListenerEndpoint (..), ListenerScheme (..), toWaiApplication)
+import HarchWeb.Server.Application (Application)
+import HarchWeb.Server.Config (ListenerEndpoint (..), ListenerScheme (..))
+import HarchWeb.Server.RequestExecution (toWaiApplication)
 import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocket)
 import Network.Socket qualified as Socket
 

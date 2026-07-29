@@ -26,10 +26,12 @@ module HarchWeb.Server.Config
     TlsConfig (..),
     TlsCredentialSourceKind (..),
     TlsStartupMode (..),
+    planServerStartup,
     sharedCertificatePaths,
   )
 where
 
+import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import HarchWeb.Observability
   ( ObservabilityConfig (..),
@@ -172,3 +174,113 @@ data ListenerStartupError
 sharedCertificatePaths :: FilePath -> (FilePath, FilePath)
 sharedCertificatePaths certificateDirectory =
   (certificateDirectory </> "fullchain.pem", certificateDirectory </> "privkey.pem")
+
+-- | Validate listener declarations and describe the runtime listeners they
+-- require. This is configuration planning, so it stays independent of socket
+-- and application execution.
+planServerStartup :: (HasServerConfig config) => config -> Either ListenerStartupError ServerStartupPlan
+planServerStartup config = do
+  plannedListeners <- concat <$> traverse classifyListener (listenerConfigs (toServerConfig config))
+  case firstDuplicate (concatMap plannedBindEndpoints plannedListeners) of
+    Just duplicateEndpoint -> Left (DuplicateListenerEndpoint duplicateEndpoint)
+    Nothing ->
+      Right
+        ServerStartupPlan
+          { httpBindPlan =
+              HttpBindPlan
+                { httpEndpoints =
+                    [ endpoint
+                    | PlannedHttp endpoint <- plannedListeners
+                    ]
+                },
+            manualTlsBindPlans =
+              [ manualTlsBindPlan
+              | PlannedManualTls manualTlsBindPlan <- plannedListeners
+              ],
+            acmeBindPlans =
+              [ acmeBindPlan
+              | PlannedAcme acmeBindPlan <- plannedListeners
+              ]
+          }
+
+data PlannedListener
+  = PlannedHttp ListenerEndpoint
+  | PlannedManualTls ManualTlsBindPlan
+  | PlannedAcme AcmeBindPlan
+
+classifyListener :: ListenerConfig -> Either ListenerStartupError [PlannedListener]
+classifyListener listenerConfig =
+  case (listenerScheme listenerConfig, listenerTls listenerConfig, listenerAcme listenerConfig) of
+    (Http, Nothing, Nothing) ->
+      Right [PlannedHttp (listenerEndpoint listenerConfig)]
+    (Http, Nothing, Just acmeConfig) ->
+      Right
+        [ PlannedHttp (listenerEndpoint listenerConfig),
+          PlannedAcme
+            AcmeBindPlan
+              { acmeEndpoint = listenerEndpoint listenerConfig,
+                acmeTlsEndpoint = Nothing,
+                acmeListenerConfig = acmeConfig
+              }
+        ]
+    (Http, Just _, _) ->
+      Left (InvalidListenerTlsConfiguration listenerConfig)
+    (Https, _, Just _) ->
+      Left (InvalidListenerAcmeConfiguration listenerConfig)
+    (Https, Nothing, Nothing) ->
+      Left (InvalidListenerTlsConfiguration listenerConfig)
+    (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
+      Right
+        [ PlannedManualTls
+            ManualTlsBindPlan
+              { tlsEndpoint = listenerEndpoint listenerConfig,
+                tlsCertificateFile = certificatePath,
+                tlsPrivateKeyFile = privateKeyPath,
+                tlsCredentialSourceKind = ManualTlsCredentials,
+                tlsStartupMode = RequireCertificateFiles
+              }
+        ]
+    (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
+      let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
+       in Right
+            [ PlannedManualTls
+                ManualTlsBindPlan
+                  { tlsEndpoint = listenerEndpoint listenerConfig,
+                    tlsCertificateFile = certificatePath,
+                    tlsPrivateKeyFile = privateKeyPath,
+                    tlsCredentialSourceKind = SharedTlsCredentials,
+                    tlsStartupMode = startupMode
+                  }
+            ]
+    (Https, Just TlsConfig {certificateSource = AcmeCertificateSource acmeConfig}, Nothing) ->
+      Right
+        [ PlannedAcme
+            AcmeBindPlan
+              { acmeEndpoint = listenerEndpoint listenerConfig,
+                acmeTlsEndpoint = Just (listenerEndpoint listenerConfig),
+                acmeListenerConfig = acmeConfig
+              }
+        ]
+
+plannedBindEndpoints :: PlannedListener -> [ListenerEndpoint]
+plannedBindEndpoints plannedListener =
+  case plannedListener of
+    PlannedHttp endpoint -> [endpoint]
+    PlannedManualTls manualTlsBindPlan -> [tlsEndpoint manualTlsBindPlan]
+    PlannedAcme acmeBindPlan -> maybeToList (acmeTlsEndpoint acmeBindPlan)
+
+listenerEndpoint :: ListenerConfig -> ListenerEndpoint
+listenerEndpoint listenerConfig =
+  ListenerEndpoint
+    { endpointHost = listenerHost listenerConfig,
+      endpointPort = listenerPort listenerConfig
+    }
+
+firstDuplicate :: (Eq value) => [value] -> Maybe value
+firstDuplicate values =
+  case values of
+    [] -> Nothing
+    value : remainingValues ->
+      if value `elem` remainingValues
+        then Just value
+        else firstDuplicate remainingValues

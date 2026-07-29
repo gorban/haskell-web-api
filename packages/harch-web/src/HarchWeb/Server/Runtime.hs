@@ -19,7 +19,9 @@ import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServers, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Server
+import HarchWeb.Server.Application (Application (..))
+import HarchWeb.Server.Config
+import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.Transport
   ( startHttpRuntimeServers,
     startManualTlsRuntimeServers,
