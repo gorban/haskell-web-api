@@ -42,6 +42,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Document (RuntimeNonce (..))
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.PathPrefix qualified as PathPrefix
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
@@ -468,7 +469,7 @@ limitObservabilityHeaderValue = Text.take 256
 
 requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> Text
 requestPathPrefix requestPolicyConfig request =
-  maybe Text.empty normalizeRequestPathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
+  maybe Text.empty PathPrefix.normalizePathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
 
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request = if ByteString.null (Wai.rawPathInfo request) then "/" else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
@@ -483,27 +484,11 @@ appendRawQueryString path rawQueryString =
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request = applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (waiRequestPath requestPolicyConfig request)
 
-normalizeRequestPathPrefix :: Text -> Text
-normalizeRequestPathPrefix pathPrefix =
-  let trimmedPrefix = Text.strip pathPrefix
-      slashPrefixedPrefix =
-        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
-          (True, _) -> Text.empty
-          (False, True) -> trimmedPrefix
-          (False, False) -> "/" <> trimmedPrefix
-   in Text.dropWhileEnd (== '/') slashPrefixedPrefix
-
 applyRequestPathPrefix :: Text -> Text -> Text
-applyRequestPathPrefix pathPrefix path =
-  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
-   in if Text.null normalizedPrefix then path else if path == "/" then normalizedPrefix else normalizedPrefix <> path
+applyRequestPathPrefix = PathPrefix.applyPathPrefix
 
 stripRequestPathPrefix :: Text -> Text -> Text
-stripRequestPathPrefix pathPrefix path =
-  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
-   in if Text.null normalizedPrefix
-        then path
-        else if path == normalizedPrefix then "/" else maybe path ("/" <>) (Text.stripPrefix (normalizedPrefix <> "/") path)
+stripRequestPathPrefix = PathPrefix.stripPathPrefix
 
 firstCommaSeparatedValue :: Text -> Maybe Text
 firstCommaSeparatedValue value =

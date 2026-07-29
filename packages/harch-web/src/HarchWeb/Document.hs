@@ -22,6 +22,7 @@ module HarchWeb.Document
     defaultNavigationRuntimeScript,
     generateRuntimeNonce,
     liveRegionAttributes,
+    navigationRuntimeScriptSource,
     renderDocument,
     renderDocumentWithNonce,
   )
@@ -32,6 +33,7 @@ import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.PathPrefix (applyPathPrefix)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), Stylesheet (..))
 import System.IO (IOMode (ReadMode), withBinaryFile)
@@ -79,6 +81,10 @@ defaultNavigationRuntime =
     { navigationRuntimePath = "/assets/navigation.js",
       navigationRuntimeScript = defaultNavigationRuntimeScript
     }
+
+navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
+navigationRuntimeScriptSource pathPrefix runtime =
+  applyPathPrefix pathPrefix (navigationRuntimePath runtime)
 
 defaultNavigationRuntimeScript :: Text
 defaultNavigationRuntimeScript =

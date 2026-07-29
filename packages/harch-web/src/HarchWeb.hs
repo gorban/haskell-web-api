@@ -25,7 +25,6 @@ module HarchWeb
     ReloadingTlsCredentials,
     exportConnectionObservabilityToOtlp,
     exportRequestObservabilityToOtlp,
-    navigationRuntimeScriptSource,
     planObservabilityStartup,
     reloadTlsCredentialsIfChanged,
     loadReloadingTlsCredentials,
@@ -37,7 +36,6 @@ module HarchWeb
   )
 where
 
-import Data.Text (Text)
 import HarchWeb.Acme
 import HarchWeb.Document
   ( Document (..),
@@ -59,6 +57,7 @@ import HarchWeb.Document
     defaultNavigationRuntimeScript,
     generateRuntimeNonce,
     liveRegionAttributes,
+    navigationRuntimeScriptSource,
     renderDocument,
     renderDocumentWithNonce,
   )
@@ -90,7 +89,3 @@ import HarchWeb.StaticAssets
     staticAssetHrefWithPrefix,
     stylesheet,
   )
-
-navigationRuntimeScriptSource :: Text -> NavigationRuntime -> Text
-navigationRuntimeScriptSource pathPrefix runtime =
-  applyRequestPathPrefix pathPrefix (navigationRuntimePath runtime)

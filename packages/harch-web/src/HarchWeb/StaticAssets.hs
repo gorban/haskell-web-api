@@ -24,6 +24,7 @@ where
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import HarchWeb.PathPrefix (applyPathPrefix)
 
 data StaticAssetRoot = StaticAssetRoot
   { staticUrlPrefix :: Text,
@@ -108,19 +109,3 @@ normalizeStaticPrefix prefix =
 trimLeadingSlash :: Text -> Text
 trimLeadingSlash assetPath =
   fromMaybe assetPath (Text.stripPrefix "/" assetPath)
-
-applyPathPrefix :: Text -> Text -> Text
-applyPathPrefix pathPrefix path =
-  let trimmedPrefix = Text.strip pathPrefix
-      slashPrefixedPrefix =
-        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
-          (True, _) -> Text.empty
-          (False, True) -> trimmedPrefix
-          (False, False) -> "/" <> trimmedPrefix
-      normalizedPrefix =
-        Text.dropWhileEnd
-          (== '/')
-          slashPrefixedPrefix
-   in if Text.null normalizedPrefix
-        then path
-        else if path == "/" then normalizedPrefix else normalizedPrefix <> path
