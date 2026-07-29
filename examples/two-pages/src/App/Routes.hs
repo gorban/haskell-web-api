@@ -60,7 +60,7 @@ routeCodec =
           "/live-data" -> Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()}
           "/live-data/events" -> Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()}
           _ -> Nothing,
-      renderRoute = \routeRequest -> routeHref (requestRoute routeRequest),
+      renderRoute = routeHref . requestRoute,
       notFoundRequest = \() -> RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
     }
 
