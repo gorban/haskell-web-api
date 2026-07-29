@@ -1,6 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed application, request, response, and middleware contracts.
@@ -53,7 +52,6 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
-import Data.IORef (atomicModifyIORef', newIORef)
 import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -85,6 +83,7 @@ import HarchWeb.Security
   )
 import HarchWeb.Server.Config
 import HarchWeb.Server.Response
+import HarchWeb.Server.Sse
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
 import HarchWeb.StaticAssets (StaticAssetsConfig (..))
 import Network.HTTP.Types qualified as Http
@@ -436,26 +435,6 @@ redirectResponse status =
         responseLogEntries = []
       }
 
-eventStreamResponse :: ServerSentEventSource -> Response route context
-eventStreamResponse =
-  EventStreamResponse
-    ResponseBody
-      { responseStatus = 200,
-        responseContentType = "text/event-stream; charset=utf-8",
-        responseBody = Text.empty,
-        responseObservabilityAttributes = [],
-        responseLogEntries = []
-      }
-
-serverSentEventSourceFromList :: [ServerSentEvent] -> IO ServerSentEventSource
-serverSentEventSourceFromList events = do
-  eventsReference <- newIORef events
-  pure $
-    ServerSentEventSource $
-      atomicModifyIORef' eventsReference $ \case
-        [] -> ([], Nothing)
-        event : remainingEvents -> (remainingEvents, Just event)
-
 responseDiagnostics :: Response route context -> ResponseDiagnostics
 responseDiagnostics response =
   case response of
@@ -507,21 +486,6 @@ runRequestMiddlewarePipeline middleware request = go middleware
       case result of
         ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
         HaltMiddleware haltedRequestContext responseBodyValue -> pure (HaltMiddleware haltedRequestContext responseBodyValue)
-
-renderServerSentEvent :: ServerSentEvent -> Text
-renderServerSentEvent ServerSentEvent {serverSentEventName, serverSentEventId, serverSentEventData} =
-  Text.concat
-    ( maybeToList (renderSseField "event" <$> serverSentEventName)
-        <> maybeToList (renderSseField "id" <$> serverSentEventId)
-        <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (Text.splitOn "\n" serverSentEventData)
-        <> ["\n"]
-    )
-
-renderSseField :: Text -> Text -> Text
-renderSseField fieldName fieldValue = fieldName <> ": " <> Text.filter (`notElem` ['\r', '\n']) fieldValue <> "\n"
-
-renderSseDataLine :: Text -> Text
-renderSseDataLine line = "data: " <> line <> "\n"
 
 toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Document.RuntimeNonce -> Application route context -> Response route context -> Wai.Response
 toWaiResponse additionalHeaders runtimeNonce webApplication response =
@@ -624,6 +588,3 @@ isNotFoundPage webApplication page =
 
 htmlContentType :: Text
 htmlContentType = "text/html; charset=utf-8"
-
-serverSentEventContentType :: Text
-serverSentEventContentType = "text/event-stream; charset=utf-8"

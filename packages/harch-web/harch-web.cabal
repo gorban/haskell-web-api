@@ -101,6 +101,7 @@ library
     HarchWeb.Server.LocalTest
     HarchWeb.Server.Response
     HarchWeb.Server.Runtime
+    HarchWeb.Server.Sse
     HarchWeb.Server.StaticAssets
     HarchWeb.Server.Transport
     HarchWeb.Server.Transport.Tls
