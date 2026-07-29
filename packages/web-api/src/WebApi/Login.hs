@@ -105,10 +105,13 @@ lookupCredential credentialStore identifier =
     LoginUsername username -> findAccountCredentialByUsername credentialStore username
 
 continueWithCredential :: MfaStore -> Password -> AccountCredential -> IO PasswordLoginResult
-continueWithCredential mfaStore password credential
-  | not (verifyPassword password (accountCredentialPasswordHash credential)) = pure PasswordLoginRejected
-  | not (accountCredentialEmailVerified credential) = pure (PasswordLoginEmailVerificationRequired accountId)
-  | otherwise = classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
+continueWithCredential mfaStore password credential =
+  if not (verifyPassword password (accountCredentialPasswordHash credential))
+    then pure PasswordLoginRejected
+    else
+      if not (accountCredentialEmailVerified credential)
+        then pure (PasswordLoginEmailVerificationRequired accountId)
+        else classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
   where
     accountId = accountCredentialId credential
 
