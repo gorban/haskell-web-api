@@ -1,5 +1,4 @@
 {-# LANGUAGE BangPatterns #-}
-{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed application, request, response, and middleware contracts.
@@ -56,7 +55,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
-import HarchWeb.Document (Document, NavigationRuntime, Page)
+import HarchWeb.Document (NavigationRuntime, Page)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, renderRoute)
@@ -78,12 +77,12 @@ import HarchWeb.Security
     waiRequestPath,
     waiRequestRouteTarget,
   )
+import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
 import HarchWeb.Server.Config
 import HarchWeb.Server.Response
 import HarchWeb.Server.Sse
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
-import HarchWeb.StaticAssets (StaticAssetsConfig (..))
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -194,26 +193,6 @@ firstDuplicate values =
         then Just value
         else firstDuplicate remainingValues
 
-data Application route context = Application
-  { appName :: Text,
-    defaultRequestContext :: context,
-    requestContextFromRequest :: Wai.Request -> context -> context,
-    applicationNavigationRuntime :: Maybe NavigationRuntime,
-    applicationStaticAssets :: StaticAssetsConfig,
-    applicationRequestPolicy :: RequestPolicyConfig,
-    applicationRequestMiddleware :: [RequestMiddleware context],
-    routeCodec :: RouteCodec route context,
-    renderResponse :: RouteRequest route context -> IO (Response route context),
-    handleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
-    pageShell :: Page route context -> Document route,
-    reportRequestObservability :: Observability.RequestObservability -> IO (),
-    reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
-    reportApplicationLog :: Text -> IO ()
-  }
-
-application :: Application route context -> Application route context
-application = id
-
 applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
 applyResponseHeaders additionalHeaders =
   Wai.mapResponseHeaders (additionalHeaders <>)
@@ -316,12 +295,6 @@ handleRoutedRequest webApplication request respond requestStartedAt policyEvalua
             requestResponseRenderedAt = responseRenderedAt
           }
   finalizeRoutedResponse webApplication request respond executionTimings requestPolicyConfig requestPath routeRequest runtimeNonce response
-
-middlewareResultContext :: MiddlewareResult context -> context
-middlewareResultContext middlewareResult =
-  case middlewareResult of
-    ContinueMiddleware requestContext -> requestContext
-    HaltMiddleware requestContext _ -> requestContext
 
 middlewareTimingEntry :: Application route context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
 middlewareTimingEntry webApplication startedAt completedAt =
@@ -471,18 +444,6 @@ responseKind response =
     RedirectResponse _ _ -> Observability.BodyResponseKind
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
     EventStreamResponse _ _ -> Observability.BodyResponseKind
-
--- | Run middleware in declaration order. The first middleware sees the
--- request first; a halt short-circuits the remaining middleware.
-runRequestMiddlewarePipeline :: [RequestMiddleware context] -> Wai.Request -> context -> IO (MiddlewareResult context)
-runRequestMiddlewarePipeline middleware request = go middleware
-  where
-    go [] requestContext = pure (ContinueMiddleware requestContext)
-    go (RequestMiddleware runMiddleware : remainingMiddleware) requestContext = do
-      result <- runMiddleware request requestContext
-      case result of
-        ContinueMiddleware nextRequestContext -> go remainingMiddleware nextRequestContext
-        HaltMiddleware haltedRequestContext responseBodyValue -> pure (HaltMiddleware haltedRequestContext responseBodyValue)
 
 toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Document.RuntimeNonce -> Application route context -> Response route context -> Wai.Response
 toWaiResponse additionalHeaders runtimeNonce webApplication response =
