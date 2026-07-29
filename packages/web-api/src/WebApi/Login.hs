@@ -106,12 +106,12 @@ lookupCredential credentialStore identifier =
 
 continueWithCredential :: MfaStore -> Password -> AccountCredential -> IO PasswordLoginResult
 continueWithCredential mfaStore password credential =
-  if not (verifyPassword password (accountCredentialPasswordHash credential))
-    then pure PasswordLoginRejected
-    else
-      if not (accountCredentialEmailVerified credential)
-        then pure (PasswordLoginEmailVerificationRequired accountId)
-        else classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
+  case verifyPassword password (accountCredentialPasswordHash credential) of
+    False -> pure PasswordLoginRejected
+    True ->
+      case accountCredentialEmailVerified credential of
+        False -> pure (PasswordLoginEmailVerificationRequired accountId)
+        True -> classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
   where
     accountId = accountCredentialId credential
 
