@@ -93,7 +93,9 @@ library
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Observability.Otlp
+    HarchWeb.Observability.Otlp.Export
     HarchWeb.Observability.Otlp.Wire
+    HarchWeb.Observability.Types
     HarchWeb.Server.Config
     HarchWeb.Server.LocalTest
     HarchWeb.Server.Runtime

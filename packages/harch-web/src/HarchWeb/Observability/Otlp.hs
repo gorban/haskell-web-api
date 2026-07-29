@@ -24,7 +24,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
-import HarchWeb.Observability (OtlpExporter (..))
+import HarchWeb.Observability.Types (OtlpExporter (..))
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http

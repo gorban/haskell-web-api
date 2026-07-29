@@ -12,7 +12,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)
-import HarchWeb.Observability qualified as Observability
+import HarchWeb.Observability.Types qualified as Observability
 
 otlpTraceBodyFromSpan ::
   Text ->
