@@ -32,6 +32,7 @@ npm run check --prefix "$extension_dir"
 
 unzip -Z1 "$output_dir/haskell-web-api-ormolu-formatter.vsix" | grep -qx 'extension/extension.js'
 unzip -Z1 "$output_dir/haskell-web-api-ormolu-formatter.vsix" | grep -qx 'extension/ormolu.js'
+unzip -Z1 "$output_dir/haskell-web-api-ormolu-formatter.vsix" | grep -qx 'extension/LICENSE.txt'
 unzip -Z1 "$output_dir/haskell-web-api-ormolu-formatter.vsix" | grep -qx 'extension/package.json'
 if unzip -Z1 "$output_dir/haskell-web-api-ormolu-formatter.vsix" | grep -q '^extension/test/'; then
   echo 'The VSIX unexpectedly includes test sources.' >&2

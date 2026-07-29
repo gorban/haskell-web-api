@@ -58,7 +58,7 @@ jobs:
     steps:
       - name: Checkout
         id: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Haskell
         if: steps.checkout.outcome == 'success'
@@ -71,7 +71,7 @@ jobs:
       - name: Setup Node
         if: steps.setup_haskell.outcome == 'success'
         id: setup_node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
