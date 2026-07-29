@@ -19,7 +19,6 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Server qualified as Server
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
@@ -1598,7 +1597,7 @@ spec = do
       let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t"
           observabilityAttribute = Observability.ObservabilityAttribute "action.outcome" (Observability.TextAttribute "rejected")
           responseBodyValue =
-            Server.clientActionResponseBody
+            clientActionResponseBody
               ClientActionResponse
                 { clientActionStatus = 422,
                   clientActionPatches = [RegionPatch ("first " <> escapedText) escapedText, RegionPatch "second" escapedText],
