@@ -111,13 +111,13 @@ runDatabaseSetupArgsWith ::
   [String] ->
   IO ()
 runDatabaseSetupArgsWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed outputHandle arguments =
-  case parseDatabaseSetupCommand arguments of
-    Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
-    Right setupCommand -> do
-      setupResult <- runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand
-      case setupResult of
-        Left setupError -> ioError (userError (renderDatabaseSetupError setupError))
-        Right () -> hPutStrLn outputHandle (successMessage setupCommand)
+  either throwDatabaseSetupError runParsedCommand (parseDatabaseSetupCommand arguments)
+  where
+    throwDatabaseSetupError =
+      ioError . userError . renderDatabaseSetupError
+    runParsedCommand setupCommand =
+      runDatabaseSetupCommandWith loadMigrationConfig loadRuntimeConfig runMigrations runSeed setupCommand
+        >>= either throwDatabaseSetupError (const (hPutStrLn outputHandle (successMessage setupCommand)))
 
 runDatabaseSetupCommand :: DatabaseSetupCommand -> IO (Either DatabaseSetupError ())
 runDatabaseSetupCommand =
