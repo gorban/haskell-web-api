@@ -316,17 +316,17 @@ reportSetupPrerequisitesWithResult ::
   Handle ->
   IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
 reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
-  loadedConfig <- loadConfig
   prerequisiteReport <-
-    case loadedConfig of
-      Left loadError ->
-        pure (Left loadError)
-      Right setupConfig -> do
-        Right report <- checkSetupPrerequisitesWith (pure (Right setupConfig)) checkDatabase checkTracing
-        reportWithDatabase <- applyDatabaseAutostart attemptDatabase setupConfig report
-        Right <$> applyTracingAutostart attemptTracing reportWithDatabase
+    loadConfig >>= either (pure . Left) reportLoadedSetupConfig
   mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
   pure prerequisiteReport
+  where
+    reportLoadedSetupConfig setupConfig =
+      checkLoadedSetupConfig checkDatabase checkTracing setupConfig
+        >>= traverse (applyAutostart setupConfig)
+    applyAutostart setupConfig report = do
+      reportWithDatabase <- applyDatabaseAutostart attemptDatabase setupConfig report
+      applyTracingAutostart attemptTracing reportWithDatabase
 
 reportSetupPrerequisitesWith ::
   IO (Either SetupPrerequisiteConfigLoadError PrerequisiteConfig.SetupPrerequisiteConfig) ->
