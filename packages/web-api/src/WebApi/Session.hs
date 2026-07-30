@@ -48,11 +48,11 @@ issueAccountSession sessionStore accountId issuedAtNanoseconds =
                 sessionExpiresAtNanoseconds = expiresAtNanoseconds
               }
       saveResult <- saveAccountSession sessionStore opaqueSession
-      pure $
-        case saveResult of
-          Left storeError -> Left storeError
-          Right False -> Left AccountSessionStoreCorruptData
-          Right True -> Right opaqueSession
+      pure $ do
+        saved <- saveResult
+        if saved
+          then Right opaqueSession
+          else Left AccountSessionStoreCorruptData
 
 boundedExpiration :: Word64 -> Maybe Word64
 boundedExpiration issuedAtNanoseconds =
