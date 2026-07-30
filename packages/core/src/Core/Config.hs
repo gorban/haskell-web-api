@@ -42,7 +42,10 @@ loadConfigOverridesFile :: FilePath -> IO (Either ConfigOverridesFileError [(Tex
 loadConfigOverridesFile overridesPath = do
   overridesPathExists <- doesPathExist overridesPath
   if overridesPathExists
-    then do
+    then loadExistingOverridesFile
+    else pure (Right [])
+  where
+    loadExistingOverridesFile = do
       overridesReadResult <-
         ( try $ do
             fileContents <- TextIO.readFile overridesPath
@@ -51,14 +54,10 @@ loadConfigOverridesFile overridesPath = do
         ) ::
           IO (Either IOException Text)
       pure $
-        case overridesReadResult of
-          Left readError ->
-            Left
-              ( UnreadableConfigOverridesFile
-                  (Text.pack (displayException readError))
-              )
-          Right fileContents -> parseConfigOverridesFile fileContents
-    else pure (Right [])
+        either
+          (Left . UnreadableConfigOverridesFile . Text.pack . displayException)
+          parseConfigOverridesFile
+          overridesReadResult
 
 parseConfigOverridesFile :: Text -> Either ConfigOverridesFileError [(Text, Text)]
 parseConfigOverridesFile =
