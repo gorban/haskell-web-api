@@ -61,6 +61,7 @@ library
     Core.Control.Error
     Core.Prelude
     Core.Setup
+    Core.Setup.ContainerRuntime
     Core.Setup.DatabaseAutostart
     Core.Setup.Prerequisite
     Core.Setup.PrerequisiteConfig
