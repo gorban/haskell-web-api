@@ -206,16 +206,16 @@ completeRecoveryCode context accountId suppliedCode = do
     recoveryHashValues <- liftMfaStore (loadUnusedRecoveryCodeHashes (secondFactorMfaStore context) accountId)
     recoveryHashes <-
       fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
-    case find (verifyRecoveryCode suppliedCode) recoveryHashes of
-      Nothing -> pure False
-      Just matchingHash ->
-        liftMfaStore
-          (consumeRecoveryCodeHash (secondFactorMfaStore context) accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
+    maybe (pure False) consumeMatchingHash (find (verifyRecoveryCode suppliedCode) recoveryHashes)
   pure $
     either
       infrastructureFailureResult
       (\accepted -> if accepted then PasswordMfaLoginAccepted accountId else PasswordMfaLoginRejected)
       recoveryResult
+  where
+    consumeMatchingHash matchingHash =
+      liftMfaStore
+        (consumeRecoveryCodeHash (secondFactorMfaStore context) accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT LoginInfrastructureError IO value
 liftMfaStore = liftEitherWith LoginMfaStoreError
