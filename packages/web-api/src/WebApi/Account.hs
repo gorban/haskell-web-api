@@ -191,20 +191,18 @@ confirmEmailVerificationAt :: AccountStore -> Word64 -> EmailVerificationToken -
 confirmEmailVerificationAt accountStore now token =
   runExceptT $ do
     maybeStoredVerification <- liftAccountStore id (findEmailVerification accountStore (emailVerificationTokenDigest token))
-    case maybeStoredVerification of
-      Nothing -> pure EmailVerificationRejected
-      Just storedVerification -> confirmStoredEmailVerification storedVerification
+    maybe (pure EmailVerificationRejected) confirmStoredEmailVerification maybeStoredVerification
   where
     confirmStoredEmailVerification storedVerification =
       case validateEmailVerificationToken now token storedVerification of
         acceptedVerification@(EmailVerificationAccepted accountId _) -> do
           maybeConsumedAccountId <- liftAccountStore id (consumeEmailVerification accountStore (emailVerificationTokenDigest token) now)
-          case maybeConsumedAccountId of
-            Nothing -> pure EmailVerificationRejected
-            Just consumedAccountId -> do
-              guardError (AccountStoreCorruptData "email verification was consumed for a different account") (consumedAccountId == accountId)
-              pure acceptedVerification
+          maybe (pure EmailVerificationRejected) (confirmConsumedAccount acceptedVerification accountId) maybeConsumedAccountId
         validationResult -> pure validationResult
+
+    confirmConsumedAccount acceptedVerification accountId consumedAccountId = do
+      guardError (AccountStoreCorruptData "email verification was consumed for a different account") (consumedAccountId == accountId)
+      pure acceptedVerification
 
 resendEmailVerificationAt ::
   AccountStore ->
