@@ -77,7 +77,8 @@ startMfaEnrollmentWith ::
 startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
   runExceptT $ do
     (secret, encryptedSecret) <-
-      liftMaybeWith MfaEnrollmentEncryptionFailed
+      liftMaybeWith
+        MfaEnrollmentEncryptionFailed
         (generateEncryptedSecret generateSecret encrypt encryptionKey)
     saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
     guardError MfaEnrollmentAccountIsNotEligible saved
