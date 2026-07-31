@@ -10,6 +10,7 @@ where
 import Control.Concurrent (newEmptyMVar, newMVar, takeMVar, tryPutMVar)
 import Control.Exception (bracket, finally)
 import Control.Monad (void)
+import Data.Bifunctor (first)
 import Data.List (find)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
@@ -34,39 +35,44 @@ import Text.Read (readMaybe)
 
 runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
 runServer outputHandle config webApplication =
-  case planServerStartup config of
-    Left startupError -> ioError (userError ("Invalid listener startup plan: " <> show startupError))
-    Right startupPlan -> do
-      let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
-      challengeStore <- AcmeChallengeStore <$> newMVar []
-      let runtimeApplication = toRuntimeWaiApplication challengeStore webApplication
-          connectionReporter = reportConnectionObservability webApplication
-      case runtimeStartupValidationError startupPlan of
-        Just runtimeError ->
-          ioError (userError runtimeError)
-        Nothing ->
-          connectionReporter `seq`
-            observabilityPlan `seq`
-              bracket
-                (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
-                stopRuntimeServers
-                ( \httpServers ->
-                    bracket
-                      (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
-                      stopAcmeRuntimeServers
-                      ( \acmeServers ->
-                          bracket
-                            (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
-                            stopRuntimeServers
-                            ( \manualTlsServers ->
-                                httpServers `seq`
-                                  acmeServers `seq`
-                                    manualTlsServers `seq`
-                                      announceRuntimeStartup outputHandle startupPlan
-                                        >> waitForShutdownSignal
-                            )
-                      )
-                )
+  either
+    (ioError . userError)
+    (runServerWithStartupPlan outputHandle config webApplication)
+    (validatedServerStartupPlan config)
+
+validatedServerStartupPlan :: (HasServerConfig config) => config -> Either String ServerStartupPlan
+validatedServerStartupPlan config = do
+  startupPlan <- first (("Invalid listener startup plan: " <>) . show) (planServerStartup config)
+  maybe (Right startupPlan) Left (runtimeStartupValidationError startupPlan)
+
+runServerWithStartupPlan :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> ServerStartupPlan -> IO ()
+runServerWithStartupPlan outputHandle config webApplication startupPlan = do
+  let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
+  challengeStore <- AcmeChallengeStore <$> newMVar []
+  let runtimeApplication = toRuntimeWaiApplication challengeStore webApplication
+      connectionReporter = reportConnectionObservability webApplication
+  connectionReporter `seq`
+    observabilityPlan `seq`
+      bracket
+        (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
+        stopRuntimeServers
+        ( \httpServers ->
+            bracket
+              (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
+              stopAcmeRuntimeServers
+              ( \acmeServers ->
+                  bracket
+                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
+                    stopRuntimeServers
+                    ( \manualTlsServers ->
+                        httpServers `seq`
+                          acmeServers `seq`
+                            manualTlsServers `seq`
+                              announceRuntimeStartup outputHandle startupPlan
+                                >> waitForShutdownSignal
+                    )
+              )
+        )
 
 toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do
