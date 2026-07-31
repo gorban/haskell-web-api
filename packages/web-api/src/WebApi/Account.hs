@@ -21,7 +21,7 @@ where
 import Control.Exception (SomeException, displayException, try)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Core.Control.Error (fromMaybeError, guardError, liftEitherWith)
+import Core.Control.Error (fromMaybeError, guardError, liftEitherWith, liftMaybeWith)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -167,8 +167,9 @@ registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPo
   runExceptT $ do
     expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
     (passwordHash, accountId, token) <-
-      liftIO (generateRegistrationInputs passwordHasher passwordHashingPolicy password)
-        >>= fromMaybeError RegistrationPasswordHashingFailed
+      liftMaybeWith
+        RegistrationPasswordHashingFailed
+        (generateRegistrationInputs passwordHasher passwordHashingPolicy password)
     let pendingAccount =
           PendingAccount
             { pendingAccountId = accountId,
