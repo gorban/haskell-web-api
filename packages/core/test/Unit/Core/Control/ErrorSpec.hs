@@ -34,3 +34,9 @@ spec = describe "handleError" $ do
       ( (runExceptT (liftEitherWith length (pure (Right "value" :: Either String String))) `shouldReturn` Right "value")
           :| [runExceptT (liftEitherWith length (pure (Left "failed" :: Either String String))) `shouldReturn` Left 6]
       )
+
+  it "lifts effectful optional values and explains missing ones" $ do
+    expectAll
+      ( (runExceptT (liftMaybeWith "missing" (pure (Just "present"))) `shouldReturn` Right "present")
+          :| [runExceptT (liftMaybeWith "missing" (pure Nothing :: IO (Maybe String))) `shouldReturn` Left "missing"]
+      )

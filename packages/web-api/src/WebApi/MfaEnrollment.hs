@@ -11,7 +11,7 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Core.Control.Error (fromMaybeError, guardError, liftEitherWith)
+import Core.Control.Error (fromMaybeError, guardError, liftEitherWith, liftMaybeWith)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
@@ -77,8 +77,8 @@ startMfaEnrollmentWith ::
 startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
   runExceptT $ do
     (secret, encryptedSecret) <-
-      liftIO (generateEncryptedSecret generateSecret encrypt encryptionKey)
-        >>= fromMaybeError MfaEnrollmentEncryptionFailed
+      liftMaybeWith MfaEnrollmentEncryptionFailed
+        (generateEncryptedSecret generateSecret encrypt encryptionKey)
     saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
     guardError MfaEnrollmentAccountIsNotEligible saved
     pure (MfaEnrollmentStart secret)
@@ -134,9 +134,8 @@ confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId 
     pure (MfaEnrollmentConfirmation recoveryCodes)
   where
     hashGeneratedRecoveryCode recoveryCode =
-      liftIO (hashCode recoveryCode)
-        >>= fmap recoveryCodeHashText
-          . fromMaybeError MfaEnrollmentRecoveryCodeHashingFailed
+      recoveryCodeHashText
+        <$> liftMaybeWith MfaEnrollmentRecoveryCodeHashingFailed (hashCode recoveryCode)
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT MfaEnrollmentError IO value
 liftMfaStore = liftEitherWith MfaEnrollmentStoreError

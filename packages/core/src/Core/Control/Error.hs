@@ -3,6 +3,7 @@ module Core.Control.Error
     guardError,
     handleError,
     liftEitherWith,
+    liftMaybeWith,
   )
 where
 
@@ -25,6 +26,12 @@ guardError errorValue condition = unless condition (throwError errorValue)
 -- use site.
 liftEitherWith :: (Functor monad) => (sourceError -> error) -> monad (Either sourceError value) -> ExceptT error monad value
 liftEitherWith mapError = ExceptT . fmap (first mapError)
+
+-- | Lift an effectful optional value into an error-capable computation.
+--
+-- Use this at an effect boundary where absence is a domain failure.
+liftMaybeWith :: (Functor monad) => error -> monad (Maybe value) -> ExceptT error monad value
+liftMaybeWith errorValue = ExceptT . fmap (maybe (Left errorValue) Right)
 
 -- | Run an 'ExceptT' computation and handle the error case.
 --
