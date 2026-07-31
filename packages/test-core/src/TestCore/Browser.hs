@@ -440,23 +440,24 @@ splitRunnerArguments value =
   filter (not . null) (map (Text.unpack . Text.strip) (Text.splitOn "," (Text.pack value)))
 
 runBrowserScenario :: BrowserConfig -> BrowserScenario a -> IO (Either BrowserRunnerError a)
-runBrowserScenario config scenario = do
-  launched <- launchBrowserSession config
-  case launched of
-    Left launchError -> pure (Left launchError)
-    Right session -> do
-      initialized <- sendCommand session "initialize" (configurationFields config)
-      case initialized of
-        Left initializationError -> closeFailedSession session initializationError
-        Right _ -> do
-          scenarioAttempt <- tryAny (runExceptT (runReaderT (unBrowserScenario scenario) session))
-          let scenarioResult =
-                case scenarioAttempt of
-                  Left unexpectedException -> Left (BrowserRunnerProtocolError (displayException unexpectedException))
-                  Right result -> result
-          finishResult <- finishSession session scenarioResult
-          exitCode <- waitForProcess (sessionProcess session)
-          pure (mergeSessionResults exitCode scenarioResult finishResult)
+runBrowserScenario config scenario =
+  launchBrowserSession config >>= either (pure . Left) (runInitializedScenario config scenario)
+
+runInitializedScenario :: BrowserConfig -> BrowserScenario a -> BrowserSession -> IO (Either BrowserRunnerError a)
+runInitializedScenario config scenario session = do
+  initialized <- sendCommand session "initialize" (configurationFields config)
+  either (closeFailedSession session) (const (runInitializedBrowserScenario scenario session)) initialized
+
+runInitializedBrowserScenario :: BrowserScenario a -> BrowserSession -> IO (Either BrowserRunnerError a)
+runInitializedBrowserScenario scenario session = do
+  scenarioAttempt <- tryAny (runExceptT (runReaderT (unBrowserScenario scenario) session))
+  let scenarioResult =
+        case scenarioAttempt of
+          Left unexpectedException -> Left (BrowserRunnerProtocolError (displayException unexpectedException))
+          Right result -> result
+  finishResult <- finishSession session scenarioResult
+  exitCode <- waitForProcess (sessionProcess session)
+  pure (mergeSessionResults exitCode scenarioResult finishResult)
 
 launchBrowserSession :: BrowserConfig -> IO (Either BrowserRunnerError BrowserSession)
 launchBrowserSession config = do
