@@ -11,7 +11,6 @@ import Control.Concurrent (newEmptyMVar, newMVar, takeMVar, tryPutMVar)
 import Control.Exception (bracket, finally)
 import Control.Monad (void)
 import Data.Bifunctor (first)
-import Data.List (find)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -154,31 +153,38 @@ firstAcmeRuntimeStartupError httpListenerEndpoints acmePlans =
 
 validateAcmeRuntimeBindPlan :: [ListenerEndpoint] -> AcmeBindPlan -> Maybe String
 validateAcmeRuntimeBindPlan httpListenerEndpoints acmePlan =
-  case acmeHttp01ChallengePort acmePlan of
-    Left runtimeError ->
-      Just runtimeError
-    Right challengePort ->
-      case acmeTlsEndpoint acmePlan of
-        Nothing ->
-          if endpointPort (acmeEndpoint acmePlan) == challengePort
-            then validateAcmeRuntimeConfiguration acmePlan
-            else
-              Just $
-                "Unsupported runtime listener startup plan: ACME listener on "
-                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
-                  <> " requires the configured http-01 port to match its HTTP listener port "
-                  <> show (endpointPort (acmeEndpoint acmePlan))
-                  <> "."
-        Just _ ->
-          if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
-            then validateAcmeRuntimeConfiguration acmePlan
-            else
-              Just $
-                "Unsupported runtime listener startup plan: ACME listener on "
-                  <> renderListenerEndpoint (acmeEndpoint acmePlan)
-                  <> " requires an HTTP listener on port "
-                  <> show challengePort
-                  <> " for http-01 challenges."
+  either Just (validateAcmeChallengePort httpListenerEndpoints acmePlan) (acmeHttp01ChallengePort acmePlan)
+
+validateAcmeChallengePort :: [ListenerEndpoint] -> AcmeBindPlan -> Int -> Maybe String
+validateAcmeChallengePort httpListenerEndpoints acmePlan challengePort =
+  maybe
+    (validateHttpOnlyAcmeChallengePort acmePlan challengePort)
+    (const (validateTlsAcmeChallengePort httpListenerEndpoints acmePlan challengePort))
+    (acmeTlsEndpoint acmePlan)
+
+validateHttpOnlyAcmeChallengePort :: AcmeBindPlan -> Int -> Maybe String
+validateHttpOnlyAcmeChallengePort acmePlan challengePort =
+  if endpointPort (acmeEndpoint acmePlan) == challengePort
+    then validateAcmeRuntimeConfiguration acmePlan
+    else
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires the configured http-01 port to match its HTTP listener port "
+          <> show (endpointPort (acmeEndpoint acmePlan))
+          <> "."
+
+validateTlsAcmeChallengePort :: [ListenerEndpoint] -> AcmeBindPlan -> Int -> Maybe String
+validateTlsAcmeChallengePort httpListenerEndpoints acmePlan challengePort =
+  if hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan
+    then validateAcmeRuntimeConfiguration acmePlan
+    else
+      Just $
+        "Unsupported runtime listener startup plan: ACME listener on "
+          <> renderListenerEndpoint (acmeEndpoint acmePlan)
+          <> " requires an HTTP listener on port "
+          <> show challengePort
+          <> " for http-01 challenges."
 
 validateAcmeRuntimeConfiguration :: AcmeBindPlan -> Maybe String
 validateAcmeRuntimeConfiguration acmePlan =
@@ -193,9 +199,7 @@ validateAcmeRuntimeConfiguration acmePlan =
 
 hasMatchingAcmeHttp01ChallengeEndpoint :: Int -> [ListenerEndpoint] -> AcmeBindPlan -> Bool
 hasMatchingAcmeHttp01ChallengeEndpoint challengePort httpListenerEndpoints acmePlan =
-  case find (isAcmeHttp01ChallengeEndpointFor challengePort (acmeEndpoint acmePlan)) httpListenerEndpoints of
-    Just _ -> True
-    Nothing -> False
+  any (isAcmeHttp01ChallengeEndpointFor challengePort (acmeEndpoint acmePlan)) httpListenerEndpoints
 
 acmeHttp01ChallengePort :: AcmeBindPlan -> Either String Int
 acmeHttp01ChallengePort acmePlan =
