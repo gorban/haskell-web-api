@@ -295,34 +295,43 @@ listenerUrlPrefix listenerScheme =
     Https -> "https://"
 
 runtimeRequestObservabilityReporter :: AppConfig -> Observability.RequestObservability -> IO ()
-runtimeRequestObservabilityReporter config requestObservability = do
-  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show requestObservability))
-  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
-    exportResult <-
-      try
-        (HarchWeb.exportRequestObservabilityToOtlp "web-api" exporter requestObservability) ::
-        IO (Either SomeException ())
-    case exportResult of
-      Left exportError ->
-        runtimeApplicationLogReporter
-          ("Failed to export request observability to OTLP: " <> Text.pack (displayException exportError))
-      Right () ->
-        hFlush stderr
+runtimeRequestObservabilityReporter config =
+  runtimeObservabilityReporter
+    config
+    "request observability"
+    (HarchWeb.exportRequestObservabilityToOtlp "web-api")
 
 runtimeConnectionObservabilityReporter :: AppConfig -> Observability.ConnectionObservability -> IO ()
-runtimeConnectionObservabilityReporter config connectionObservability = do
-  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show connectionObservability))
+runtimeConnectionObservabilityReporter config =
+  runtimeObservabilityReporter
+    config
+    "connection observability"
+    (HarchWeb.exportConnectionObservabilityToOtlp "web-api")
+
+runtimeObservabilityReporter ::
+  (Show observability) =>
+  AppConfig ->
+  Text.Text ->
+  (HarchWeb.OtlpExporter -> observability -> IO ()) ->
+  observability ->
+  IO ()
+runtimeObservabilityReporter config observabilityKind exportObservability observabilityValue = do
+  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue))
   forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
     exportResult <-
-      try
-        (HarchWeb.exportConnectionObservabilityToOtlp "web-api" exporter connectionObservability) ::
+      try (exportObservability exporter observabilityValue) ::
         IO (Either SomeException ())
-    case exportResult of
-      Left exportError ->
-        runtimeApplicationLogReporter
-          ("Failed to export connection observability to OTLP: " <> Text.pack (displayException exportError))
-      Right () ->
-        hFlush stderr
+    either
+      (runtimeApplicationLogReporter . exportFailureMessage observabilityKind)
+      (const (hFlush stderr))
+      exportResult
+
+exportFailureMessage :: Text.Text -> SomeException -> Text.Text
+exportFailureMessage observabilityKind exportError =
+  "Failed to export "
+    <> observabilityKind
+    <> " to OTLP: "
+    <> Text.pack (displayException exportError)
 
 runtimeApplicationLogReporter :: Text.Text -> IO ()
 runtimeApplicationLogReporter =
