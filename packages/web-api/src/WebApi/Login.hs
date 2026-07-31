@@ -17,7 +17,6 @@ import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Data.List (find)
 import Data.Text (Text)
-import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.Email (EmailAddress)
