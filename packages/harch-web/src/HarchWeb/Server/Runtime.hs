@@ -15,11 +15,13 @@ import Data.List (find)
 import Data.Maybe (isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServers, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
+import HarchWeb.Security (RequestPolicyConfig)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
 import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
@@ -79,18 +81,22 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
   maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore request
-  case maybeChallengeResponse of
-    Just challengeResponse -> do
-      challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
-      reportEarlyRequestObservability
-        webApplication
-        request
-        requestStartedAt
-        challengeResponseReportedAt
-        (acmeChallengeRoutePath requestPolicyConfig request)
-        challengeResponse
-      respond challengeResponse
-    Nothing -> toWaiApplication webApplication request respond
+  maybe
+    (toWaiApplication webApplication request respond)
+    (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)
+    maybeChallengeResponse
+
+respondAcmeChallenge :: (Eq route) => Application route context -> Wai.Request -> RequestPolicyConfig -> Word64 -> (Wai.Response -> IO Wai.ResponseReceived) -> Wai.Response -> IO Wai.ResponseReceived
+respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond challengeResponse = do
+  challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
+  reportEarlyRequestObservability
+    webApplication
+    request
+    requestStartedAt
+    challengeResponseReportedAt
+    (acmeChallengeRoutePath requestPolicyConfig request)
+    challengeResponse
+  respond challengeResponse
 
 announceRuntimeStartup :: Handle -> ServerStartupPlan -> IO ()
 announceRuntimeStartup outputHandle startupPlan = do
