@@ -2,13 +2,14 @@
 
 module Core.Setup.ContainerRuntime
   ( ContainerRuntimeFailure (..),
+    attemptContainerAutostart,
     runContainerRuntimeCommand,
     tryContainerRuntimes,
   )
 where
 
 import Control.Exception (IOException, try)
-import Core.Setup.PrerequisitePlan (ContainerRuntime (..))
+import Core.Setup.PrerequisitePlan (ContainerAutostartPlan (..), ContainerRuntime (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Exit (ExitCode (..))
@@ -19,6 +20,27 @@ data ContainerRuntimeFailure = ContainerRuntimeFailure
     containerRuntimeFailureMessage :: Text
   }
   deriving (Eq, Show)
+
+attemptContainerAutostart ::
+  (ContainerRuntime -> [String] -> IO (Either Text ())) ->
+  Maybe ContainerAutostartPlan ->
+  Text ->
+  Either Text [String] ->
+  (Text -> result) ->
+  (ContainerRuntime -> result) ->
+  ([ContainerRuntimeFailure] -> result) ->
+  IO result
+attemptContainerAutostart runCommand maybeAutostartPlan disabledMessage commandArguments skipped succeeded failed =
+  case maybeAutostartPlan of
+    Nothing -> pure (skipped disabledMessage)
+    Just autostartPlan ->
+      either (pure . skipped) runWithArguments commandArguments
+      where
+        runWithArguments arguments =
+          either failed succeeded
+            <$> tryContainerRuntimes
+              (autostartRuntimes autostartPlan)
+              (`runCommand` arguments)
 
 runContainerRuntimeCommand :: ContainerRuntime -> [String] -> IO (Either Text ())
 runContainerRuntimeCommand runtime commandArguments =

@@ -9,8 +9,8 @@ where
 
 import Core.Setup.ContainerRuntime
   ( ContainerRuntimeFailure (..),
+    attemptContainerAutostart,
     runContainerRuntimeCommand,
-    tryContainerRuntimes,
   )
 import Core.Setup.Prerequisite
   ( TcpEndpoint (..),
@@ -19,7 +19,6 @@ import Core.Setup.Prerequisite
 import Core.Setup.PrerequisitePlan
   ( ContainerRuntime (..),
     TracingPrerequisitePlan (..),
-    autostartRuntimes,
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -41,18 +40,14 @@ attemptTracingAutostartWith ::
   TracingPrerequisitePlan ->
   IO TracingAutostartResult
 attemptTracingAutostartWith runCommand tracingPlan =
-  case tracingAutostartPlan tracingPlan of
-    Nothing ->
-      pure (TracingAutostartSkipped "tracing autostart is disabled for this setup plan")
-    Just autostartPlan ->
-      case tracingAutostartArguments tracingPlan of
-        Left skipReason ->
-          pure (TracingAutostartSkipped skipReason)
-        Right commandArguments ->
-          either TracingAutostartFailed TracingAutostartSucceeded
-            <$> tryContainerRuntimes
-              (autostartRuntimes autostartPlan)
-              (`runCommand` commandArguments)
+  attemptContainerAutostart
+    runCommand
+    (tracingAutostartPlan tracingPlan)
+    "tracing autostart is disabled for this setup plan"
+    (tracingAutostartArguments tracingPlan)
+    TracingAutostartSkipped
+    TracingAutostartSucceeded
+    TracingAutostartFailed
 
 tracingAutostartArguments :: TracingPrerequisitePlan -> Either Text [String]
 tracingAutostartArguments tracingPlan = do

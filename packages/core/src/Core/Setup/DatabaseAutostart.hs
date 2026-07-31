@@ -10,15 +10,14 @@ where
 
 import Core.Setup.ContainerRuntime
   ( ContainerRuntimeFailure (..),
+    attemptContainerAutostart,
     runContainerRuntimeCommand,
-    tryContainerRuntimes,
   )
 import Core.Setup.Prerequisite (TcpEndpoint (..))
 import Core.Setup.PrerequisiteConfig (SetupPrerequisiteConfig (..))
 import Core.Setup.PrerequisitePlan
   ( ContainerRuntime (..),
     DatabasePrerequisitePlan (..),
-    autostartRuntimes,
   )
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -42,18 +41,14 @@ attemptDatabaseAutostartWith ::
   DatabasePrerequisitePlan ->
   IO DatabaseAutostartResult
 attemptDatabaseAutostartWith runCommand setupConfig databasePlan =
-  case databaseAutostartPlan databasePlan of
-    Nothing ->
-      pure (DatabaseAutostartSkipped "database autostart is disabled for this setup plan")
-    Just autostartPlan ->
-      case databaseAutostartArguments setupConfig of
-        Left skipReason ->
-          pure (DatabaseAutostartSkipped skipReason)
-        Right commandArguments ->
-          either DatabaseAutostartFailed DatabaseAutostartSucceeded
-            <$> tryContainerRuntimes
-              (autostartRuntimes autostartPlan)
-              (`runCommand` commandArguments)
+  attemptContainerAutostart
+    runCommand
+    (databaseAutostartPlan databasePlan)
+    "database autostart is disabled for this setup plan"
+    (databaseAutostartArguments setupConfig)
+    DatabaseAutostartSkipped
+    DatabaseAutostartSucceeded
+    DatabaseAutostartFailed
 
 databaseAutostartArguments :: SetupPrerequisiteConfig -> Either Text [String]
 databaseAutostartArguments setupConfig = do
