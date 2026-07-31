@@ -759,34 +759,33 @@ runRuntimeParameterizedRowsQuery databaseConfig sql parameters =
     (runRuntimeParameterizedQueryRows sql parameters)
 
 runRuntimeQueryRows :: Text -> LibPQ.Connection -> IO (Either Text [Text])
-runRuntimeQueryRows sql connection = do
-  maybeResult <- LibPQ.exec connection (TextEncoding.encodeUtf8 sql)
-  case maybeResult of
-    Nothing ->
-      fmap Left (renderRuntimeConnectionError connection)
-    Just result -> do
-      resultStatus <- LibPQ.resultStatus result
-      case resultStatus of
-        LibPQ.TuplesOk ->
-          readRuntimeQueryRows result
-        _ ->
-          fmap Left (renderRuntimeResultError result)
+runRuntimeQueryRows sql =
+  runRuntimeQuery
+    (\connection -> LibPQ.exec connection (TextEncoding.encodeUtf8 sql))
+    readRuntimeQueryRows
 
 runRuntimeParameterizedQueryRows :: Text -> [Text] -> LibPQ.Connection -> IO (Either Text [[Text]])
-runRuntimeParameterizedQueryRows sql parameters connection = do
-  maybeResult <-
-    LibPQ.execParams
-      connection
-      (TextEncoding.encodeUtf8 sql)
-      (fmap parameterValue parameters)
-      LibPQ.Text
-  case maybeResult of
-    Nothing -> fmap Left (renderRuntimeConnectionError connection)
-    Just result -> do
+runRuntimeParameterizedQueryRows sql parameters =
+  runRuntimeQuery
+    ( \connection ->
+        LibPQ.execParams
+          connection
+          (TextEncoding.encodeUtf8 sql)
+          (fmap parameterValue parameters)
+          LibPQ.Text
+    )
+    readRuntimeQueryTable
+
+runRuntimeQuery :: (LibPQ.Connection -> IO (Maybe LibPQ.Result)) -> (LibPQ.Result -> IO (Either Text value)) -> LibPQ.Connection -> IO (Either Text value)
+runRuntimeQuery runQuery readRows connection = do
+  maybeResult <- runQuery connection
+  maybe (Left <$> renderRuntimeConnectionError connection) readResult maybeResult
+  where
+    readResult result = do
       resultStatus <- LibPQ.resultStatus result
-      case resultStatus of
-        LibPQ.TuplesOk -> readRuntimeQueryTable result
-        _ -> fmap Left (renderRuntimeResultError result)
+      if resultStatus == LibPQ.TuplesOk
+        then readRows result
+        else Left <$> renderRuntimeResultError result
 
 parameterValue :: Text -> Maybe (LibPQ.Oid, ByteString.ByteString, LibPQ.Format)
 parameterValue value =
