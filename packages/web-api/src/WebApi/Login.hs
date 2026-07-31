@@ -172,12 +172,11 @@ continuePasswordLogin context passwordResult =
     PasswordLoginMfaRequired accountId -> completeConfirmedEnrollment context accountId
 
 completeConfirmedEnrollment :: SecondFactorContext -> AccountId -> IO PasswordMfaLoginResult
-completeConfirmedEnrollment context accountId = do
-  enrollmentResult <- runExceptT (liftMfaStore (loadTotpEnrollment (secondFactorMfaStore context) accountId))
-  either
-    (pure . infrastructureFailureResult)
-    (maybe (pure (PasswordMfaLoginEnrollmentRequired accountId)) (completeStoredEnrollment context accountId))
-    enrollmentResult
+completeConfirmedEnrollment context accountId =
+  loadTotpEnrollment (secondFactorMfaStore context) accountId
+    >>= either
+      (pure . PasswordMfaLoginMfaStoreError)
+      (maybe (pure (PasswordMfaLoginEnrollmentRequired accountId)) (completeStoredEnrollment context accountId))
 
 completeStoredEnrollment :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> IO PasswordMfaLoginResult
 completeStoredEnrollment context accountId enrollment =
