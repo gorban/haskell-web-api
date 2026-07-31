@@ -5,6 +5,9 @@ module WebApi.Session
   )
 where
 
+import Control.Monad.Except (ExceptT, runExceptT)
+import Control.Monad.IO.Class (liftIO)
+import Core.Control.Error (fromMaybeError, guardError, liftEitherWith)
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.Session
@@ -34,25 +37,28 @@ data AccountSessionStore = AccountSessionStore
 -- tokens are generated only after the caller has completed authentication.
 issueAccountSession :: AccountSessionStore -> AccountId -> Word64 -> IO (Either AccountSessionStoreError (OpaqueSession AccountId))
 issueAccountSession sessionStore accountId issuedAtNanoseconds =
-  case boundedExpiration issuedAtNanoseconds of
-    Nothing -> pure (Left AccountSessionStoreCorruptData)
-    Just expiresAtNanoseconds -> do
-      newSessionId <- generateSessionId
-      newCsrfToken <- generateCsrfToken
-      let opaqueSession =
-            OpaqueSession
-              { sessionId = newSessionId,
-                sessionPrincipal = accountId,
-                sessionCsrfToken = newCsrfToken,
-                sessionIssuedAtNanoseconds = issuedAtNanoseconds,
-                sessionExpiresAtNanoseconds = expiresAtNanoseconds
-              }
-      saveResult <- saveAccountSession sessionStore opaqueSession
-      pure $ do
-        saved <- saveResult
-        if saved
-          then Right opaqueSession
-          else Left AccountSessionStoreCorruptData
+  runExceptT $ do
+    expiresAtNanoseconds <- fromMaybeError AccountSessionStoreCorruptData (boundedExpiration issuedAtNanoseconds)
+    opaqueSession <- liftIO (generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds)
+    saved <- liftSessionStore (saveAccountSession sessionStore opaqueSession)
+    guardError AccountSessionStoreCorruptData saved
+    pure opaqueSession
+
+liftSessionStore :: IO (Either AccountSessionStoreError value) -> ExceptT AccountSessionStoreError IO value
+liftSessionStore = liftEitherWith id
+
+generateOpaqueSession :: AccountId -> Word64 -> Word64 -> IO (OpaqueSession AccountId)
+generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds = do
+  newSessionId <- generateSessionId
+  newCsrfToken <- generateCsrfToken
+  pure
+    OpaqueSession
+      { sessionId = newSessionId,
+        sessionPrincipal = accountId,
+        sessionCsrfToken = newCsrfToken,
+        sessionIssuedAtNanoseconds = issuedAtNanoseconds,
+        sessionExpiresAtNanoseconds = expiresAtNanoseconds
+      }
 
 boundedExpiration :: Word64 -> Maybe Word64
 boundedExpiration issuedAtNanoseconds =
