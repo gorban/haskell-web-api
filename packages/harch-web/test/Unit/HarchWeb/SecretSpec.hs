@@ -35,7 +35,9 @@ spec = do
       maybeRandomEnvelope <- encryptSecret key plaintext
       expectAll
         ( ((maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext)
-            :| [ decryptSecret key "not-base64" `shouldBe` Nothing,
+            :| [ decryptSecretText key envelope `shouldBe` Just "authenticator-secret",
+                 decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce "\255")) `shouldBe` Nothing,
+                 decryptSecret key "not-base64" `shouldBe` Nothing,
                  decryptSecret key (envelope <> "A") `shouldBe` Nothing,
                  decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing,
                  decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing,

@@ -23,7 +23,7 @@ import HarchWeb.Account (AccountId)
 import HarchWeb.Email (EmailAddress)
 import HarchWeb.Password (Password, PasswordHash, verifyPassword)
 import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
-import HarchWeb.Secret (SecretEncryptionKey, decryptSecret)
+import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCode)
 import HarchWeb.Username (Username)
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
@@ -228,7 +228,5 @@ infrastructureFailureResult infrastructureError =
     LoginCorruptEnrollment -> PasswordMfaLoginCorruptEnrollment
 
 decodeTotpSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
-decodeTotpSecret encryptionKey encryptedSecret = do
-  plaintext <- decryptSecret encryptionKey encryptedSecret
-  renderedSecret <- either (const Nothing) Just (TextEncoding.decodeUtf8' plaintext)
-  mkTotpSecret renderedSecret
+decodeTotpSecret encryptionKey encryptedSecret =
+  mkTotpSecret =<< decryptSecretText encryptionKey encryptedSecret

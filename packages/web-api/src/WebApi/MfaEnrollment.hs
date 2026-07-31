@@ -26,7 +26,7 @@ import HarchWeb.RecoveryCode
     hashRecoveryCode,
     recoveryCodeHashText,
   )
-import HarchWeb.Secret (SecretEncryptionKey, decryptSecret, encryptSecret)
+import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText, encryptSecret)
 import HarchWeb.Totp
   ( TotpCode,
     TotpSecret,
@@ -148,10 +148,8 @@ requireUnconfirmedEnrollment enrollment =
     Nothing -> pure (storedTotpEncryptedSecret enrollment)
 
 decodeSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
-decodeSecret encryptionKey encryptedSecret = do
-  plaintext <- decryptSecret encryptionKey encryptedSecret
-  renderedSecret <- either (const Nothing) Just (TextEncoding.decodeUtf8' plaintext)
-  mkTotpSecret renderedSecret
+decodeSecret encryptionKey encryptedSecret =
+  mkTotpSecret =<< decryptSecretText encryptionKey encryptedSecret
 
 generateRecoveryCodes :: IO RecoveryCode -> IO (NonEmpty RecoveryCode)
 generateRecoveryCodes generateCode = do

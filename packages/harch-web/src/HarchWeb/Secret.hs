@@ -3,6 +3,7 @@
 module HarchWeb.Secret
   ( SecretEncryptionKey,
     decryptSecret,
+    decryptSecretText,
     encryptSecret,
     encryptSecretWithNonce,
     mkSecretEncryptionKey,
@@ -43,6 +44,11 @@ decryptSecret (SecretEncryptionKey key) encodedEnvelope = do
   envelope <- either (const Nothing) Just (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedEnvelope))
   (nonce, authenticationTag, ciphertext) <- splitEnvelope envelope
   decrypt key nonce authenticationTag ciphertext
+
+decryptSecretText :: SecretEncryptionKey -> Text -> Maybe Text
+decryptSecretText encryptionKey encodedEnvelope = do
+  plaintext <- decryptSecret encryptionKey encodedEnvelope
+  either (const Nothing) Just (TextEncoding.decodeUtf8' plaintext)
 
 encrypt :: ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString -> Maybe ByteString.ByteString
 encrypt key nonce plaintext =
