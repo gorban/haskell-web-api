@@ -109,22 +109,23 @@ toWaiApplication webApplication request respond = do
       requestPath = waiRequestPath requestPolicyConfig request
   policyEvaluatedAt <- policyResponseHeaders `seq` getMonotonicTimeNSec
   earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
-  case earlyResult of
-    Left (earlyResponsePath, earlyResponseValue) -> do
-      responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
-      reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
-      respond earlyResponseValue
-    Right () ->
-      handleRoutedRequest
-        RoutedRequestExecution
-          { routedRequestApplication = webApplication,
-            routedRequestWaiRequest = request,
-            routedRequestRespond = respond,
-            routedRequestPolicyConfig = requestPolicyConfig,
-            routedRequestPath = requestPath
-          }
-        requestStartedAt
-        policyEvaluatedAt
+  let respondEarlyRequest (earlyResponsePath, earlyResponseValue) = do
+        responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
+        reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
+        respond earlyResponseValue
+
+      handleRoutedRequestAfterEarlyStages =
+        handleRoutedRequest
+          RoutedRequestExecution
+            { routedRequestApplication = webApplication,
+              routedRequestWaiRequest = request,
+              routedRequestRespond = respond,
+              routedRequestPolicyConfig = requestPolicyConfig,
+              routedRequestPath = requestPath
+            }
+          requestStartedAt
+          policyEvaluatedAt
+  either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
 
 handleRoutedRequest :: (Eq route) => RoutedRequestExecution route context -> Word64 -> Word64 -> IO Wai.ResponseReceived
 handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = do
