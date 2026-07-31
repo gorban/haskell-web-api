@@ -228,11 +228,10 @@ emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothin
 
 handleAccountAction :: AccountWorkflow -> HarchWeb.ClientActionRequest AppRequestContext -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
-  case selectedAccountAction actionRequest of
-    Nothing -> pure Nothing
-    Just action -> do
-      result <- runAppM (AppServices workflow) action
-      pure (Just (either attachClientActionFailure id result))
+  traverse runSelectedAccountAction (selectedAccountAction actionRequest)
+  where
+    runSelectedAccountAction action =
+      either attachClientActionFailure id <$> runAppM (AppServices workflow) action
 
 selectedAccountAction :: HarchWeb.ClientActionRequest AppRequestContext -> Maybe (AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse)
 selectedAccountAction actionRequest =
