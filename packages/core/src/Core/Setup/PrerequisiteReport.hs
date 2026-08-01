@@ -145,7 +145,7 @@ checkSetupPrerequisitesWith ::
   (Text -> IO (Either TracingEndpointParseError Bool)) ->
   IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
 checkSetupPrerequisitesWith loadConfig checkDatabase checkTracing =
-  loadConfig >>= either (pure . Left) (checkLoadedSetupConfig checkDatabase checkTracing)
+  either (pure . Left) (checkLoadedSetupConfig checkDatabase checkTracing) =<< loadConfig
 
 checkLoadedSetupConfig ::
   (TcpEndpoint -> IO Bool) ->
@@ -317,7 +317,7 @@ reportSetupPrerequisitesWithResult ::
   IO (Either SetupPrerequisiteConfigLoadError SetupPrerequisiteReport)
 reportSetupPrerequisitesWithResult loadConfig checkDatabase checkTracing attemptDatabase attemptTracing outputHandle = do
   prerequisiteReport <-
-    loadConfig >>= either (pure . Left) reportLoadedSetupConfig
+    either (pure . Left) reportLoadedSetupConfig =<< loadConfig
   mapM_ (TextIO.hPutStrLn outputHandle) (renderSetupPrerequisiteReport prerequisiteReport)
   pure prerequisiteReport
   where
