@@ -24,6 +24,7 @@ import HarchWeb
     toWaiApplication,
   )
 import HarchWeb qualified
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site
   ( Site (..),
@@ -247,7 +248,7 @@ homeSiteRoute =
         { pageTitle = "Home",
           pageRoute = HomeRoute,
           pageContext = requestContext routeRequest,
-          pageBody = "<h1>Home</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) SecondRoute <> "\">Browse second</a></p>",
+          pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Home</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) SecondRoute <> "\">Browse second</a></p>")),
           pageBootstrapHooks = []
         }
 
@@ -259,7 +260,7 @@ secondSiteRoute =
         { pageTitle = "Second",
           pageRoute = SecondRoute,
           pageContext = requestContext routeRequest,
-          pageBody = "<h1>Second</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>",
+          pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Second</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),
           pageBootstrapHooks = ["second-page"]
         }
 
@@ -290,7 +291,7 @@ notFoundSiteRoute =
         { pageTitle = "Not Found",
           pageRoute = NotFoundRoute,
           pageContext = requestContext routeRequest,
-          pageBody = "<h1>Not Found</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>",
+          pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Not Found</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),
           pageBootstrapHooks = []
         }
 

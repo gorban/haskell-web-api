@@ -32,6 +32,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
+import HarchWeb.Markup (Html, renderHtml)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.PathPrefix (applyPathPrefix)
 import HarchWeb.Routing (RouteCodec, routeHref)
@@ -42,7 +43,7 @@ data Page route context = Page
   { pageTitle :: Text,
     pageRoute :: route,
     pageContext :: context,
-    pageBody :: Text,
+    pageBody :: Html,
     pageBootstrapHooks :: [Text]
   }
   deriving (Eq, Show)
@@ -296,7 +297,7 @@ data Document route = Document
     documentNavigation :: [ResolvedNavigationItem route],
     documentMainId :: Text,
     documentMainAttributes :: [HtmlAttribute],
-    documentMainContent :: Text,
+    documentMainContent :: Html,
     documentBootstrapHooks :: [Text],
     documentStylesheets :: [Stylesheet],
     documentRuntimeDescriptors :: [RuntimeDescriptor]
@@ -423,7 +424,7 @@ renderDocumentWithNonce runtimeNonce document =
       "\"",
       renderAttributes (documentMainAttributes document <> renderBootstrapHookAttributes (documentBootstrapHooks document)),
       ">",
-      documentMainContent document,
+      renderHtml (documentMainContent document),
       "</main></body></html>"
     ]
 

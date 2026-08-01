@@ -18,6 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
@@ -58,6 +59,9 @@ data TestRoute
   | EventStreamRoute
   | MissingRoute
   deriving (Eq, Show)
+
+trustedMarkup :: Text -> Html
+trustedMarkup = trustedHtml . MarkupUnsafe.unsafeTrustHtml
 
 defaultContext :: TestContext
 defaultContext = TestContext {requestLanguage = "en", testContextPathPrefix = ""}
@@ -146,7 +150,7 @@ samplePage request =
     { pageTitle = "Known",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = "<h1>Known</h1>",
+      pageBody = trustedMarkup "<h1>Known</h1>",
       pageBootstrapHooks = []
     }
 
@@ -156,7 +160,7 @@ sampleMissingPage request =
     { pageTitle = "Missing",
       pageRoute = requestRoute request,
       pageContext = requestContext request,
-      pageBody = "<h1>Missing</h1>",
+      pageBody = trustedMarkup "<h1>Missing</h1>",
       pageBootstrapHooks = []
     }
 
@@ -957,7 +961,7 @@ spec = do
           navigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "primary"}
           mainAttribute = HtmlAttribute {attributeName = "data-navigation-content", attributeValue = "true"}
           localTestServer = LocalTestServer {localServerHost = "127.0.0.1", localServerPort = 5001, localServerBaseUrl = "http://127.0.0.1:5001"}
-          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = trustedMarkup "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
           navigationItem = NavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute}
           navigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/navigation.js", navigationRuntimeScript = "console.log('nav');"}
           stylesheetPath = AssetPath "/assets/sample.css"
@@ -966,7 +970,7 @@ spec = do
           scopedCssClass = ScopedCssClass scopedCssScope "title"
           globalCssClass = GlobalCssClass "visually-hidden"
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
@@ -982,7 +986,7 @@ spec = do
       pageTitle page `shouldBe` "Known"
       pageRoute page `shouldBe` KnownRoute
       pageContext page `shouldBe` defaultContext
-      pageBody page `shouldBe` "<h1>Known</h1>"
+      renderHtml (pageBody page) `shouldBe` "<h1>Known</h1>"
       pageBootstrapHooks page `shouldBe` ["known-page"]
       navigationItemLabel `shouldBe` "Known"
       navigationItemRoute `shouldBe` KnownRoute
@@ -1067,8 +1071,8 @@ spec = do
     it "exercises derived Eq and Show instances for public HarchWeb records and responses" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
           otherRequest = RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
-          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
-          otherPage = Page {pageTitle = "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = "<h1>Missing</h1>", pageBootstrapHooks = []}
+          page = Page {pageTitle = "Known", pageRoute = KnownRoute, pageContext = defaultContext, pageBody = trustedMarkup "<h1>Known</h1>", pageBootstrapHooks = ["known-page"]}
+          otherPage = Page {pageTitle = "Missing", pageRoute = MissingRoute, pageContext = defaultContext, pageBody = trustedMarkup "<h1>Missing</h1>", pageBootstrapHooks = []}
           attribute = HtmlAttribute {attributeName = "data-app", attributeValue = "sample"}
           otherAttribute = HtmlAttribute {attributeName = "lang", attributeValue = "en"}
           navigationAttribute = HtmlAttribute {attributeName = "data-navigation-region", attributeValue = "primary"}
@@ -1101,8 +1105,8 @@ spec = do
           otherServerSentEvent = ServerSentEvent {serverSentEventName = Nothing, serverSentEventId = Just "43", serverSentEventData = "Waiting"}
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           otherResolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Missing", navigationRoute = MissingRoute, navigationHref = "/404", navigationIsActive = False}
-          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
+          document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
+          otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellStylesheets = [], shellRuntimeDescriptors = []}
           body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
