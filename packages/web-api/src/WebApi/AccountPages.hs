@@ -677,13 +677,13 @@ renderMfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Text
 renderMfaEnrollmentRegion locale mfaEnrollmentPath form = HarchWeb.renderHtml (renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form)
 
 renderMfaEnrollmentRegionHtml :: AppLocale -> Text -> MfaEnrollmentForm -> HarchWeb.Html
-renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (mfaEnrollmentRegion locale mfaEnrollmentPath form)
+renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form = HarchWeb.regionHtml (mfaEnrollmentRegion locale mfaEnrollmentPath form)
 
-mfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Maybe HarchWeb.Region
+mfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> HarchWeb.Region
 mfaEnrollmentRegion locale mfaEnrollmentPath form =
   let copy = accountPageCopy locale
    in accountRegion
-        "mfa-enrollment-region"
+        (HarchWeb.literalElementId "mfa-enrollment-region")
         [HarchWeb.ariaLive "polite"]
         [ renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
           renderEnrollmentSecret (mfaEnrollmentFormSecret form),
@@ -715,13 +715,13 @@ renderLoginRegion :: AppLocale -> Text -> LoginForm -> Text
 renderLoginRegion locale loginPath form = HarchWeb.renderHtml (renderLoginRegionHtml locale loginPath form)
 
 renderLoginRegionHtml :: AppLocale -> Text -> LoginForm -> HarchWeb.Html
-renderLoginRegionHtml locale loginPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (loginRegion locale loginPath form)
+renderLoginRegionHtml locale loginPath form = HarchWeb.regionHtml (loginRegion locale loginPath form)
 
-loginRegion :: AppLocale -> Text -> LoginForm -> Maybe HarchWeb.Region
+loginRegion :: AppLocale -> Text -> LoginForm -> HarchWeb.Region
 loginRegion locale loginPath form =
   let copy = accountPageCopy locale
    in accountRegion
-        "login-region"
+        (HarchWeb.literalElementId "login-region")
         [HarchWeb.ariaLive "polite"]
         [ renderMessage (loginFormMessage form) (loginFormIsError form),
           HarchWeb.element
@@ -749,12 +749,12 @@ renderPendingProfileRegion :: Text -> PendingProfileForm -> Text
 renderPendingProfileRegion profilePath form = HarchWeb.renderHtml (renderPendingProfileRegionHtml profilePath form)
 
 renderPendingProfileRegionHtml :: Text -> PendingProfileForm -> HarchWeb.Html
-renderPendingProfileRegionHtml profilePath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (pendingProfileRegion profilePath form)
+renderPendingProfileRegionHtml profilePath form = HarchWeb.regionHtml (pendingProfileRegion profilePath form)
 
-pendingProfileRegion :: Text -> PendingProfileForm -> Maybe HarchWeb.Region
+pendingProfileRegion :: Text -> PendingProfileForm -> HarchWeb.Region
 pendingProfileRegion profilePath form =
   accountRegion
-    "profile-region"
+    (HarchWeb.literalElementId "profile-region")
     [HarchWeb.ariaLive "polite"]
     [ renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
       HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-email" "true"] [HarchWeb.text (pendingProfileFormEmail form)],
@@ -787,13 +787,13 @@ renderLogoutRegionHtml locale logoutPath message isError =
   renderLogoutRegionWithMessage locale logoutPath ((,isError) <$> message)
 
 renderLogoutRegionWithMessage :: AppLocale -> Text -> Maybe (Text, Bool) -> HarchWeb.Html
-renderLogoutRegionWithMessage locale logoutPath messageState = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (logoutRegion locale logoutPath messageState)
+renderLogoutRegionWithMessage locale logoutPath messageState = HarchWeb.regionHtml (logoutRegion locale logoutPath messageState)
 
-logoutRegion :: AppLocale -> Text -> Maybe (Text, Bool) -> Maybe HarchWeb.Region
+logoutRegion :: AppLocale -> Text -> Maybe (Text, Bool) -> HarchWeb.Region
 logoutRegion locale logoutPath messageState =
   let copy = accountPageCopy locale
    in accountRegion
-        "logout-region"
+        (HarchWeb.literalElementId "logout-region")
         [HarchWeb.ariaLive "polite"]
         [ maybe (HarchWeb.fragment []) renderLogoutMessage messageState,
           HarchWeb.element
@@ -856,13 +856,13 @@ renderRegistrationRegion :: AppLocale -> Text -> RegistrationForm -> Text
 renderRegistrationRegion locale registrationPath form = HarchWeb.renderHtml (renderRegistrationRegionHtml locale registrationPath form)
 
 renderRegistrationRegionHtml :: AppLocale -> Text -> RegistrationForm -> HarchWeb.Html
-renderRegistrationRegionHtml locale registrationPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (registrationRegion locale registrationPath form)
+renderRegistrationRegionHtml locale registrationPath form = HarchWeb.regionHtml (registrationRegion locale registrationPath form)
 
-registrationRegion :: AppLocale -> Text -> RegistrationForm -> Maybe HarchWeb.Region
+registrationRegion :: AppLocale -> Text -> RegistrationForm -> HarchWeb.Region
 registrationRegion locale registrationPath form =
   let copy = accountPageCopy locale
    in accountRegion
-        "registration-region"
+        (HarchWeb.literalElementId "registration-region")
         [HarchWeb.ariaLive "polite"]
         [ renderMessage (registrationFormMessage form) (registrationFormIsError form),
           HarchWeb.element
@@ -897,13 +897,13 @@ renderVerificationRegion :: AppLocale -> Text -> VerificationForm -> Text
 renderVerificationRegion locale verificationPath form = HarchWeb.renderHtml (renderVerificationRegionHtml locale verificationPath form)
 
 renderVerificationRegionHtml :: AppLocale -> Text -> VerificationForm -> HarchWeb.Html
-renderVerificationRegionHtml locale verificationPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (verificationRegion locale verificationPath form)
+renderVerificationRegionHtml locale verificationPath form = HarchWeb.regionHtml (verificationRegion locale verificationPath form)
 
-verificationRegion :: AppLocale -> Text -> VerificationForm -> Maybe HarchWeb.Region
+verificationRegion :: AppLocale -> Text -> VerificationForm -> HarchWeb.Region
 verificationRegion locale verificationPath form =
   let copy = accountPageCopy locale
    in accountRegion
-        "verification-region"
+        (HarchWeb.literalElementId "verification-region")
         [HarchWeb.ariaLive "polite"]
         [ renderMessage (verificationFormMessage form) (verificationFormIsError form),
           HarchWeb.element
@@ -943,22 +943,21 @@ renderMessageWithState maybeMessage stateAttributes =
     Nothing -> HarchWeb.fragment []
     Just message -> HarchWeb.element HarchWeb.paragraphTag (HarchWeb.dataAttribute "account-message" "true" : stateAttributes) [HarchWeb.text message]
 
-accountRegion :: Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> Maybe HarchWeb.Region
-accountRegion identifier attributes children = do
-  elementIdentifier <- HarchWeb.mkElementId identifier
-  pure (HarchWeb.region (HarchWeb.mkRegionId elementIdentifier) HarchWeb.sectionTag attributes children)
+accountRegion :: HarchWeb.ElementId -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Region
+accountRegion elementIdentifier attributes children =
+  HarchWeb.region (HarchWeb.mkRegionId elementIdentifier) HarchWeb.sectionTag attributes children
 
-replaceRegionPatch :: Maybe HarchWeb.Region -> [HarchWeb.RegionPatch]
-replaceRegionPatch = maybe [] (pure . HarchWeb.replaceRegion)
+replaceRegionPatch :: HarchWeb.Region -> [HarchWeb.RegionPatch]
+replaceRegionPatch = pure . HarchWeb.replaceRegion
 
 elementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
 elementWithId tag identifier attributes children =
-  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.element tag (HarchWeb.elementId elementIdentifier : attributes) children) (HarchWeb.mkElementId identifier)
+  HarchWeb.element tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes) children
 
 voidElementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> HarchWeb.Html
 voidElementWithId tag identifier attributes =
-  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.voidElement tag (HarchWeb.elementId elementIdentifier : attributes)) (HarchWeb.mkElementId identifier)
+  HarchWeb.voidElement tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
 
 labelWithFor :: Text -> Text -> HarchWeb.Html
 labelWithFor identifier label =
-  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.element HarchWeb.labelTag [HarchWeb.labelFor elementIdentifier] [HarchWeb.text label]) (HarchWeb.mkElementId identifier)
+  HarchWeb.element HarchWeb.labelTag [HarchWeb.labelFor (HarchWeb.literalElementId identifier)] [HarchWeb.text label]

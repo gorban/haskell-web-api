@@ -8,7 +8,7 @@ module App.App
 where
 
 import App.Components.Layout (twoPageShell)
-import App.Pages.Home (homePage)
+import App.Pages.Home (homePage, subscriptionResultRegion)
 import App.Pages.LiveData (liveDataPage)
 import App.Pages.NotFound (notFoundPage)
 import App.Pages.Second (secondPage)
@@ -31,14 +31,8 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
-    mkElementId,
-    mkRegionId,
-    paragraphTag,
-    region,
     replaceRegion,
-    role,
     serverSentEventSourceFromList,
-    text,
   )
 import HarchWeb.Site
   ( Site (..),
@@ -114,9 +108,7 @@ twoPageClientAction actionRequest =
 
 subscriptionPatch :: Text.Text -> Text.Text -> [RegionPatch]
 subscriptionPatch liveRole message =
-  maybe []
-    (\identifier -> [replaceRegion (region (mkRegionId identifier) paragraphTag [role liveRole] [text message])])
-    (mkElementId "subscription-result")
+  [replaceRegion (subscriptionResultRegion liveRole message)]
 
 twoPageServerConfig :: ServerConfig
 twoPageServerConfig =

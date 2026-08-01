@@ -32,6 +32,7 @@ module HarchWeb.Markup
     inputMode,
     labelFor,
     labelTag,
+    literalElementId,
     listItemTag,
     listTag,
     maxLength,
@@ -144,6 +145,11 @@ mkElementId :: Text -> Maybe ElementId
 mkElementId identifier
   | identifier == "" = Nothing
   | otherwise = Just (Internal.ElementId identifier)
+
+-- | An opaque ID for a framework-owned literal. Dynamic or user-provided IDs
+-- must use 'mkElementId' so validation remains explicit at the boundary.
+literalElementId :: Text -> ElementId
+literalElementId = Internal.ElementId
 
 mkRegionId :: ElementId -> RegionId
 mkRegionId = Internal.RegionId

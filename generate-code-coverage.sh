@@ -208,7 +208,6 @@ while IFS= read -r staged_pkg; do
 done < <(find "$coverage_staging_dir" -mindepth 1 -maxdepth 1 -type d -print)
 repoRoot="$(pwd)"
 missing_coverage=false
-aggregate_issue=false
 copied_mix=false
 declare -a hpc_search_dirs=()
 declare -a per_project_findings=()
@@ -386,7 +385,6 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
       if [[ "$line" == *"expressions used"* || "$line" == *"boolean coverage"* || "$line" == *"alternatives used"* ]] && awk 'match($0, /[0-9]+(\.[0-9]+)?%/) { s=substr($0,RSTART,RLENGTH); gsub(/%/,"",s); if ((s+0)<100) exit 0; exit 1 } { exit 1 }' <<<"$line"; then
         trimmed_line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         aggregate_findings+=("$trimmed_line")
-        aggregate_issue=true
       fi
     done < <(printf '%s\n' "$aggregate_report_output")
   else
@@ -410,13 +408,12 @@ if [ "${#per_project_findings[@]}" -gt 0 ]; then
   for finding in ${per_project_findings[@]+"${per_project_findings[@]}"}; do
     printf '\033[31m- %s\033[0m\n' "$finding"
   done
-elif $aggregate_issue; then
+elif [ "${#aggregate_findings[@]}" -gt 0 ]; then
   echo
-  printf '\033[31mAggregate coverage report contains mismatched component mix data.\033[0m\n'
+  printf '\033[33mAggregate coverage report mixes components from separate package builds and is diagnostic only.\033[0m\n'
   for line in ${aggregate_findings[@]+"${aggregate_findings[@]}"}; do
-    printf '\033[31m- %s\033[0m\n' "$line"
+    printf '\033[33m- %s\033[0m\n' "$line"
   done
-  missing_coverage=true
 fi
 
 if $missing_coverage; then

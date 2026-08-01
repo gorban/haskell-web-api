@@ -1,11 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module App.Pages.Home (homePage) where
+module App.Pages.Home
+  ( homePage,
+    subscriptionResultRegion,
+  )
+where
 
 import App.Routes (TwoPageRoute (..), routeHref)
+import Data.Text (Text)
 import HarchWeb
   ( CssClass (..),
     Page (..),
+    Region,
     RouteRequest (..),
     anchorTag,
     ariaLabel,
@@ -17,18 +23,21 @@ import HarchWeb
     dataFlag,
     element,
     elementId,
-    formTag,
     formAction,
+    formTag,
     headingOneTag,
     href,
     inputTag,
     inputType,
     labelFor,
     labelTag,
+    literalElementId,
     method,
-    mkElementId,
+    mkRegionId,
     name,
     paragraphTag,
+    region,
+    regionHtml,
     required,
     role,
     sectionTag,
@@ -45,9 +54,8 @@ homePage routeRequest =
         pageRoute = HomeRoute,
         pageContext = requestContext routeRequest,
         pageBody =
-          case (mkElementId "subscription-email", mkElementId "subscription-result") of
-            (Just emailId, Just resultId) ->
-              element
+          let emailId = literalElementId "subscription-email"
+           in element
                 sectionTag
                 [dataAttribute "page" "home", className (ScopedCssClass (cssScope "home") "root")]
                 [ element headingOneTag [] [text "Home"],
@@ -66,8 +74,15 @@ homePage routeRequest =
                       voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required],
                       element buttonTag [name "intent", value "subscribe", inputType "submit"] [text "Subscribe"]
                     ],
-                  element paragraphTag [elementId resultId, dataAttribute "harch-region" "true", role "status"] []
-                ]
-            _ -> text "",
+                  regionHtml (subscriptionResultRegion "status" "")
+                ],
         pageBootstrapHooks = []
       }
+
+subscriptionResultRegion :: Text -> Text -> Region
+subscriptionResultRegion liveRole message =
+  region
+    (mkRegionId (literalElementId "subscription-result"))
+    paragraphTag
+    [role liveRole]
+    [text message]
