@@ -47,8 +47,12 @@ renderClientActionResponse actionResponse =
     <> maybe "null" jsonString (clientActionFocusId actionResponse)
     <> "}"
   where
-    renderPatch RegionPatch {regionPatchId, regionPatchHtml} =
-      "{\"id\":" <> jsonString regionPatchId <> ",\"html\":" <> jsonString regionPatchHtml <> "}"
+    renderPatch
+      RegionPatch
+        { regionPatchId,
+          regionPatchHtml
+        } =
+        "{\"id\":" <> jsonString regionPatchId <> ",\"html\":" <> jsonString regionPatchHtml <> "}"
 
 jsonString :: Text -> Text
 jsonString textValue = "\"" <> Text.concatMap escapeJsonCharacter textValue <> "\""

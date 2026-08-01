@@ -187,42 +187,80 @@ instance Show AppPageModel where
     showParen (precedence > 10) (showString "SecondPage " . showsPrec 11 secondPage)
   showsPrec precedence (SpacesPage spacesPage) =
     showParen (precedence > 10) (showString "SpacesPage " . showsPrec 11 spacesPage)
-  showsPrec precedence (RegistrationPage registrationPath RegistrationForm {registrationFormUsername, registrationFormEmail, registrationFormDisplayName, registrationFormMessage, registrationFormIsError}) =
-    showParen
-      (precedence > 10)
-      ( showString "RegistrationPage "
-          . shows registrationPath
-          . showChar ' '
-          . showString "(RegistrationForm {registrationFormUsername = "
-          . shows registrationFormUsername
-          . showString ", registrationFormEmail = "
-          . shows registrationFormEmail
-          . showString ", registrationFormDisplayName = "
-          . shows registrationFormDisplayName
-          . showString ", registrationFormMessage = "
-          . shows registrationFormMessage
-          . showString ", registrationFormIsError = "
-          . shows registrationFormIsError
-          . showString "})"
-      )
-  showsPrec precedence (EmailVerificationPage verificationPath VerificationForm {verificationFormToken, verificationFormMessage, verificationFormIsError}) =
-    showParen
-      (precedence > 10)
-      ( showString "EmailVerificationPage "
-          . shows verificationPath
-          . showChar ' '
-          . showString "(VerificationForm {verificationFormToken = "
-          . shows verificationFormToken
-          . showString ", verificationFormMessage = "
-          . shows verificationFormMessage
-          . showString ", verificationFormIsError = "
-          . shows verificationFormIsError
-          . showString "})"
-      )
-  showsPrec precedence (MfaEnrollmentPage mfaEnrollmentPath MfaEnrollmentForm {mfaEnrollmentFormAccountId, mfaEnrollmentFormMessage, mfaEnrollmentFormIsError}) =
-    showParen (precedence > 10) (showString "MfaEnrollmentPage " . shows mfaEnrollmentPath . showChar ' ' . shows mfaEnrollmentFormAccountId . showChar ' ' . shows mfaEnrollmentFormMessage . showChar ' ' . shows mfaEnrollmentFormIsError)
-  showsPrec precedence (LoginPage loginPath LoginForm {loginFormEmail, loginFormMessage, loginFormIsError}) =
-    showParen (precedence > 10) (showString "LoginPage " . shows loginPath . showChar ' ' . shows loginFormEmail . showChar ' ' . shows loginFormMessage . showChar ' ' . shows loginFormIsError)
+  showsPrec
+    precedence
+    ( RegistrationPage
+        registrationPath
+        RegistrationForm
+          { registrationFormUsername,
+            registrationFormEmail,
+            registrationFormDisplayName,
+            registrationFormMessage,
+            registrationFormIsError
+          }
+      ) =
+      showParen
+        (precedence > 10)
+        ( showString "RegistrationPage "
+            . shows registrationPath
+            . showChar ' '
+            . showString "(RegistrationForm {registrationFormUsername = "
+            . shows registrationFormUsername
+            . showString ", registrationFormEmail = "
+            . shows registrationFormEmail
+            . showString ", registrationFormDisplayName = "
+            . shows registrationFormDisplayName
+            . showString ", registrationFormMessage = "
+            . shows registrationFormMessage
+            . showString ", registrationFormIsError = "
+            . shows registrationFormIsError
+            . showString "})"
+        )
+  showsPrec
+    precedence
+    ( EmailVerificationPage
+        verificationPath
+        VerificationForm
+          { verificationFormToken,
+            verificationFormMessage,
+            verificationFormIsError
+          }
+      ) =
+      showParen
+        (precedence > 10)
+        ( showString "EmailVerificationPage "
+            . shows verificationPath
+            . showChar ' '
+            . showString "(VerificationForm {verificationFormToken = "
+            . shows verificationFormToken
+            . showString ", verificationFormMessage = "
+            . shows verificationFormMessage
+            . showString ", verificationFormIsError = "
+            . shows verificationFormIsError
+            . showString "})"
+        )
+  showsPrec
+    precedence
+    ( MfaEnrollmentPage
+        mfaEnrollmentPath
+        MfaEnrollmentForm
+          { mfaEnrollmentFormAccountId,
+            mfaEnrollmentFormMessage,
+            mfaEnrollmentFormIsError
+          }
+      ) =
+      showParen (precedence > 10) (showString "MfaEnrollmentPage " . shows mfaEnrollmentPath . showChar ' ' . shows mfaEnrollmentFormAccountId . showChar ' ' . shows mfaEnrollmentFormMessage . showChar ' ' . shows mfaEnrollmentFormIsError)
+  showsPrec
+    precedence
+    ( LoginPage
+        loginPath
+        LoginForm
+          { loginFormEmail,
+            loginFormMessage,
+            loginFormIsError
+          }
+      ) =
+      showParen (precedence > 10) (showString "LoginPage " . shows loginPath . showChar ' ' . shows loginFormEmail . showChar ' ' . shows loginFormMessage . showChar ' ' . shows loginFormIsError)
   showsPrec precedence (LogoutPage logoutPath) =
     showParen (precedence > 10) (showString "LogoutPage " . shows logoutPath)
   showsPrec precedence (ProfilePage profilePage) =

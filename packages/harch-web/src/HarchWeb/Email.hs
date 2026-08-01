@@ -116,10 +116,15 @@ emailAddressText :: EmailAddress -> Text
 emailAddressText (EmailAddress value) = value
 
 mkEmailMessage :: EmailMessageInput -> Maybe EmailMessage
-mkEmailMessage EmailMessageInput {emailInputRecipient = recipient, emailInputSubject = subject, emailInputBody = body} =
-  if validHeaderValue subject
-    then Just (EmailMessage recipient subject body)
-    else Nothing
+mkEmailMessage
+  EmailMessageInput
+    { emailInputRecipient = recipient,
+      emailInputSubject = subject,
+      emailInputBody = body
+    } =
+    if validHeaderValue subject
+      then Just (EmailMessage recipient subject body)
+      else Nothing
 
 smtpServerHost :: Text -> SmtpHost
 smtpServerHost = SmtpHost
@@ -137,15 +142,22 @@ smtpAuthentication :: SmtpUsername -> SmtpPassword -> SmtpAuthentication
 smtpAuthentication = SmtpAuthentication
 
 mkSmtpConfig :: SmtpConfigInput -> Maybe SmtpConfig
-mkSmtpConfig SmtpConfigInput {smtpInputHost = SmtpHost host, smtpInputPort = port, smtpInputHeloName = SmtpHeloName heloName, smtpInputEnvelopeSender = sender, smtpInputAuthentication = authentication} =
-  if not (Text.null host) && port > 0 && validHeaderValue heloName
-    then SmtpConfig host port heloName sender <$> traverse toCredentials authentication
-    else Nothing
-  where
-    toCredentials (SmtpAuthentication (SmtpUsername username) (SmtpPassword password)) =
-      if validAuthenticationValue username && validAuthenticationValue password
-        then Just (SmtpCredentials username password)
-        else Nothing
+mkSmtpConfig
+  SmtpConfigInput
+    { smtpInputHost = SmtpHost host,
+      smtpInputPort = port,
+      smtpInputHeloName = SmtpHeloName heloName,
+      smtpInputEnvelopeSender = sender,
+      smtpInputAuthentication = authentication
+    } =
+    if not (Text.null host) && port > 0 && validHeaderValue heloName
+      then SmtpConfig host port heloName sender <$> traverse toCredentials authentication
+      else Nothing
+    where
+      toCredentials (SmtpAuthentication (SmtpUsername username) (SmtpPassword password)) =
+        if validAuthenticationValue username && validAuthenticationValue password
+          then Just (SmtpCredentials username password)
+          else Nothing
 
 verificationEmail :: EmailLocale -> EmailAddress -> Text -> EmailMessage
 verificationEmail locale recipient verificationUrl =

@@ -37,13 +37,18 @@ serverSentEventSourceFromList events = do
         event : remainingEvents -> (remainingEvents, Just event)
 
 renderServerSentEvent :: ServerSentEvent -> Text
-renderServerSentEvent ServerSentEvent {serverSentEventName, serverSentEventId, serverSentEventData} =
-  Text.concat
-    ( maybeToList (renderSseField "event" <$> serverSentEventName)
-        <> maybeToList (renderSseField "id" <$> serverSentEventId)
-        <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (Text.splitOn "\n" serverSentEventData)
-        <> ["\n"]
-    )
+renderServerSentEvent
+  ServerSentEvent
+    { serverSentEventName,
+      serverSentEventId,
+      serverSentEventData
+    } =
+    Text.concat
+      ( maybeToList (renderSseField "event" <$> serverSentEventName)
+          <> maybeToList (renderSseField "id" <$> serverSentEventId)
+          <> map (renderSseDataLine . Text.filter (`notElem` ['\r', '\n'])) (Text.splitOn "\n" serverSentEventData)
+          <> ["\n"]
+      )
 
 renderSseField :: Text -> Text -> Text
 renderSseField fieldName fieldValue = fieldName <> ": " <> Text.filter (`notElem` ['\r', '\n']) fieldValue <> "\n"

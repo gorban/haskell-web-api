@@ -459,17 +459,22 @@ renderBootstrapHookAttributes bootstrapHooks =
       ]
 
 renderNavigationItem :: ResolvedNavigationItem route -> Text
-renderNavigationItem ResolvedNavigationItem {navigationLabel = itemLabel, navigationHref = itemHref, navigationIsActive = itemIsActive} =
-  Text.concat
-    [ "<a href=\"",
-      itemHref,
-      "\"",
-      " data-page-link=\"true\"",
-      if itemIsActive then " aria-current=\"page\"" else Text.empty,
-      ">",
-      itemLabel,
-      "</a>"
-    ]
+renderNavigationItem
+  ResolvedNavigationItem
+    { navigationLabel = itemLabel,
+      navigationHref = itemHref,
+      navigationIsActive = itemIsActive
+    } =
+    Text.concat
+      [ "<a href=\"",
+        itemHref,
+        "\"",
+        " data-page-link=\"true\"",
+        if itemIsActive then " aria-current=\"page\"" else Text.empty,
+        ">",
+        itemLabel,
+        "</a>"
+      ]
 
 renderRuntimeDescriptors :: RuntimeNonce -> [RuntimeDescriptor] -> Text
 renderRuntimeDescriptors runtimeNonce =

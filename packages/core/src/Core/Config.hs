@@ -85,12 +85,18 @@ parseConfigOverridesFile =
                     else Right [(strippedKey, Text.strip (Text.drop 1 rawValueWithSeparator))]
 
 lookupConfigValue :: Text -> ConfigLayers -> Maybe Text
-lookupConfigValue key configLayers =
-  lookupInLayer (configLayerEnvironmentOverrides configLayers)
-    `orElse` lookupInLayer (configLayerLocalOverrides configLayers)
-    `orElse` lookupInLayer (configLayerCommittedDefaults configLayers)
-  where
-    lookupInLayer = lookup key . reverse
+lookupConfigValue
+  key
+  ConfigLayers
+    { configLayerCommittedDefaults = committedDefaults,
+      configLayerLocalOverrides = localOverrides,
+      configLayerEnvironmentOverrides = environmentOverrides
+    } =
+    lookupInLayer environmentOverrides
+      `orElse` lookupInLayer localOverrides
+      `orElse` lookupInLayer committedDefaults
+    where
+      lookupInLayer = lookup key . reverse
 
 orElse :: Maybe value -> Maybe value -> Maybe value
 orElse maybeValue fallbackValue =

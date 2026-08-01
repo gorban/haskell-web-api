@@ -124,17 +124,23 @@ data AppEnvironmentConfig = AppEnvironmentConfig
   deriving (Eq)
 
 instance Show AppEnvironmentConfig where
-  show AppEnvironmentConfig {appMode, databaseConfig, smtpDeliveryConfig, publicBaseUrl} =
-    "AppEnvironmentConfig {appMode = "
-      <> show appMode
-      <> ", databaseConfig = "
-      <> show databaseConfig
-      <> ", smtpDeliveryConfig = "
-      <> renderSmtpDeliveryConfig smtpDeliveryConfig
-      <> ", publicBaseUrl = "
-      <> show publicBaseUrl
-      <> ", totpEncryptionKey = <redacted>"
-      <> "}"
+  show
+    AppEnvironmentConfig
+      { appMode,
+        databaseConfig,
+        smtpDeliveryConfig,
+        publicBaseUrl
+      } =
+      "AppEnvironmentConfig {appMode = "
+        <> show appMode
+        <> ", databaseConfig = "
+        <> show databaseConfig
+        <> ", smtpDeliveryConfig = "
+        <> renderSmtpDeliveryConfig smtpDeliveryConfig
+        <> ", publicBaseUrl = "
+        <> show publicBaseUrl
+        <> ", totpEncryptionKey = <redacted>"
+        <> "}"
 
 data SmtpDeliveryConfig = SmtpDeliveryConfig
   { smtpDeliveryHost :: Text,
@@ -147,20 +153,28 @@ data SmtpDeliveryConfig = SmtpDeliveryConfig
   deriving (Eq)
 
 renderSmtpDeliveryConfig :: SmtpDeliveryConfig -> String
-renderSmtpDeliveryConfig SmtpDeliveryConfig {smtpDeliveryHost, smtpDeliveryPort, smtpDeliveryHeloName, smtpDeliverySender, smtpDeliveryUsername, smtpDeliveryPassword} =
-  "SmtpDeliveryConfig {smtpDeliveryHost = "
-    <> show smtpDeliveryHost
-    <> ", smtpDeliveryPort = "
-    <> show smtpDeliveryPort
-    <> ", smtpDeliveryHeloName = "
-    <> show smtpDeliveryHeloName
-    <> ", smtpDeliverySender = "
-    <> show smtpDeliverySender
-    <> ", smtpDeliveryUsername = "
-    <> show smtpDeliveryUsername
-    <> ", smtpDeliveryPassword = "
-    <> show smtpDeliveryPassword
-    <> "}"
+renderSmtpDeliveryConfig
+  SmtpDeliveryConfig
+    { smtpDeliveryHost,
+      smtpDeliveryPort,
+      smtpDeliveryHeloName,
+      smtpDeliverySender,
+      smtpDeliveryUsername,
+      smtpDeliveryPassword
+    } =
+    "SmtpDeliveryConfig {smtpDeliveryHost = "
+      <> show smtpDeliveryHost
+      <> ", smtpDeliveryPort = "
+      <> show smtpDeliveryPort
+      <> ", smtpDeliveryHeloName = "
+      <> show smtpDeliveryHeloName
+      <> ", smtpDeliverySender = "
+      <> show smtpDeliverySender
+      <> ", smtpDeliveryUsername = "
+      <> show smtpDeliveryUsername
+      <> ", smtpDeliveryPassword = "
+      <> show smtpDeliveryPassword
+      <> "}"
 
 data AppEnvironmentConfigLoadError
   = AppEnvironmentOverridesFileError FilePath ConfigOverridesFileError
@@ -188,13 +202,19 @@ data AppStartupConfigLoadError
   deriving (Eq, Show)
 
 instance HasServerConfig AppConfig where
-  toServerConfig AppConfig {listenerConfigs = appListeners, staticAssets = appStaticAssets, requestPolicy = appRequestPolicy, observability = appObservability} =
-    ServerConfig
+  toServerConfig
+    AppConfig
       { listenerConfigs = appListeners,
         staticAssets = appStaticAssets,
         requestPolicy = appRequestPolicy,
         observability = appObservability
-      }
+      } =
+      ServerConfig
+        { listenerConfigs = appListeners,
+          staticAssets = appStaticAssets,
+          requestPolicy = appRequestPolicy,
+          observability = appObservability
+        }
 
 committedEnvDefaults :: [(Text, Text)]
 committedEnvDefaults =
