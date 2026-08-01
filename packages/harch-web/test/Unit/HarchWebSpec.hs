@@ -1028,7 +1028,7 @@ spec = do
       documentNavigation document `shouldBe` [resolvedNavigationItem]
       documentMainId document `shouldBe` "app-main"
       documentMainAttributes document `shouldBe` [mainAttribute]
-      documentMainContent document `shouldBe` "<h1>Known</h1>"
+      renderHtml (documentMainContent document) `shouldBe` "<h1>Known</h1>"
       documentBootstrapHooks document `shouldBe` ["known-page"]
       documentStylesheets document `shouldBe` [stylesheetValue]
       documentRuntimeDescriptors document `shouldBe` [DeferredModule "navigation" "/assets/navigation.js"]
@@ -1384,7 +1384,7 @@ spec = do
                     attributeValue = "true"
                   }
               ],
-            documentMainContent = "<h1>Known</h1>",
+            documentMainContent = trustedMarkup "<h1>Known</h1>",
             documentBootstrapHooks = [],
             documentStylesheets = [],
             documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
@@ -1414,7 +1414,7 @@ spec = do
                 { pageTitle = "Known",
                   pageRoute = KnownRoute,
                   pageContext = defaultContext,
-                  pageBody = "<h1>Known</h1>",
+                  pageBody = trustedMarkup "<h1>Known</h1>",
                   pageBootstrapHooks = ["known-page", "hydrate-known"]
                 }
             )
