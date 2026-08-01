@@ -170,12 +170,17 @@ spec = do
       CoreConfig.parseDelimitedTextsUnsafe ";" " first ; ; second ; "
         `shouldBe` ["first", "second"]
 
-  describe "parseHeadersUnsafe" $ do
-    it "parses valid header pairs and skips malformed entries" $
-      CoreConfig.parseHeadersUnsafe "authorization=Bearer token; broken; x-request-id = 123 "
-        `shouldBe` [ ("authorization", "Bearer token"),
-                     ("x-request-id", "123")
-                   ]
+  describe "parseHeaders" $ do
+    it "parses valid header pairs" $
+      CoreConfig.parseHeaders "OTLP_HEADERS" "authorization=Bearer token; x-request-id = 123 "
+        `shouldBe` Right
+          [ ("authorization", "Bearer token"),
+            ("x-request-id", "123")
+          ]
+
+    it "rejects malformed entries instead of discarding them" $
+      CoreConfig.parseHeaders "OTLP_HEADERS" "authorization=Bearer token; broken"
+        `shouldBe` Left (CoreConfig.InvalidConfigValue "OTLP_HEADERS" "authorization=Bearer token; broken")
 
   describe "declaredIndices" $ do
     it "extracts sorted unique indices while ignoring malformed keys" $ do

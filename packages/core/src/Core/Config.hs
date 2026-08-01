@@ -12,7 +12,7 @@ module Core.Config
     parseBoolean,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
-    parseHeadersUnsafe,
+    parseHeaders,
     parseNonNegativeInt,
     parsePositiveInt,
   )
@@ -134,15 +134,16 @@ parseDelimitedTextsUnsafe delimiter =
     . map Text.strip
     . Text.splitOn delimiter
 
-parseHeadersUnsafe :: Text -> [(Text, Text)]
-parseHeadersUnsafe value =
-  mapMaybe parseHeaderPair (parseDelimitedTextsUnsafe ";" value)
+parseHeaders :: Text -> Text -> Either ConfigParseError [(Text, Text)]
+parseHeaders key value =
+  traverse parseHeaderPair (parseDelimitedTextsUnsafe ";" value)
   where
     parseHeaderPair headerEntry =
-      let (headerName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
+      let (rawHeaderName, headerValueWithSeparator) = Text.breakOn "=" headerEntry
+          headerName = Text.strip rawHeaderName
        in if Text.null headerName || Text.null headerValueWithSeparator
-            then Nothing
-            else Just (Text.strip headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
+            then Left (InvalidConfigValue key value)
+            else Right (headerName, Text.strip (Text.drop 1 headerValueWithSeparator))
 
 declaredIndices :: Text -> [(Text, Text)] -> [Int]
 declaredIndices entryPrefix =

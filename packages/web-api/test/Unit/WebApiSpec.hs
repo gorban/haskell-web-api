@@ -1853,19 +1853,11 @@ spec = do
         [ ("OTLP_METRICS_ENDPOINT", "http://collector:4318/v1/metrics"),
           ("OTLP_METRICS_HEADERS", "x-scope=metrics;broken-entry")
         ]
-        `shouldBe` Right
-          defaultAppConfig
-            { observability =
-                ObservabilityConfig
-                  { tracingExporter = Nothing,
-                    metricsExporter =
-                      Just
-                        OtlpExporter
-                          { otlpEndpoint = "http://collector:4318/v1/metrics",
-                            otlpHeaders = [("x-scope", "metrics")]
-                          }
-                  }
-            }
+        `shouldBe` Left
+          ( InvalidConfigValue
+              "OTLP_METRICS_HEADERS"
+              "x-scope=metrics;broken-entry"
+          )
 
     it "fails invalid runtime values with explicit errors" $ do
       parseRuntimeAppConfig

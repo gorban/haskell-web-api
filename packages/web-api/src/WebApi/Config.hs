@@ -61,7 +61,7 @@ import Core.Config
     parseBoolean,
     parseDelimitedTexts,
     parseDelimitedTextsUnsafe,
-    parseHeadersUnsafe,
+    parseHeaders,
     parseNonNegativeInt,
     parsePositiveInt,
   )
@@ -773,7 +773,18 @@ parseOptionalOtlpExporterWithDefaultP exporterPrefix defaultEndpoint = do
   configuredEndpoint <- optionalConfigValueP (exporterPrefix <> "_ENDPOINT")
   configuredHeaders <- optionalConfigValueP (exporterPrefix <> "_HEADERS")
   case configuredEndpoint <|> defaultEndpoint of
-    Just endpoint -> pure (Just OtlpExporter {otlpEndpoint = endpoint, otlpHeaders = maybe [] (parseHeadersUnsafe . Text.strip) configuredHeaders})
+    Just endpoint -> do
+      headers <-
+        traverse
+          (liftEitherP . parseHeaders (exporterPrefix <> "_HEADERS"))
+          configuredHeaders
+      pure
+        ( Just
+            OtlpExporter
+              { otlpEndpoint = endpoint,
+                otlpHeaders = fromMaybe [] headers
+              }
+        )
     Nothing -> liftEitherP $ case configuredHeaders of
       Just _ -> Left (MissingConfigValue (exporterPrefix <> "_ENDPOINT"))
       Nothing -> Right Nothing
