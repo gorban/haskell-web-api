@@ -944,15 +944,15 @@ renderMessageWithState maybeMessage stateAttributes =
     Just message -> HarchWeb.element HarchWeb.paragraphTag (HarchWeb.dataAttribute "account-message" "true" : stateAttributes) [HarchWeb.text message]
 
 accountRegion :: HarchWeb.ElementId -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Region
-accountRegion elementIdentifier attributes children =
-  HarchWeb.region (HarchWeb.mkRegionId elementIdentifier) HarchWeb.sectionTag attributes children
+accountRegion elementIdentifier =
+  HarchWeb.region (HarchWeb.mkRegionId elementIdentifier) HarchWeb.sectionTag
 
 replaceRegionPatch :: HarchWeb.Region -> [HarchWeb.RegionPatch]
 replaceRegionPatch = pure . HarchWeb.replaceRegion
 
 elementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
-elementWithId tag identifier attributes children =
-  HarchWeb.element tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes) children
+elementWithId tag identifier attributes =
+  HarchWeb.element tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
 
 voidElementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> HarchWeb.Html
 voidElementWithId tag identifier attributes =
