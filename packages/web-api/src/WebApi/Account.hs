@@ -249,8 +249,8 @@ deliverVerificationEmail ::
   EmailVerificationToken ->
   ExceptT error IO ()
 deliverVerificationEmail toError emailDelivery locale emailAddress renderVerificationUrl token =
-  liftIO (try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ()))
-    >>= either (throwError . toError . Text.pack . displayException) pure
+  either (throwError . toError . Text.pack . displayException) pure
+    =<< liftIO (try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ()))
 
 addNanoseconds :: Word64 -> Word64 -> Maybe Word64
 addNanoseconds now duration =

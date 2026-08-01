@@ -92,10 +92,10 @@ beginPasswordLogin credentialStore mfaStore emailAddress =
 
 beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginIdentifier -> Password -> IO PasswordLoginResult
 beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password =
-  lookupCredential credentialStore identifier
-    >>= either
-      (pure . PasswordLoginCredentialStoreError)
-      (maybe (pure PasswordLoginRejected) (continueWithCredential mfaStore password))
+  either
+    (pure . PasswordLoginCredentialStoreError)
+    (maybe (pure PasswordLoginRejected) (continueWithCredential mfaStore password))
+    =<< lookupCredential credentialStore identifier
 
 lookupCredential :: AccountCredentialStore -> LoginIdentifier -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
 lookupCredential credentialStore identifier =
@@ -172,10 +172,10 @@ continuePasswordLogin context passwordResult =
 
 completeConfirmedEnrollment :: SecondFactorContext -> AccountId -> IO PasswordMfaLoginResult
 completeConfirmedEnrollment context accountId =
-  loadTotpEnrollment (secondFactorMfaStore context) accountId
-    >>= either
-      (pure . PasswordMfaLoginMfaStoreError)
-      (maybe (pure (PasswordMfaLoginEnrollmentRequired accountId)) (completeStoredEnrollment context accountId))
+  either
+    (pure . PasswordMfaLoginMfaStoreError)
+    (maybe (pure (PasswordMfaLoginEnrollmentRequired accountId)) (completeStoredEnrollment context accountId))
+    =<< loadTotpEnrollment (secondFactorMfaStore context) accountId
 
 completeStoredEnrollment :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> IO PasswordMfaLoginResult
 completeStoredEnrollment context accountId enrollment =
