@@ -67,6 +67,8 @@ library
     WebApi.Account
     WebApi.AccountPages
     WebApi.AccountPages.Forms
+    WebApi.AccountPages.Rendering
+    WebApi.AccountPages.Actions
     WebApi.App
     WebApi.App.Enhancements
     WebApi.App.Shell

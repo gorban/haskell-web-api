@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module WebApi.AccountPages.Forms
   ( LoginForm (..),
     MfaEnrollmentForm (..),
