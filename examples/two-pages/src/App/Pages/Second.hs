@@ -3,10 +3,17 @@
 module App.Pages.Second (secondPage) where
 
 import App.Routes (TwoPageRoute (..), routeHref)
-import qualified Data.Text as Text
 import HarchWeb
   ( Page (..),
     RouteRequest (..),
+    anchorTag,
+    dataAttribute,
+    element,
+    headingOneTag,
+    href,
+    paragraphTag,
+    sectionTag,
+    text,
   )
 
 secondPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
@@ -17,14 +24,12 @@ secondPage routeRequest =
         pageRoute = SecondRoute,
         pageContext = requestContext routeRequest,
         pageBody =
-          Text.concat
-            [ "<section data-page=\"second\">",
-              "<h1>Second</h1>",
-              "<p>This page also returns full HTML when loaded directly.</p>",
-              "<p><a href=\"",
-              routeHref HomeRoute,
-              "\" data-page-link=\"true\">Back home</a></p>",
-              "</section>"
+          element
+            sectionTag
+            [dataAttribute "page" "second"]
+            [ element headingOneTag [] [text "Second"],
+              element paragraphTag [] [text "This page also returns full HTML when loaded directly."],
+              element paragraphTag [] [element anchorTag [href (routeHref HomeRoute), dataAttribute "page-link" "true"] [text "Back home"]]
             ],
         pageBootstrapHooks = ["second-page"]
       }

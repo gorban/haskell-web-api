@@ -12,10 +12,12 @@ module HarchWeb.Markup.Internal
     Tag (..),
     TrustedHtml (..),
     attribute,
+    booleanAttribute,
     element,
     fragment,
     renderHtml,
     text,
+    voidElement,
   )
 where
 
@@ -29,6 +31,7 @@ newtype Html = Html
 
 data Node
   = ElementNode Tag [Attribute] [Node]
+  | VoidElementNode Tag [Attribute]
   | TextNode Text
   | TrustedNode TrustedHtml
   deriving (Eq, Show)
@@ -38,7 +41,7 @@ newtype Tag = Tag
   }
   deriving (Eq, Show)
 
-data Attribute = Attribute AttributeName Text
+data Attribute = Attribute AttributeName (Maybe Text)
   deriving (Eq, Show)
 
 newtype AttributeName = AttributeName
@@ -84,8 +87,14 @@ element :: Tag -> [Attribute] -> [Html] -> Html
 element tag attributes children =
   Html [ElementNode tag attributes (concatMap htmlNodes children)]
 
+voidElement :: Tag -> [Attribute] -> Html
+voidElement tag attributes = Html [VoidElementNode tag attributes]
+
 attribute :: AttributeName -> Text -> Attribute
-attribute = Attribute
+attribute name value = Attribute name (Just value)
+
+booleanAttribute :: AttributeName -> Attribute
+booleanAttribute name = Attribute name Nothing
 
 renderHtml :: Html -> Text
 renderHtml (Html nodes) = Text.concat (map renderNode nodes)
@@ -102,12 +111,17 @@ renderNode node =
         <> "</"
         <> tagText tag
         <> ">"
+    VoidElementNode tag attributes ->
+      "<" <> tagText tag <> Text.concat (map renderAttribute attributes) <> ">"
     TextNode value -> escapeHtmlText value
     TrustedNode trustedHtml -> trustedHtmlText trustedHtml
 
 renderAttribute :: Attribute -> Text
-renderAttribute (Attribute name value) =
-  " " <> attributeNameText name <> "=\"" <> escapeHtmlAttribute value <> "\""
+renderAttribute (Attribute name maybeValue) =
+  case maybeValue of
+    Just value ->
+      " " <> attributeNameText name <> "=\"" <> escapeHtmlAttribute value <> "\""
+    Nothing -> " " <> attributeNameText name
 
 escapeHtmlText :: Text -> Text
 escapeHtmlText = Text.concatMap escapeCharacter
