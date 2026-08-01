@@ -1002,6 +1002,13 @@ spec = do
       navigationRuntimePath defaultNavigationRuntime `shouldBe` "/assets/navigation.js"
       navigationRuntimeScript defaultNavigationRuntime `shouldBe` defaultNavigationRuntimeScript
       Text.isInfixOf "function navigateTo" defaultNavigationRuntimeScript `shouldBe` True
+      expectAll
+        ( (Text.isInfixOf "const CapturedEvent = Object.freeze({ Submit: 'submit' });" defaultCaptureKernelScript `shouldBe` True)
+            :| [ Text.isInfixOf "function dispatchCapturedEvent(capturedEventTypes, capturedEvent)" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "case capturedEventTypes.Submit:" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "['click', 'input', 'change', 'keydown', 'submit']" defaultCaptureKernelScript `shouldBe` False
+               ]
+        )
       assetPathText stylesheetPath `shouldBe` "/assets/sample.css"
       stylesheetAsset stylesheetValue `shouldBe` AssetPath "/assets/sample.css"
       cssScopeName scopedCssScope `shouldBe` "sample"
