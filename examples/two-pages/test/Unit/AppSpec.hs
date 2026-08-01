@@ -252,7 +252,7 @@ spec =
                 (nextRequestBodyChunk actionBodyChunks)
                 ( (waiRequest ["actions", "subscribe"])
                     { Wai.requestMethod = "POST",
-                      Wai.requestHeaders = [("X-Harch-Action", "1")]
+                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
@@ -264,8 +264,8 @@ spec =
               { clientActionMethod = "POST",
                 clientActionPath = "/actions/subscribe",
                 clientActionFields = [("email", "ada@example")],
-              clientActionCsrfToken = Nothing,
-              clientActionContext = ()
+                clientActionCsrfToken = Nothing,
+                clientActionContext = ()
               }
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status422)
@@ -284,7 +284,7 @@ spec =
                 (nextRequestBodyChunk actionBodyChunks)
                 ( (waiRequest ["actions", "subscribe"])
                     { Wai.requestMethod = "POST",
-                      Wai.requestHeaders = [("X-Harch-Action", "1")]
+                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
@@ -296,8 +296,8 @@ spec =
               { clientActionMethod = "POST",
                 clientActionPath = "/actions/subscribe",
                 clientActionFields = [("email", "ada@example.com")],
-              clientActionCsrfToken = Nothing,
-              clientActionContext = ()
+                clientActionCsrfToken = Nothing,
+                clientActionContext = ()
               }
         expectAll
           ( (Wai.responseStatus response `shouldBe` Http.status200)

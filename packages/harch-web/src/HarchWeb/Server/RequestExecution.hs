@@ -11,7 +11,10 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
@@ -173,13 +176,33 @@ dispatchRoutedRequest
     let webApplication = routedRequestApplication routedRequestExecution
         request = routedRequestWaiRequest routedRequestExecution
         requestPath = routedRequestPath routedRequestExecution
+        requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
      in if isClientActionRequest request
           then do
-            requestBody <- Wai.strictRequestBody request
-            let actionFields = parseClientActionFields requestBody
-            maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
-            maybe (renderResponse webApplication routeRequest) (pure . ClientActionBodyResponse) maybeActionResponse
+            let expectedOrigin = requestScheme requestPolicyConfig request <> "://" <> TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Host" (Wai.requestHeaders request)))
+            case validateClientActionRequest expectedOrigin request of
+              Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+              Right () -> do
+                actionBody <- readClientActionBody request
+                case actionBody >>= parseClientActionFields of
+                  Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+                  Right actionFields -> do
+                    maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
+                    pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
           else renderResponse webApplication routeRequest
+
+readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)
+readClientActionBody request = go 0 []
+  where
+    go byteCount chunks = do
+      chunk <- Wai.getRequestBodyChunk request
+      let nextByteCount = byteCount + ByteString.length chunk
+      if nextByteCount > maxClientActionBodyBytes
+        then pure (Left ClientActionBodyTooLarge)
+        else
+          if ByteString.null chunk
+            then pure (Right (LazyByteString.fromChunks (reverse chunks)))
+            else go nextByteCount (chunk : chunks)
 
 finalizeRoutedResponse :: (Eq route) => RoutedRequestExecution route context -> RequestExecutionTimings -> RouteRequest route context -> Document.RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
 finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response = do

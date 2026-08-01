@@ -1583,13 +1583,13 @@ spec = do
                 reportRequestObservability = writeIORef requestObservabilityReference . Just,
                 reportApplicationLog = \entry -> modifyIORef' logEntriesReference (<> [entry])
               }
-      actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&intent=subscribe&blank&invalid=%FF"]
+      actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&intent=subscribe&blank"]
       let capturedActionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["es", "known"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")]
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
                   }
               )
       response <- performWaiRequest (toWaiApplication actionApplication) capturedActionRequest
@@ -1599,7 +1599,7 @@ spec = do
           ClientActionRequest
             { clientActionMethod = "POST",
               clientActionPath = "/es/known",
-              clientActionFields = [("email", "ada@example.com"), ("_csrf", "csrf-token"), ("intent", "subscribe"), ("blank", ""), ("invalid", "�")],
+              clientActionFields = [("email", "ada@example.com"), ("_csrf", "csrf-token"), ("intent", "subscribe"), ("blank", "")],
               clientActionCsrfToken = Just "csrf-token",
               clientActionContext = spanishContext
             }
@@ -1613,6 +1613,41 @@ spec = do
         `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
       capturedLogEntries <- readIORef logEntriesReference
       capturedLogEntries `shouldSatisfy` any (Text.isInfixOf "private registration failure detail")
+
+    it "rejects malformed client-action form encoding before application dispatch" $ do
+      actionBodyChunks <- newIORef ["email=%FF"]
+      let actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
+      Wai.responseStatus response `shouldBe` Http.status400
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+
+    it "rejects oversized or cross-origin client actions before application dispatch" $ do
+      oversizedChunks <- newIORef [ByteString.replicate 65537 97]
+      crossOriginChunks <- newIORef ["email=ada%40example.test"]
+      invalidContentTypeChunks <- newIORef ["email=ada%40example.test"]
+      let requestWith bodyChunks headers =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk bodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = headers
+                  }
+              )
+          validHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
+      oversizedResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith oversizedChunks validHeaders)
+      crossOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith crossOriginChunks (init validHeaders <> [("Origin", "https://evil.example")]))
+      invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
+      Wai.responseStatus oversizedResponse `shouldBe` Http.status413
+      Wai.responseStatus crossOriginResponse `shouldBe` Http.status403
+      Wai.responseStatus invalidContentTypeResponse `shouldBe` Http.status415
 
     it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
       let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t"
@@ -1644,18 +1679,19 @@ spec = do
                ]
         )
 
-    it "falls back to the SSR response when an action is not handled" $ do
-      actionBodyChunks <- newIORef []
+    it "rejects marked actions without a matching handler instead of falling back to SSR" $ do
+      actionBodyChunks <- newIORef ["intent=unknown"]
       let actionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["known"])
-                  { Wai.requestHeaders = [("X-Harch-Action", "1")]
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
                   }
               )
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
-      Wai.responseStatus response `shouldBe` Http.status200
-      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
+      Wai.responseStatus response `shouldBe` Http.status404
+      lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json; charset=utf-8")
 
     it "renders typed redirects with the location header and standard response metadata" $ do
       let typedRedirect = redirectResponse 302 "/spaces" :: Response TestRoute TestContext
@@ -1681,7 +1717,8 @@ spec = do
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["actions", "empty"])
-                  { Wai.requestHeaders = [("X-Harch-Action", "1")]
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
                   }
               )
       response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
