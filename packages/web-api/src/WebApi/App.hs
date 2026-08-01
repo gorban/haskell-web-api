@@ -242,8 +242,7 @@ runWithConfig outputHandle appConfig !environmentConfig = do
 run :: Handle -> IO ()
 run outputHandle = do
   configFileStatuses <- loadDefaultStartupConfigFileStatuses
-  loadAppStartupConfig
-    >>= either throwStartupLoadError (runLoadedStartupConfig outputHandle configFileStatuses)
+  either throwStartupLoadError (runLoadedStartupConfig outputHandle configFileStatuses) =<< loadAppStartupConfig
 
 throwStartupLoadError :: AppStartupConfigLoadError -> IO ()
 throwStartupLoadError loadError =
