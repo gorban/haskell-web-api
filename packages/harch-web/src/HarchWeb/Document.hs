@@ -32,8 +32,8 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.Markup (Html, renderHtml, text)
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Markup (Html, renderHtml, text)
 import HarchWeb.PathPrefix (applyPathPrefix)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), Stylesheet (..))
@@ -46,7 +46,29 @@ data Page route context = Page
     pageBody :: Html,
     pageBootstrapHooks :: [Text]
   }
-  deriving (Eq, Show)
+
+instance (Eq route, Eq context) => Eq (Page route context) where
+  left == right =
+    pageTitle left == pageTitle right
+      && pageRoute left == pageRoute right
+      && pageContext left == pageContext right
+      && renderHtml (pageBody left) == renderHtml (pageBody right)
+      && pageBootstrapHooks left == pageBootstrapHooks right
+
+instance (Show route, Show context) => Show (Page route context) where
+  showsPrec precedence page =
+    showParen (precedence > 10) $
+      showString "Page {pageTitle = "
+        . shows (pageTitle page)
+        . showString ", pageRoute = "
+        . shows (pageRoute page)
+        . showString ", pageContext = "
+        . shows (pageContext page)
+        . showString ", pageBody = "
+        . shows (renderHtml (pageBody page))
+        . showString ", pageBootstrapHooks = "
+        . shows (pageBootstrapHooks page)
+        . showString "}"
 
 data HtmlAttribute = HtmlAttribute
   { attributeName :: Text,

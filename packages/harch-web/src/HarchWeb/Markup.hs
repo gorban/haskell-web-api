@@ -11,9 +11,11 @@ module HarchWeb.Markup
     TrustedHtml,
     anchorTag,
     ariaLabel,
+    ariaLive,
     autocomplete,
     buttonTag,
     className,
+    codeTag,
     dataAttribute,
     dataFlag,
     divTag,
@@ -21,24 +23,34 @@ module HarchWeb.Markup
     elementId,
     fragment,
     headingOneTag,
+    headingTwoTag,
     formTag,
     formAction,
     href,
     inputTag,
     inputType,
+    inputMode,
     labelFor,
     labelTag,
+    listItemTag,
+    listTag,
+    maxLength,
     method,
+    minLength,
     mkElementId,
     mkRegionId,
     name,
     paragraphTag,
+    optionTag,
     region,
     regionHtml,
+    regionPatchHtml,
+    regionPatchId,
     replaceRegion,
     required,
     role,
     sectionTag,
+    selectTag,
     text,
     trustedHtml,
     value,
@@ -84,6 +96,9 @@ formAction = attribute (AttributeName "action")
 ariaLabel :: Text -> Attribute
 ariaLabel = attribute (AttributeName "aria-label")
 
+ariaLive :: Text -> Attribute
+ariaLive = attribute (AttributeName "aria-live")
+
 autocomplete :: Text -> Attribute
 autocomplete = attribute (AttributeName "autocomplete")
 
@@ -96,12 +111,21 @@ href = attribute (AttributeName "href")
 inputType :: Text -> Attribute
 inputType = attribute (AttributeName "type")
 
+inputMode :: Text -> Attribute
+inputMode = attribute (AttributeName "inputmode")
+
 labelFor :: ElementId -> Attribute
 labelFor elementIdentifier =
   attribute (AttributeName "for") (Internal.elementIdText elementIdentifier)
 
 method :: Text -> Attribute
 method = attribute (AttributeName "method")
+
+minLength :: Text -> Attribute
+minLength = attribute (AttributeName "minlength")
+
+maxLength :: Text -> Attribute
+maxLength = attribute (AttributeName "maxlength")
 
 name :: Text -> Attribute
 name = attribute (AttributeName "name")
@@ -139,11 +163,29 @@ formTag = Tag "form"
 headingOneTag :: Tag
 headingOneTag = Tag "h1"
 
+headingTwoTag :: Tag
+headingTwoTag = Tag "h2"
+
 inputTag :: Tag
 inputTag = Tag "input"
 
 labelTag :: Tag
 labelTag = Tag "label"
+
+listItemTag :: Tag
+listItemTag = Tag "li"
+
+listTag :: Tag
+listTag = Tag "ul"
+
+codeTag :: Tag
+codeTag = Tag "code"
+
+selectTag :: Tag
+selectTag = Tag "select"
+
+optionTag :: Tag
+optionTag = Tag "option"
 
 paragraphTag :: Tag
 paragraphTag = Tag "p"
@@ -172,6 +214,14 @@ regionHtml renderedRegion =
 
 replaceRegion :: Region -> RegionPatch
 replaceRegion = Internal.ReplaceRegion
+
+regionPatchId :: RegionPatch -> Text
+regionPatchId (Internal.ReplaceRegion renderedRegion) =
+  case regionIdentifier renderedRegion of
+    Internal.RegionId (Internal.ElementId identifier) -> identifier
+
+regionPatchHtml :: RegionPatch -> Text
+regionPatchHtml (Internal.ReplaceRegion renderedRegion) = renderHtml (regionHtml renderedRegion)
 
 regionFrameworkAttributes :: RegionId -> [Attribute]
 regionFrameworkAttributes (Internal.RegionId identifier) =

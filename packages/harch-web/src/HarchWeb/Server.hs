@@ -8,7 +8,7 @@ module HarchWeb.Server
     ClientActionRequest (..),
     ClientActionResponse (..),
     MiddlewareResult (..),
-    RegionPatch (..),
+    RegionPatch,
     RequestMiddleware (..),
     Response (..),
     ResponseBody (..),

@@ -15,6 +15,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import HarchWeb.Markup (regionPatchHtml, regionPatchId)
 import HarchWeb.Server.Response
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -47,12 +48,12 @@ renderClientActionResponse actionResponse =
     <> maybe "null" jsonString (clientActionFocusId actionResponse)
     <> "}"
   where
-    renderPatch
-      RegionPatch
-        { regionPatchId,
-          regionPatchHtml
-        } =
-        "{\"id\":" <> jsonString regionPatchId <> ",\"html\":" <> jsonString regionPatchHtml <> "}"
+    renderPatch patch =
+      "{\"id\":"
+        <> jsonString (regionPatchId patch)
+        <> ",\"html\":"
+        <> jsonString (regionPatchHtml patch)
+        <> "}"
 
 jsonString :: Text -> Text
 jsonString textValue = "\"" <> Text.concatMap escapeJsonCharacter textValue <> "\""

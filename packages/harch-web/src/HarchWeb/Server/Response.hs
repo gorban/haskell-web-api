@@ -5,7 +5,7 @@ module HarchWeb.Server.Response
   ( ClientActionRequest (..),
     ClientActionResponse (..),
     MiddlewareResult (..),
-    RegionPatch (..),
+    RegionPatch,
     RequestMiddleware (..),
     Response (..),
     ResponseBody (..),
@@ -17,6 +17,7 @@ where
 
 import Data.Text (Text)
 import HarchWeb.Document (Page)
+import HarchWeb.Markup (RegionPatch)
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -76,14 +77,6 @@ data ClientActionRequest context = ClientActionRequest
     clientActionFields :: [(Text, Text)],
     clientActionCsrfToken :: Maybe Text,
     clientActionContext :: context
-  }
-  deriving (Eq, Show)
-
--- | A named SSR region replacement returned by a client action. The replacement
--- must include the region element itself, preserving its id for later patches.
-data RegionPatch = RegionPatch
-  { regionPatchId :: Text,
-    regionPatchHtml :: Text
   }
   deriving (Eq, Show)
 

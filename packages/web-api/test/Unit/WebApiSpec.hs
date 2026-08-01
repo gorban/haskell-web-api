@@ -25,6 +25,7 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
@@ -324,9 +325,9 @@ actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
       && HarchWeb.clientActionStatus actionResponse == expectedStatus
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
-        [HarchWeb.RegionPatch patchId html] ->
-          patchId `elem` ["registration-region", "verification-region", "mfa-enrollment-region", "login-region", "logout-region"]
-            && expectedMessage `Text.isInfixOf` html
+        [patch] ->
+          HarchWeb.regionPatchId patch `elem` ["registration-region", "verification-region", "mfa-enrollment-region", "login-region", "logout-region"]
+            && expectedMessage `Text.isInfixOf` HarchWeb.regionPatchHtml patch
         _ -> False
   Nothing -> False
 
@@ -3043,53 +3044,53 @@ spec = do
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
-            && "data-page=\"email-verification\"" `Text.isInfixOf` HarchWeb.pageBody page
-            && "value=\"prefilled-token\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"email-verification\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
+            && "value=\"prefilled-token\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       renderPageFromRouteData defaultAppConfig registrationRequest RegistrationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Create account"
-            && "data-page=\"registration\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"registration\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       renderPageFromRouteData defaultAppConfig mfaRequest MfaEnrollmentRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Set up authenticator"
-            && "data-page=\"mfa-enrollment\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"mfa-enrollment\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       renderPageFromRouteData defaultAppConfig loginRequest LoginRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Sign in"
-            && "data-page=\"login\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"login\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       renderPageFromRouteData defaultAppConfig logoutRequest LogoutRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Sign out"
-            && "data-page=\"logout\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"logout\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       renderPageFromRouteData defaultAppConfig profileRequestValue ProfileRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Profile"
-            && "data-page=\"profile\"" `Text.isInfixOf` HarchWeb.pageBody page
-            && "href=\"/login\"" `Text.isInfixOf` HarchWeb.pageBody page
-            && "href=\"/register\"" `Text.isInfixOf` HarchWeb.pageBody page
+            && "data-page=\"profile\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
+            && "href=\"/login\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
+            && "href=\"/register\"" `Text.isInfixOf` HarchWeb.renderHtml (HarchWeb.pageBody page)
       HarchWeb.renderResponse pureApplication registrationRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
           _ -> expectationFailure "expected a registration page response"
       HarchWeb.renderResponse pureApplication verificationRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"email-verification\""
           _ -> expectationFailure "expected an email-verification page response"
       HarchWeb.renderResponse pureApplication mfaRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"mfa-enrollment\""
           _ -> expectationFailure "expected an MFA-enrollment page response"
       HarchWeb.renderResponse pureApplication loginRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"login\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"login\""
           _ -> expectationFailure "expected a login page response"
       HarchWeb.renderResponse pureApplication logoutRequest
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"logout\""
           _ -> expectationFailure "expected a logout page response"
       HarchWeb.renderResponse pureApplication profileRequestValue
         >>= \case
-          HarchWeb.PageResponse page -> HarchWeb.pageBody page `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
+          HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
           _ -> expectationFailure "expected a profile page response"
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
@@ -3706,10 +3707,11 @@ spec = do
         case started of
           Just response ->
             case HarchWeb.clientActionPatches response of
-              [HarchWeb.RegionPatch _ html] ->
-                case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
-                  Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
-                  Nothing -> expectationFailure "expected an enrollment secret" >> pure Text.empty
+              [patch] ->
+                let html = HarchWeb.regionPatchHtml patch
+                 in case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
+                      Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
+                      Nothing -> expectationFailure "expected an enrollment secret" >> pure Text.empty
               _ -> expectationFailure "expected one enrollment patch" >> pure Text.empty
           Nothing -> expectationFailure "expected enrollment action" >> pure Text.empty
       totpSecret <- maybe (expectationFailure "expected a valid enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret secret)
@@ -3727,10 +3729,11 @@ spec = do
         case spanishStarted of
           Just response ->
             case HarchWeb.clientActionPatches response of
-              [HarchWeb.RegionPatch _ html] ->
-                case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
-                  Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
-                  Nothing -> expectationFailure "expected a Spanish enrollment secret" >> pure Text.empty
+              [patch] ->
+                let html = HarchWeb.regionPatchHtml patch
+                 in case Text.stripPrefix "<code>" (snd (Text.breakOn "<code>" html)) of
+                      Just secretWithSuffix -> pure (Text.takeWhile (/= '<') secretWithSuffix)
+                      Nothing -> expectationFailure "expected a Spanish enrollment secret" >> pure Text.empty
               _ -> expectationFailure "expected one Spanish enrollment patch" >> pure Text.empty
           Nothing -> expectationFailure "expected a Spanish enrollment action" >> pure Text.empty
       spanishTotpSecret <- maybe (expectationFailure "expected a valid Spanish enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret spanishSecret)
@@ -4579,7 +4582,7 @@ spec = do
                 { HarchWeb.pageTitle = "web-api: Second",
                   HarchWeb.pageRoute = SecondRoute,
                   HarchWeb.pageContext = defaultRequestContext,
-                  HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+                  HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
                   HarchWeb.pageBootstrapHooks = ["second-page"]
                 }
             )
@@ -7093,7 +7096,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -7103,7 +7106,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -7113,7 +7116,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Spaces",
             HarchWeb.pageRoute = SpacesRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -7123,7 +7126,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Not Found",
             HarchWeb.pageRoute = NotFoundRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -7143,7 +7146,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -7875,7 +7878,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Second",
             HarchWeb.pageRoute = SecondRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p data-error-state=\"true\">Could not load second page data.</p><p>Second page content is temporarily unavailable.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
             HarchWeb.pageBootstrapHooks = ["second-page"]
           }
 
@@ -7895,7 +7898,7 @@ spec = do
           { HarchWeb.pageTitle = "web-api: Home",
             HarchWeb.pageRoute = HomeRoute,
             HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p data-error-state=\"true\">Could not load home page data.</p><p>Home page content is temporarily unavailable.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>",
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p data-error-state=\"true\">Could not load home page data.</p><p>Home page content is temporarily unavailable.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"),
             HarchWeb.pageBootstrapHooks = []
           }
 
@@ -8232,12 +8235,12 @@ spec = do
       secondPage <- renderPage defaultAppConfig secondRequest
       notFoundPage <- renderPage defaultAppConfig notFoundRequest
       HarchWeb.documentTitle (HarchWeb.pageShell pureApplication homePage) `shouldBe` "web-api: Home"
-      Text.isInfixOf "Browse the second page" (HarchWeb.documentMainContent (HarchWeb.pageShell pureApplication homePage))
+      Text.isInfixOf "Browse the second page" (HarchWeb.renderHtml (HarchWeb.documentMainContent (HarchWeb.pageShell pureApplication homePage)))
         `shouldBe` True
       HarchWeb.documentTitle (HarchWeb.pageShell pureApplication secondPage) `shouldBe` "web-api: Second"
       HarchWeb.documentBootstrapHooks (HarchWeb.pageShell pureApplication secondPage) `shouldBe` ["second-page"]
       HarchWeb.documentTitle (HarchWeb.pageShell pureApplication notFoundPage) `shouldBe` "web-api: Not Found"
-      Text.isInfixOf "The requested page could not be found." (HarchWeb.documentMainContent (HarchWeb.pageShell pureApplication notFoundPage))
+      Text.isInfixOf "The requested page could not be found." (HarchWeb.renderHtml (HarchWeb.documentMainContent (HarchWeb.pageShell pureApplication notFoundPage)))
         `shouldBe` True
 
     it "can grow from page responses to API responses without changing route matching" $ do

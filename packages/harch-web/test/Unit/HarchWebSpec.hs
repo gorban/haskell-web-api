@@ -63,6 +63,16 @@ data TestRoute
 trustedMarkup :: Text -> Html
 trustedMarkup = trustedHtml . MarkupUnsafe.unsafeTrustHtml
 
+testRegionPatch :: Text -> Text -> RegionPatch
+testRegionPatch identifier message =
+  replaceRegion
+    ( region
+        (mkRegionId (fromMaybe (error "test region id must be non-empty") (mkElementId identifier)))
+        paragraphTag
+        []
+        [text message]
+    )
+
 defaultContext :: TestContext
 defaultContext = TestContext {requestLanguage = "en", testContextPathPrefix = ""}
 
@@ -974,7 +984,7 @@ spec = do
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
-          regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
+          regionPatch = testRegionPatch "status-region" "Ready"
           clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
@@ -1057,7 +1067,7 @@ spec = do
       clientActionCsrfToken clientActionRequest `shouldBe` Nothing
       clientActionContext clientActionRequest `shouldBe` defaultContext
       regionPatchId regionPatch `shouldBe` "status-region"
-      regionPatchHtml regionPatch `shouldBe` "<p>Ready</p>"
+      regionPatchHtml regionPatch `shouldBe` "<p id=\"status-region\" data-harch-region=\"true\">Ready</p>"
       clientActionStatus clientActionResponse `shouldBe` 200
       clientActionPatches clientActionResponse `shouldBe` [regionPatch]
       clientActionFocusId clientActionResponse `shouldBe` Nothing
@@ -1131,8 +1141,8 @@ spec = do
           otherRedirectResponseValue = RedirectResponse otherBody "/other"
           clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Just "csrf-token", clientActionContext = defaultContext}
           otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
-          regionPatch = RegionPatch {regionPatchId = "status-region", regionPatchHtml = "<p>Ready</p>"}
-          otherRegionPatch = RegionPatch {regionPatchId = "other-region", regionPatchHtml = "<p>Other</p>"}
+          regionPatch = testRegionPatch "status-region" "Ready"
+          otherRegionPatch = testRegionPatch "other-region" "Other"
           clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
 
@@ -1232,11 +1242,11 @@ spec = do
       show [clientActionRequest] `shouldContain` "ClientActionRequest {clientActionMethod = \"POST\""
       (regionPatch == regionPatch) `shouldBe` True
       (regionPatch /= otherRegionPatch) `shouldBe` True
-      show regionPatch `shouldBe` "RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}"
-      show [regionPatch] `shouldContain` "RegionPatch {regionPatchId = \"status-region\""
+      show regionPatch `shouldContain` "ReplaceRegion"
+      show [regionPatch] `shouldContain` "ReplaceRegion"
       (clientActionResponse == clientActionResponse) `shouldBe` True
       (clientActionResponse /= otherClientActionResponse) `shouldBe` True
-      show clientActionResponse `shouldBe` "ClientActionResponse {clientActionStatus = 200, clientActionPatches = [RegionPatch {regionPatchId = \"status-region\", regionPatchHtml = \"<p>Ready</p>\"}], clientActionFocusId = Just \"email\", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}"
+      show clientActionResponse `shouldContain` "ClientActionResponse {clientActionStatus = 200"
       show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = 200"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
@@ -1563,7 +1573,7 @@ spec = do
                     ( Just
                         ClientActionResponse
                           { clientActionStatus = 422,
-                            clientActionPatches = [RegionPatch "status-region" "<p id=\"status-region\">Enter a valid email address.</p>"],
+                            clientActionPatches = [testRegionPatch "status-region" "Enter a valid email address."],
                             clientActionFocusId = Just "email",
                             clientActionHeaders = [("Set-Cookie", "session=opaque")],
                             clientActionObservabilityAttributes = [failureAttribute],
@@ -1597,7 +1607,7 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
       lookup "Set-Cookie" (Wai.responseHeaders response) `shouldBe` Just "session=opaque"
       readResponseBody response
-        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
+        `shouldReturn` "{\"patches\":[{\"id\":\"status-region\",\"html\":\"<p id=\\\"status-region\\\" data-harch-region=\\\"true\\\">Enter a valid email address.</p>\"}],\"focusId\":\"email\"}"
       maybeRequestObservability <- readIORef requestObservabilityReference
       fmap (Observability.requestSpanAttributes . Observability.observabilityRequestSpan) maybeRequestObservability
         `shouldSatisfy` maybe False (hasTextAttribute "error.type" "RegistrationStoreUnavailable")
@@ -1611,7 +1621,7 @@ spec = do
             clientActionResponseBody
               ClientActionResponse
                 { clientActionStatus = 422,
-                  clientActionPatches = [RegionPatch ("first " <> escapedText) escapedText, RegionPatch "second" escapedText],
+                  clientActionPatches = [testRegionPatch ("first " <> escapedText) escapedText, testRegionPatch "second" escapedText],
                   clientActionFocusId = Just escapedText,
                   clientActionHeaders = [],
                   clientActionObservabilityAttributes = [observabilityAttribute],

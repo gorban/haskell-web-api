@@ -21,7 +21,7 @@ import HarchWeb
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
-    RegionPatch (..),
+    RegionPatch,
     RequestPolicyConfig (..),
     ServerConfig (..),
     ServerSentEvent (..),
@@ -31,7 +31,14 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
+    mkElementId,
+    mkRegionId,
+    paragraphTag,
+    region,
+    replaceRegion,
+    role,
     serverSentEventSourceFromList,
+    text,
   )
 import HarchWeb.Site
   ( Site (..),
@@ -87,7 +94,7 @@ twoPageClientAction actionRequest =
                   "." `Text.isInfixOf` emailAddress ->
                     ClientActionResponse
                       { clientActionStatus = 200,
-                        clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Thanks. Your subscription request is ready.</p>"],
+                        clientActionPatches = subscriptionPatch "status" "Thanks. Your subscription request is ready.",
                         clientActionFocusId = Nothing,
                         clientActionHeaders = [],
                         clientActionObservabilityAttributes = [],
@@ -96,7 +103,7 @@ twoPageClientAction actionRequest =
               _ ->
                 ClientActionResponse
                   { clientActionStatus = 422,
-                    clientActionPatches = [RegionPatch "subscription-result" "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"alert\">Enter a valid email address.</p>"],
+                    clientActionPatches = subscriptionPatch "alert" "Enter a valid email address.",
                     clientActionFocusId = Just "subscription-email",
                     clientActionHeaders = [],
                     clientActionObservabilityAttributes = [],
@@ -104,6 +111,12 @@ twoPageClientAction actionRequest =
                   }
           )
       _ -> Nothing
+
+subscriptionPatch :: Text.Text -> Text.Text -> [RegionPatch]
+subscriptionPatch liveRole message =
+  maybe []
+    (\identifier -> [replaceRegion (region (mkRegionId identifier) paragraphTag [role liveRole] [text message])])
+    (mkElementId "subscription-result")
 
 twoPageServerConfig :: ServerConfig
 twoPageServerConfig =

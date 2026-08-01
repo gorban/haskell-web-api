@@ -34,12 +34,12 @@ import WebApi.AccountPages
     RegistrationForm (..),
     VerificationForm (..),
     emptyRegistrationForm,
-    renderLoginPage,
-    renderLogoutPage,
-    renderMfaEnrollmentPage,
-    renderPendingProfileRegion,
-    renderRegistrationPage,
-    renderVerificationPage,
+    renderLoginPageHtml,
+    renderLogoutPageHtml,
+    renderMfaEnrollmentPageHtml,
+    renderPendingProfileRegionHtml,
+    renderRegistrationPageHtml,
+    renderVerificationPageHtml,
   )
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.Config (AppConfig (..))
@@ -475,146 +475,117 @@ localizedText routeRequest englishText spanishText =
     Spanish -> spanishText
 
 renderPageBody :: AppPageModel -> Text
-renderPageBody = renderPageBodyForLocale English
+renderPageBody = HarchWeb.renderHtml . renderPageBodyForLocale English
 
-renderPageBodyForLocale :: AppLocale -> AppPageModel -> Text
+renderPageBodyForLocale :: AppLocale -> AppPageModel -> HarchWeb.Html
 renderPageBodyForLocale locale pageModel =
   case pageModel of
     HomePage homePage ->
-      Text.concat
-        [ "<section data-page=\"home\">",
-          "<h1 data-page-title=\"true\">",
-          homeHeading homePage,
-          "</h1>",
+      HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "home"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (homeHeading homePage)],
           renderPageError (homeErrorMessage homePage),
-          "<p>",
-          homeSummary homePage,
-          "</p>",
-          renderCallToAction (homePrimaryAction homePage),
-          "</section>"
+          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (homeSummary homePage)],
+          renderCallToAction (homePrimaryAction homePage)
         ]
     SecondPage secondPage ->
-      Text.concat
-        [ "<section data-page=\"second\">",
-          "<h1 data-page-title=\"true\">",
-          secondHeading secondPage,
-          "</h1>",
+      HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "second"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (secondHeading secondPage)],
           renderPageError (secondErrorMessage secondPage),
-          "<p>",
-          secondSummary secondPage,
-          "</p>",
+          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (secondSummary secondPage)],
           renderSecondPageHighlights secondPage,
-          renderCallToAction (secondPrimaryAction secondPage),
-          "</section>"
+          renderCallToAction (secondPrimaryAction secondPage)
         ]
     SpacesPage spacesPage ->
-      Text.concat
-        [ "<section data-page=\"spaces\">",
-          "<h1 data-page-title=\"true\">",
-          spacesHeading spacesPage,
-          "</h1><p>",
-          spacesSummary spacesPage,
-          "</p></section>"
+      HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "spaces"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (spacesHeading spacesPage)],
+          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (spacesSummary spacesPage)]
         ]
     RegistrationPage registrationPath registrationForm ->
-      renderRegistrationPage locale registrationPath registrationForm
+      renderRegistrationPageHtml locale registrationPath registrationForm
     EmailVerificationPage verificationPath verificationForm ->
-      renderVerificationPage locale verificationPath verificationForm
+      renderVerificationPageHtml locale verificationPath verificationForm
     MfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm ->
-      renderMfaEnrollmentPage locale mfaEnrollmentPath mfaEnrollmentForm
+      renderMfaEnrollmentPageHtml locale mfaEnrollmentPath mfaEnrollmentForm
     LoginPage loginPath loginForm ->
-      renderLoginPage locale loginPath loginForm
+      renderLoginPageHtml locale loginPath loginForm
     LogoutPage logoutPath ->
-      renderLogoutPage locale logoutPath
+      renderLogoutPageHtml locale logoutPath
     ProfilePage profilePage ->
       renderProfilePageBody profilePage
     NotFoundPage notFoundPage ->
-      Text.concat
-        [ "<section data-page=\"not-found\">",
-          "<h1 data-page-title=\"true\">",
-          notFoundHeading notFoundPage,
-          "</h1>",
-          "<p>",
-          notFoundSummary notFoundPage,
-          "</p>",
-          renderCallToAction (notFoundPrimaryAction notFoundPage),
-          "</section>"
+      HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "not-found"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (notFoundHeading notFoundPage)],
+          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (notFoundSummary notFoundPage)],
+          renderCallToAction (notFoundPrimaryAction notFoundPage)
         ]
 
-renderProfilePageBody :: ProfilePageModel -> Text
+renderProfilePageBody :: ProfilePageModel -> HarchWeb.Html
 renderProfilePageBody profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
     PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegion profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
+      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
     AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
       profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction]
 
-profilePageSection :: Text -> Text -> [Text] -> Text
+profilePageSection :: Text -> Text -> [HarchWeb.Html] -> HarchWeb.Html
 profilePageSection heading summary content =
-  Text.concat
-    [ "<section data-page=\"profile\">",
-      "<h1 data-page-title=\"true\">",
-      heading,
-      "</h1><p>",
-      summary,
-      "</p>",
-      Text.concat content,
-      "</section>"
+  HarchWeb.element
+    HarchWeb.sectionTag
+    [HarchWeb.dataAttribute "page" "profile"]
+    [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text heading],
+      HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text summary],
+      HarchWeb.fragment content
     ]
 
-renderProfileEmail :: Text -> Text
+renderProfileEmail :: Text -> HarchWeb.Html
 renderProfileEmail emailAddress =
-  Text.concat ["<p data-profile-email=\"true\">", emailAddress, "</p>"]
+  HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-email" "true"] [HarchWeb.text emailAddress]
 
-renderProfileIdentity :: Maybe Text -> Maybe Text -> Text
+renderProfileIdentity :: Maybe Text -> Maybe Text -> HarchWeb.Html
 renderProfileIdentity maybeUsername maybeDisplayName =
-  Text.concat
-    [ maybe Text.empty (\username -> Text.concat ["<p data-profile-username=\"true\">", username, "</p>"]) maybeUsername,
-      maybe Text.empty (\displayName -> Text.concat ["<p data-profile-display-name=\"true\">", displayName, "</p>"]) maybeDisplayName
+  HarchWeb.fragment
+    [ maybe (HarchWeb.fragment []) (\username -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-username" "true"] [HarchWeb.text username]) maybeUsername,
+      maybe (HarchWeb.fragment []) (\displayName -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-display-name" "true"] [HarchWeb.text displayName]) maybeDisplayName
     ]
 
-renderHighlights :: [Text] -> Text
+renderHighlights :: [Text] -> HarchWeb.Html
 renderHighlights highlights =
   case highlights of
-    [] -> "<p data-empty-state=\"true\">No highlights yet.</p>"
-    _ ->
-      Text.concat
-        [ "<ul>",
-          Text.concat (map renderHighlight highlights),
-          "</ul>"
-        ]
+    [] -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "empty-state" "true"] [HarchWeb.text "No highlights yet."]
+    _ -> HarchWeb.element HarchWeb.listTag [] (map renderHighlight highlights)
 
-renderPageError :: Maybe Text -> Text
+renderPageError :: Maybe Text -> HarchWeb.Html
 renderPageError maybeErrorMessage =
   case maybeErrorMessage of
-    Nothing -> Text.empty
-    Just errorMessage ->
-      Text.concat
-        [ "<p data-error-state=\"true\">",
-          errorMessage,
-          "</p>"
-        ]
+    Nothing -> HarchWeb.fragment []
+    Just errorMessage -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "error-state" "true"] [HarchWeb.text errorMessage]
 
-renderSecondPageHighlights :: SecondPageModel -> Text
+renderSecondPageHighlights :: SecondPageModel -> HarchWeb.Html
 renderSecondPageHighlights secondPage =
   case secondErrorMessage secondPage of
     Nothing -> renderHighlights (secondHighlights secondPage)
-    Just _ -> Text.empty
+    Just _ -> HarchWeb.fragment []
 
-renderHighlight :: Text -> Text
+renderHighlight :: Text -> HarchWeb.Html
 renderHighlight highlight =
-  Text.concat ["<li>", highlight, "</li>"]
+  HarchWeb.element HarchWeb.listItemTag [] [HarchWeb.text highlight]
 
-renderCallToAction :: CallToAction -> Text
+renderCallToAction :: CallToAction -> HarchWeb.Html
 renderCallToAction callToAction =
-  Text.concat
-    [ "<p><a href=\"",
-      callToActionHref callToAction,
-      "\" data-page-link=\"true\">",
-      callToActionLabel callToAction,
-      "</a></p>"
+  HarchWeb.element
+    HarchWeb.paragraphTag
+    []
+    [ HarchWeb.element HarchWeb.anchorTag [HarchWeb.href (callToActionHref callToAction), HarchWeb.dataAttribute "page-link" "true"] [HarchWeb.text (callToActionLabel callToAction)]
     ]

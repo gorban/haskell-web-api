@@ -230,8 +230,8 @@ spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale
 responsePageBody :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text
 responsePageBody response =
   case response of
-    HarchWeb.PageResponse page -> HarchWeb.pageBody page
-    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.pageBody page
+    HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
+    HarchWeb.PageResponseWithMetadata _ page -> HarchWeb.renderHtml (HarchWeb.pageBody page)
     _ -> ""
 
 responseStatus :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Int

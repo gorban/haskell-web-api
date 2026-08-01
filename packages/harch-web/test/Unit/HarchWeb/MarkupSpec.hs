@@ -44,3 +44,20 @@ spec = do
               renderedRegion = Markup.renderHtml (Markup.regionHtml resultRegion)
           renderedRegion
             `shouldBe` "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\">Ready</p>"
+
+    it "keeps framework-owned region attributes on repeated replacements" $ do
+      case (Markup.mkElementId "subscription-result", Markup.mkElementId "attempted-override") of
+        (Just regionElementId, Just overrideElementId) -> do
+          let renderedPatch =
+                Markup.regionPatchHtml
+                  ( Markup.replaceRegion
+                      ( Markup.region
+                          (Markup.mkRegionId regionElementId)
+                          Markup.paragraphTag
+                          [Markup.elementId overrideElementId, Markup.dataAttribute "harch-region" "false", Markup.role "alert"]
+                          [Markup.text "Try again"]
+                      )
+                  )
+          renderedPatch
+            `shouldBe` "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"alert\">Try again</p>"
+        _ -> expectationFailure "expected literal element IDs to be valid"

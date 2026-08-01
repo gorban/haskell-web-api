@@ -11,15 +11,21 @@ module WebApi.AccountPages
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
     renderRegistrationPage,
+    renderRegistrationPageHtml,
     renderRegistrationRegion,
     renderVerificationPage,
+    renderVerificationPageHtml,
     renderVerificationRegion,
     renderPendingProfileRegion,
+    renderPendingProfileRegionHtml,
     renderMfaEnrollmentPage,
+    renderMfaEnrollmentPageHtml,
     renderMfaEnrollmentRegion,
     renderLoginPage,
+    renderLoginPageHtml,
     renderLoginRegion,
     renderLogoutPage,
+    renderLogoutPageHtml,
     renderLogoutRegion,
   )
 where
@@ -592,7 +598,7 @@ registrationResponse :: AppLocale -> Text -> Int -> RegistrationForm -> Maybe Te
 registrationResponse locale registrationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "registration-region" (renderRegistrationRegion locale registrationPath form)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (registrationRegion locale registrationPath form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -603,7 +609,7 @@ verificationResponse :: AppLocale -> Text -> Int -> VerificationForm -> Maybe Te
 verificationResponse locale verificationPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "verification-region" (renderVerificationRegion locale verificationPath form)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion locale verificationPath form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -614,7 +620,7 @@ mfaEnrollmentResponse :: AppLocale -> Text -> Int -> MfaEnrollmentForm -> Maybe 
 mfaEnrollmentResponse locale mfaEnrollmentPath status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "mfa-enrollment-region" (renderMfaEnrollmentRegion locale mfaEnrollmentPath form)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion locale mfaEnrollmentPath form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -625,7 +631,7 @@ loginResponse :: AppLocale -> Text -> Int -> LoginForm -> Maybe Text -> Http.Res
 loginResponse locale loginPath status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "login-region" (renderLoginRegion locale loginPath form)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (loginRegion locale loginPath form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -636,7 +642,7 @@ logoutResponse :: AppLocale -> Text -> Int -> Maybe Text -> Bool -> Http.Respons
 logoutResponse locale logoutPath status message isError headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "logout-region" (renderLogoutRegion locale logoutPath message isError)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion locale logoutPath ((,isError) <$> message)),
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -647,7 +653,7 @@ profileResponse :: HarchWeb.ClientActionRequest AppRequestContext -> Int -> Pend
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = [HarchWeb.RegionPatch "profile-region" (renderPendingProfileRegion (accountRoutePath actionRequest ProfileRoute) form)],
+      HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (accountRoutePath actionRequest ProfileRoute) form),
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -655,211 +661,258 @@ profileResponse actionRequest status form =
     }
 
 renderMfaEnrollmentPage :: AppLocale -> Text -> MfaEnrollmentForm -> Text
-renderMfaEnrollmentPage locale mfaEnrollmentPath form =
+renderMfaEnrollmentPage locale mfaEnrollmentPath form = HarchWeb.renderHtml (renderMfaEnrollmentPageHtml locale mfaEnrollmentPath form)
+
+renderMfaEnrollmentPageHtml :: AppLocale -> Text -> MfaEnrollmentForm -> HarchWeb.Html
+renderMfaEnrollmentPageHtml locale mfaEnrollmentPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section data-page=\"mfa-enrollment\"><h1 data-page-title=\"true\">",
-          accountMfaEnrollmentHeading copy,
-          "</h1>",
-          renderMfaEnrollmentRegion locale mfaEnrollmentPath form,
-          "</section>"
+   in HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "mfa-enrollment"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (accountMfaEnrollmentHeading copy)],
+          renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form
         ]
 
 renderMfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Text
-renderMfaEnrollmentRegion locale mfaEnrollmentPath form =
+renderMfaEnrollmentRegion locale mfaEnrollmentPath form = HarchWeb.renderHtml (renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form)
+
+renderMfaEnrollmentRegionHtml :: AppLocale -> Text -> MfaEnrollmentForm -> HarchWeb.Html
+renderMfaEnrollmentRegionHtml locale mfaEnrollmentPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (mfaEnrollmentRegion locale mfaEnrollmentPath form)
+
+mfaEnrollmentRegion :: AppLocale -> Text -> MfaEnrollmentForm -> Maybe HarchWeb.Region
+mfaEnrollmentRegion locale mfaEnrollmentPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section id=\"mfa-enrollment-region\" aria-live=\"polite\">",
-          renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
+   in accountRegion
+        "mfa-enrollment-region"
+        [HarchWeb.ariaLive "polite"]
+        [ renderMessage (mfaEnrollmentFormMessage form) (mfaEnrollmentFormIsError form),
           renderEnrollmentSecret (mfaEnrollmentFormSecret form),
           renderRecoveryCodes copy (mfaEnrollmentFormRecoveryCodes form),
-          "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml mfaEnrollmentPath,
-          "\" method=\"post\"><input id=\"mfa-account\" name=\"account\" type=\"hidden\" value=\"",
-          escapeHtml (mfaEnrollmentFormAccountId form),
-          "\"><input name=\"intent\" type=\"hidden\" value=\"start\"><button type=\"submit\">",
-          accountStartMfaEnrollmentLabel copy,
-          "</button></form>",
-          renderConfirmationForm locale mfaEnrollmentPath form,
-          "</section>"
+          HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction mfaEnrollmentPath, HarchWeb.method "post"]
+            [ voidElementWithId HarchWeb.inputTag "mfa-account" [HarchWeb.name "account", HarchWeb.inputType "hidden", HarchWeb.value (mfaEnrollmentFormAccountId form)],
+              HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name "intent", HarchWeb.inputType "hidden", HarchWeb.value "start"],
+              HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountStartMfaEnrollmentLabel copy)]
+            ],
+          renderConfirmationForm locale mfaEnrollmentPath form
         ]
 
 renderLoginPage :: AppLocale -> Text -> LoginForm -> Text
-renderLoginPage locale loginPath form =
+renderLoginPage locale loginPath form = HarchWeb.renderHtml (renderLoginPageHtml locale loginPath form)
+
+renderLoginPageHtml :: AppLocale -> Text -> LoginForm -> HarchWeb.Html
+renderLoginPageHtml locale loginPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section data-page=\"login\"><h1 data-page-title=\"true\">",
-          accountLoginHeading copy,
-          "</h1>",
-          renderLoginRegion locale loginPath form,
-          "</section>"
+   in HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "login"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (accountLoginHeading copy)],
+          renderLoginRegionHtml locale loginPath form
         ]
 
 renderLoginRegion :: AppLocale -> Text -> LoginForm -> Text
-renderLoginRegion locale loginPath form =
+renderLoginRegion locale loginPath form = HarchWeb.renderHtml (renderLoginRegionHtml locale loginPath form)
+
+renderLoginRegionHtml :: AppLocale -> Text -> LoginForm -> HarchWeb.Html
+renderLoginRegionHtml locale loginPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (loginRegion locale loginPath form)
+
+loginRegion :: AppLocale -> Text -> LoginForm -> Maybe HarchWeb.Region
+loginRegion locale loginPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section id=\"login-region\" aria-live=\"polite\">",
-          renderMessage (loginFormMessage form) (loginFormIsError form),
-          "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml loginPath,
-          "\" method=\"post\"><label for=\"login-email\">",
-          accountLoginIdentifierLabel copy,
-          "</label><input id=\"login-email\" name=\"email\" type=\"text\" autocomplete=\"username\" required value=\"",
-          escapeHtml (loginFormEmail form),
-          "\"><label for=\"login-password\">",
-          accountLoginPasswordLabel copy,
-          "</label><input id=\"login-password\" name=\"password\" type=\"password\" autocomplete=\"current-password\" required><label for=\"login-proof\">",
-          accountVerificationMethodLabel copy,
-          "</label><select id=\"login-proof\" name=\"proof\"><option value=\"totp\">",
-          accountAuthenticatorCodeLabel copy,
-          "</option><option value=\"recovery\">",
-          accountRecoveryCodeLabel copy,
-          "</option></select><label for=\"login-code\">",
-          accountVerificationCodeLabel copy,
-          "</label><input id=\"login-code\" name=\"code\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
-          accountSignInLabel copy,
-          "</button></form></section>"
+   in accountRegion
+        "login-region"
+        [HarchWeb.ariaLive "polite"]
+        [ renderMessage (loginFormMessage form) (loginFormIsError form),
+          HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction loginPath, HarchWeb.method "post"]
+            [ labelWithFor "login-email" (accountLoginIdentifierLabel copy),
+              voidElementWithId HarchWeb.inputTag "login-email" [HarchWeb.name "email", HarchWeb.inputType "text", HarchWeb.autocomplete "username", HarchWeb.required, HarchWeb.value (loginFormEmail form)],
+              labelWithFor "login-password" (accountLoginPasswordLabel copy),
+              voidElementWithId HarchWeb.inputTag "login-password" [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "current-password", HarchWeb.required],
+              labelWithFor "login-proof" (accountVerificationMethodLabel copy),
+              elementWithId
+                HarchWeb.selectTag
+                "login-proof"
+                [HarchWeb.name "proof"]
+                [ HarchWeb.element HarchWeb.optionTag [HarchWeb.value "totp"] [HarchWeb.text (accountAuthenticatorCodeLabel copy)],
+                  HarchWeb.element HarchWeb.optionTag [HarchWeb.value "recovery"] [HarchWeb.text (accountRecoveryCodeLabel copy)]
+                ],
+              labelWithFor "login-code" (accountVerificationCodeLabel copy),
+              voidElementWithId HarchWeb.inputTag "login-code" [HarchWeb.name "code", HarchWeb.autocomplete "one-time-code", HarchWeb.required],
+              HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountSignInLabel copy)]
+            ]
         ]
 
 renderPendingProfileRegion :: Text -> PendingProfileForm -> Text
-renderPendingProfileRegion profilePath form =
-  Text.concat
-    [ "<section id=\"profile-region\" aria-live=\"polite\">",
-      renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
-      "<p data-profile-email=\"true\">",
-      escapeHtml (pendingProfileFormEmail form),
-      "</p><form data-profile-resend=\"true\" data-harch-action=\"true\" data-harch-control action=\"",
-      escapeHtml profilePath,
-      "\" method=\"post\"><input name=\"intent\" type=\"hidden\" value=\"resend-verification\"><button type=\"submit\">",
-      escapeHtml (pendingProfileFormResendLabel form),
-      "</button></form></section>"
+renderPendingProfileRegion profilePath form = HarchWeb.renderHtml (renderPendingProfileRegionHtml profilePath form)
+
+renderPendingProfileRegionHtml :: Text -> PendingProfileForm -> HarchWeb.Html
+renderPendingProfileRegionHtml profilePath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (pendingProfileRegion profilePath form)
+
+pendingProfileRegion :: Text -> PendingProfileForm -> Maybe HarchWeb.Region
+pendingProfileRegion profilePath form =
+  accountRegion
+    "profile-region"
+    [HarchWeb.ariaLive "polite"]
+    [ renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
+      HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "profile-email" "true"] [HarchWeb.text (pendingProfileFormEmail form)],
+      HarchWeb.element
+        HarchWeb.formTag
+        [HarchWeb.dataAttribute "profile-resend" "true", HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction profilePath, HarchWeb.method "post"]
+        [ HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name "intent", HarchWeb.inputType "hidden", HarchWeb.value "resend-verification"],
+          HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (pendingProfileFormResendLabel form)]
+        ]
     ]
 
 renderLogoutPage :: AppLocale -> Text -> Text
-renderLogoutPage locale logoutPath =
+renderLogoutPage locale logoutPath = HarchWeb.renderHtml (renderLogoutPageHtml locale logoutPath)
+
+renderLogoutPageHtml :: AppLocale -> Text -> HarchWeb.Html
+renderLogoutPageHtml locale logoutPath =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section data-page=\"logout\"><h1 data-page-title=\"true\">",
-          accountLogoutHeading copy,
-          "</h1>",
-          renderLogoutRegionWithMessage locale logoutPath Nothing,
-          "</section>"
+   in HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "logout"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (accountLogoutHeading copy)],
+          renderLogoutRegionWithMessage locale logoutPath Nothing
         ]
 
 renderLogoutRegion :: AppLocale -> Text -> Maybe Text -> Bool -> Text
-renderLogoutRegion locale logoutPath message isError =
+renderLogoutRegion locale logoutPath message isError = HarchWeb.renderHtml (renderLogoutRegionHtml locale logoutPath message isError)
+
+renderLogoutRegionHtml :: AppLocale -> Text -> Maybe Text -> Bool -> HarchWeb.Html
+renderLogoutRegionHtml locale logoutPath message isError =
   renderLogoutRegionWithMessage locale logoutPath ((,isError) <$> message)
 
-renderLogoutRegionWithMessage :: AppLocale -> Text -> Maybe (Text, Bool) -> Text
-renderLogoutRegionWithMessage locale logoutPath messageState =
+renderLogoutRegionWithMessage :: AppLocale -> Text -> Maybe (Text, Bool) -> HarchWeb.Html
+renderLogoutRegionWithMessage locale logoutPath messageState = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (logoutRegion locale logoutPath messageState)
+
+logoutRegion :: AppLocale -> Text -> Maybe (Text, Bool) -> Maybe HarchWeb.Region
+logoutRegion locale logoutPath messageState =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section id=\"logout-region\" aria-live=\"polite\">",
-          maybe Text.empty renderLogoutMessage messageState,
-          "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml logoutPath,
-          "\" method=\"post\"><button type=\"submit\">",
-          accountSignOutLabel copy,
-          "</button></form></section>"
+   in accountRegion
+        "logout-region"
+        [HarchWeb.ariaLive "polite"]
+        [ maybe (HarchWeb.fragment []) renderLogoutMessage messageState,
+          HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction logoutPath, HarchWeb.method "post"]
+            [HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountSignOutLabel copy)]]
         ]
   where
     renderLogoutMessage (message, isError) = renderMessage (Just message) isError
 
-renderEnrollmentSecret :: Maybe Text -> Text
+renderEnrollmentSecret :: Maybe Text -> HarchWeb.Html
 renderEnrollmentSecret maybeSecret =
   case maybeSecret of
-    Nothing -> Text.empty
-    Just secret -> Text.concat ["<p data-totp-secret=\"true\"><code>", escapeHtml secret, "</code></p>"]
+    Nothing -> HarchWeb.fragment []
+    Just secret -> HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "totp-secret" "true"] [HarchWeb.element HarchWeb.codeTag [] [HarchWeb.text secret]]
 
-renderRecoveryCodes :: AccountPageCopy -> [Text] -> Text
+renderRecoveryCodes :: AccountPageCopy -> [Text] -> HarchWeb.Html
 renderRecoveryCodes copy recoveryCodes =
   case recoveryCodes of
-    [] -> Text.empty
-    _ -> Text.concat ["<section data-recovery-codes=\"true\"><h2>", accountRecoveryCodesHeading copy, "</h2><p>", accountRecoveryCodesInstruction copy, "</p><ul>", Text.concat (map (\code -> Text.concat ["<li><code>", escapeHtml code, "</code></li>"]) recoveryCodes), "</ul></section>"]
+    [] -> HarchWeb.fragment []
+    _ ->
+      HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "recovery-codes" "true"]
+        [ HarchWeb.element HarchWeb.headingTwoTag [] [HarchWeb.text (accountRecoveryCodesHeading copy)],
+          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (accountRecoveryCodesInstruction copy)],
+          HarchWeb.element HarchWeb.listTag [] (map (\code -> HarchWeb.element HarchWeb.listItemTag [] [HarchWeb.element HarchWeb.codeTag [] [HarchWeb.text code]]) recoveryCodes)
+        ]
 
-renderConfirmationForm :: AppLocale -> Text -> MfaEnrollmentForm -> Text
+renderConfirmationForm :: AppLocale -> Text -> MfaEnrollmentForm -> HarchWeb.Html
 renderConfirmationForm locale mfaEnrollmentPath form =
   case mfaEnrollmentFormSecret form of
-    Nothing -> Text.empty
+    Nothing -> HarchWeb.fragment []
     Just _ ->
       let copy = accountPageCopy locale
-       in Text.concat
-            [ "<form data-harch-action=\"true\" data-harch-control action=\"",
-              escapeHtml mfaEnrollmentPath,
-              "\" method=\"post\"><input name=\"account\" type=\"hidden\" value=\"",
-              escapeHtml (mfaEnrollmentFormAccountId form),
-              "\"><input name=\"intent\" type=\"hidden\" value=\"confirm\"><label for=\"mfa-code\">",
-              accountAuthenticatorCodeLabel copy,
-              "</label><input id=\"mfa-code\" name=\"code\" inputmode=\"numeric\" autocomplete=\"one-time-code\" required><button type=\"submit\">",
-              accountConfirmMfaEnrollmentLabel copy,
-              "</button></form>"
+       in HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction mfaEnrollmentPath, HarchWeb.method "post"]
+            [ HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name "account", HarchWeb.inputType "hidden", HarchWeb.value (mfaEnrollmentFormAccountId form)],
+              HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name "intent", HarchWeb.inputType "hidden", HarchWeb.value "confirm"],
+              labelWithFor "mfa-code" (accountAuthenticatorCodeLabel copy),
+              voidElementWithId HarchWeb.inputTag "mfa-code" [HarchWeb.name "code", HarchWeb.inputMode "numeric", HarchWeb.autocomplete "one-time-code", HarchWeb.required],
+              HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountConfirmMfaEnrollmentLabel copy)]
             ]
 
 renderRegistrationPage :: AppLocale -> Text -> RegistrationForm -> Text
-renderRegistrationPage locale registrationPath form =
+renderRegistrationPage locale registrationPath form = HarchWeb.renderHtml (renderRegistrationPageHtml locale registrationPath form)
+
+renderRegistrationPageHtml :: AppLocale -> Text -> RegistrationForm -> HarchWeb.Html
+renderRegistrationPageHtml locale registrationPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section data-page=\"registration\"><h1 data-page-title=\"true\">",
-          accountRegistrationHeading copy,
-          "</h1>",
-          renderRegistrationRegion locale registrationPath form,
-          "</section>"
+   in HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "registration"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (accountRegistrationHeading copy)],
+          renderRegistrationRegionHtml locale registrationPath form
         ]
 
 renderRegistrationRegion :: AppLocale -> Text -> RegistrationForm -> Text
-renderRegistrationRegion locale registrationPath form =
+renderRegistrationRegion locale registrationPath form = HarchWeb.renderHtml (renderRegistrationRegionHtml locale registrationPath form)
+
+renderRegistrationRegionHtml :: AppLocale -> Text -> RegistrationForm -> HarchWeb.Html
+renderRegistrationRegionHtml locale registrationPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (registrationRegion locale registrationPath form)
+
+registrationRegion :: AppLocale -> Text -> RegistrationForm -> Maybe HarchWeb.Region
+registrationRegion locale registrationPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section id=\"registration-region\" aria-live=\"polite\">",
-          renderMessage (registrationFormMessage form) (registrationFormIsError form),
-          "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml registrationPath,
-          "\" method=\"post\"><label for=\"registration-username\">",
-          accountUsernameLabel copy,
-          "</label><input id=\"registration-username\" name=\"username\" autocomplete=\"username\" minlength=\"3\" maxlength=\"20\" required value=\"",
-          escapeHtml (registrationFormUsername form),
-          "\"><label for=\"registration-email\">",
-          accountEmailLabel copy,
-          "</label><input id=\"registration-email\" name=\"email\" type=\"email\" autocomplete=\"email\" required value=\"",
-          escapeHtml (registrationFormEmail form),
-          "\"><label for=\"registration-display-name\">",
-          accountDisplayNameLabel copy,
-          "</label><input id=\"registration-display-name\" name=\"displayName\" autocomplete=\"name\" value=\"",
-          escapeHtml (registrationFormDisplayName form),
-          "\"><label for=\"registration-password\">",
-          accountRegistrationPasswordLabel copy,
-          "</label><input id=\"registration-password\" name=\"password\" type=\"password\" autocomplete=\"new-password\" minlength=\"12\" required><button type=\"submit\">",
-          accountCreateAccountLabel copy,
-          "</button></form></section>"
+   in accountRegion
+        "registration-region"
+        [HarchWeb.ariaLive "polite"]
+        [ renderMessage (registrationFormMessage form) (registrationFormIsError form),
+          HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction registrationPath, HarchWeb.method "post"]
+            [ labelWithFor "registration-username" (accountUsernameLabel copy),
+              voidElementWithId HarchWeb.inputTag "registration-username" [HarchWeb.name "username", HarchWeb.autocomplete "username", HarchWeb.minLength "3", HarchWeb.maxLength "20", HarchWeb.required, HarchWeb.value (registrationFormUsername form)],
+              labelWithFor "registration-email" (accountEmailLabel copy),
+              voidElementWithId HarchWeb.inputTag "registration-email" [HarchWeb.name "email", HarchWeb.inputType "email", HarchWeb.autocomplete "email", HarchWeb.required, HarchWeb.value (registrationFormEmail form)],
+              labelWithFor "registration-display-name" (accountDisplayNameLabel copy),
+              voidElementWithId HarchWeb.inputTag "registration-display-name" [HarchWeb.name "displayName", HarchWeb.autocomplete "name", HarchWeb.value (registrationFormDisplayName form)],
+              labelWithFor "registration-password" (accountRegistrationPasswordLabel copy),
+              voidElementWithId HarchWeb.inputTag "registration-password" [HarchWeb.name "password", HarchWeb.inputType "password", HarchWeb.autocomplete "new-password", HarchWeb.minLength "12", HarchWeb.required],
+              HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountCreateAccountLabel copy)]
+            ]
         ]
 
 renderVerificationPage :: AppLocale -> Text -> VerificationForm -> Text
-renderVerificationPage locale verificationPath form =
+renderVerificationPage locale verificationPath form = HarchWeb.renderHtml (renderVerificationPageHtml locale verificationPath form)
+
+renderVerificationPageHtml :: AppLocale -> Text -> VerificationForm -> HarchWeb.Html
+renderVerificationPageHtml locale verificationPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section data-page=\"email-verification\"><h1 data-page-title=\"true\">",
-          accountVerificationHeading copy,
-          "</h1>",
-          renderVerificationRegion locale verificationPath form,
-          "</section>"
+   in HarchWeb.element
+        HarchWeb.sectionTag
+        [HarchWeb.dataAttribute "page" "email-verification"]
+        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (accountVerificationHeading copy)],
+          renderVerificationRegionHtml locale verificationPath form
         ]
 
 renderVerificationRegion :: AppLocale -> Text -> VerificationForm -> Text
-renderVerificationRegion locale verificationPath form =
+renderVerificationRegion locale verificationPath form = HarchWeb.renderHtml (renderVerificationRegionHtml locale verificationPath form)
+
+renderVerificationRegionHtml :: AppLocale -> Text -> VerificationForm -> HarchWeb.Html
+renderVerificationRegionHtml locale verificationPath form = maybe (HarchWeb.fragment []) HarchWeb.regionHtml (verificationRegion locale verificationPath form)
+
+verificationRegion :: AppLocale -> Text -> VerificationForm -> Maybe HarchWeb.Region
+verificationRegion locale verificationPath form =
   let copy = accountPageCopy locale
-   in Text.concat
-        [ "<section id=\"verification-region\" aria-live=\"polite\">",
-          renderMessage (verificationFormMessage form) (verificationFormIsError form),
-          "<form data-harch-action=\"true\" data-harch-control action=\"",
-          escapeHtml verificationPath,
-          "\" method=\"post\"><label for=\"verification-token\">",
-          accountVerificationTokenLabel copy,
-          "</label><input id=\"verification-token\" name=\"token\" autocomplete=\"one-time-code\" required value=\"",
-          escapeHtml (verificationFormToken form),
-          "\"><button type=\"submit\">",
-          accountVerifyEmailLabel copy,
-          "</button></form></section>"
+   in accountRegion
+        "verification-region"
+        [HarchWeb.ariaLive "polite"]
+        [ renderMessage (verificationFormMessage form) (verificationFormIsError form),
+          HarchWeb.element
+            HarchWeb.formTag
+            [HarchWeb.dataAttribute "harch-action" "true", HarchWeb.dataFlag "harch-control", HarchWeb.formAction verificationPath, HarchWeb.method "post"]
+            [ labelWithFor "verification-token" (accountVerificationTokenLabel copy),
+              voidElementWithId HarchWeb.inputTag "verification-token" [HarchWeb.name "token", HarchWeb.autocomplete "one-time-code", HarchWeb.required, HarchWeb.value (verificationFormToken form)],
+              HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text (accountVerifyEmailLabel copy)]
+            ]
         ]
 
 emailVerificationLifetimeNanoseconds :: Word64
@@ -878,34 +931,34 @@ nonEmptyText :: Text -> Maybe Text
 nonEmptyText "" = Nothing
 nonEmptyText value = Just value
 
-renderMessage :: Maybe Text -> Bool -> Text
+renderMessage :: Maybe Text -> Bool -> HarchWeb.Html
 renderMessage maybeMessage isError =
   case isError of
-    False -> renderMessageWithState maybeMessage Text.empty
-    True -> renderMessageWithState maybeMessage " data-error-state=\"true\""
+    False -> renderMessageWithState maybeMessage []
+    True -> renderMessageWithState maybeMessage [HarchWeb.dataAttribute "error-state" "true"]
 
-renderMessageWithState :: Maybe Text -> Text -> Text
-renderMessageWithState maybeMessage stateAttribute =
+renderMessageWithState :: Maybe Text -> [HarchWeb.Attribute] -> HarchWeb.Html
+renderMessageWithState maybeMessage stateAttributes =
   case maybeMessage of
-    Nothing -> Text.empty
-    Just message ->
-      Text.concat
-        [ "<p data-account-message=\"true\"",
-          stateAttribute,
-          ">",
-          escapeHtml message,
-          "</p>"
-        ]
+    Nothing -> HarchWeb.fragment []
+    Just message -> HarchWeb.element HarchWeb.paragraphTag (HarchWeb.dataAttribute "account-message" "true" : stateAttributes) [HarchWeb.text message]
 
-escapeHtml :: Text -> Text
-escapeHtml =
-  Text.concatMap
-    ( \character ->
-        case character of
-          '&' -> "&amp;"
-          '<' -> "&lt;"
-          '>' -> "&gt;"
-          '\"' -> "&quot;"
-          '\'' -> "&#39;"
-          _ -> Text.singleton character
-    )
+accountRegion :: Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> Maybe HarchWeb.Region
+accountRegion identifier attributes children = do
+  elementIdentifier <- HarchWeb.mkElementId identifier
+  pure (HarchWeb.region (HarchWeb.mkRegionId elementIdentifier) HarchWeb.sectionTag attributes children)
+
+replaceRegionPatch :: Maybe HarchWeb.Region -> [HarchWeb.RegionPatch]
+replaceRegionPatch = maybe [] (pure . HarchWeb.replaceRegion)
+
+elementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
+elementWithId tag identifier attributes children =
+  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.element tag (HarchWeb.elementId elementIdentifier : attributes) children) (HarchWeb.mkElementId identifier)
+
+voidElementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> HarchWeb.Html
+voidElementWithId tag identifier attributes =
+  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.voidElement tag (HarchWeb.elementId elementIdentifier : attributes)) (HarchWeb.mkElementId identifier)
+
+labelWithFor :: Text -> Text -> HarchWeb.Html
+labelWithFor identifier label =
+  maybe (HarchWeb.fragment []) (\elementIdentifier -> HarchWeb.element HarchWeb.labelTag [HarchWeb.labelFor elementIdentifier] [HarchWeb.text label]) (HarchWeb.mkElementId identifier)
