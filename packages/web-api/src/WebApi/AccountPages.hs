@@ -61,6 +61,14 @@ import WebApi.Account
     registerAccountWithIdentityAtWithPasswordHasher,
     resendEmailVerificationAt,
   )
+import WebApi.AccountPages.Forms
+  ( LoginForm (..),
+    MfaEnrollmentForm (..),
+    PendingProfileForm (..),
+    RegistrationForm (..),
+    VerificationForm (..),
+    emptyRegistrationForm,
+  )
 import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
@@ -103,46 +111,6 @@ import WebApi.Session
     AccountSessionStoreError (..),
     issueAccountSession,
   )
-
-data RegistrationForm = RegistrationForm
-  { registrationFormUsername :: Text,
-    registrationFormEmail :: Text,
-    registrationFormDisplayName :: Text,
-    registrationFormMessage :: Maybe Text,
-    registrationFormIsError :: Bool
-  }
-  deriving (Eq)
-
-data VerificationForm = VerificationForm
-  { verificationFormToken :: Text,
-    verificationFormMessage :: Maybe Text,
-    verificationFormIsError :: Bool
-  }
-  deriving (Eq)
-
-data PendingProfileForm = PendingProfileForm
-  { pendingProfileFormEmail :: Text,
-    pendingProfileFormMessage :: Maybe Text,
-    pendingProfileFormIsError :: Bool,
-    pendingProfileFormResendLabel :: Text
-  }
-  deriving (Eq)
-
-data MfaEnrollmentForm = MfaEnrollmentForm
-  { mfaEnrollmentFormAccountId :: Text,
-    mfaEnrollmentFormSecret :: Maybe Text,
-    mfaEnrollmentFormRecoveryCodes :: [Text],
-    mfaEnrollmentFormMessage :: Maybe Text,
-    mfaEnrollmentFormIsError :: Bool
-  }
-  deriving (Eq)
-
-data LoginForm = LoginForm
-  { loginFormEmail :: Text,
-    loginFormMessage :: Maybe Text,
-    loginFormIsError :: Bool
-  }
-  deriving (Eq)
 
 data AccountPageCopy = AccountPageCopy
   { accountRegistrationHeading :: Text,
@@ -228,9 +196,6 @@ accountPageCopy locale =
           accountRecoveryCodesHeading = "Codigos de recuperacion",
           accountRecoveryCodesInstruction = "Guarda estos codigos. No se mostraran de nuevo."
         }
-
-emptyRegistrationForm :: RegistrationForm
-emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothing False
 
 handleAccountAction :: AccountWorkflow -> HarchWeb.ClientActionRequest AppRequestContext -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
