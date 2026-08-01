@@ -8,6 +8,7 @@ module HarchWeb.Server.ClientAction
     isClientActionRequest,
     maxClientActionBodyBytes,
     parseClientActionFields,
+    validateClientActionCsrf,
     validateClientActionRequest,
   )
 where
@@ -29,6 +30,7 @@ data ClientActionProtocolError
   | ClientActionMethodNotAllowed
   | ClientActionUnsupportedMediaType
   | ClientActionOriginRejected
+  | ClientActionCsrfRejected
   | ClientActionNotFound
   deriving (Eq, Show)
 
@@ -45,6 +47,14 @@ validateClientActionRequest expectedOrigin request
   | requestOrigin request /= Just expectedOrigin = Left ClientActionOriginRejected
   | otherwise = Right ()
 
+validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError ()
+validateClientActionCsrf request actionFields
+  | Just cookieToken <- requestCsrfCookie request,
+    Just submittedToken <- lookup "_harch_csrf" actionFields,
+    cookieToken == submittedToken =
+      Right ()
+  | otherwise = Left ClientActionCsrfRejected
+
 formUrlEncodedRequest :: Wai.Request -> Bool
 formUrlEncodedRequest request =
   maybe False isFormUrlEncoded (lookup "Content-Type" (Wai.requestHeaders request))
@@ -57,6 +67,18 @@ formUrlEncodedRequest request =
 
 requestOrigin :: Wai.Request -> Maybe Text
 requestOrigin request = lookup "Origin" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
+
+requestCsrfCookie :: Wai.Request -> Maybe Text
+requestCsrfCookie request =
+  lookup "harch-csrf" (requestCookies request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
+
+requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
+requestCookies request =
+  maybe [] (map parseCookie . ByteString.split 59) (lookup "Cookie" (Wai.requestHeaders request))
+  where
+    parseCookie cookie =
+      let (name, valueWithSeparator) = ByteString.break (== 61) (ByteString.dropWhile (== 32) cookie)
+       in (name, ByteString.drop 1 valueWithSeparator)
 
 parseClientActionFields :: LazyByteString.ByteString -> Either ClientActionProtocolError [(Text, Text)]
 parseClientActionFields requestBody =
@@ -80,6 +102,7 @@ clientActionProtocolErrorResponse protocolError =
           ClientActionMethodNotAllowed -> 405
           ClientActionUnsupportedMediaType -> 415
           ClientActionOriginRejected -> 403
+          ClientActionCsrfRejected -> 403
           ClientActionNotFound -> 404,
       responseContentType = "application/json; charset=utf-8",
       responseBody = "{\"patches\":[],\"focusId\":null}",

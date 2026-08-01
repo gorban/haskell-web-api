@@ -118,7 +118,7 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
     PageResponse page ->
       Wai.responseLBS
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
+        (pageResponseHeaders additionalHeaders runtimeNonce)
         (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     PageResponseWithMetadata pageResponseBodyValue page ->
       let !pageStatusMessage = ByteString.empty
@@ -126,12 +126,19 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
           !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
        in Wai.responseLBS
             pageStatus
-            (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)])
+            (pageResponseHeaders additionalHeaders runtimeNonce)
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
     BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
+
+pageResponseHeaders :: Http.ResponseHeaders -> Document.RuntimeNonce -> Http.ResponseHeaders
+pageResponseHeaders additionalHeaders runtimeNonce =
+  additionalHeaders
+    <> [ (Http.hContentType, TextEncoding.encodeUtf8 htmlContentType),
+         ("Set-Cookie", TextEncoding.encodeUtf8 ("harch-csrf=" <> Document.runtimeNonceValue runtimeNonce <> "; Path=/; SameSite=Strict"))
+       ]
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =

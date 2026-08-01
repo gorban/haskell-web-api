@@ -187,8 +187,11 @@ dispatchRoutedRequest
                 case actionBody >>= parseClientActionFields of
                   Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
                   Right actionFields -> do
-                    maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_csrf" actionFields, clientActionContext = routedRequestContext}
-                    pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
+                    case validateClientActionCsrf request actionFields of
+                      Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
+                      Right () -> do
+                        maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_harch_csrf" actionFields, clientActionContext = routedRequestContext}
+                        pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
           else renderResponse webApplication routeRequest
 
 readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)

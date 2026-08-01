@@ -246,13 +246,13 @@ spec =
           )
 
       it "returns validation patches for captured subscription actions" $ do
-        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example"]
+        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example&_harch_csrf=csrf-token"]
         let actionRequest =
               Wai.setRequestBodyChunks
                 (nextRequestBodyChunk actionBodyChunks)
                 ( (waiRequest ["actions", "subscribe"])
                     { Wai.requestMethod = "POST",
-                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
+                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
@@ -278,13 +278,13 @@ spec =
           )
 
       it "returns a success patch for valid captured subscription actions" $ do
-        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example.com"]
+        actionBodyChunks <- newIORef [TextEncoding.encodeUtf8 "email=ada%40example.com&_harch_csrf=csrf-token"]
         let actionRequest =
               Wai.setRequestBodyChunks
                 (nextRequestBodyChunk actionBodyChunks)
                 ( (waiRequest ["actions", "subscribe"])
                     { Wai.requestMethod = "POST",
-                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
+                      Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
                     }
                 )
         response <- performWaiRequest (toWaiApplication buildApplication) actionRequest
