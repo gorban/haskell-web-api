@@ -67,6 +67,8 @@ library
     HarchWeb.Gmail
     HarchWeb.GoogleWorkspace
     HarchWeb.LoginProtection
+    HarchWeb.Markup
+    HarchWeb.Markup.Unsafe
     HarchWeb.Observability
     HarchWeb.Password
     HarchWeb.RecoveryCode
@@ -92,6 +94,7 @@ library
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
+    HarchWeb.Markup.Internal
     HarchWeb.Observability.Otlp
     HarchWeb.Observability.Otlp.Export
     HarchWeb.Observability.Otlp.Wire
