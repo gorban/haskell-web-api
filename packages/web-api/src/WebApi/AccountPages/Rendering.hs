@@ -299,7 +299,9 @@ submitButton :: Text -> HarchWeb.Html
 submitButton label = HarchWeb.element HarchWeb.buttonTag [HarchWeb.inputType "submit"] [HarchWeb.text label]
 
 renderMessage :: Maybe Text -> Bool -> HarchWeb.Html
-renderMessage maybeMessage isError = maybe (HarchWeb.fragment []) (HarchWeb.element HarchWeb.paragraphTag ([HarchWeb.dataAttribute "account-message" "true"] <> if isError then [HarchWeb.dataAttribute "error-state" "true"] else []) . pure . HarchWeb.text) maybeMessage
+renderMessage maybeMessage isError = maybe (HarchWeb.fragment []) (HarchWeb.element HarchWeb.paragraphTag attributes . pure . HarchWeb.text) maybeMessage
+  where
+    attributes = HarchWeb.dataAttribute "account-message" "true" : [HarchWeb.dataAttribute "error-state" "true" | isError]
 
 renderEnrollmentSecret :: Maybe Text -> HarchWeb.Html
 renderEnrollmentSecret = maybe (HarchWeb.fragment []) (HarchWeb.element HarchWeb.paragraphTag [HarchWeb.dataAttribute "totp-secret" "true"] . pure . HarchWeb.element HarchWeb.codeTag [] . pure . HarchWeb.text)
