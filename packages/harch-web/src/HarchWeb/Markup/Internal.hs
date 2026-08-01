@@ -136,5 +136,6 @@ escapeCharacter character =
     '<' -> "&lt;"
     '>' -> "&gt;"
     '\"' -> "&quot;"
+    -- Numeric references were supported by legacy HTML parsers that did not support `&apos;`.
     '\'' -> "&#39;"
     _ -> Text.singleton character
