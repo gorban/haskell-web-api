@@ -78,14 +78,36 @@ spec = do
       let committedDefaults = [("KEY", "committed")]
           localOverrides = [("KEY", "local")]
           environmentOverrides = [("KEY", "environment")]
-      CoreConfig.lookupConfigValue "KEY" committedDefaults localOverrides environmentOverrides
+      CoreConfig.lookupConfigValue
+        "KEY"
+        CoreConfig.ConfigLayers
+          { CoreConfig.configLayerCommittedDefaults = committedDefaults,
+            CoreConfig.configLayerLocalOverrides = localOverrides,
+            CoreConfig.configLayerEnvironmentOverrides = environmentOverrides
+          }
         `shouldBe` Just "environment"
 
     it "uses the last declaration within each layer" $ do
       let committedDefaults = [("KEY", "first"), ("KEY", "second")]
       expectAll
-        ( (CoreConfig.lookupConfigValue "KEY" committedDefaults [] [] `shouldBe` Just "second")
-            :| [CoreConfig.lookupConfigValue "MISSING" committedDefaults [] [] `shouldBe` Nothing]
+        ( ( CoreConfig.lookupConfigValue
+              "KEY"
+              CoreConfig.ConfigLayers
+                { CoreConfig.configLayerCommittedDefaults = committedDefaults,
+                  CoreConfig.configLayerLocalOverrides = [],
+                  CoreConfig.configLayerEnvironmentOverrides = []
+                }
+              `shouldBe` Just "second"
+          )
+            :| [ CoreConfig.lookupConfigValue
+                   "MISSING"
+                   CoreConfig.ConfigLayers
+                     { CoreConfig.configLayerCommittedDefaults = committedDefaults,
+                       CoreConfig.configLayerLocalOverrides = [],
+                       CoreConfig.configLayerEnvironmentOverrides = []
+                     }
+                   `shouldBe` Nothing
+               ]
         )
 
   describe "parsePositiveInt" $ do

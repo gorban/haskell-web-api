@@ -12,7 +12,8 @@ module Core.Setup.PrerequisiteConfig
 where
 
 import Core.Config
-  ( ConfigOverridesFileError (..),
+  ( ConfigLayers (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     loadConfigOverridesFile,
     lookupConfigValue,
@@ -107,7 +108,14 @@ parseSetupPrerequisiteConfig committedDefaults localOverrides environmentOverrid
         Nothing -> Left (MissingConfigValue key)
 
     lookupOptionalValue key =
-      lookupConfigValue key committedDefaults localOverrides environmentOverrides
+      lookupConfigValue key configLayers
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
     optionalBoolean key fallback =
       maybe

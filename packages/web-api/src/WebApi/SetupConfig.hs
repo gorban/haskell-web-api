@@ -15,7 +15,8 @@ module WebApi.SetupConfig
 where
 
 import Core.Config
-  ( ConfigOverridesFileError (..),
+  ( ConfigLayers (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     loadConfigOverridesFile,
     lookupConfigValue,
@@ -135,7 +136,14 @@ parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmen
     lookupMigrationValue key =
       fmap
         (key,)
-        (lookupConfigValue key committedDefaults localOverrides environmentOverrides)
+        (lookupConfigValue key configLayers)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
     migrationConfigKeys =
       [ "WEB_API_MIGRATION_DATABASE_HOST",
@@ -155,4 +163,11 @@ parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides 
       maybe
         (Right fallback)
         (parseBoolean key)
-        (lookupConfigValue key committedDefaults localOverrides environmentOverrides)
+        (lookupConfigValue key configLayers)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }

@@ -8,6 +8,7 @@ import Control.Exception (bracket)
 import Data.ByteString qualified as ByteString
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
+import Data.Word (Word16)
 import HarchWeb.DevSmtp
 import HarchWeb.Email
 import Test.Hspec
@@ -19,8 +20,8 @@ spec =
       bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
         let sender = required (mkEmailAddress "noreply@example.test")
             recipient = required (mkEmailAddress "ada@example.test")
-            message = required (mkEmailMessage recipient "Welcome" "First line\n.second line")
-            config = required (mkSmtpConfig "127.0.0.1" (devSmtpPort server) "account.example.test" sender)
+            message = required (mkEmailMessage (EmailMessageInput recipient "Welcome" "First line\n.second line"))
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender Nothing))
         (null <$> devSmtpReceivedEmails server) `shouldReturn` True
         deliverSmtpEmail config message
         delivered <- awaitEmail server "ada@example.test"
@@ -35,8 +36,8 @@ spec =
       bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
         let sender = required (mkEmailAddress "noreply@example.test")
             recipient = required (mkEmailAddress "ada@example.test")
-            message = required (mkEmailMessage recipient "Authenticated" "Body")
-            config = required (mkAuthenticatedSmtpConfig "127.0.0.1" (devSmtpPort server) "account.example.test" sender "local-user" "local-password")
+            message = required (mkEmailMessage (EmailMessageInput recipient "Authenticated" "Body"))
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender (Just (smtpAuthentication (smtpLoginUsername "local-user") (smtpLoginPassword "local-password")))))
         deliverSmtpEmail config message
         delivered <- awaitEmail server "ada@example.test"
         devSmtpEnvelopeSender delivered `shouldBe` "noreply@example.test"
@@ -45,6 +46,16 @@ spec =
 
 required :: Maybe value -> value
 required = fromMaybe (error "Expected valid development SMTP fixture")
+
+smtpConfigInput :: Text.Text -> Word16 -> Text.Text -> EmailAddress -> Maybe SmtpAuthentication -> SmtpConfigInput
+smtpConfigInput host port heloName sender authentication =
+  SmtpConfigInput
+    { smtpInputHost = smtpServerHost host,
+      smtpInputPort = port,
+      smtpInputHeloName = smtpServerHeloName heloName,
+      smtpInputEnvelopeSender = sender,
+      smtpInputAuthentication = authentication
+    }
 
 awaitEmail :: DevSmtpServer -> String -> IO DevSmtpEmail
 awaitEmail server recipient = go (100 :: Int)

@@ -208,13 +208,19 @@ runtimeEmailDelivery :: SmtpDeliveryConfig -> Email.EmailDelivery
 runtimeEmailDelivery smtpConfig =
   case Email.mkEmailAddress (smtpDeliverySender smtpConfig) of
     Just sender ->
-      case Email.mkAuthenticatedSmtpConfig
-        (smtpDeliveryHost smtpConfig)
-        (fromIntegral (smtpDeliveryPort smtpConfig))
-        (smtpDeliveryHeloName smtpConfig)
-        sender
-        (smtpDeliveryUsername smtpConfig)
-        (smtpDeliveryPassword smtpConfig) of
+      case Email.mkSmtpConfig
+        Email.SmtpConfigInput
+          { Email.smtpInputHost = Email.smtpServerHost (smtpDeliveryHost smtpConfig),
+            Email.smtpInputPort = fromIntegral (smtpDeliveryPort smtpConfig),
+            Email.smtpInputHeloName = Email.smtpServerHeloName (smtpDeliveryHeloName smtpConfig),
+            Email.smtpInputEnvelopeSender = sender,
+            Email.smtpInputAuthentication =
+              Just
+                ( Email.smtpAuthentication
+                    (Email.smtpLoginUsername (smtpDeliveryUsername smtpConfig))
+                    (Email.smtpLoginPassword (smtpDeliveryPassword smtpConfig))
+                )
+          } of
         Just configuredSmtp -> Email.EmailDelivery (Email.deliverSmtpEmail configuredSmtp)
         Nothing -> unavailableEmailDelivery
     Nothing -> unavailableEmailDelivery

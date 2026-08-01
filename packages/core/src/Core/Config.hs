@@ -2,6 +2,7 @@
 
 module Core.Config
   ( ConfigOverridesFileError (..),
+    ConfigLayers (..),
     ConfigParseError (..),
     declaredIndices,
     indexedConfigKey,
@@ -37,6 +38,12 @@ data ConfigOverridesFileError
   = InvalidConfigOverridesLine Int Text
   | UnreadableConfigOverridesFile Text
   deriving (Eq, Show)
+
+data ConfigLayers = ConfigLayers
+  { configLayerCommittedDefaults :: [(Text, Text)],
+    configLayerLocalOverrides :: [(Text, Text)],
+    configLayerEnvironmentOverrides :: [(Text, Text)]
+  }
 
 loadConfigOverridesFile :: FilePath -> IO (Either ConfigOverridesFileError [(Text, Text)])
 loadConfigOverridesFile overridesPath = do
@@ -77,8 +84,8 @@ parseConfigOverridesFile =
                     then Left (InvalidConfigOverridesLine lineNumber rawLine)
                     else Right [(strippedKey, Text.strip (Text.drop 1 rawValueWithSeparator))]
 
-lookupConfigValue :: Text -> [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Maybe Text
-lookupConfigValue key committedDefaults localOverrides environmentOverrides =
+lookupConfigValue :: Text -> ConfigLayers -> Maybe Text
+lookupConfigValue key ConfigLayers {configLayerCommittedDefaults = committedDefaults, configLayerLocalOverrides = localOverrides, configLayerEnvironmentOverrides = environmentOverrides} =
   lookupInLayer environmentOverrides
     `orElse` lookupInLayer localOverrides
     `orElse` lookupInLayer committedDefaults

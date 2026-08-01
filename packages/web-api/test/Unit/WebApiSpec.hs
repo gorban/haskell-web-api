@@ -2222,7 +2222,7 @@ spec = do
         accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
         accountWorkflowTotpClock workflow >>= (`shouldSatisfy` (> 0))
-        case Email.mkEmailMessage recipient "Verification test" "Hello" of
+        case Email.mkEmailMessage (Email.EmailMessageInput recipient "Verification test" "Hello") of
           Nothing -> expectationFailure "expected a valid SMTP test message"
           Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message
         awaitDevSmtpEmail server "person@example.test"
@@ -2253,7 +2253,7 @@ spec = do
               defaultAppEnvironmentConfig
                 { smtpDeliveryConfig = (smtpDeliveryConfig defaultAppEnvironmentConfig) {smtpDeliveryHeloName = "bad\nhelo"}
                 }
-      case Email.mkEmailMessage recipient "Verification test" "Hello" of
+      case Email.mkEmailMessage (Email.EmailMessageInput recipient "Verification test" "Hello") of
         Nothing -> expectationFailure "expected a valid SMTP test message"
         Just message ->
           forM_ [invalidSenderWorkflow, invalidHeloWorkflow] $ \invalidWorkflow ->

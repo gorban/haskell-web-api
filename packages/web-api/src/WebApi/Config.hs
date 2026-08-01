@@ -51,7 +51,8 @@ import Control.Monad (filterM)
 import Control.Monad.Except (MonadError (throwError))
 import Control.Monad.Reader (ReaderT, asks, runReaderT)
 import Core.Config
-  ( ConfigOverridesFileError (..),
+  ( ConfigLayers (..),
+    ConfigOverridesFileError (..),
     ConfigParseError (..),
     declaredIndices,
     indexedConfigKey,
@@ -387,9 +388,16 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
       }
   where
     requiredConfigValue key =
-      case lookupConfigValue key committedDefaults localOverrides environmentOverrides of
+      case lookupConfigValue key configLayers of
         Just value -> Right value
         Nothing -> Left (MissingConfigValue key)
+
+    configLayers =
+      ConfigLayers
+        { configLayerCommittedDefaults = committedDefaults,
+          configLayerLocalOverrides = localOverrides,
+          configLayerEnvironmentOverrides = environmentOverrides
+        }
 
 parseMode :: Text -> Either ConfigParseError AppMode
 parseMode value =
@@ -472,7 +480,15 @@ allConfigEntriesP = asks (\sources -> configCommittedDefaults sources <> configL
 
 optionalConfigValueP :: Text -> ConfigParser (Maybe Text)
 optionalConfigValueP key =
-  asks (\sources -> lookupConfigValue key (configCommittedDefaults sources) (configLocalOverrides sources) (configEnvironmentOverrides sources))
+  asks (lookupConfigValue key . configLayersFromSources)
+
+configLayersFromSources :: ConfigSources -> ConfigLayers
+configLayersFromSources sources =
+  ConfigLayers
+    { configLayerCommittedDefaults = configCommittedDefaults sources,
+      configLayerLocalOverrides = configLocalOverrides sources,
+      configLayerEnvironmentOverrides = configEnvironmentOverrides sources
+    }
 
 requiredConfigValueP :: Text -> ConfigParser Text
 requiredConfigValueP key = do

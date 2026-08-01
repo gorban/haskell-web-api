@@ -7,7 +7,7 @@ import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Exception (SomeException, displayException, finally, try)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as Text
-import HarchWeb.Email (EmailAddress, EmailMessage, mkEmailAddress, mkEmailMessage)
+import HarchWeb.Email (EmailAddress, EmailMessage, EmailMessageInput (..), mkEmailAddress, mkEmailMessage)
 import HarchWeb.Gmail
   ( GmailHttpRequest (..),
     GmailHttpResponse (..),
@@ -100,7 +100,12 @@ requiredEmailAddress value =
 
 requiredEmailMessage :: Text.Text -> Text.Text -> Text.Text -> EmailMessage
 requiredEmailMessage recipient subject body =
-  case mkEmailMessage (requiredEmailAddress recipient) subject body of
+  case mkEmailMessage
+    EmailMessageInput
+      { emailInputRecipient = requiredEmailAddress recipient,
+        emailInputSubject = subject,
+        emailInputBody = body
+      } of
     Just message -> message
     Nothing -> error "Expected valid email message"
 

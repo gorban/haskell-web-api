@@ -9,6 +9,7 @@ import Control.Monad (unless)
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isJust, isNothing)
+import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word16)
 import HarchWeb.Email
@@ -24,10 +25,20 @@ sampleSender :: EmailAddress
 sampleSender = required "sample sender" (mkEmailAddress "noreply@example.test")
 
 sampleMessage :: EmailMessage
-sampleMessage = required "sample message" (mkEmailMessage sampleRecipient "Account verification" ".first\nsecond\r\n.third")
+sampleMessage = required "sample message" (mkEmailMessage (EmailMessageInput sampleRecipient "Account verification" ".first\nsecond\r\n.third"))
 
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
+
+smtpConfigInput :: Text -> Word16 -> Text -> EmailAddress -> Maybe SmtpAuthentication -> SmtpConfigInput
+smtpConfigInput host port heloName sender authentication =
+  SmtpConfigInput
+    { smtpInputHost = smtpServerHost host,
+      smtpInputPort = port,
+      smtpInputHeloName = smtpServerHeloName heloName,
+      smtpInputEnvelopeSender = sender,
+      smtpInputAuthentication = authentication
+    }
 
 spec :: Spec
 spec = do
@@ -54,12 +65,12 @@ spec = do
         ( (emailMessageRecipient sampleMessage `shouldBe` sampleRecipient)
             :| [ emailMessageSubject sampleMessage `shouldBe` "Account verification",
                  emailMessageBody sampleMessage `shouldBe` ".first\nsecond\r\n.third",
-                 sampleMessage /= required "different message" (mkEmailMessage sampleRecipient "Different" "body") `shouldBe` True,
+                 sampleMessage /= required "different message" (mkEmailMessage (EmailMessageInput sampleRecipient "Different" "body")) `shouldBe` True,
                  show sampleMessage `shouldBe` "EmailMessage {emailMessageRecipient = EmailAddress \"ada@example.test\", emailMessageSubject = \"Account verification\", emailMessageBody = \".first\\nsecond\\r\\n.third\"}",
                  show [sampleMessage] `shouldContain` "EmailMessage",
-                 mkEmailMessage sampleRecipient "Bcc: attacker@example.test\r\n" "body" `shouldBe` Nothing,
-                 mkEmailMessage sampleRecipient "Bcc: attacker@example.test\n" "body" `shouldBe` Nothing,
-                 mkEmailMessage sampleRecipient "Sena\241" "body" `shouldBe` Nothing
+                 mkEmailMessage (EmailMessageInput sampleRecipient "Bcc: attacker@example.test\r\n" "body") `shouldBe` Nothing,
+                 mkEmailMessage (EmailMessageInput sampleRecipient "Bcc: attacker@example.test\n" "body") `shouldBe` Nothing,
+                 mkEmailMessage (EmailMessageInput sampleRecipient "Sena\241" "body") `shouldBe` Nothing
                ]
         )
 
@@ -83,20 +94,20 @@ spec = do
   describe "SmtpConfig" $ do
     it "requires a resolved host, nonzero port, and header-safe HELO name" $ do
       expectAll
-        ( (isJust (mkSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender) `shouldBe` True)
-            :| [ isNothing (mkSmtpConfig "" 2525 "account.example.test" sampleSender) `shouldBe` True,
-                 isNothing (mkSmtpConfig "127.0.0.1" 0 "account.example.test" sampleSender) `shouldBe` True,
-                 isNothing (mkSmtpConfig "127.0.0.1" 2525 "account\r\n.example.test" sampleSender) `shouldBe` True,
-                 isJust (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password") `shouldBe` True,
-                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "" "smtp-password") `shouldBe` True,
-                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user\r" "smtp-password") `shouldBe` True,
-                 isNothing (mkAuthenticatedSmtpConfig "127.0.0.1" 2525 "account.example.test" sampleSender "smtp-user" "smtp-password\NUL") `shouldBe` True
+        ( (isJust (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender Nothing)) `shouldBe` True)
+            :| [ isNothing (mkSmtpConfig (smtpConfigInput "" 2525 "account.example.test" sampleSender Nothing)) `shouldBe` True,
+                 isNothing (mkSmtpConfig (smtpConfigInput "127.0.0.1" 0 "account.example.test" sampleSender Nothing)) `shouldBe` True,
+                 isNothing (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account\r\n.example.test" sampleSender Nothing)) `shouldBe` True,
+                 isJust (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "smtp-user") (smtpLoginPassword "smtp-password"))))) `shouldBe` True,
+                 isNothing (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "") (smtpLoginPassword "smtp-password"))))) `shouldBe` True,
+                 isNothing (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "smtp-user\r") (smtpLoginPassword "smtp-password"))))) `shouldBe` True,
+                 isNothing (mkSmtpConfig (smtpConfigInput "127.0.0.1" 2525 "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "smtp-user") (smtpLoginPassword "smtp-password\NUL"))))) `shouldBe` True
                ]
         )
 
   describe "deliverSmtpEmail" $ do
     it "fails clearly when its resolver has no usable SMTP address" $ do
-      let config = required "SMTP config" (mkSmtpConfig "smtp.example.test" 2525 "account.example.test" sampleSender)
+      let config = required "SMTP config" (mkSmtpConfig (smtpConfigInput "smtp.example.test" 2525 "account.example.test" sampleSender Nothing))
       result <- try (deliverSmtpEmailWithResolver (const (pure Nothing)) config sampleMessage) :: IO (Either IOException ())
       case result of
         Left failure -> displayException failure `shouldContain` "SMTP hostname did not resolve to a connectable address"
@@ -106,7 +117,7 @@ spec = do
       withLoopbackSmtp
         acceptingServer
         ( \port -> do
-            let config = required "loopback SMTP config" (mkSmtpConfig "127.0.0.1" port "account.example.test" sampleSender)
+            let config = required "loopback SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
             deliverSmtpEmail config sampleMessage
         )
         >>= \(_, deliveredMessage) ->
@@ -115,7 +126,7 @@ spec = do
 
     it "stops when the SMTP server rejects a command" $ do
       _ <- withLoopbackSmtp rejectingEhloServer $ \port -> do
-        let config = required "rejecting SMTP config" (mkSmtpConfig "127.0.0.1" port "account.example.test" sampleSender)
+        let config = required "rejecting SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender Nothing))
         result <- try (deliverSmtpEmail config sampleMessage) :: IO (Either IOException ())
         case result of
           Left failure -> do
@@ -130,7 +141,7 @@ spec = do
       withLoopbackSmtp
         acceptingAuthenticatedServer
         ( \port -> do
-            let config = required "authenticated SMTP config" (mkAuthenticatedSmtpConfig "127.0.0.1" port "account.example.test" sampleSender "smtp-user" "smtp-password")
+            let config = required "authenticated SMTP config" (mkSmtpConfig (smtpConfigInput "127.0.0.1" port "account.example.test" sampleSender (Just (smtpAuthentication (smtpLoginUsername "smtp-user") (smtpLoginPassword "smtp-password")))))
             deliverSmtpEmail config sampleMessage
         )
         >>= \(_, deliveredMessage) ->
