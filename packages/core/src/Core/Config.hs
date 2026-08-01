@@ -18,9 +18,9 @@ module Core.Config
   )
 where
 
-import Control.Applicative ((<|>))
 import Control.Exception (IOException, displayException, evaluate, try)
 import Data.Char (isDigit)
+import Data.Foldable (asum)
 import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
@@ -84,23 +84,18 @@ parseConfigOverridesFile =
                     then Left (InvalidConfigOverridesLine lineNumber rawLine)
                     else Right [(strippedKey, Text.strip (Text.drop 1 rawValueWithSeparator))]
 
-lookupConfigValue :: Text -> ConfigLayers -> Maybe Text
-lookupConfigValue
-  key
+configLayersByPrecedence :: ConfigLayers -> [[(Text, Text)]]
+configLayersByPrecedence
   ConfigLayers
     { configLayerCommittedDefaults = committedDefaults,
       configLayerLocalOverrides = localOverrides,
       configLayerEnvironmentOverrides = environmentOverrides
     } =
-    lookupInLayer environmentOverrides
-      `orElse` lookupInLayer localOverrides
-      `orElse` lookupInLayer committedDefaults
-    where
-      lookupInLayer = lookup key . reverse
+    [environmentOverrides, localOverrides, committedDefaults]
 
-orElse :: Maybe value -> Maybe value -> Maybe value
-orElse maybeValue fallbackValue =
-  maybeValue <|> fallbackValue
+lookupConfigValue :: Text -> ConfigLayers -> Maybe Text
+lookupConfigValue key =
+  asum . map (lookup key . reverse) . configLayersByPrecedence
 
 parsePositiveInt :: Text -> Text -> Either ConfigParseError Int
 parsePositiveInt key value =
