@@ -20,6 +20,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Security qualified as Security
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
@@ -963,6 +964,15 @@ spec = do
       show [exporterStartup] `shouldBe` "[OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]"
       show [observabilityPlan] `shouldBe` "[ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}]"
       show [serverConfig] `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
+
+  describe "RequestContextField" $
+    it "keeps private context fields comparable and inspectable" $ do
+      let clientAddress = Security.RequestContextField "client.address" "203.0.113.8"
+          peerAddress = Security.RequestContextField "network.peer.address" "203.0.113.8"
+      clientAddress `shouldBe` clientAddress
+      clientAddress `shouldNotBe` peerAddress
+      show clientAddress `shouldBe` "RequestContextField {requestContextFieldName = \"client.address\", requestContextFieldValue = \"203.0.113.8\"}"
+      show [clientAddress] `shouldBe` "[RequestContextField {requestContextFieldName = \"client.address\", requestContextFieldValue = \"203.0.113.8\"}]"
 
   describe "public record coverage" $ do
     it "reads every exported selector from the public request, page, shell, and document records" $ do

@@ -2990,6 +2990,14 @@ spec = do
                      "account.profile.resend.clock"
                    ]
 
+    it "keeps failure codes comparable and inspectable" $ do
+      let registrationFailure = AppEffect.RegistrationStoreFailure
+          loginFailure = AppEffect.LoginSessionFailure
+      registrationFailure `shouldBe` registrationFailure
+      registrationFailure `shouldNotBe` loginFailure
+      show registrationFailure `shouldBe` "RegistrationStoreFailure"
+      show [registrationFailure] `shouldBe` "[RegistrationStoreFailure]"
+
     it "composes application services, IO, and typed failures through one boundary" $ do
       let services = AppEffect.AppServices unavailableAccountWorkflow
           successfulAction :: AppEffect.AppM Text Int
