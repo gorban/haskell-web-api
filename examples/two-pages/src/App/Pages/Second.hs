@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module App.Pages.Second (secondPage) where
 
@@ -9,6 +10,8 @@ import HarchWeb
     anchorTag,
     dataAttribute,
     element,
+    fragment,
+    harch,
     headingOneTag,
     href,
     paragraphTag,
@@ -24,12 +27,12 @@ secondPage routeRequest =
         pageRoute = SecondRoute,
         pageContext = requestContext routeRequest,
         pageBody =
-          element
-            sectionTag
-            [dataAttribute "page" "second"]
-            [ element headingOneTag [] [text "Second"],
-              element paragraphTag [] [text "This page also returns full HTML when loaded directly."],
-              element paragraphTag [] [element anchorTag [href (routeHref HomeRoute), dataAttribute "page-link" "true"] [text "Back home"]]
-            ],
+          [harch|
+            <section data-page="second">
+              <h1>Second</h1>
+              <p>This page also returns full HTML when loaded directly.</p>
+              <p><a href={routeHref HomeRoute} data-page-link="true">Back home</a></p>
+            </section>
+          |],
         pageBootstrapHooks = ["second-page"]
       }

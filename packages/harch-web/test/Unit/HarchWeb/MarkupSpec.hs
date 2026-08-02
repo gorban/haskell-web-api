@@ -41,6 +41,11 @@ spec = do
           quoted = [harch|<p>Literal &amp; unsafe &lt;literal&gt; {interpolatedText} {safeChild}</p>|]
       renderHtml quoted `shouldBe` "<p>Literal &amp; unsafe &lt;literal&gt; &lt;reviewed&gt; <code>safe</code></p>"
 
+    it "composes a list of Html children in a root-level markup fragment" $ do
+      let children = [element codeTag [] [text "safe"], element paragraphTag [] [text "after"]]
+          quoted = [harch|<label for="email">Email address</label>{children}|]
+      renderHtml quoted `shouldBe` "<label for=\"email\">Email address</label><code>safe</code><p>after</p>"
+
     it "lowers normal, self-closing, and qualified components to typed Haskell functions" $ do
       let quoted =
             [harch|

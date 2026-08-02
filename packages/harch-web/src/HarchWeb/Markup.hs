@@ -97,6 +97,9 @@ instance MarkupContent Html where
 instance MarkupContent Text where
   toHtml = text
 
+instance MarkupContent [Html] where
+  toHtml = fragment
+
 className :: CssClass -> Attribute
 className = attribute (AttributeName "class") . cssClassText
 

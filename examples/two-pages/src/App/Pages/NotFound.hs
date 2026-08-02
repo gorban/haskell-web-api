@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module App.Pages.NotFound (notFoundPage) where
 
@@ -9,6 +10,8 @@ import HarchWeb
     anchorTag,
     dataAttribute,
     element,
+    fragment,
+    harch,
     headingOneTag,
     href,
     paragraphTag,
@@ -24,12 +27,12 @@ notFoundPage routeRequest =
         pageRoute = NotFoundRoute,
         pageContext = requestContext routeRequest,
         pageBody =
-          element
-            sectionTag
-            [dataAttribute "page" "not-found"]
-            [ element headingOneTag [] [text "Not Found"],
-              element paragraphTag [] [text "The requested page could not be found."],
-              element paragraphTag [] [element anchorTag [href (routeHref HomeRoute), dataAttribute "page-link" "true"] [text "Return home"]]
-            ],
+          [harch|
+            <section data-page="not-found">
+              <h1>Not Found</h1>
+              <p>The requested page could not be found.</p>
+              <p><a href={routeHref HomeRoute} data-page-link="true">Return home</a></p>
+            </section>
+          |],
         pageBootstrapHooks = []
       }
