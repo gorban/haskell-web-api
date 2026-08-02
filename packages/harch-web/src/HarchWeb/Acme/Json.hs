@@ -28,6 +28,7 @@ module HarchWeb.Acme.Json
 where
 
 import Control.Monad (replicateM)
+import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Functor (($>))
 import Data.Text (Text)
@@ -169,23 +170,11 @@ unicodeJsonCharacterParser = do
   maybe pfail (pure . toEnum) (readMaybe ("0x" <> hexDigits))
 
 jsonStringBytes :: Text -> LazyByteString.ByteString
-jsonStringBytes textValue =
-  LazyByteString.fromStrict . TextEncoding.encodeUtf8 $
-    "\""
-      <> Text.concatMap escapeJsonCharacter textValue
-      <> "\""
+jsonStringBytes = Aeson.encode . Aeson.String
 
 escapeJsonCharacter :: Char -> Text
-escapeJsonCharacter character =
-  case character of
-    '"' -> "\\\""
-    '\\' -> "\\\\"
-    '\b' -> "\\b"
-    '\f' -> "\\f"
-    '\n' -> "\\n"
-    '\r' -> "\\r"
-    '\t' -> "\\t"
-    _ -> Text.singleton character
+escapeJsonCharacter =
+  Text.dropEnd 1 . Text.drop 1 . TextEncoding.decodeUtf8 . LazyByteString.toStrict . Aeson.encode . Text.singleton
 
 jsonBoolBytes :: Bool -> LazyByteString.ByteString
 jsonBoolBytes boolValue =

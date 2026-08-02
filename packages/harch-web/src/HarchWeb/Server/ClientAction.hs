@@ -13,6 +13,8 @@ module HarchWeb.Server.ClientAction
   )
 where
 
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Encoding qualified as JsonEncoding
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Maybe (fromMaybe)
@@ -122,30 +124,18 @@ clientActionResponseBody actionResponse =
 
 renderClientActionResponse :: ClientActionResponse -> Text
 renderClientActionResponse actionResponse =
-  "{\"patches\":["
-    <> Text.intercalate "," (map renderPatch (clientActionPatches actionResponse))
-    <> "],\"focusId\":"
-    <> maybe "null" jsonString (clientActionFocusId actionResponse)
-    <> "}"
+  jsonText
+    ( JsonEncoding.pairs
+        ( JsonEncoding.pair "patches" (JsonEncoding.list renderPatch (clientActionPatches actionResponse))
+            <> JsonEncoding.pair "focusId" (Aeson.toEncoding (clientActionFocusId actionResponse))
+        )
+    )
   where
     renderPatch patch =
-      "{\"id\":"
-        <> jsonString (regionPatchId patch)
-        <> ",\"html\":"
-        <> jsonString (regionPatchHtml patch)
-        <> "}"
+      JsonEncoding.pairs
+        ( JsonEncoding.pair "id" (Aeson.toEncoding (regionPatchId patch))
+            <> JsonEncoding.pair "html" (Aeson.toEncoding (regionPatchHtml patch))
+        )
 
-jsonString :: Text -> Text
-jsonString textValue = "\"" <> Text.concatMap escapeJsonCharacter textValue <> "\""
-
-escapeJsonCharacter :: Char -> Text
-escapeJsonCharacter character =
-  case character of
-    '"' -> "\\\""
-    '\\' -> "\\\\"
-    '\b' -> "\\b"
-    '\f' -> "\\f"
-    '\n' -> "\\n"
-    '\r' -> "\\r"
-    '\t' -> "\\t"
-    _ -> Text.singleton character
+jsonText :: JsonEncoding.Encoding -> Text
+jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString

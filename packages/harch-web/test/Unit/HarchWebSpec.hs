@@ -1654,7 +1654,7 @@ spec = do
       Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403
 
     it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
-      let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t"
+      let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t unicode ☃"
           observabilityAttribute = Observability.ObservabilityAttribute "action.outcome" (Observability.TextAttribute "rejected")
           responseBodyValue =
             clientActionResponseBody
@@ -1675,11 +1675,12 @@ spec = do
                  encodedResponse `shouldSatisfy` Text.isInfixOf "},{",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\\"",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\\\",
-                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\b",
-                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\f",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\u0008",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\u000c",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\n",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\r",
-                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\t"
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "\\t",
+                 encodedResponse `shouldSatisfy` Text.isInfixOf "☃"
                ]
         )
 

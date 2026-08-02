@@ -8,8 +8,12 @@ module WebApi.Response
   )
 where
 
+import Data.Aeson qualified as Aeson
+import Data.Aeson.Encoding qualified as JsonEncoding
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import WebApi.AppEffect (AccountWorkflow (..))
@@ -131,39 +135,30 @@ renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
     SecondRouteDataResult (Right secondRouteData) ->
       jsonResponseBodyWithOperations 200 (secondRouteApiBody secondRouteData) databaseOperations
     SecondRouteDataResult (Left databaseError) ->
-      jsonErrorResponseBody 503 "{\"error\":\"second-page-unavailable\"}" (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseOperations databaseError)
+      jsonErrorResponseBody
+        503
+        (jsonErrorBody "second-page-unavailable")
+        (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseOperations databaseError)
     _ ->
-      jsonResponseBodyWithOperations 404 "{\"error\":\"not-found\"}" databaseOperations
+      jsonResponseBodyWithOperations 404 (jsonErrorBody "not-found") databaseOperations
 
-statusApiBody :: StatusApiData -> Text
+statusApiBody :: StatusApiData -> JsonEncoding.Encoding
 statusApiBody statusApiData =
-  Text.concat
-    [ "{\"status\":\"ok\",\"locale\":\"",
-      renderLocale (statusApiLocale statusApiData),
-      "\"}"
-    ]
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "status" (Aeson.toEncoding ("ok" :: Text))
+        <> JsonEncoding.pair "locale" (Aeson.toEncoding (renderLocale (statusApiLocale statusApiData)))
+    )
 
-secondRouteApiBody :: SecondRouteData -> Text
+secondRouteApiBody :: SecondRouteData -> JsonEncoding.Encoding
 secondRouteApiBody secondRouteData =
-  Text.concat
-    [ "{\"summary\":",
-      renderJsonString (secondRouteSummary secondRouteData),
-      ",\"highlights\":",
-      renderJsonStringList (secondRouteHighlights secondRouteData),
-      "}"
-    ]
+  JsonEncoding.pairs
+    ( JsonEncoding.pair "summary" (Aeson.toEncoding (secondRouteSummary secondRouteData))
+        <> JsonEncoding.pair "highlights" (Aeson.toEncoding (secondRouteHighlights secondRouteData))
+    )
 
-renderJsonStringList :: [Text] -> Text
-renderJsonStringList values =
-  Text.concat
-    [ "[",
-      Text.intercalate "," (map renderJsonString values),
-      "]"
-    ]
-
-renderJsonString :: Text -> Text
-renderJsonString value =
-  Text.concat ["\"", value, "\""]
+jsonErrorBody :: Text -> JsonEncoding.Encoding
+jsonErrorBody errorCode =
+  JsonEncoding.pairs (JsonEncoding.pair "error" (Aeson.toEncoding errorCode))
 
 renderLocale :: AppLocale -> Text
 renderLocale locale =
@@ -171,25 +166,28 @@ renderLocale locale =
     English -> "en"
     Spanish -> "es"
 
-jsonResponseBodyWithOperations :: Int -> Text -> [DatabaseOperation] -> HarchWeb.ResponseBody
-jsonResponseBodyWithOperations statusCode bodyText databaseOperations =
+jsonResponseBodyWithOperations :: Int -> JsonEncoding.Encoding -> [DatabaseOperation] -> HarchWeb.ResponseBody
+jsonResponseBodyWithOperations statusCode bodyValue databaseOperations =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = statusCode,
       HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseBody = jsonText bodyValue,
       HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
       HarchWeb.responseLogEntries = []
     }
 
-jsonErrorResponseBody :: Int -> Text -> FailureDiagnostics -> HarchWeb.ResponseBody
-jsonErrorResponseBody statusCode bodyText diagnostics =
+jsonErrorResponseBody :: Int -> JsonEncoding.Encoding -> FailureDiagnostics -> HarchWeb.ResponseBody
+jsonErrorResponseBody statusCode bodyValue diagnostics =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = statusCode,
       HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = bodyText,
+      HarchWeb.responseBody = jsonText bodyValue,
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
       HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
     }
+
+jsonText :: JsonEncoding.Encoding -> Text
+jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
 
 pageSuccessResponseMetadata :: [DatabaseOperation] -> HarchWeb.ResponseBody
 pageSuccessResponseMetadata databaseOperations =

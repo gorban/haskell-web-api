@@ -96,6 +96,7 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
+    aeson,
     base ^>=4.22.0.0,
     bytestring,
     core,

@@ -7722,6 +7722,18 @@ spec = do
             HarchWeb.responseLogEntries = []
           }
 
+    it "escapes hostile database content in API JSON" $ do
+      let hostileRouteData =
+            SecondRouteDataResult
+              ( Right
+                  SecondRouteData
+                    { secondRouteSummary = "quote\" slash\\ newline\n control\t unicode ☃",
+                      secondRouteHighlights = ["</script><script>alert(1)</script>", "\b"]
+                    }
+              )
+      HarchWeb.responseBody (renderApiResponseFromRouteData hostileRouteData)
+        `shouldBe` "{\"summary\":\"quote\\\" slash\\\\ newline\\n control\\t unicode ☃\",\"highlights\":[\"</script><script>alert(1)</script>\",\"\\u0008\"]}"
+
     it "loads second-page content from the database effect when provided" $
       buildPageModelWithDatabase
         ( buildSeededDatabaseEffect
