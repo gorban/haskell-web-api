@@ -23,7 +23,7 @@ import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Database (PageRepository (..), DatabaseError (..), DatabaseResult (..), HomePageData (..), SecondPageData (..))
+import WebApi.Database (DatabaseError (..), DatabaseResult (..), HomePageData (..), PageRepository (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository)
 import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
 

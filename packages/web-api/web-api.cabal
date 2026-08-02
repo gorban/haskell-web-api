@@ -93,8 +93,13 @@ library
     WebApi.SetupPlan
 
   other-modules:
+    WebApi.Postgres.AccountRepository
+    WebApi.Postgres.MfaRepository
+    WebApi.Postgres.Migration
     WebApi.Postgres.PageRepository
     WebApi.Postgres.QueryRunner
+    WebApi.Postgres.Runtime
+    WebApi.Postgres.SessionRepository
 
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
@@ -152,7 +157,10 @@ test-suite haskell-web-api-tests
   import: common
   -- Common test suite settings.
   type: exitcode-stdio-1.0
-  hs-source-dirs: test
+  hs-source-dirs:
+    test
+    src
+
   -- Suppress warnings about missing home modules in test suite;
   -- Otherwise, we'd have to list all test modules in other-modules.
   -- Add -keep-tmp-files to the end to keep the generated files for inspection.
@@ -183,6 +191,7 @@ test-suite haskell-web-api-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
+    aeson,
     base ^>=4.22.0.0,
     bytestring,
     core,
@@ -192,6 +201,7 @@ test-suite haskell-web-api-tests
     haskell-web-api,
     hspec,
     http-types,
+    mtl,
     network,
     postgresql-libpq,
     process,
@@ -199,4 +209,6 @@ test-suite haskell-web-api-tests
     temporary,
     test-core,
     text,
+    time,
+    transformers,
     wai,

@@ -23,7 +23,8 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
-import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.AccountRepository (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner)
+import WebApi.Postgres.Migration (runPostgresMigrationsForRuntime)
 
 spec :: Spec
 spec = do

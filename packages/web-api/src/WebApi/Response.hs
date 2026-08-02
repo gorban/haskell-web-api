@@ -18,7 +18,7 @@ import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
-import WebApi.Database (PageRepository, DatabaseError (..), DatabaseOperation (..), defaultPageRepository)
+import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
 import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
 import WebApi.Profile (ProfileLoadError (..), loadProfile)
 import WebApi.Route

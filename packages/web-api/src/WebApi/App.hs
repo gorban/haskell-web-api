@@ -47,7 +47,14 @@ import WebApi.Config
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
-import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepository)
+import WebApi.Postgres.AccountRepository
+  ( buildRuntimePostgresAccountCredentialStore,
+    buildRuntimePostgresAccountProfileStore,
+    buildRuntimePostgresAccountStore,
+  )
+import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
+import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
+import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route
   ( AppRequestContext (..),

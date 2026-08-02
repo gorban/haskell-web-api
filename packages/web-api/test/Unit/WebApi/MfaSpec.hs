@@ -17,7 +17,8 @@ import WebApi.Mfa
     MfaStoreError (..),
     StoredTotpEnrollment (..),
   )
-import WebApi.Postgres (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner)
+import WebApi.Postgres.Migration (runPostgresMigrationsForRuntime)
 
 spec :: Spec
 spec = do

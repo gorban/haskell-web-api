@@ -13,9 +13,9 @@ where
 import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.Database
-  ( PageRepository,
-    DatabaseError,
+  ( DatabaseError,
     DatabaseOperation,
+    PageRepository,
     SecondPageData,
     databaseResultOperations,
     databaseResultValue,

@@ -23,10 +23,12 @@ import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
 import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig)
-import WebApi.Postgres
-  ( PostgresRunnerError,
-    runPostgresMigrationsForRuntime,
+import WebApi.Postgres.Migration
+  ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
+  )
+import WebApi.Postgres.Runtime
+  ( PostgresRunnerError,
   )
 
 data DatabaseSetupCommand
