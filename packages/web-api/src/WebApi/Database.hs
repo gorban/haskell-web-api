@@ -1,15 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.Database
-  ( DatabaseEffect (..),
+  ( PageRepository (..),
     DatabaseError (..),
     DatabaseOperation (..),
     DatabaseResult (..),
     DatabaseSeed (..),
     HomePageData (..),
     SecondPageData (..),
-    buildSeededDatabaseEffect,
-    defaultDatabaseEffect,
+    buildSeededPageRepository,
+    defaultPageRepository,
     defaultDatabaseSeed,
   )
 where
@@ -18,7 +18,6 @@ import Data.Text (Text)
 import Data.Word (Word64)
 import WebApi.Route
   ( AppLocale (..),
-    AppRequestContext (..),
   )
 
 data DatabaseError
@@ -79,11 +78,9 @@ data DatabaseSeed = DatabaseSeed
   }
   deriving (Eq, Show)
 
-data DatabaseEffect = DatabaseEffect
-  { loadHomePageData :: AppRequestContext -> IO (Either DatabaseError HomePageData),
-    loadHomePageDataWithObservability :: AppRequestContext -> IO (DatabaseResult HomePageData),
-    loadSecondPageData :: AppRequestContext -> IO (Either DatabaseError SecondPageData),
-    loadSecondPageDataWithObservability :: AppRequestContext -> IO (DatabaseResult SecondPageData)
+data PageRepository = PageRepository
+  { loadHomePage :: AppLocale -> IO (DatabaseResult HomePageData),
+    loadSecondPage :: AppLocale -> IO (DatabaseResult SecondPageData)
   }
 
 defaultDatabaseSeed :: DatabaseSeed
@@ -113,32 +110,30 @@ defaultDatabaseSeed =
             }
     }
 
-defaultDatabaseEffect :: DatabaseEffect
-defaultDatabaseEffect = buildSeededDatabaseEffect defaultDatabaseSeed
+defaultPageRepository :: PageRepository
+defaultPageRepository = buildSeededPageRepository defaultDatabaseSeed
 
-buildSeededDatabaseEffect :: DatabaseSeed -> DatabaseEffect
-buildSeededDatabaseEffect seed =
-  DatabaseEffect
-    { loadHomePageData = fmap databaseResultValue . loadSeededHomePageData,
-      loadHomePageDataWithObservability = loadSeededHomePageData,
-      loadSecondPageData = fmap databaseResultValue . loadSeededSecondPageData,
-      loadSecondPageDataWithObservability = loadSeededSecondPageData
+buildSeededPageRepository :: DatabaseSeed -> PageRepository
+buildSeededPageRepository seed =
+  PageRepository
+    { loadHomePage = loadSeededHomePage,
+      loadSecondPage = loadSeededSecondPage
     }
   where
-    loadSeededHomePageData requestContext =
+    loadSeededHomePage locale =
       pure $
         DatabaseResult
           { databaseResultValue =
-              case requestLocale requestContext of
+              case locale of
                 English -> englishHomePageData seed
                 Spanish -> spanishHomePageData seed,
             databaseResultOperations = []
           }
-    loadSeededSecondPageData requestContext =
+    loadSeededSecondPage locale =
       pure $
         DatabaseResult
           { databaseResultValue =
-              case requestLocale requestContext of
+              case locale of
                 English -> englishSecondPageData seed
                 Spanish -> spanishSecondPageData seed,
             databaseResultOperations = []

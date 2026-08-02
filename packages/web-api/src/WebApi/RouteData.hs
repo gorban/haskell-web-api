@@ -13,16 +13,16 @@ where
 import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.Database
-  ( DatabaseEffect,
+  ( PageRepository,
     DatabaseError,
     DatabaseOperation,
     SecondPageData,
     databaseResultOperations,
     databaseResultValue,
-    defaultDatabaseEffect,
+    defaultPageRepository,
     homePageDataSummary,
-    loadHomePageDataWithObservability,
-    loadSecondPageDataWithObservability,
+    loadHomePage,
+    loadSecondPage,
     secondPageDataHighlights,
     secondPageDataSummary,
   )
@@ -71,13 +71,13 @@ data RouteDataSelection = RouteDataSelection
 
 selectRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteData =
-  selectRouteDataWithDatabase defaultDatabaseEffect
+  selectRouteDataWithDatabase defaultPageRepository
 
-selectRouteDataSelectionWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataSelection
-selectRouteDataSelectionWithDatabase databaseEffect routeRequest =
+selectRouteDataSelectionWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataSelection
+selectRouteDataSelectionWithDatabase pageRepository routeRequest =
   case routeDataPlan (HarchWeb.requestRoute routeRequest) of
-    LoadHomeRouteData -> selectHomeRouteData databaseEffect requestContext
-    LoadSecondRouteData -> selectSecondRouteData databaseEffect requestContext
+    LoadHomeRouteData -> selectHomeRouteData pageRepository requestContext
+    LoadSecondRouteData -> selectSecondRouteData pageRepository requestContext
     BuildStatusRouteData -> pure (emptyRouteDataSelection (StatusApiDataResult (StatusApiData (requestLocale requestContext))))
     UseStaticRouteData result -> pure (emptyRouteDataSelection result)
   where
@@ -89,18 +89,18 @@ data RouteDataPlan
   | BuildStatusRouteData
   | UseStaticRouteData RouteDataResult
 
-selectHomeRouteData :: DatabaseEffect -> AppRequestContext -> IO RouteDataSelection
-selectHomeRouteData databaseEffect requestContext = do
-  homePageDataResult <- loadHomePageDataWithObservability databaseEffect requestContext
+selectHomeRouteData :: PageRepository -> AppRequestContext -> IO RouteDataSelection
+selectHomeRouteData pageRepository requestContext = do
+  homePageDataResult <- loadHomePage pageRepository (requestLocale requestContext)
   pure
     RouteDataSelection
       { routeDataResult = HomeRouteDataResult (HomeRouteData . homePageDataSummary <$> databaseResultValue homePageDataResult),
         routeDataDatabaseOperations = databaseResultOperations homePageDataResult
       }
 
-selectSecondRouteData :: DatabaseEffect -> AppRequestContext -> IO RouteDataSelection
-selectSecondRouteData databaseEffect requestContext = do
-  secondPageDataResult <- loadSecondPageDataWithObservability databaseEffect requestContext
+selectSecondRouteData :: PageRepository -> AppRequestContext -> IO RouteDataSelection
+selectSecondRouteData pageRepository requestContext = do
+  secondPageDataResult <- loadSecondPage pageRepository (requestLocale requestContext)
   pure
     RouteDataSelection
       { routeDataResult = SecondRouteDataResult (toSecondRouteData <$> databaseResultValue secondPageDataResult),
@@ -128,6 +128,6 @@ routeDataPlan route =
     ProfileRoute -> UseStaticRouteData ProfileRouteDataResult
     NotFoundRoute -> UseStaticRouteData NotFoundRouteDataResult
 
-selectRouteDataWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
-selectRouteDataWithDatabase databaseEffect routeRequest =
-  fmap routeDataResult (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+selectRouteDataWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
+selectRouteDataWithDatabase pageRepository routeRequest =
+  fmap routeDataResult (selectRouteDataSelectionWithDatabase pageRepository routeRequest)

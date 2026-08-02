@@ -44,8 +44,8 @@ import WebApi.AccountPages
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.Config (AppConfig (..))
 import WebApi.Database
-  ( DatabaseEffect,
-    defaultDatabaseEffect,
+  ( PageRepository,
+    defaultPageRepository,
   )
 import WebApi.Profile (ProfileState (..))
 import WebApi.Route
@@ -282,13 +282,13 @@ showProfilePage precedence profilePage =
 
 renderPage :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
 renderPage config =
-  renderPageWithDatabase config defaultDatabaseEffect
+  renderPageWithDatabase config defaultPageRepository
 
-renderPageWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
-renderPageWithDatabase config databaseEffect routeRequest =
+renderPageWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Page AppRoute AppRequestContext)
+renderPageWithDatabase config pageRepository routeRequest =
   fmap
     (renderPageFromRouteData config routeRequest)
-    (selectRouteDataWithDatabase databaseEffect routeRequest)
+    (selectRouteDataWithDatabase pageRepository routeRequest)
 
 renderPageFromRouteData :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> HarchWeb.Page AppRoute AppRequestContext
 renderPageFromRouteData config routeRequest routeData =
@@ -325,13 +325,13 @@ routeTitle :: AppRoute -> Text
 routeTitle = routePageTitle . routeMetadata
 
 buildPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
-buildPageModel = buildPageModelWithDatabase defaultDatabaseEffect
+buildPageModel = buildPageModelWithDatabase defaultPageRepository
 
-buildPageModelWithDatabase :: DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
-buildPageModelWithDatabase databaseEffect routeRequest =
+buildPageModelWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO AppPageModel
+buildPageModelWithDatabase pageRepository routeRequest =
   fmap
     (buildPageModelFromRouteData routeRequest)
-    (selectRouteDataWithDatabase databaseEffect routeRequest)
+    (selectRouteDataWithDatabase pageRepository routeRequest)
 
 buildPageModelFromRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> AppPageModel
 buildPageModelFromRouteData routeRequest routeData =

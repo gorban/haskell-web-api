@@ -4,8 +4,8 @@ module WebApi.Postgres
   ( PostgresCommand (..),
     PostgresCommandResult (..),
     PostgresRunnerError (..),
-    buildPostgresDatabaseEffect,
-    buildPostgresDatabaseEffectWithRunner,
+    buildPostgresPageRepository,
+    buildPostgresPageRepositoryWithRunner,
     buildRuntimePostgresAccountStore,
     buildRuntimePostgresAccountStoreWithRunner,
     buildRuntimePostgresAccountProfileStore,
@@ -16,8 +16,8 @@ module WebApi.Postgres
     buildRuntimePostgresMfaStoreWithRunner,
     buildRuntimePostgresAccountSessionStore,
     buildRuntimePostgresAccountSessionStoreWithRunner,
-    buildRuntimePostgresDatabaseEffect,
-    buildRuntimePostgresDatabaseEffectWithRunner,
+    buildRuntimePostgresPageRepository,
+    buildRuntimePostgresPageRepositoryWithRunner,
     decodeRuntimeQueryValue,
     renderRuntimeConnectionErrorMessage,
     renderRuntimeResultErrorMessage,
@@ -35,7 +35,7 @@ module WebApi.Postgres
   )
 where
 
-import Control.Exception (bracket, evaluate)
+import Control.Exception (bracket)
 import Control.Monad.Except (ExceptT, liftEither, runExceptT)
 import Core.Control.Error (liftEitherWith)
 import Data.Bifunctor (first)
@@ -47,7 +47,6 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error (lenientDecode)
 import Database.PostgreSQL.LibPQ qualified as LibPQ
-import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Account
   ( AccountId,
     EmailVerificationTokenDigest,
@@ -83,13 +82,10 @@ import WebApi.Account
   )
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database
-  ( DatabaseEffect (..),
-    DatabaseError (..),
-    DatabaseOperation (..),
-    DatabaseResult (..),
-    HomePageData (..),
-    SecondPageData (..),
+  ( PageRepository,
   )
+import WebApi.Postgres.PageRepository qualified as PageRepository
+import WebApi.Postgres.QueryRunner (PageQueryRunner (..))
 import WebApi.Login
   ( AccountCredential (..),
     AccountCredentialStore (..),
@@ -99,10 +95,6 @@ import WebApi.Mfa
   ( MfaStore (..),
     MfaStoreError (..),
     StoredTotpEnrollment (..),
-  )
-import WebApi.Route
-  ( AppLocale (..),
-    AppRequestContext (..),
   )
 import WebApi.Session
   ( AccountSessionStore (..),
@@ -128,64 +120,27 @@ data PostgresRunnerError
   | UnexpectedQueryRows Text [Text]
   deriving (Eq, Show)
 
-buildPostgresDatabaseEffect :: DatabaseConfig -> DatabaseEffect
-buildPostgresDatabaseEffect =
-  buildPostgresDatabaseEffectWithRunner runPostgresCommand
+buildPostgresPageRepository :: DatabaseConfig -> PageRepository
+buildPostgresPageRepository =
+  buildPostgresPageRepositoryWithRunner runPostgresCommand
 
-buildPostgresDatabaseEffectWithRunner :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> DatabaseEffect
-buildPostgresDatabaseEffectWithRunner runCommand databaseConfig =
-  DatabaseEffect
-    { loadHomePageData = fmap databaseResultValue . loadPostgresHomePageData,
-      loadHomePageDataWithObservability =
-        loadPostgresHomePageData,
-      loadSecondPageData = fmap databaseResultValue . loadPostgresSecondPageData,
-      loadSecondPageDataWithObservability =
-        loadPostgresSecondPageData
+buildPostgresPageRepositoryWithRunner :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> PageRepository
+buildPostgresPageRepositoryWithRunner runCommand databaseConfig =
+  PageRepository.pageRepository
+    PageQueryRunner
+      { runRequiredTextQuery =
+          \sql ->
+            first renderRunnerError
+              <$> runRequiredScalarCommand runCommand databaseConfig sql,
+        runTextRowsQuery =
+          \sql ->
+            first renderRunnerError
+              <$> runRowsCommand runCommand databaseConfig sql
     }
-  where
-    loadPostgresHomePageData requestContext = do
-      (summaryResult, operation) <-
-        timedDatabaseOperation homeSummaryOperation $
-          fmap
-            (fmap HomePageData)
-            (runRequiredScalarQuery runCommand databaseConfig (homeSummaryQuery (requestLocale requestContext)) HomePageDataError)
-      pure
-        DatabaseResult
-          { databaseResultValue = summaryResult,
-            databaseResultOperations = [operation]
-          }
-    loadPostgresSecondPageData requestContext = do
-      (summaryResult, summaryOperation) <-
-        timedDatabaseOperation secondSummaryOperation $
-          runRequiredScalarQuery runCommand databaseConfig (secondSummaryQuery (requestLocale requestContext)) SecondPageDataError
-      case summaryResult of
-        Left databaseError ->
-          pure
-            DatabaseResult
-              { databaseResultValue = Left databaseError,
-                databaseResultOperations = [summaryOperation]
-              }
-        Right secondSummary -> do
-          (highlightsResult, highlightsOperation) <-
-            timedDatabaseOperation secondHighlightsOperation $
-              runOptionalRowsQuery runCommand databaseConfig (secondHighlightsQuery (requestLocale requestContext)) SecondPageDataError
-          pure
-            DatabaseResult
-              { databaseResultValue =
-                  fmap
-                    ( \highlights ->
-                        SecondPageData
-                          { secondPageDataSummary = secondSummary,
-                            secondPageDataHighlights = highlights
-                          }
-                    )
-                    highlightsResult,
-                databaseResultOperations = [summaryOperation, highlightsOperation]
-              }
 
-buildRuntimePostgresDatabaseEffect :: DatabaseConfig -> DatabaseEffect
-buildRuntimePostgresDatabaseEffect =
-  buildRuntimePostgresDatabaseEffectWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
+buildRuntimePostgresPageRepository :: DatabaseConfig -> PageRepository
+buildRuntimePostgresPageRepository =
+  buildRuntimePostgresPageRepositoryWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
 
 buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
 buildRuntimePostgresAccountStore !databaseConfig =
@@ -523,73 +478,17 @@ decodeStoredSession sessionToken rows =
         _ -> Left AccountSessionStoreCorruptData
     _ -> Left AccountSessionStoreCorruptData
 
-buildRuntimePostgresDatabaseEffectWithRunner ::
+buildRuntimePostgresPageRepositoryWithRunner ::
   (DatabaseConfig -> Text -> IO (Either Text Text)) ->
   (DatabaseConfig -> Text -> IO (Either Text [Text])) ->
   DatabaseConfig ->
-  DatabaseEffect
-buildRuntimePostgresDatabaseEffectWithRunner runScalarQuery runRowsQuery databaseConfig =
-  DatabaseEffect
-    { loadHomePageData = fmap databaseResultValue . loadRuntimeHomePageData,
-      loadHomePageDataWithObservability = loadRuntimeHomePageData,
-      loadSecondPageData = fmap databaseResultValue . loadRuntimeSecondPageData,
-      loadSecondPageDataWithObservability = loadRuntimeSecondPageData
+  PageRepository
+buildRuntimePostgresPageRepositoryWithRunner runScalarQuery runRowsQuery databaseConfig =
+  PageRepository.pageRepository
+    PageQueryRunner
+      { runRequiredTextQuery = runScalarQuery databaseConfig,
+        runTextRowsQuery = runRowsQuery databaseConfig
     }
-  where
-    loadRuntimeHomePageData requestContext = do
-      (summaryResult, operation) <-
-        timedDatabaseOperation homeSummaryOperation $
-          fmap
-            (fmap HomePageData)
-            (runScalarQuery databaseConfig (homeSummaryQuery (requestLocale requestContext)))
-      pure
-        DatabaseResult
-          { databaseResultValue = first HomePageDataError summaryResult,
-            databaseResultOperations = [operation]
-          }
-    loadRuntimeSecondPageData requestContext = do
-      (summaryResult, summaryOperation) <-
-        timedDatabaseOperation secondSummaryOperation $
-          runScalarQuery databaseConfig (secondSummaryQuery (requestLocale requestContext))
-      case first SecondPageDataError summaryResult of
-        Left databaseError ->
-          pure
-            DatabaseResult
-              { databaseResultValue = Left databaseError,
-                databaseResultOperations = [summaryOperation]
-              }
-        Right secondSummary -> do
-          (highlightsResult, highlightsOperation) <-
-            timedDatabaseOperation secondHighlightsOperation $
-              runRowsQuery databaseConfig (secondHighlightsQuery (requestLocale requestContext))
-          pure
-            DatabaseResult
-              { databaseResultValue =
-                  fmap
-                    ( \highlights ->
-                        SecondPageData
-                          { secondPageDataSummary = secondSummary,
-                            secondPageDataHighlights = highlights
-                          }
-                    )
-                    (first SecondPageDataError highlightsResult),
-                databaseResultOperations = [summaryOperation, highlightsOperation]
-              }
-
-timedDatabaseOperation :: DatabaseOperation -> IO a -> IO (a, DatabaseOperation)
-timedDatabaseOperation databaseOperation action = do
-  _ <- evaluate (databaseOperationStartedAtNanoseconds databaseOperation)
-  _ <- evaluate (databaseOperationEndedAtNanoseconds databaseOperation)
-  startedAt <- getMonotonicTimeNSec
-  result <- action
-  endedAt <- getMonotonicTimeNSec
-  pure
-    ( result,
-      databaseOperation
-        { databaseOperationStartedAtNanoseconds = Just startedAt,
-          databaseOperationEndedAtNanoseconds = Just endedAt
-        }
-    )
 
 runPostgresMigrations :: DatabaseConfig -> IO (Either PostgresRunnerError ())
 runPostgresMigrations =
@@ -681,25 +580,23 @@ seedStatements =
     "INSERT INTO " <> qualifiedTableName "page_content" <> " (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'es', 'Inicio renderizado en el servidor con datos de desarrollo preconfigurados.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'es', 'Second page content with stubbed data ready for future loaders.');"
   ]
 
-runRequiredScalarQuery :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> (Text -> DatabaseError) -> IO (Either DatabaseError Text)
-runRequiredScalarQuery runCommand databaseConfig sql toDatabaseError =
+runRequiredScalarCommand :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> IO (Either PostgresRunnerError Text)
+runRequiredScalarCommand runCommand databaseConfig sql =
   fmap
     ( \commandResult ->
         case normalizeQueryResult sql commandResult of
-          Left runnerError -> Left (toDatabaseError (renderRunnerError runnerError))
+          Left runnerError -> Left runnerError
           Right rows ->
             case parseRequiredScalarRows rows of
-              Left runnerError -> Left (toDatabaseError (renderRunnerError runnerError))
+              Left runnerError -> Left runnerError
               Right value -> Right value
     )
     (runCommand (queryCommand databaseConfig sql))
 
-runOptionalRowsQuery :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> (Text -> DatabaseError) -> IO (Either DatabaseError [Text])
-runOptionalRowsQuery runCommand databaseConfig sql toDatabaseError =
+runRowsCommand :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> IO (Either PostgresRunnerError [Text])
+runRowsCommand runCommand databaseConfig sql =
   fmap
-    ( either (Left . toDatabaseError . renderRunnerError) Right
-        . normalizeQueryResult sql
-    )
+    (normalizeQueryResult sql)
     (runCommand (queryCommand databaseConfig sql))
 
 runStatements :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> [Text] -> IO (Either PostgresRunnerError ())
@@ -911,36 +808,6 @@ passwordEnvironment :: DatabaseConfig -> [(String, String)]
 passwordEnvironment databaseConfig =
   [("PGPASSWORD", Text.unpack (databasePassword databaseConfig))]
 
-homeSummaryQuery :: AppLocale -> Text
-homeSummaryQuery locale =
-  Text.concat
-    [ "SELECT summary FROM ",
-      qualifiedTableName "page_content",
-      " WHERE route_slug = 'home' AND locale = '",
-      renderLocaleCode locale,
-      "';"
-    ]
-
-secondSummaryQuery :: AppLocale -> Text
-secondSummaryQuery locale =
-  Text.concat
-    [ "SELECT summary FROM ",
-      qualifiedTableName "page_content",
-      " WHERE route_slug = 'second' AND locale = '",
-      renderLocaleCode locale,
-      "';"
-    ]
-
-secondHighlightsQuery :: AppLocale -> Text
-secondHighlightsQuery locale =
-  Text.concat
-    [ "SELECT highlight FROM ",
-      qualifiedTableName "page_highlights",
-      " WHERE route_slug = 'second' AND locale = '",
-      renderLocaleCode locale,
-      "' ORDER BY position ASC;"
-    ]
-
 createPendingAccountQuery :: Text
 createPendingAccountQuery =
   "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES ($1, $2, $3, $6, NULLIF($7, ''), NULLIF($8, '')) ON CONFLICT DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
@@ -1002,33 +869,6 @@ loadAccountSessionQuery =
 invalidateAccountSessionQuery :: Text
 invalidateAccountSessionQuery =
   "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = issued_at_nanoseconds WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;"
-
-homeSummaryOperation :: DatabaseOperation
-homeSummaryOperation =
-  DatabaseOperation
-    { databaseOperationName = "load-home-page-summary",
-      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
-      databaseOperationStartedAtNanoseconds = Nothing,
-      databaseOperationEndedAtNanoseconds = Nothing
-    }
-
-secondSummaryOperation :: DatabaseOperation
-secondSummaryOperation =
-  DatabaseOperation
-    { databaseOperationName = "load-second-page-summary",
-      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
-      databaseOperationStartedAtNanoseconds = Nothing,
-      databaseOperationEndedAtNanoseconds = Nothing
-    }
-
-secondHighlightsOperation :: DatabaseOperation
-secondHighlightsOperation =
-  DatabaseOperation
-    { databaseOperationName = "load-second-page-highlights",
-      databaseQueryTemplate = "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;",
-      databaseOperationStartedAtNanoseconds = Nothing,
-      databaseOperationEndedAtNanoseconds = Nothing
-    }
 
 qualifiedTableName :: Text -> Text
 qualifiedTableName tableName =
@@ -1092,12 +932,6 @@ mergeEnvironment :: [(String, String)] -> [(String, String)] -> [(String, String
 mergeEnvironment inheritedEnvironment additionalEnvironment =
   additionalEnvironment
     <> filter (\(key, _) -> key `notElem` map fst additionalEnvironment) inheritedEnvironment
-
-renderLocaleCode :: AppLocale -> Text
-renderLocaleCode locale =
-  case locale of
-    English -> "en"
-    Spanish -> "es"
 
 renderRunnerError :: PostgresRunnerError -> Text
 renderRunnerError runnerError =

@@ -25,7 +25,7 @@ import WebApi.AccountPages (PendingProfileForm (..), handleAccountAction, render
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
-import WebApi.Database (defaultDatabaseEffect)
+import WebApi.Database (defaultPageRepository)
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..))
 import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfile)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
@@ -64,7 +64,7 @@ spec =
       secondPageResponse <-
         selectResponseWithDatabaseAndAccountWorkflow
           defaultAppConfig
-          defaultDatabaseEffect
+          defaultPageRepository
           unavailableAccountWorkflow
           (HarchWeb.RouteRequest SecondRoute defaultRequestContext)
       expectAll
@@ -209,7 +209,7 @@ profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (Harc
 profileResponse workflow requestContext =
   selectResponseWithDatabaseAndAccountWorkflow
     defaultAppConfig
-    defaultDatabaseEffect
+    defaultPageRepository
     workflow
     (HarchWeb.RouteRequest ProfileRoute requestContext)
 

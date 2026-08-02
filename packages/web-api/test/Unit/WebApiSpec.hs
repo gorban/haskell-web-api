@@ -57,14 +57,14 @@ import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
-import WebApi.Database (DatabaseEffect (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededDatabaseEffect, defaultDatabaseEffect, defaultDatabaseSeed)
+import WebApi.Database (PageRepository (..), DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), SecondPageData (..), buildSeededPageRepository, defaultPageRepository, defaultDatabaseSeed)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
-import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresDatabaseEffect, buildPostgresDatabaseEffectWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresDatabaseEffectWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepository, buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -83,6 +83,22 @@ equalValues = (==)
 renderedValue :: (Show value) => value -> String
 renderedValue = show
 {-# NOINLINE renderedValue #-}
+
+loadHomePageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult HomePageData)
+loadHomePageForRequest pageRepository requestContext =
+  loadHomePage pageRepository (requestLocale requestContext)
+
+loadSecondPageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult SecondPageData)
+loadSecondPageForRequest pageRepository requestContext =
+  loadSecondPage pageRepository (requestLocale requestContext)
+
+loadHomePageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError HomePageData)
+loadHomePageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadHomePageForRequest pageRepository requestContext
+
+loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
+loadSecondPageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadSecondPageForRequest pageRepository requestContext
 
 trustedForwardedApplication :: HarchWeb.Application AppRoute AppRequestContext
 trustedForwardedApplication =
@@ -2419,10 +2435,10 @@ spec = do
       show [seededDatabase]
         `shouldBe` "[DatabaseSeed {englishHomePageData = Right (HomePageData {homePageDataSummary = \"Seeded home\"}), spanishHomePageData = Left (HomePageDataError \"home unavailable\"), englishSecondPageData = Right (SecondPageData {secondPageDataSummary = \"Seeded second\", secondPageDataHighlights = [\"One\"]}), spanishSecondPageData = Left (SecondPageDataError \"second unavailable\")}]"
 
-  describe "buildSeededDatabaseEffect" $ do
+  describe "buildSeededPageRepository" $ do
     it "loads page-oriented seeded data for both English and Spanish requests" $ do
-      let englishEffect = buildSeededDatabaseEffect defaultDatabaseSeed
-      loadHomePageDataWithObservability englishEffect defaultRequestContext
+      let englishEffect = buildSeededPageRepository defaultDatabaseSeed
+      loadHomePageForRequest englishEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -2431,29 +2447,29 @@ spec = do
                   },
             databaseResultOperations = []
           }
-      loadHomePageData englishEffect defaultRequestContext
+      loadHomePageValueForRequest englishEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
             { homePageDataSummary = "Server-rendered home page with stubbed content."
             }
-      loadSecondPageData englishEffect defaultRequestContext
+      loadSecondPageValueForRequest englishEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
-      loadHomePageData englishEffect spanishRequestContext
+      loadHomePageValueForRequest englishEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
             { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageData englishEffect spanishRequestContext
+      loadSecondPageValueForRequest englishEffect spanishRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
               secondPageDataHighlights = []
             }
-      loadSecondPageDataWithObservability englishEffect spanishRequestContext
+      loadSecondPageForRequest englishEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -2466,7 +2482,7 @@ spec = do
 
     it "returns explicit seeded errors without collapsing page-specific failures" $ do
       let seededEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
                   spanishHomePageData =
@@ -2482,28 +2498,28 @@ spec = do
                         },
                   spanishSecondPageData = Left (SecondPageDataError "second seed unavailable")
                 }
-      loadHomePageData seededEffect defaultRequestContext
+      loadHomePageValueForRequest seededEffect defaultRequestContext
         `shouldReturn` Left (HomePageDataError "home seed unavailable")
-      loadSecondPageData seededEffect spanishRequestContext
+      loadSecondPageValueForRequest seededEffect spanishRequestContext
         `shouldReturn` Left (SecondPageDataError "second seed unavailable")
-      loadSecondPageDataWithObservability seededEffect spanishRequestContext
+      loadSecondPageForRequest seededEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "second seed unavailable"),
             databaseResultOperations = []
           }
 
     it "keeps the default seeded interpreter deterministic for repeated requests" $ do
-      firstHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
-      secondHome <- loadHomePageData defaultDatabaseEffect defaultRequestContext
+      firstHome <- loadHomePageValueForRequest defaultPageRepository defaultRequestContext
+      secondHome <- loadHomePageValueForRequest defaultPageRepository defaultRequestContext
       firstHome `shouldBe` secondHome
-      firstSecond <- loadSecondPageData defaultDatabaseEffect spanishRequestContext
-      secondSecond <- loadSecondPageData defaultDatabaseEffect spanishRequestContext
+      firstSecond <- loadSecondPageValueForRequest defaultPageRepository spanishRequestContext
+      secondSecond <- loadSecondPageValueForRequest defaultPageRepository spanishRequestContext
       firstSecond `shouldBe` secondSecond
 
   describe "selectRouteData" $ do
     it "selects the same second-route domain data for page and API surfaces" $ do
       let seededDatabaseEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                   spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -2548,7 +2564,7 @@ spec = do
         `shouldBe` "RouteDataSelection {routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = []})), routeDataDatabaseOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}"
       show [routeDataSelection]
         `shouldBe` "[RouteDataSelection {routeDataResult = SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = \"Shared domain summary\", secondRouteHighlights = []})), routeDataDatabaseOperations = [DatabaseOperation {databaseOperationName = \"load-second-page-summary\", databaseQueryTemplate = \"SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;\"}]}]"
-      selectRouteDataSelectionWithDatabase (buildSeededDatabaseEffect defaultDatabaseSeed) secondRequest
+      selectRouteDataSelectionWithDatabase (buildSeededPageRepository defaultDatabaseSeed) secondRequest
         `shouldReturn` RouteDataSelection
           { routeDataResult =
               SecondRouteDataResult
@@ -2563,7 +2579,7 @@ spec = do
 
     it "loads home-route data from the database effect and preserves explicit failures" $ do
       let seededDatabaseEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData =
                     Right
@@ -2594,8 +2610,8 @@ spec = do
                 databaseOperationEndedAtNanoseconds = Nothing
               }
           observedHomeEffect =
-            defaultDatabaseEffect
-              { loadHomePageDataWithObservability =
+            defaultPageRepository
+              { loadHomePage =
                   \_ ->
                     pure
                       DatabaseResult
@@ -2674,7 +2690,7 @@ spec = do
                 }
           )
       selectRouteData spacesRequest `shouldReturn` SpacesRouteDataResult
-      selectRouteDataSelectionWithDatabase (buildSeededDatabaseEffect defaultDatabaseSeed) spacesRequest
+      selectRouteDataSelectionWithDatabase (buildSeededPageRepository defaultDatabaseSeed) spacesRequest
         `shouldReturn` RouteDataSelection SpacesRouteDataResult []
       selectRouteData spanishApiStatusRequest
         `shouldReturn` StatusApiDataResult
@@ -3033,17 +3049,17 @@ spec = do
       selectRouteData loginRequest `shouldReturn` LoginRouteDataResult
       selectRouteData logoutRequest `shouldReturn` LogoutRouteDataResult
       selectRouteData profileRequestValue `shouldReturn` ProfileRouteDataResult
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect registrationRequest
+      selectRouteDataSelectionWithDatabase defaultPageRepository registrationRequest
         `shouldReturn` RouteDataSelection RegistrationRouteDataResult []
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect verificationRequest
+      selectRouteDataSelectionWithDatabase defaultPageRepository verificationRequest
         `shouldReturn` RouteDataSelection EmailVerificationRouteDataResult []
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect mfaRequest
+      selectRouteDataSelectionWithDatabase defaultPageRepository mfaRequest
         `shouldReturn` RouteDataSelection MfaEnrollmentRouteDataResult []
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect loginRequest
+      selectRouteDataSelectionWithDatabase defaultPageRepository loginRequest
         `shouldReturn` RouteDataSelection LoginRouteDataResult []
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect logoutRequest
+      selectRouteDataSelectionWithDatabase defaultPageRepository logoutRequest
         `shouldReturn` RouteDataSelection LogoutRouteDataResult []
-      selectRouteDataSelectionWithDatabase defaultDatabaseEffect profileRequestValue
+      selectRouteDataSelectionWithDatabase defaultPageRepository profileRequestValue
         `shouldReturn` RouteDataSelection ProfileRouteDataResult []
       buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
         `shouldBe` RegistrationPage "/register" emptyRegistrationForm
@@ -3138,7 +3154,7 @@ spec = do
         >>= \case
           HarchWeb.PageResponse page -> HarchWeb.renderHtml (HarchWeb.pageBody page) `shouldSatisfy` Text.isInfixOf "data-page=\"profile\""
           _ -> expectationFailure "expected a profile page response"
-      let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultDatabaseEffect) defaultAppEnvironmentConfig
+      let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultPageRepository) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
         runtimeApplication
         HarchWeb.ClientActionRequest
@@ -4013,8 +4029,8 @@ spec = do
                           else "Fast SSR\nShared route data"
                   | otherwise ->
                       failingPostgresResult "unexpected query"
-          postgresEffect = buildPostgresDatabaseEffectWithRunner runner postgresTestConfig
-      loadHomePageDataWithObservability postgresEffect defaultRequestContext
+          postgresEffect = buildPostgresPageRepositoryWithRunner runner postgresTestConfig
+      loadHomePageForRequest postgresEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -4030,29 +4046,29 @@ spec = do
                   }
               ]
           }
-      loadHomePageData postgresEffect defaultRequestContext
+      loadHomePageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
             { homePageDataSummary = "Server-rendered home page with stubbed content."
             }
-      loadSecondPageData postgresEffect defaultRequestContext
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
             }
-      loadHomePageData postgresEffect spanishRequestContext
+      loadHomePageValueForRequest postgresEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
             { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageData postgresEffect spanishRequestContext
+      loadSecondPageValueForRequest postgresEffect spanishRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Charge depuis PostgreSQL.",
               secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
             }
-      loadSecondPageDataWithObservability postgresEffect spanishRequestContext
+      loadSecondPageForRequest postgresEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -4122,12 +4138,12 @@ spec = do
                       successfulPostgresResult Text.empty
                   | otherwise ->
                       failingPostgresResult "relation does not exist"
-          postgresEffect = buildPostgresDatabaseEffectWithRunner missingRunner postgresTestConfig
-      loadHomePageData postgresEffect defaultRequestContext
+          postgresEffect = buildPostgresPageRepositoryWithRunner missingRunner postgresTestConfig
+      loadHomePageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (HomePageDataError "expected exactly one row: ")
-      loadSecondPageData postgresEffect defaultRequestContext
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "relation does not exist")
-      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+      loadSecondPageForRequest postgresEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "relation does not exist"),
             databaseResultOperations =
@@ -4166,13 +4182,13 @@ spec = do
                       failingPostgresResult "highlights unavailable"
                   | otherwise ->
                       successfulPostgresResult Text.empty
-      loadHomePageData (buildPostgresDatabaseEffectWithRunner homeFailureRunner postgresTestConfig) defaultRequestContext
+      loadHomePageValueForRequest (buildPostgresPageRepositoryWithRunner homeFailureRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` Left (HomePageDataError "psql command failed")
-      loadHomePageData (buildPostgresDatabaseEffectWithRunner malformedScalarRunner postgresTestConfig) defaultRequestContext
+      loadHomePageValueForRequest (buildPostgresPageRepositoryWithRunner malformedScalarRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` Left (HomePageDataError "expected exactly one row: first, second")
-      loadSecondPageData (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+      loadSecondPageValueForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "highlights unavailable")
-      loadSecondPageDataWithObservability (buildPostgresDatabaseEffectWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
+      loadSecondPageForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
             databaseResultOperations =
@@ -4220,11 +4236,11 @@ spec = do
                 then Right ["SSR rápido", "Datos compartidos"]
                 else Right ["Fast SSR", "Shared route data"]
           postgresEffect =
-            buildRuntimePostgresDatabaseEffectWithRunner
+            buildRuntimePostgresPageRepositoryWithRunner
               scalarRunner
               rowsRunner
               postgresTestConfig
-      loadHomePageDataWithObservability postgresEffect defaultRequestContext
+      loadHomePageForRequest postgresEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -4240,18 +4256,18 @@ spec = do
                   }
               ]
           }
-      loadSecondPageData postgresEffect defaultRequestContext
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
             }
-      loadHomePageData postgresEffect spanishRequestContext
+      loadHomePageValueForRequest postgresEffect spanishRequestContext
         `shouldReturn` Right
           HomePageData
             { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
-      loadSecondPageDataWithObservability postgresEffect spanishRequestContext
+      loadSecondPageForRequest postgresEffect spanishRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue =
               Right
@@ -4294,15 +4310,15 @@ spec = do
           rowsRunner _ _ =
             pure (Left "highlights unavailable")
           postgresEffect =
-            buildRuntimePostgresDatabaseEffectWithRunner
+            buildRuntimePostgresPageRepositoryWithRunner
               scalarRunner
               rowsRunner
               postgresTestConfig
-      loadHomePageData postgresEffect defaultRequestContext
+      loadHomePageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (HomePageDataError "connection refused")
-      loadSecondPageData postgresEffect defaultRequestContext
+      loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "highlights unavailable")
-      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+      loadSecondPageForRequest postgresEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "highlights unavailable"),
             databaseResultOperations =
@@ -4330,11 +4346,11 @@ spec = do
           rowsRunner _ _ =
             error "expected runtime highlight query to be skipped when the second-page summary fails"
           postgresEffect =
-            buildRuntimePostgresDatabaseEffectWithRunner
+            buildRuntimePostgresPageRepositoryWithRunner
               scalarRunner
               rowsRunner
               postgresTestConfig
-      loadSecondPageDataWithObservability postgresEffect defaultRequestContext
+      loadSecondPageForRequest postgresEffect defaultRequestContext
         `shouldReturn` DatabaseResult
           { databaseResultValue = Left (SecondPageDataError "summary unavailable"),
             databaseResultOperations =
@@ -4589,7 +4605,7 @@ spec = do
             <> fmap (,Text.empty) (migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements)
         )
       $ \argsLogPath -> do
-        let application = buildAppWithDatabase defaultAppConfig (buildPostgresDatabaseEffect postgresTestConfig)
+        let application = buildAppWithDatabase defaultAppConfig (buildPostgresPageRepository postgresTestConfig)
         fmap stripVolatileDatabaseTimingResponse (HarchWeb.renderResponse application secondRequest)
           `shouldReturn` HarchWeb.PageResponseWithMetadata
             HarchWeb.ResponseBody
@@ -4668,7 +4684,7 @@ spec = do
           )
         ]
       $ \_ ->
-        loadHomePageData (buildPostgresDatabaseEffect postgresTestConfig) defaultRequestContext
+        loadHomePageValueForRequest (buildPostgresPageRepository postgresTestConfig) defaultRequestContext
           `shouldReturn` Left (HomePageDataError "default runner failed")
 
     it "prefers a runtime that is already running the named postgres container in the containerized psql wrapper" $ do
@@ -4696,24 +4712,24 @@ spec = do
         ensureDefaultPostgresAvailable
         runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
         runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
-        let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
-        loadHomePageData postgresEffect defaultRequestContext
+        let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
+        loadHomePageValueForRequest postgresEffect defaultRequestContext
           `shouldReturn` Right
             HomePageData
               { homePageDataSummary = "Server-rendered home page with stubbed content."
               }
-        loadSecondPageData postgresEffect defaultRequestContext
+        loadSecondPageValueForRequest postgresEffect defaultRequestContext
           `shouldReturn` Right
             SecondPageData
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                 secondPageDataHighlights = []
               }
-        loadHomePageData postgresEffect spanishRequestContext
+        loadHomePageValueForRequest postgresEffect spanishRequestContext
           `shouldReturn` Right
             HomePageData
               { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
               }
-        loadSecondPageData postgresEffect spanishRequestContext
+        loadSecondPageValueForRequest postgresEffect spanishRequestContext
           `shouldReturn` Right
             SecondPageData
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -7289,7 +7305,7 @@ spec = do
                       successfulPostgresResult "Fast SSR\nShared route data"
                   | otherwise ->
                       failingPostgresResult "unexpected query"
-          postgresEffect = buildPostgresDatabaseEffectWithRunner postgresRunner postgresTestConfig
+          postgresEffect = buildPostgresPageRepositoryWithRunner postgresRunner postgresTestConfig
       let renderedSecondPage =
             renderPageFromRouteData
               defaultAppConfig
@@ -7388,7 +7404,7 @@ spec = do
     it "maps shared second-page load failures into explicit API error responses" $
       selectResponseWithDatabase
         defaultAppConfig
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7433,8 +7449,8 @@ spec = do
                 databaseOperationEndedAtNanoseconds = Nothing
               }
           untimedDatabaseEffect =
-            defaultDatabaseEffect
-              { loadSecondPageDataWithObservability =
+            defaultPageRepository
+              { loadSecondPage =
                   \_ ->
                     pure
                       DatabaseResult
@@ -7478,7 +7494,7 @@ spec = do
                       failingPostgresResult "highlights unavailable"
                   | otherwise ->
                       failingPostgresResult "unexpected query"
-          postgresEffect = buildPostgresDatabaseEffectWithRunner failingRunner postgresTestConfig
+          postgresEffect = buildPostgresPageRepositoryWithRunner failingRunner postgresTestConfig
       fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
@@ -7562,7 +7578,7 @@ spec = do
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
       let failingDatabaseEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                   spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7605,7 +7621,7 @@ spec = do
 
     it "redirects root requests before a home-page database failure can be observed" $ do
       let failingDatabaseEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
                   spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7627,7 +7643,7 @@ spec = do
 
     it "keeps routes without required database data on their existing responses" $ do
       let failingDatabaseEffect =
-            buildSeededDatabaseEffect
+            buildSeededPageRepository
               DatabaseSeed
                 { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                   spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7714,7 +7730,7 @@ spec = do
 
     it "builds explicit home-page error state when the database effect fails" $
       buildPageModelWithDatabase
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7782,7 +7798,7 @@ spec = do
 
     it "loads second-page content from the database effect when provided" $
       buildPageModelWithDatabase
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7812,7 +7828,7 @@ spec = do
 
     it "builds an explicit error-state second page when the database effect fails" $
       buildPageModelWithDatabase
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7925,7 +7941,7 @@ spec = do
     it "renders an explicit error state when the second-page load fails" $
       renderPageWithDatabase
         defaultAppConfig
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -7945,7 +7961,7 @@ spec = do
     it "renders an explicit error state when the home-page load fails" $
       renderPageWithDatabase
         defaultAppConfig
-        ( buildSeededDatabaseEffect
+        ( buildSeededPageRepository
             DatabaseSeed
               { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
                 spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -8272,7 +8288,7 @@ spec = do
       let failingApplication =
             buildAppWithDatabase
               defaultAppConfig
-              ( buildSeededDatabaseEffect
+              ( buildSeededPageRepository
                   DatabaseSeed
                     { englishHomePageData = englishHomePageData defaultDatabaseSeed,
                       spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
@@ -8327,7 +8343,7 @@ spec = do
             buildRuntimeAppWithDatabaseBuilder
               defaultAppConfig
               ( \databaseRuntimeConfig ->
-                  buildSeededDatabaseEffect
+                  buildSeededPageRepository
                     defaultDatabaseSeed
                       { englishSecondPageData =
                           Right
@@ -8393,7 +8409,7 @@ spec = do
             runtimeApplication =
               buildRuntimeAppWithDatabaseBuilder
                 runtimeAppConfig
-                (const defaultDatabaseEffect)
+                (const defaultPageRepository)
                 defaultAppEnvironmentConfig
         HarchWeb.reportRequestObservability
           runtimeApplication
@@ -8432,7 +8448,7 @@ spec = do
             runtimeApplication =
               buildRuntimeAppWithDatabaseBuilder
                 runtimeAppConfig
-                (const defaultDatabaseEffect)
+                (const defaultPageRepository)
                 defaultAppEnvironmentConfig
         HarchWeb.reportRequestObservability
           runtimeApplication
@@ -8462,7 +8478,7 @@ spec = do
             runtimeApplication =
               buildRuntimeAppWithDatabaseBuilder
                 runtimeAppConfig
-                (const defaultDatabaseEffect)
+                (const defaultPageRepository)
                 defaultAppEnvironmentConfig
         HarchWeb.reportConnectionObservability
           runtimeApplication
@@ -8512,7 +8528,7 @@ spec = do
             runtimeApplication =
               buildRuntimeAppWithDatabaseBuilder
                 runtimeAppConfig
-                (const defaultDatabaseEffect)
+                (const defaultPageRepository)
                 defaultAppEnvironmentConfig
         HarchWeb.reportConnectionObservability
           runtimeApplication

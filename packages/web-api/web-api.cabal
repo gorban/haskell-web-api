@@ -92,6 +92,10 @@ library
     WebApi.SetupConfig
     WebApi.SetupPlan
 
+  other-modules:
+    WebApi.Postgres.PageRepository
+    WebApi.Postgres.QueryRunner
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
@@ -108,6 +112,7 @@ library
     process,
     text,
     time,
+    transformers,
     wai,
 
   -- Directories containing source files.

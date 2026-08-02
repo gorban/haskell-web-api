@@ -15,7 +15,7 @@ import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountSto
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
-import WebApi.Database (defaultDatabaseEffect)
+import WebApi.Database (defaultPageRepository)
 import WebApi.Session (AccountSessionStore (..))
 
 spec =
@@ -129,7 +129,7 @@ spec =
 
     it "keeps Spanish registration SSR and its immediate failure patch localized" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultDatabaseEffect localizedRegistrationWorkflow) $ \server -> do
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
           let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
           runBrowserScenario
             browser
@@ -151,7 +151,7 @@ spec =
 
     it "resends a pending-profile verification email through the immediate capture path" $
       withBrowserApp $ \browser appConfig ->
-        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultDatabaseEffect pendingProfileWorkflow) $ \server -> do
+        HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository pendingProfileWorkflow) $ \server -> do
           let profileUrl = HarchWeb.localServerBaseUrl server <> "/profile"
           runBrowserScenario
             browser

@@ -44,10 +44,10 @@ import WebApi.Config
     defaultAppEnvironmentConfig,
     loadAppStartupConfig,
   )
-import WebApi.Database (DatabaseEffect, defaultDatabaseEffect)
+import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
-import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresDatabaseEffect, buildRuntimePostgresMfaStore)
+import WebApi.Postgres (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountStore, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepository)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route
   ( AppRequestContext (..),
@@ -59,26 +59,26 @@ import WebApi.Route
   )
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
-buildAppWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabase config databaseEffect =
-  buildAppWithDatabaseAndAccountWorkflow config databaseEffect unavailableAccountWorkflow
+buildAppWithDatabase :: AppConfig -> PageRepository -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabase config pageRepository =
+  buildAppWithDatabaseAndAccountWorkflow config pageRepository unavailableAccountWorkflow
 
-buildAppWithDatabaseAndAccountWorkflow :: AppConfig -> DatabaseEffect -> AccountWorkflow -> HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow =
-  buildAppWithDatabaseAndReporters config databaseEffect accountWorkflow ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
+buildAppWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
+  buildAppWithDatabaseAndReporters config pageRepository accountWorkflow ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
 
 buildAppWithDatabaseAndReporters ::
   AppConfig ->
-  DatabaseEffect ->
+  PageRepository ->
   AccountWorkflow ->
   (Observability.RequestObservability -> IO ()) ->
   (Observability.ConnectionObservability -> IO ()) ->
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AppRequestContext
-buildAppWithDatabaseAndReporters config databaseEffect !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
+buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
-      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config databaseEffect accountWorkflow))
+      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config pageRepository accountWorkflow))
           { Site.siteRequestContextFromRequest =
               requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
             Site.siteStaticAssets = staticAssets config,
@@ -93,11 +93,11 @@ buildAppWithDatabaseAndReporters config databaseEffect !accountWorkflow requestO
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
-  buildAppWithDatabase config defaultDatabaseEffect
+  buildAppWithDatabase config defaultPageRepository
 
-buildAppSiteRoutes :: AppConfig -> DatabaseEffect -> AccountWorkflow -> [Site.SiteRoute AppRoute AppRequestContext]
-buildAppSiteRoutes config databaseEffect accountWorkflow =
-  let renderSelectedResponse = selectResponseWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow
+buildAppSiteRoutes :: AppConfig -> PageRepository -> AccountWorkflow -> [Site.SiteRoute AppRoute AppRequestContext]
+buildAppSiteRoutes config pageRepository accountWorkflow =
+  let renderSelectedResponse = selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
    in [ Site.SiteRoute
           { Site.siteRouteValue = HomeRoute,
             Site.siteRouteNavigationLabel = Just "Home",
@@ -158,13 +158,13 @@ buildAppSiteRoutes config databaseEffect accountWorkflow =
 buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildRuntimeApp config environmentConfig =
   let databaseConfiguration = databaseConfig environmentConfig
-      databaseEffect = buildRuntimePostgresDatabaseEffect databaseConfiguration
+      pageRepository = buildRuntimePostgresPageRepository databaseConfiguration
       accountWorkflow = buildRuntimeAccountWorkflow environmentConfig
-   in databaseEffect `seq`
+   in pageRepository `seq`
         accountWorkflow `seq`
           buildAppWithDatabaseAndReporters
             config
-            databaseEffect
+            pageRepository
             accountWorkflow
             (runtimeRequestObservabilityReporter config)
             (runtimeConnectionObservabilityReporter config)
@@ -172,15 +172,15 @@ buildRuntimeApp config environmentConfig =
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
-  (DatabaseConfig -> DatabaseEffect) ->
+  (DatabaseConfig -> PageRepository) ->
   AppEnvironmentConfig ->
   HarchWeb.Application AppRoute AppRequestContext
-buildRuntimeAppWithDatabaseBuilder config buildDatabaseEffect environmentConfig =
-  let databaseEffect = buildDatabaseEffect (databaseConfig environmentConfig)
-   in databaseEffect `seq`
+buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
+  let pageRepository = buildPageRepository (databaseConfig environmentConfig)
+   in pageRepository `seq`
         buildAppWithDatabaseAndReporters
           config
-          databaseEffect
+          pageRepository
           unavailableAccountWorkflow
           (runtimeRequestObservabilityReporter config)
           (runtimeConnectionObservabilityReporter config)

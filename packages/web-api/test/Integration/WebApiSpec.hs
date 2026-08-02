@@ -23,9 +23,17 @@ import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Database (DatabaseEffect (..), DatabaseError (..), HomePageData (..), SecondPageData (..))
-import WebApi.Postgres (buildPostgresDatabaseEffect, buildRuntimePostgresDatabaseEffect)
+import WebApi.Database (PageRepository (..), DatabaseError (..), DatabaseResult (..), HomePageData (..), SecondPageData (..))
+import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository)
 import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
+
+loadHomePageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError HomePageData)
+loadHomePageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadHomePage pageRepository (requestLocale requestContext)
+
+loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
+loadSecondPageValueForRequest pageRepository requestContext =
+  databaseResultValue <$> loadSecondPage pageRepository (requestLocale requestContext)
 
 spec = do
   describe "main" $ do
@@ -213,25 +221,25 @@ spec = do
           supportedVersionResult
             `shouldSatisfy` (`elem` fmap (\majorVersion -> (ExitSuccess, show majorVersion <> "\n", "")) supportedPostgresMajorVersions)
 
-          let postgresEffect = buildPostgresDatabaseEffect defaultRealPostgresConfig
+          let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
               spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
-          loadHomePageData postgresEffect defaultRequestContext
+          loadHomePageValueForRequest postgresEffect defaultRequestContext
             `shouldReturn` Right
               HomePageData
                 { homePageDataSummary = "Server-rendered home page with stubbed content."
                 }
-          loadSecondPageData postgresEffect defaultRequestContext
+          loadSecondPageValueForRequest postgresEffect defaultRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                   secondPageDataHighlights = []
                 }
-          loadHomePageData postgresEffect spanishRequestContext
+          loadHomePageValueForRequest postgresEffect spanishRequestContext
             `shouldReturn` Right
               HomePageData
                 { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                 }
-          loadSecondPageData postgresEffect spanishRequestContext
+          loadSecondPageValueForRequest postgresEffect spanishRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -239,13 +247,13 @@ spec = do
                 }
 
           withTemporaryEnvironment "PATH" (Just "") $ do
-            let runtimePostgresEffect = buildRuntimePostgresDatabaseEffect defaultRealPostgresConfig
-            loadHomePageData runtimePostgresEffect defaultRequestContext
+            let runtimePostgresEffect = buildRuntimePostgresPageRepository defaultRealPostgresConfig
+            loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
               `shouldReturn` Right
                 HomePageData
                   { homePageDataSummary = "Server-rendered home page with stubbed content."
                   }
-            loadSecondPageData runtimePostgresEffect spanishRequestContext
+            loadSecondPageValueForRequest runtimePostgresEffect spanishRequestContext
               `shouldReturn` Right
                 SecondPageData
                   { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -296,11 +304,11 @@ spec = do
       withUnusedLoopbackPort $ \unusedPort ->
         withTemporaryEnvironment "PATH" (Just "") $ do
           let runtimePostgresEffect =
-                buildRuntimePostgresDatabaseEffect
+                buildRuntimePostgresPageRepository
                   defaultRealPostgresConfig
                     { databasePort = unusedPort
                     }
-          loadHomePageData runtimePostgresEffect defaultRequestContext
+          loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
               Left (HomePageDataError errorMessage) -> do
                 expectAll

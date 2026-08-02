@@ -18,7 +18,7 @@ import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
-import WebApi.Database (DatabaseEffect, DatabaseError (..), DatabaseOperation (..), defaultDatabaseEffect)
+import WebApi.Database (PageRepository, DatabaseError (..), DatabaseOperation (..), defaultPageRepository)
 import WebApi.Page (renderPageFromRouteData, renderProfilePageWithState, renderUnavailableProfilePage)
 import WebApi.Profile (ProfileLoadError (..), loadProfile)
 import WebApi.Route
@@ -38,10 +38,10 @@ import WebApi.RouteData
 
 selectResponse :: AppConfig -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponse config =
-  selectResponseWithDatabase config defaultDatabaseEffect
+  selectResponseWithDatabase config defaultPageRepository
 
-selectResponseWithDatabase :: AppConfig -> DatabaseEffect -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
-selectResponseWithDatabase config databaseEffect routeRequest =
+selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectResponseWithDatabase config pageRepository routeRequest =
   if isHomePageRequest routeRequest
     then pure (HarchWeb.redirectResponse 302 (spacesLocation routeRequest))
     else
@@ -53,13 +53,13 @@ selectResponseWithDatabase config databaseEffect routeRequest =
               PageSurface ->
                 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
         )
-        (selectRouteDataSelectionWithDatabase databaseEffect routeRequest)
+        (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
 
-selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> DatabaseEffect -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
-selectResponseWithDatabaseAndAccountWorkflow config databaseEffect accountWorkflow routeRequest =
+selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
+selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow routeRequest =
   if isProfilePageRequest routeRequest
     then selectProfileResponse config accountWorkflow routeRequest
-    else selectResponseWithDatabase config databaseEffect routeRequest
+    else selectResponseWithDatabase config pageRepository routeRequest
 
 isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isProfilePageRequest routeRequest =
