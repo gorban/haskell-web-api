@@ -21,8 +21,7 @@ import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Migration (runPostgresMigrationsForRuntime)
-import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner)
+import WebApi.Postgres.Testing (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, runPostgresMigrationsForRuntime)
 import WebApi.Session
   ( AccountSessionStore (..),
     AccountSessionStoreError (..),

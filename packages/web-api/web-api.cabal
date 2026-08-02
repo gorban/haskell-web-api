@@ -84,6 +84,7 @@ library
     WebApi.Page
     WebApi.PageShell
     WebApi.Postgres
+    WebApi.Postgres.Testing
     WebApi.Profile
     WebApi.Response
     WebApi.Route
@@ -157,10 +158,7 @@ test-suite haskell-web-api-tests
   import: common
   -- Common test suite settings.
   type: exitcode-stdio-1.0
-  hs-source-dirs:
-    test
-    src
-
+  hs-source-dirs: test
   -- Suppress warnings about missing home modules in test suite;
   -- Otherwise, we'd have to list all test modules in other-modules.
   -- Add -keep-tmp-files to the end to keep the generated files for inspection.
@@ -191,7 +189,6 @@ test-suite haskell-web-api-tests
   build-depends:
     -- For testing framework:
     -- For running the executable in tests:
-    aeson,
     base ^>=4.22.0.0,
     bytestring,
     core,
@@ -201,7 +198,6 @@ test-suite haskell-web-api-tests
     haskell-web-api,
     hspec,
     http-types,
-    mtl,
     network,
     postgresql-libpq,
     process,
@@ -209,6 +205,4 @@ test-suite haskell-web-api-tests
     temporary,
     test-core,
     text,
-    time,
-    transformers,
     wai,
