@@ -7799,7 +7799,7 @@ spec = do
                   )
               )
       pendingProfile
-        `shouldSatisfy` \html -> Text.isInfixOf "data-profile-resend=\"true\"" html && not (Text.isInfixOf "data-message-error=\"true\"" html)
+        `shouldSatisfy` \html -> Text.isInfixOf "data-profile-resend=\"true\"" html && not (Text.isInfixOf "data-error-state=\"true\"" html)
       let anonymousProfile =
             renderPageBody
               ( ProfilePage
