@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Unit.HarchWeb.MarkupSpec (spec) where
 
@@ -11,6 +12,39 @@ import HarchWeb.Markup.Unsafe qualified as Unsafe
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import Unit.HarchWeb.MarkupComponents qualified as Account
+import Unit.HarchWeb.MarkupRejection (rejectedMarkup)
+
+duplicateNamedPropertyRejected :: Bool
+duplicateNamedPropertyRejected =
+  $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" heroTitle=\"Second\" />")
+
+unknownNamedPropertyRejected :: Bool
+unknownNamedPropertyRejected =
+  $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" unknownProperty=\"Second\" />")
+
+missingNamedPropertyRejected :: Bool
+missingNamedPropertyRejected =
+  $(rejectedMarkup "<Account.HeroCard />")
+
+nonLiteralPropsRejected :: Bool
+nonLiteralPropsRejected =
+  $(rejectedMarkup "<Account.UserAvatar props={Account.AccountProfile \"Ada\"} />")
+
+mixedPropsRejected :: Bool
+mixedPropsRejected =
+  $(rejectedMarkup "<Account.HeroCard props={[Account.HeroCardProps \"First\"]} heroTitle=\"First\" />")
+
+duplicateChildrenRejected :: Bool
+duplicateChildrenRejected =
+  $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" children={[]} children={[]} />")
+
+mixedChildrenRejected :: Bool
+mixedChildrenRejected =
+  $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" children={[]}><p>Nested</p></Account.HeroCard>")
+
+literalChildrenRejected :: Bool
+literalChildrenRejected =
+  $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" children=\"not-a-list\" />")
 
 spec :: Spec
 spec = do
@@ -46,15 +80,41 @@ spec = do
           quoted = [harch|<label for="email">Email address</label>{children}|]
       renderHtml quoted `shouldBe` "<label for=\"email\">Email address</label><code>safe</code><p>after</p>"
 
-    it "lowers normal, self-closing, and qualified components to typed Haskell functions" $ do
+    it "lowers named, qualified, and self-closing components to typed Haskell functions" $ do
       let quoted =
             [harch|
-              <HeroCard props={HeroCardProps "Second page"}>
-                <Account.ProfileCard props={Account.ProfileCardProps "Ada"} />
-              </HeroCard>
+              <Account.HeroCard heroTitle="Second page">
+                <Account.ProfileCard profileCardTitle="Ada" />
+              </Account.HeroCard>
             |]
       renderHtml quoted
         `shouldBe` "<section data-hero-card=\"true\"><h2>Second page</h2><p data-profile-card=\"true\">Ada</p></section>"
+
+    it "passes computed children and heterogeneous positional props directly to components" $ do
+      let computedChildren = [element paragraphTag [] [text "Computed child"]]
+          computedChildrenQuoted =
+            [harch|<Account.HeroCard heroTitle="Second page" children={computedChildren} />|]
+          legacyProfileCardQuoted =
+            [harch|<Account.ProfileCard props={[Account.ProfileCardProps "Legacy"]} />|]
+          avatarQuoted =
+            [harch|<Account.UserAvatar props={[Account.AccountProfile "Ada", Account.SmallAvatar]} />|]
+      renderHtml computedChildrenQuoted
+        `shouldBe` "<section data-hero-card=\"true\"><h2>Second page</h2><p>Computed child</p></section>"
+      renderHtml legacyProfileCardQuoted `shouldBe` "<p data-profile-card=\"true\">Legacy</p>"
+      renderHtml avatarQuoted `shouldBe` "<p data-user-avatar=\"small\">Ada</p>"
+
+    it "rejects invalid named properties, positional props, and child forms while lowering" $
+      expectAll
+        ( (duplicateNamedPropertyRejected `shouldBe` True)
+            :| [ unknownNamedPropertyRejected `shouldBe` True,
+                 missingNamedPropertyRejected `shouldBe` True,
+                 nonLiteralPropsRejected `shouldBe` True,
+                 mixedPropsRejected `shouldBe` True,
+                 duplicateChildrenRejected `shouldBe` True,
+                 mixedChildrenRejected `shouldBe` True,
+                 literalChildrenRejected `shouldBe` True
+               ]
+        )
 
     it "embeds patchable regions explicitly without changing their SSR root" $ do
       let statusRegion = region (mkRegionId (literalElementId "status")) paragraphTag [role "status"] [text "Ready"]
@@ -167,9 +227,3 @@ spec = do
           renderedHtml
             `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
         _ -> expectationFailure "expected literal element IDs to be valid"
-
-newtype HeroCardProps = HeroCardProps Text.Text
-
-heroCard :: HeroCardProps -> [Html] -> Html
-heroCard (HeroCardProps title) children =
-  element sectionTag [dataAttribute "hero-card" "true"] (element headingTwoTag [] [text title] : children)

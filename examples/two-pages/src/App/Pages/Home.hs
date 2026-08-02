@@ -8,8 +8,7 @@ module App.Pages.Home
 where
 
 import App.Components.SubscriptionEmailField
-  ( SubscriptionEmailFieldProps (..),
-    subscriptionEmailField,
+  ( subscriptionEmailField,
   )
 import App.Routes (TwoPageRoute (..), routeHref)
 import Data.Text (Text)
@@ -65,7 +64,7 @@ homePage routeRequest =
                   <p><a href={routeHref LiveDataRoute} data-page-link="true">See live updates</a></p>
 
                   <form aria-label="Subscription" data-harch-control data-harch-action="true" action="/actions/subscribe" method="post">
-                    <SubscriptionEmailField props={SubscriptionEmailFieldProps} />
+                    <SubscriptionEmailField />
                     <button name="intent" value="subscribe" type="submit">Subscribe</button>
                   </form>
 
