@@ -7784,20 +7784,22 @@ spec = do
         `shouldBe` "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
       renderPageBody (RegistrationPage "/register" emptyRegistrationForm)
         `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
-      renderPageBody
-        ( ProfilePage
-            ( PendingProfilePage
-                "Profile"
-                "Verify your email address before continuing."
-                "person@example.test"
-                (Just "person_01")
-                (Just "Person Example")
-                "/profile"
-                "Resend verification email"
-                (CallToAction "Sign out" LogoutRoute "/logout")
-            )
-        )
-        `shouldSatisfy` Text.isInfixOf "data-profile-resend=\"true\""
+      let pendingProfile =
+            renderPageBody
+              ( ProfilePage
+                  ( PendingProfilePage
+                      "Profile"
+                      "Verify your email address before continuing."
+                      "person@example.test"
+                      (Just "person_01")
+                      (Just "Person Example")
+                      "/profile"
+                      "Resend verification email"
+                      (CallToAction "Sign out" LogoutRoute "/logout")
+                  )
+              )
+      pendingProfile
+        `shouldSatisfy` \html -> Text.isInfixOf "data-profile-resend=\"true\"" html && not (Text.isInfixOf "data-message-error=\"true\"" html)
       let anonymousProfile =
             renderPageBody
               ( ProfilePage
