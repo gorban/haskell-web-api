@@ -32,6 +32,7 @@ library
   exposed-modules:
     App.App
     App.Components.Layout
+    App.Components.SubscriptionEmailField
     App.Pages.Home
     App.Pages.LiveData
     App.Pages.NotFound

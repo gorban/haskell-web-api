@@ -7,6 +7,10 @@ module App.Pages.Home
   )
 where
 
+import App.Components.SubscriptionEmailField
+  ( SubscriptionEmailFieldProps (..),
+    subscriptionEmailField,
+  )
 import App.Routes (TwoPageRoute (..), routeHref)
 import Data.Text (Text)
 import HarchWeb
@@ -16,24 +20,19 @@ import HarchWeb
     RouteRequest (..),
     anchorTag,
     ariaLabel,
-    autocomplete,
     buttonTag,
     className,
     cssScope,
     dataAttribute,
     dataFlag,
     element,
-    elementId,
     formAction,
     formTag,
     fragment,
     harch,
     headingOneTag,
     href,
-    inputTag,
     inputType,
-    labelFor,
-    labelTag,
     literalElementId,
     method,
     mkRegionId,
@@ -41,12 +40,10 @@ import HarchWeb
     paragraphTag,
     region,
     regionHtml,
-    required,
     role,
     sectionTag,
     text,
     value,
-    voidElement,
   )
 
 homePage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
@@ -57,8 +54,7 @@ homePage routeRequest =
         pageRoute = HomeRoute,
         pageContext = requestContext routeRequest,
         pageBody =
-          let emailId = literalElementId "subscription-email"
-           in [harch|
+          [harch|
                 <section data-page="home" class={ScopedCssClass (cssScope "home") "root"}>
                   <h1>Home</h1>
 
@@ -69,14 +65,13 @@ homePage routeRequest =
                   <p><a href={routeHref LiveDataRoute} data-page-link="true">See live updates</a></p>
 
                   <form aria-label="Subscription" data-harch-control data-harch-action="true" action="/actions/subscribe" method="post">
-                    <label for={emailId}>Email address</label>
-                    <input id={emailId} name="email" type="email" autocomplete="email" required />
+                    <SubscriptionEmailField props={SubscriptionEmailFieldProps} />
                     <button name="intent" value="subscribe" type="submit">Subscribe</button>
                   </form>
 
                   <Region value={subscriptionResultRegion "status" ""} />
                 </section>
-              |],
+          |],
         pageBootstrapHooks = []
       }
 
