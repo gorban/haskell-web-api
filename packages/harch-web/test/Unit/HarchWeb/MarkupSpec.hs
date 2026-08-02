@@ -1,18 +1,61 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Unit.HarchWeb.MarkupSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
+import HarchWeb
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Markup.Unsafe qualified as Unsafe
-import HarchWeb.StaticAssets (CssClass (..), cssScope)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
+import Unit.HarchWeb.MarkupComponents qualified as Account
 
 spec :: Spec
 spec = do
   describe "HTML markup" $ do
+    it "lowers native tags, typed attributes, and void elements to the existing AST" $ do
+      let emailId = literalElementId "subscription-email"
+          quoted =
+            [harch|
+              <section data-page="home" class={ScopedCssClass (cssScope "home") "root"}>
+                <h1>Home</h1>
+                <label for={emailId}>Email address</label>
+                <input id={emailId} name="email" type="email" autocomplete="email" required />
+              </section>
+            |]
+          direct =
+            element
+              sectionTag
+              [dataAttribute "page" "home", className (ScopedCssClass (cssScope "home") "root")]
+              [ element headingOneTag [] [text "Home"],
+                element labelTag [labelFor emailId] [text "Email address"],
+                voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required]
+              ]
+      renderHtml quoted `shouldBe` renderHtml direct
+
+    it "escapes literal and Text interpolation while composing Html interpolation safely" $ do
+      let interpolatedText = "<reviewed>" :: Text.Text
+          safeChild = element codeTag [] [text "safe"]
+          quoted = [harch|<p>Literal &amp; unsafe &lt;literal&gt; {interpolatedText} {safeChild}</p>|]
+      renderHtml quoted `shouldBe` "<p>Literal &amp; unsafe &lt;literal&gt; &lt;reviewed&gt; <code>safe</code></p>"
+
+    it "lowers normal, self-closing, and qualified components to typed Haskell functions" $ do
+      let quoted =
+            [harch|
+              <HeroCard props={HeroCardProps "Second page"}>
+                <Account.ProfileCard props={Account.ProfileCardProps "Ada"} />
+              </HeroCard>
+            |]
+      renderHtml quoted
+        `shouldBe` "<section data-hero-card=\"true\"><h2>Second page</h2><p data-profile-card=\"true\">Ada</p></section>"
+
+    it "embeds patchable regions explicitly without changing their SSR root" $ do
+      let statusRegion = region (mkRegionId (literalElementId "status")) paragraphTag [role "status"] [text "Ready"]
+          quoted = [harch|<section><Region value={statusRegion} /></section>|]
+      renderHtml quoted `shouldBe` "<section><p id=\"status\" data-harch-region=\"true\" role=\"status\">Ready</p></section>"
+
     it "escapes ordinary text and attribute values while leaving trusted fragments explicit" $ do
       let renderedHtml =
             Markup.renderHtml
@@ -119,3 +162,9 @@ spec = do
           renderedHtml
             `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
         _ -> expectationFailure "expected literal element IDs to be valid"
+
+newtype HeroCardProps = HeroCardProps Text.Text
+
+heroCard :: HeroCardProps -> [Html] -> Html
+heroCard (HeroCardProps title) children =
+  element sectionTag [dataAttribute "hero-card" "true"] (element headingTwoTag [] [text title] : children)

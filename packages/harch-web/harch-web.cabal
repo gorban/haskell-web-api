@@ -95,6 +95,7 @@ library
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Markup.Internal
+    HarchWeb.Markup.Quasi
     HarchWeb.Observability.Otlp
     HarchWeb.Observability.Otlp.Export
     HarchWeb.Observability.Otlp.Wire
@@ -125,6 +126,7 @@ library
     cryptonite,
     directory,
     filepath,
+    haskell-src-meta,
     http-client,
     http-client-tls,
     http-types,
@@ -133,6 +135,7 @@ library
     network,
     pem,
     process,
+    template-haskell,
     temporary,
     text,
     time,

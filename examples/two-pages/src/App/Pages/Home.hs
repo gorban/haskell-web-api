@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module App.Pages.Home
   ( homePage,
@@ -25,6 +26,8 @@ import HarchWeb
     elementId,
     formAction,
     formTag,
+    fragment,
+    harch,
     headingOneTag,
     href,
     inputTag,
@@ -55,27 +58,25 @@ homePage routeRequest =
         pageContext = requestContext routeRequest,
         pageBody =
           let emailId = literalElementId "subscription-email"
-           in element
-                sectionTag
-                [dataAttribute "page" "home", className (ScopedCssClass (cssScope "home") "root")]
-                [ element headingOneTag [] [text "Home"],
-                  element paragraphTag [] [text "This page is fully server-rendered on direct load and reload."],
-                  element paragraphTag [] [element anchorTag [href (routeHref SecondRoute), dataAttribute "page-link" "true"] [text "Go to the second page"]],
-                  element paragraphTag [] [element anchorTag [href (routeHref LiveDataRoute), dataAttribute "page-link" "true"] [text "See live updates"]],
-                  element
-                    formTag
-                    [ ariaLabel "Subscription",
-                      dataFlag "harch-control",
-                      dataAttribute "harch-action" "true",
-                      formAction "/actions/subscribe",
-                      method "post"
-                    ]
-                    [ element labelTag [labelFor emailId] [text "Email address"],
-                      voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required],
-                      element buttonTag [name "intent", value "subscribe", inputType "submit"] [text "Subscribe"]
-                    ],
-                  regionHtml (subscriptionResultRegion "status" "")
-                ],
+           in [harch|
+                <section data-page="home" class={ScopedCssClass (cssScope "home") "root"}>
+                  <h1>Home</h1>
+
+                  <p>This page is fully server-rendered on direct load and reload.</p>
+
+                  <p><a href={routeHref SecondRoute} data-page-link="true">Go to the second page</a></p>
+
+                  <p><a href={routeHref LiveDataRoute} data-page-link="true">See live updates</a></p>
+
+                  <form aria-label="Subscription" data-harch-control data-harch-action="true" action="/actions/subscribe" method="post">
+                    <label for={emailId}>Email address</label>
+                    <input id={emailId} name="email" type="email" autocomplete="email" required />
+                    <button name="intent" value="subscribe" type="submit">Subscribe</button>
+                  </form>
+
+                  <Region value={subscriptionResultRegion "status" ""} />
+                </section>
+              |],
         pageBootstrapHooks = []
       }
 

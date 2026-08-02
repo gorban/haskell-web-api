@@ -1,9 +1,11 @@
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Markup
   ( Attribute,
     ElementId,
     Html,
+    MarkupContent (toHtml),
     Region,
     RegionId,
     RegionPatch,
@@ -30,6 +32,7 @@ module HarchWeb.Markup
     inputTag,
     inputType,
     inputMode,
+    harch,
     labelFor,
     labelTag,
     literalElementId,
@@ -80,7 +83,19 @@ import HarchWeb.Markup.Internal
     voidElement,
   )
 import HarchWeb.Markup.Internal qualified as Internal
+import HarchWeb.Markup.Quasi (harch)
 import HarchWeb.StaticAssets (CssClass, cssClassText)
+
+-- | Values that may be embedded between markup tags. Text is escaped by the
+-- existing 'text' constructor; 'Html' remains safe because it is already AST.
+class MarkupContent value where
+  toHtml :: value -> Html
+
+instance MarkupContent Html where
+  toHtml = id
+
+instance MarkupContent Text where
+  toHtml = text
 
 className :: CssClass -> Attribute
 className = attribute (AttributeName "class") . cssClassText
