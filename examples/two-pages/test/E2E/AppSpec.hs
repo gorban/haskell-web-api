@@ -16,7 +16,7 @@ spec =
         ( runBrowserScenario browser $ do
             visit homeUrl
             assertAll
-              ((,,) <$> textContent (byRole Heading) <*> attributeValue (css "link[rel='stylesheet']") "href" <*> attributeValue (css "section[data-page='home']") "class")
+              ((,,) <$> textContent (byRole Heading `named` "Home") <*> attributeValue (css "link[rel='stylesheet']") "href" <*> attributeValue (css "section[data-page='home']") "class")
               ( \(heading, stylesheetHref, homeClass) ->
                   (heading `shouldBe` "Home")
                     :| [ stylesheetHref `shouldBe` Just "/assets/two-pages.css",
@@ -25,7 +25,7 @@ spec =
               )
             click (byRole Link `named` "Go to the second page")
             assertAll
-              ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Second") <*> browserMetrics)
               ( \(url, heading, metrics) ->
                   (url `shouldBe` secondUrl)
                     :| [ heading `shouldBe` "Second",
@@ -45,11 +45,11 @@ spec =
             assertUrl (`shouldBe` secondUrl)
             historyBack
             assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading))
+              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Home"))
               (\(url, heading) -> (url `shouldBe` homeUrl) :| [heading `shouldBe` "Home"])
             historyForward
             assertAll
-              ((,) <$> currentUrl <*> textContent (byRole Heading))
+              ((,) <$> currentUrl <*> textContent (byRole Heading `named` "Second"))
               (\(url, heading) -> (url `shouldBe` secondUrl) :| [heading `shouldBe` "Second"])
           )
           `shouldReturn` Right ()
@@ -97,11 +97,11 @@ spec =
         ( runBrowserScenario browser $ do
             visit secondUrl
             reload
-            assertText (byRole Heading) (`shouldBe` "Second")
+            assertText (byRole Heading `named` "Second") (`shouldBe` "Second")
             visitWithoutScripts homeUrl
             click (byRole Link `named` "Go to the second page")
             assertAll
-              ((,,) <$> currentUrl <*> textContent (byRole Heading) <*> browserMetrics)
+              ((,,) <$> currentUrl <*> textContent (byRole Heading `named` "Second") <*> browserMetrics)
               ( \(url, heading, metrics) ->
                   (url `shouldBe` secondUrl)
                     :| [ heading `shouldBe` "Second",
@@ -117,7 +117,7 @@ spec =
         ( runBrowserScenario browser $ do
             visitWithoutScripts liveDataUrl
             assertAll
-              ((,) <$> textContent (byRole Heading) <*> textContent (css "#live-data-status"))
+              ((,) <$> textContent (byRole Heading `named` "Live updates") <*> textContent (css "#live-data-status"))
               ( \(heading, status) ->
                   (heading `shouldBe` "Live updates")
                     :| [status `shouldBe` "Waiting for an update."]

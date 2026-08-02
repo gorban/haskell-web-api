@@ -141,6 +141,15 @@ spec =
     describe "buildApplication" $ do
       it "renders the home page with shared navigation and the enhancement runtime" $ do
         let application = buildApplication
+            authorComponents =
+              Text.concat
+                [ "<section data-page-example=\"about\"><h2>About this example</h2>",
+                  "<section data-example-author-card=\"true\"><p>Harch Web team</p>",
+                  "<p>SSR framework maintainers</p>",
+                  "<p>The page and its controls are complete before optional JavaScript loads.</p>",
+                  "</section><div data-example-author-avatar=\"compact\"><p>HW</p>",
+                  "<p>Maintained as a small, runnable framework reference.</p></div></section>"
+                ]
         response <- performWaiRequest (toWaiApplication application) (waiRequest [])
         responseBody <- readResponseBody response
         expectAll
@@ -154,6 +163,7 @@ spec =
                    Text.isInfixOf "<nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a><a href=\"/live-data\" data-page-link=\"true\">Live updates</a></nav>" responseBody `shouldBe` True,
                    Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True,
                    Text.isInfixOf "<a href=\"/live-data\" data-page-link=\"true\">See live updates</a>" responseBody `shouldBe` True,
+                   Text.isInfixOf authorComponents responseBody `shouldBe` True,
                    Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True,
                    Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True,
                    Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True,

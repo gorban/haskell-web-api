@@ -7,6 +7,12 @@ module App.Pages.Home
   )
 where
 
+import App.Components.ExampleAuthor
+  ( AuthorIdentity (..),
+    AvatarSize (..),
+    authorAvatar,
+    authorCard,
+  )
 import App.Components.SubscriptionEmailField
   ( subscriptionEmailField,
   )
@@ -30,6 +36,7 @@ import HarchWeb
     fragment,
     harch,
     headingOneTag,
+    headingTwoTag,
     href,
     inputType,
     literalElementId,
@@ -62,6 +69,16 @@ homePage routeRequest =
                   <p><a href={routeHref SecondRoute} data-page-link="true">Go to the second page</a></p>
 
                   <p><a href={routeHref LiveDataRoute} data-page-link="true">See live updates</a></p>
+
+                  <section data-page-example="about">
+                    <h2>About this example</h2>
+                    <AuthorCard authorName="Harch Web team" authorRole="SSR framework maintainers">
+                      <p>The page and its controls are complete before optional JavaScript loads.</p>
+                    </AuthorCard>
+                    <AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>
+                      <p>Maintained as a small, runnable framework reference.</p>
+                    </AuthorAvatar>
+                  </section>
 
                   <form aria-label="Subscription" data-harch-control data-harch-action="true" action="/actions/subscribe" method="post">
                     <SubscriptionEmailField />

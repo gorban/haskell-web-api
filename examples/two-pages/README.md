@@ -17,6 +17,7 @@ This example now builds with the current framework seam:
 - [app/Main.hs](app/Main.hs)
 - [src/App/App.hs](src/App/App.hs)
 - [src/App/Routes.hs](src/App/Routes.hs)
+- [src/App/Components/ExampleAuthor.hs](src/App/Components/ExampleAuthor.hs)
 - [src/App/Components/Layout.hs](src/App/Components/Layout.hs)
 - [src/App/Pages/Home.hs](src/App/Pages/Home.hs)
 - [src/App/Pages/Second.hs](src/App/Pages/Second.hs)
@@ -44,6 +45,28 @@ but it already shows the intended workflow:
 - share a small layout component,
 - ship a tiny browser enhancement layer at `/assets/navigation.js`,
 - keep the app understandable before adding any effects or deployment concerns.
+
+## Harch component forms
+
+`App.Pages.Home` contains all supported component-call forms in rendered application content:
+
+```hs
+-- Nullary props and no children.
+<SubscriptionEmailField />
+
+-- Named record fields and an HTML child.
+<AuthorCard authorName="Harch Web team" authorRole="SSR framework maintainers">
+  <p>The page and its controls are complete before optional JavaScript loads.</p>
+</AuthorCard>
+
+-- Explicit positional fallback with two distinct typed arguments and an HTML child.
+<AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>
+  <p>Maintained as a small, runnable framework reference.</p>
+</AuthorAvatar>
+```
+
+Prefer named fields for record props. The positional list is deliberately reserved for components
+whose public function has multiple distinct typed inputs, as `AuthorAvatar` does.
 
 ## Desired generated page surface
 
