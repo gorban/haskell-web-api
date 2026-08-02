@@ -298,10 +298,6 @@ spec = do
                           Observability.attributeValue = Observability.TextAttribute "https"
                         },
                       Observability.ObservabilityAttribute
-                        { Observability.attributeName = "url.path",
-                          Observability.attributeValue = Observability.TextAttribute "/api/status"
-                        },
-                      Observability.ObservabilityAttribute
                         { Observability.attributeName = "http.route",
                           Observability.attributeValue = Observability.TextAttribute "/api/status"
                         },
@@ -312,10 +308,6 @@ spec = do
                       Observability.ObservabilityAttribute
                         { Observability.attributeName = "harch.response.kind",
                           Observability.attributeValue = Observability.TextAttribute "body"
-                        },
-                      Observability.ObservabilityAttribute
-                        { Observability.attributeName = "app.surface",
-                          Observability.attributeValue = Observability.TextAttribute "api"
                         }
                     ]
                 },
@@ -397,10 +389,6 @@ spec = do
                       Observability.ObservabilityAttribute
                         { Observability.attributeName = "url.scheme",
                           Observability.attributeValue = Observability.TextAttribute "http"
-                        },
-                      Observability.ObservabilityAttribute
-                        { Observability.attributeName = "url.path",
-                          Observability.attributeValue = Observability.TextAttribute "/favicon.ico"
                         },
                       Observability.ObservabilityAttribute
                         { Observability.attributeName = "http.route",

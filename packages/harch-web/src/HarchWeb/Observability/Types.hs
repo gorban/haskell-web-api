@@ -189,10 +189,26 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
             HttpServerMetrics
               { requestDurationMetricName = "http.server.request.duration",
                 activeRequestsMetricName = "http.server.active_requests",
-                httpServerMetricAttributes = attributes
+                httpServerMetricAttributes = metricSafeAttributes attributes
               },
           observabilityTraceContext = Nothing
         }
+
+-- | Metric label cardinality must remain bounded. Request paths, network
+-- addresses, headers, diagnostic details, and timing measurements stay on
+-- spans and logs, but never become metric dimensions.
+metricSafeAttributes :: [ObservabilityAttribute] -> [ObservabilityAttribute]
+metricSafeAttributes = filter (isMetricSafeAttribute . attributeName)
+
+isMetricSafeAttribute :: Text -> Bool
+isMetricSafeAttribute attribute =
+  attribute
+    `elem` [ "http.request.method",
+             "url.scheme",
+             "http.route",
+             "http.response.status_code",
+             "harch.response.kind"
+           ]
 
 withRequestTraceContext :: RequestTraceContext -> RequestObservability -> RequestObservability
 withRequestTraceContext traceContext requestObservability =

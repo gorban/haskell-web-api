@@ -1,11 +1,15 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
     AppM,
     AppServices (..),
+    FailureCode (..),
     FailureDiagnostics (..),
     askAppServices,
     liftAppIO,
+    renderFailureCode,
     runAppM,
     throwAppFailure,
   )
@@ -44,8 +48,48 @@ newtype AppServices = AppServices
   { appAccountWorkflow :: AccountWorkflow
   }
 
+-- | Stable low-cardinality application failure codes emitted to telemetry.
+data FailureCode
+  = RegistrationDeliveryFailure
+  | RegistrationStoreFailure
+  | RegistrationPasswordHashFailure
+  | RegistrationClockFailure
+  | VerificationStoreFailure
+  | MfaEnrollmentStartFailure
+  | MfaEnrollmentConfirmFailure
+  | LoginCredentialStoreFailure
+  | LoginMfaStoreFailure
+  | LoginCorruptEnrollmentFailure
+  | LoginSessionFailure
+  | LogoutSessionFailure
+  | ProfileLoadFailure
+  | ProfileResendDeliveryFailure
+  | ProfileResendStoreFailure
+  | ProfileResendClockFailure
+  deriving (Eq, Show)
+
+renderFailureCode :: FailureCode -> Text
+renderFailureCode failureCodeValue =
+  case failureCodeValue of
+    RegistrationDeliveryFailure -> "account.registration.delivery"
+    RegistrationStoreFailure -> "account.registration.store"
+    RegistrationPasswordHashFailure -> "account.registration.password-hash"
+    RegistrationClockFailure -> "account.registration.clock"
+    VerificationStoreFailure -> "account.verification.store"
+    MfaEnrollmentStartFailure -> "account.mfa.start"
+    MfaEnrollmentConfirmFailure -> "account.mfa.confirm"
+    LoginCredentialStoreFailure -> "account.login.credential-store"
+    LoginMfaStoreFailure -> "account.login.mfa-store"
+    LoginCorruptEnrollmentFailure -> "account.login.corrupt-enrollment"
+    LoginSessionFailure -> "account.login.session"
+    LogoutSessionFailure -> "account.logout.session"
+    ProfileLoadFailure -> "account.profile.load"
+    ProfileResendDeliveryFailure -> "account.profile.resend.delivery"
+    ProfileResendStoreFailure -> "account.profile.resend.store"
+    ProfileResendClockFailure -> "account.profile.resend.clock"
+
 data FailureDiagnostics = FailureDiagnostics
-  { failureCode :: Text,
+  { failureCode :: FailureCode,
     failureType :: Text,
     failureLogEntries :: [Text]
   }

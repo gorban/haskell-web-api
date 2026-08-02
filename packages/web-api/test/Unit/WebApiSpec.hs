@@ -2952,11 +2952,49 @@ spec = do
         (\case Left storeError -> isCorrupt "email verification was consumed for a different account" storeError; _ -> False)
 
   describe "WebApi.AppEffect" $ do
+    it "renders every closed failure code to its stable telemetry value" $
+      map
+        AppEffect.renderFailureCode
+        [ AppEffect.RegistrationDeliveryFailure,
+          AppEffect.RegistrationStoreFailure,
+          AppEffect.RegistrationPasswordHashFailure,
+          AppEffect.RegistrationClockFailure,
+          AppEffect.VerificationStoreFailure,
+          AppEffect.MfaEnrollmentStartFailure,
+          AppEffect.MfaEnrollmentConfirmFailure,
+          AppEffect.LoginCredentialStoreFailure,
+          AppEffect.LoginMfaStoreFailure,
+          AppEffect.LoginCorruptEnrollmentFailure,
+          AppEffect.LoginSessionFailure,
+          AppEffect.LogoutSessionFailure,
+          AppEffect.ProfileLoadFailure,
+          AppEffect.ProfileResendDeliveryFailure,
+          AppEffect.ProfileResendStoreFailure,
+          AppEffect.ProfileResendClockFailure
+        ]
+        `shouldBe` [ "account.registration.delivery",
+                     "account.registration.store",
+                     "account.registration.password-hash",
+                     "account.registration.clock",
+                     "account.verification.store",
+                     "account.mfa.start",
+                     "account.mfa.confirm",
+                     "account.login.credential-store",
+                     "account.login.mfa-store",
+                     "account.login.corrupt-enrollment",
+                     "account.login.session",
+                     "account.logout.session",
+                     "account.profile.load",
+                     "account.profile.resend.delivery",
+                     "account.profile.resend.store",
+                     "account.profile.resend.clock"
+                   ]
+
     it "composes application services, IO, and typed failures through one boundary" $ do
       let services = AppEffect.AppServices unavailableAccountWorkflow
           successfulAction :: AppEffect.AppM Text Int
           successfulAction = AppEffect.liftAppIO (pure 42)
-          failureDiagnostics = AppEffect.FailureDiagnostics "sample.failure" "SampleFailure" ["private detail"]
+          failureDiagnostics = AppEffect.FailureDiagnostics AppEffect.RegistrationStoreFailure "SampleFailure" ["private detail"]
           failure = AppEffect.AppFailure "safe failure" failureDiagnostics
           failingAction :: AppEffect.AppM Text ()
           failingAction = AppEffect.throwAppFailure failure
@@ -2968,7 +3006,7 @@ spec = do
         >>= \case
           Left actualFailure -> do
             AppEffect.appFailurePublic actualFailure `shouldBe` "safe failure"
-            AppEffect.failureCode (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` "sample.failure"
+            AppEffect.failureCode (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` AppEffect.RegistrationStoreFailure
             AppEffect.failureType (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` "SampleFailure"
             AppEffect.failureLogEntries (AppEffect.appFailureDiagnostics actualFailure) `shouldBe` ["private detail"]
           Right () -> expectationFailure "expected a typed application failure"
@@ -3806,10 +3844,10 @@ spec = do
           (MfaEnrollmentEncryptionFailed, "TotpEncryptionError", "TOTP secret encryption failed")
         ]
         $ \(failureValue, expectedType, expectedDetail) ->
-          case mfaEnrollmentFailureDiagnostics "confirm" failureValue of
+          case mfaEnrollmentFailureDiagnostics AppEffect.MfaEnrollmentConfirmFailure failureValue of
             Nothing -> expectationFailure "expected infrastructure diagnostics for the MFA failure"
             Just diagnostics -> do
-              AppEffect.failureCode diagnostics `shouldBe` "account.mfa.confirm"
+              AppEffect.failureCode diagnostics `shouldBe` AppEffect.MfaEnrollmentConfirmFailure
               AppEffect.failureType diagnostics `shouldBe` expectedType
               AppEffect.failureLogEntries diagnostics `shouldSatisfy` any (Text.isInfixOf expectedDetail)
 

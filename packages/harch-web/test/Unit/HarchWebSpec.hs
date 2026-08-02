@@ -6234,7 +6234,7 @@ expectMeasuredRootRequestTiming requestObservabilityValue = do
         lookupIntAttribute attributeName spanAttributes
           `shouldSatisfy` maybe False (>= 0)
         lookupIntAttribute attributeName metricAttributes
-          `shouldSatisfy` maybe False (>= 0)
+          `shouldBe` Nothing
   expectTimingAttribute "harch.request.start_monotonic_ns"
   expectTimingAttribute "harch.request.duration_ns"
 
@@ -6251,7 +6251,7 @@ expectMeasuredRequestTiming requestObservabilityValue = do
         lookupIntAttribute attributeName spanAttributes
           `shouldSatisfy` maybe False (>= 0)
         lookupIntAttribute attributeName metricAttributes
-          `shouldSatisfy` maybe False (>= 0)
+          `shouldBe` Nothing
   expectTimingAttribute "harch.phase.request-policy.start_offset_ns"
   expectTimingAttribute "harch.phase.request-policy.duration_ns"
   expectTimingAttribute "harch.phase.route-match.start_offset_ns"

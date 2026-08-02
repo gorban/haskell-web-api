@@ -45,6 +45,7 @@ import WebApi.AppEffect
   ( AccountWorkflow (..),
     AppFailure (..),
     AppM,
+    FailureCode (..),
     FailureDiagnostics,
     liftAppIO,
     throwAppFailure,
@@ -197,10 +198,10 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
    in case registrationResult of
         Right RegistrationAlreadyRegistered -> pure (response 202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
         Right (RegistrationCreated _) -> pure (response 202 (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
-        Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response 502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) "account.registration.delivery" "EmailDeliveryError" detail
-        Left (RegistrationStoreError storeError) -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.store" "AccountStoreError" (accountStoreErrorDetail storeError)
-        Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.password-hash" "PasswordHashingError" "password hashing failed"
-        Left RegistrationClockOverflow -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) "account.registration.clock" "ClockOverflow" "verification expiry overflowed"
+        Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response 502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) RegistrationDeliveryFailure "EmailDeliveryError" detail
+        Left (RegistrationStoreError storeError) -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+        Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
+        Left RegistrationClockOverflow -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
 
 handleVerificationSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> VerificationSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleVerificationSubmission actionRequest submission =
@@ -216,7 +217,7 @@ handleVerificationSubmission actionRequest submission =
             Right (Account.EmailVerificationAccepted _ _) -> pure (verificationResponse (actionLocale actionRequest) path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing)
             Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token"))
             Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
-            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) "account.verification.store" "AccountStoreError" (accountStoreErrorDetail storeError)
+            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
 
 handleMfaEnrollmentSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> MfaEnrollmentSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleMfaEnrollmentSubmission actionRequest submission =
@@ -237,7 +238,7 @@ startMfaAction actionRequest path accountId = do
   started <- liftAppIO (startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now)
   case started of
     Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
-    Left errorValue -> interpretMfaFailure actionRequest path accountId "start" "mfa-account" errorValue
+    Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentStartFailure "mfa-account" errorValue
 
 confirmMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> Text -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 confirmMfaAction actionRequest path accountId codeValue =
@@ -250,17 +251,17 @@ confirmMfaAction actionRequest path accountId codeValue =
       confirmed <- liftAppIO (confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code)
       case confirmed of
         Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
-        Left errorValue -> interpretMfaFailure actionRequest path accountId "confirm" "mfa-code" errorValue
+        Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentConfirmFailure "mfa-code" errorValue
 
-interpretMfaFailure :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> Text -> Text -> MfaEnrollmentError -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-interpretMfaFailure actionRequest path accountId operation focusId errorValue =
+interpretMfaFailure :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> FailureCode -> Text -> MfaEnrollmentError -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretMfaFailure actionRequest path accountId failureCodeValue focusId errorValue =
   let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
-   in case mfaEnrollmentFailureDiagnostics operation errorValue of
+   in case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
         Nothing -> pure (response 422)
         Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response 503, appFailureDiagnostics = diagnostics}
 
-mfaEnrollmentFailureDiagnostics :: Text -> MfaEnrollmentError -> Maybe FailureDiagnostics
-mfaEnrollmentFailureDiagnostics operation errorValue =
+mfaEnrollmentFailureDiagnostics :: FailureCode -> MfaEnrollmentError -> Maybe FailureDiagnostics
+mfaEnrollmentFailureDiagnostics failureCodeValue errorValue =
   case errorValue of
     MfaEnrollmentStoreError storeError -> Just (failureDiagnostics "MfaStoreError" (mfaStoreErrorMessage storeError))
     MfaEnrollmentCorruptSecret -> Just (failureDiagnostics "CorruptTotpEnrollment" "stored TOTP secret could not be decoded")
@@ -268,7 +269,7 @@ mfaEnrollmentFailureDiagnostics operation errorValue =
     MfaEnrollmentEncryptionFailed -> Just (failureDiagnostics "TotpEncryptionError" "TOTP secret encryption failed")
     _ -> Nothing
   where
-    failureDiagnostics = buildFailureDiagnostics ("account.mfa." <> operation)
+    failureDiagnostics = buildFailureDiagnostics failureCodeValue
 
 handleLoginSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> LoginSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 handleLoginSubmission actionRequest submission =
@@ -309,9 +310,9 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
         PasswordMfaLoginEmailVerificationRequired _ -> pure (response 403 (localized actionRequest "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True Nothing [])
         PasswordMfaLoginEnrollmentRequired _ -> pure (response 403 (localized actionRequest "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True Nothing [])
         PasswordMfaLoginRejected -> pure (response 422 (localized actionRequest "Sign-in was rejected." "El inicio de sesion fue rechazado.") True (Just "login-code") [])
-        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) "account.login.credential-store" "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
-        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) "account.login.mfa-store" "MfaStoreError" (mfaStoreErrorMessage storeError)
-        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) "account.login.corrupt-enrollment" "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
+        PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
+        PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
+        PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
 
 issueLoginSession :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
@@ -320,7 +321,7 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   let path = accountRoutePath actionRequest LoginRoute
       form message = LoginForm emailValue (Just message)
   case issuedSession of
-    Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) "account.login.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+    Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
 
 handleLogout :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
@@ -332,7 +333,7 @@ handleLogout actionRequest =
           workflow <- accountWorkflow
           invalidated <- liftAppIO (invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken)
           case invalidated of
-            Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) "account.logout.session" "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
+            Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
             Right _ -> pure (logoutResponse (actionLocale actionRequest) path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
 
 handleProfileSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> ProfileSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
@@ -341,7 +342,7 @@ handleProfileSubmission actionRequest submission = do
   now <- liftAppIO (accountWorkflowClock workflow)
   loadedProfile <- liftAppIO (loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now (requestSessionId (HarchWeb.clientActionContext actionRequest)))
   case loadedProfile of
-    Left loadError -> throwClientActionFailure (profileResponse actionRequest 503 (PendingProfileForm Text.empty (Just (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.")) True (resendLabel actionRequest))) "account.profile.load" (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
+    Left loadError -> throwClientActionFailure (profileResponse actionRequest 503 (PendingProfileForm Text.empty (Just (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.")) True (resendLabel actionRequest))) ProfileLoadFailure (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
     Right ProfileUnauthenticated -> pure (profileResponse actionRequest 403 (PendingProfileForm Text.empty (Just (localized actionRequest "Sign in before requesting another verification email." "Inicia sesion antes de solicitar otro correo de verificacion.")) True (resendLabel actionRequest)))
     Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest 409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest "Your email address is already verified." "Tu direccion de correo ya esta verificada.")) True (resendLabel actionRequest)))
     Right (ProfilePending profile) -> handlePendingProfile actionRequest submission workflow now profile
@@ -369,9 +370,9 @@ interpretProfileResendResult actionRequest profile resendResult =
    in case resendResult of
         Right () -> pure (profileResponse actionRequest 202 (form (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False))
         Left ResendVerificationNoLongerPending -> pure (profileResponse actionRequest 409 (form (localized actionRequest "Your profile state changed. Reload the page before trying again." "El estado de tu perfil ha cambiado. Recarga la pagina antes de intentarlo de nuevo.") True))
-        Left (ResendVerificationDeliveryFailed detail) -> throwClientActionFailure (profileResponse actionRequest 502 (form (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True)) "account.profile.resend.delivery" "EmailDeliveryError" detail
-        Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) "account.profile.resend.store" "AccountStoreError" (accountStoreErrorDetail storeError)
-        Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) "account.profile.resend.clock" "ClockOverflow" "verification expiry overflowed"
+        Left (ResendVerificationDeliveryFailed detail) -> throwClientActionFailure (profileResponse actionRequest 502 (form (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True)) ProfileResendDeliveryFailure "EmailDeliveryError" detail
+        Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) ProfileResendStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+        Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest 503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) ProfileResendClockFailure "ClockOverflow" "verification expiry overflowed"
 
 loginProof :: LoginSubmission -> Maybe MfaLoginProof
 loginProof submission =

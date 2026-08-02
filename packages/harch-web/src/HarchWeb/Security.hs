@@ -3,6 +3,7 @@
 
 module HarchWeb.Security
   ( CorsPolicyConfig (..),
+    RequestContextField (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
     StrictTransportSecurityConfig (..),
@@ -15,6 +16,7 @@ module HarchWeb.Security
     externalRequestPath,
     httpsRedirectResponse,
     requestContextObservabilityAttributes,
+    requestContextFields,
     requestHostWithoutPort,
     requestLogContextFields,
     requestPathPrefix,
@@ -59,6 +61,15 @@ data CorsPolicyConfig = CorsPolicyConfig
     corsAllowedMethods :: [Text],
     corsAllowedHeaders :: [Text],
     corsMaxAgeSeconds :: Maybe Int
+  }
+  deriving (Eq, Show)
+
+-- | A request-derived value retained in private traces and structured logs.
+-- These fields may contain personal or high-cardinality data, so metric
+-- projection is intentionally handled elsewhere.
+data RequestContextField = RequestContextField
+  { requestContextFieldName :: Text,
+    requestContextFieldValue :: Text
   }
   deriving (Eq, Show)
 
@@ -311,37 +322,39 @@ strictTransportSecurityHeaderValue config =
 
 requestContextObservabilityAttributes :: RequestPolicyConfig -> Wai.Request -> [Observability.ObservabilityAttribute]
 requestContextObservabilityAttributes requestPolicyConfig request =
-  [ textObservabilityAttribute "client.address" (effectiveClientAddress requestPolicyConfig request),
-    textObservabilityAttribute "network.peer.address" (peerAddressText request)
-  ]
-    ++ maybe [] (pure . textObservabilityAttribute "harch.client.address.source") (effectiveClientAddressSource requestPolicyConfig request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.x_forwarded_for") (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.forwarded") (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.x_forwarded_proto") (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.x_forwarded_prefix") (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
-    ++ maybe [] (pure . textObservabilityAttribute "user_agent.original") (requestHeaderText "User-Agent" request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.referer") (sanitizedReferer request)
-    ++ maybe [] (pure . textObservabilityAttribute "http.request.header.x_requested_with") (requestHeaderText "X-Requested-With" request)
-    ++ maybe [] (pure . textObservabilityAttribute "harch.request.source") (requestSource request)
+  map
+    requestContextFieldObservabilityAttribute
+    (filter ((/= "url.scheme") . requestContextFieldName) (requestContextFields requestPolicyConfig request))
 
 requestLogContextFields :: RequestPolicyConfig -> Wai.Request -> [Text]
 requestLogContextFields requestPolicyConfig request =
-  [ renderRequestLogField "client.address" (effectiveClientAddress requestPolicyConfig request),
-    renderRequestLogField "network.peer.address" (peerAddressText request)
-  ]
-    ++ optionalRequestLogField "harch.client.address.source" (effectiveClientAddressSource requestPolicyConfig request)
-    ++ optionalRequestLogField "http.request.header.x_forwarded_for" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
-    ++ optionalRequestLogField "http.request.header.forwarded" (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
-    ++ optionalRequestLogField "http.request.header.x_forwarded_proto" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
-    ++ optionalRequestLogField "http.request.header.x_forwarded_prefix" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
-    ++ optionalRequestLogField "user_agent.original" (requestHeaderText "User-Agent" request)
-    ++ optionalRequestLogField "http.request.header.referer" (sanitizedReferer request)
-    ++ optionalRequestLogField "http.request.header.x_requested_with" (requestHeaderText "X-Requested-With" request)
-    ++ optionalRequestLogField "harch.request.source" (requestSource request)
-    ++ [renderRequestLogField "url.scheme" (requestScheme requestPolicyConfig request)]
+  map requestContextFieldLogField (requestContextFields requestPolicyConfig request)
 
-optionalRequestLogField :: Text -> Maybe Text -> [Text]
-optionalRequestLogField fieldName = maybe [] (pure . renderRequestLogField fieldName)
+requestContextFields :: RequestPolicyConfig -> Wai.Request -> [RequestContextField]
+requestContextFields requestPolicyConfig request =
+  requiredField "client.address" (effectiveClientAddress requestPolicyConfig request)
+    : requiredField "network.peer.address" (peerAddressText request)
+    : optionalField "harch.client.address.source" (effectiveClientAddressSource requestPolicyConfig request)
+    ++ optionalField "http.request.header.x_forwarded_for" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-For" request)
+    ++ optionalField "http.request.header.forwarded" (trustedRequestHeaderText requestPolicyConfig "Forwarded" request)
+    ++ optionalField "http.request.header.x_forwarded_proto" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Proto" request)
+    ++ optionalField "http.request.header.x_forwarded_prefix" (trustedRequestHeaderText requestPolicyConfig "X-Forwarded-Prefix" request)
+    ++ optionalField "user_agent.original" (requestHeaderText "User-Agent" request)
+    ++ optionalField "http.request.header.referer" (sanitizedReferer request)
+    ++ optionalField "http.request.header.x_requested_with" (requestHeaderText "X-Requested-With" request)
+    ++ optionalField "harch.request.source" (requestSource request)
+    ++ [requiredField "url.scheme" (requestScheme requestPolicyConfig request)]
+  where
+    requiredField = RequestContextField
+    optionalField name = maybe [] (pure . RequestContextField name)
+
+requestContextFieldObservabilityAttribute :: RequestContextField -> Observability.ObservabilityAttribute
+requestContextFieldObservabilityAttribute field =
+  textObservabilityAttribute (requestContextFieldName field) (requestContextFieldValue field)
+
+requestContextFieldLogField :: RequestContextField -> Text
+requestContextFieldLogField field =
+  renderRequestLogField (requestContextFieldName field) (requestContextFieldValue field)
 
 requestScheme :: RequestPolicyConfig -> Wai.Request -> Text
 requestScheme requestPolicyConfig request =

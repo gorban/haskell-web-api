@@ -46,8 +46,10 @@ import WebApi.AppEffect
     AppFailure (..),
     AppM,
     AppServices (..),
+    FailureCode,
     FailureDiagnostics (..),
     askAppServices,
+    renderFailureCode,
     throwAppFailure,
   )
 import WebApi.Login (AccountCredentialStoreError (..))
@@ -116,7 +118,7 @@ mfaErrorMessage actionRequest errorValue =
     MfaEnrollmentConfirmationRejected -> localized actionRequest "That enrollment can no longer be confirmed." "Ese registro ya no se puede confirmar."
     _ -> localized actionRequest "Authenticator enrollment is temporarily unavailable." "El registro del autenticador no esta disponible temporalmente."
 
-throwClientActionFailure :: HarchWeb.ClientActionResponse -> Text -> Text -> Text -> AppM HarchWeb.ClientActionResponse value
+throwClientActionFailure :: HarchWeb.ClientActionResponse -> FailureCode -> Text -> Text -> AppM HarchWeb.ClientActionResponse value
 throwClientActionFailure publicResponse code typeName detail =
   throwAppFailure
     AppFailure
@@ -124,12 +126,12 @@ throwClientActionFailure publicResponse code typeName detail =
         appFailureDiagnostics = buildFailureDiagnostics code typeName detail
       }
 
-buildFailureDiagnostics :: Text -> Text -> Text -> FailureDiagnostics
+buildFailureDiagnostics :: FailureCode -> Text -> Text -> FailureDiagnostics
 buildFailureDiagnostics code typeName detail =
   FailureDiagnostics
     { failureCode = code,
       failureType = typeName,
-      failureLogEntries = ["ERROR [" <> code <> "] " <> detail]
+      failureLogEntries = ["ERROR [" <> renderFailureCode code <> "] " <> detail]
     }
 
 attachClientActionFailure :: AppFailure HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
@@ -140,7 +142,7 @@ attachClientActionFailure failure =
         { HarchWeb.clientActionObservabilityAttributes =
             HarchWeb.clientActionObservabilityAttributes publicResponse
               <> [ Observability.ObservabilityAttribute "error.type" (Observability.TextAttribute (failureType diagnostics)),
-                   Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute (failureCode diagnostics))
+                   Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute (renderFailureCode (failureCode diagnostics)))
                  ],
           HarchWeb.clientActionLogEntries = HarchWeb.clientActionLogEntries publicResponse <> failureLogEntries diagnostics
         }
