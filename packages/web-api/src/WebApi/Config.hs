@@ -383,7 +383,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedSmtpPassword <- requiredConfigValue "SMTP_PASSWORD"
   parsedPublicBaseUrl <- requiredConfigValue "PUBLIC_BASE_URL"
   parsedTotpEncryptionKey <- parseTotpEncryptionKey =<< requiredConfigValue "TOTP_ENCRYPTION_KEY"
-  validateProductionTotpEncryptionKey parsedMode parsedTotpEncryptionKey
+  () <- validateProductionTotpEncryptionKey parsedMode parsedTotpEncryptionKey
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
