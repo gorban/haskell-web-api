@@ -108,9 +108,8 @@ maximumValue = maxBound
 
 productionTotpEncryptionKey :: Secret.SecretEncryptionKey
 productionTotpEncryptionKey =
-  maybe
+  fromMaybe
     (error "expected a valid production TOTP encryption key fixture")
-    id
     (Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
 {-# NOINLINE productionTotpEncryptionKey #-}
 
