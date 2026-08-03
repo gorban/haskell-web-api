@@ -6766,6 +6766,13 @@ spec = do
       HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
       SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
+      RegistrationPage "/register" emptyRegistrationForm `shouldNotBe` HomePage homePageModel
+      EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
+      MfaEnrollmentPage "/mfa" (MfaEnrollmentForm Text.empty Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
+      LoginPage "/login" (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
+      LogoutPage "/logout" `shouldNotBe` HomePage homePageModel
+      ProfilePage (UnavailableProfilePage "Profile" "Unavailable" callToAction) `shouldNotBe` HomePage homePageModel
+      NotFoundPage notFoundPageModel `shouldNotBe` HomePage homePageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
       Page WebApi.Route.HomePage `shouldNotBe` Api WebApi.Route.StatusApi
       HomeRoute `shouldNotBe` SecondRoute

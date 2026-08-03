@@ -95,6 +95,9 @@ library
     WebApi.SetupPlan
 
   other-modules:
+    WebApi.Page.Building
+    WebApi.Page.Model
+    WebApi.Page.Rendering
     WebApi.Postgres.AccountRepository
     WebApi.Postgres.MfaRepository
     WebApi.Postgres.Migration

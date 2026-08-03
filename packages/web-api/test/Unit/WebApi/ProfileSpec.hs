@@ -172,7 +172,9 @@ spec =
           signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
           signedOutModel = SignedOutProfilePage "Profile" "Sign in to view and manage your profile." signInAction registrationAction
           pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing "/profile" "Resend verification email" signOutAction
+          pendingModelWithIdentity = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" (Just "pending-person") (Just "Pending Person") "/profile" "Resend verification email" signOutAction
           authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
+          authenticatedModelWithIdentity = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" (Just "authenticated-person") (Just "Authenticated Person") signOutAction
           unavailableModel = UnavailableProfilePage "Profile" "Your profile is temporarily unavailable." signInAction
           models =
             [ (signedOutModel, "SignedOutProfilePage"),
@@ -184,7 +186,13 @@ spec =
       mapM_ assertProfilePageModelShow models
       expectAll
         ( (ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False)
-            :| [ equalValues
+            :| [ equalValues pendingModel pendingModelWithIdentity
+                   `shouldBe` True,
+                 equalValues authenticatedModel authenticatedModelWithIdentity
+                   `shouldBe` True,
+                 notEqualValues pendingModel authenticatedModel
+                   `shouldBe` True,
+                 equalValues
                    (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
                    (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
                    `shouldBe` True,
@@ -217,6 +225,10 @@ assertProfileResult action matches = do
 equalValues :: (Eq value) => value -> value -> Bool
 equalValues = (==)
 {-# NOINLINE equalValues #-}
+
+notEqualValues :: (Eq value) => value -> value -> Bool
+notEqualValues = (/=)
+{-# NOINLINE notEqualValues #-}
 
 profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.Response AppRoute WebApi.Route.AppRequestContext)
 profileResponse workflow requestContext =
