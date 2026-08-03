@@ -4,11 +4,14 @@ module App.Routes
   ( ApiRoute (..),
     CustomRoute (..),
     PreviewSlug,
+    TwoPageAction (..),
+    TwoPageActionTarget (..),
     TwoPageRoute (..),
     mkPreviewSlug,
     previewSlugText,
     routeCodec,
     routeHref,
+    twoPageActionPath,
   )
 where
 
@@ -28,6 +31,11 @@ import HarchWeb
 data ApiRoute
   = LiveDataEvents
   deriving (Eq, Show)
+
+data TwoPageActionTarget
+  = Subscribe
+
+newtype TwoPageAction = SubscribeAction Text
 
 newtype PreviewSlug = PreviewSlug Text
   deriving (Eq, Show)
@@ -76,6 +84,11 @@ routeHref route =
     Page page -> pageRoutePath page
     Api LiveDataEvents -> "/live-data/events"
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
+
+twoPageActionPath :: TwoPageActionTarget -> Text
+twoPageActionPath actionTarget =
+  case actionTarget of
+    Subscribe -> "/actions/subscribe"
 
 mkPreviewSlug :: Text -> Maybe PreviewSlug
 mkPreviewSlug value =

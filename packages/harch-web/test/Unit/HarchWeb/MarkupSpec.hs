@@ -46,6 +46,21 @@ literalChildrenRejected :: Bool
 literalChildrenRejected =
   $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" children=\"not-a-list\" />")
 
+newtype ControlRoute = ControlRoute Text.Text
+
+newtype ControlContext = ControlContext Text.Text
+
+controlRouteCodec :: RouteCodec ControlRoute ControlContext
+controlRouteCodec =
+  RouteCodec
+    { parseRoute = \context path ->
+        if path == "/control"
+          then Just RouteRequest {requestRoute = ControlRoute "control", requestContext = context}
+          else Nothing,
+      renderRoute = \RouteRequest {requestRoute = ControlRoute target, requestContext = ControlContext prefix} -> prefix <> target,
+      notFoundRequest = \context -> RouteRequest {requestRoute = ControlRoute "control", requestContext = context}
+    }
+
 spec :: Spec
 spec = do
   describe "HTML markup" $ do
@@ -102,6 +117,18 @@ spec = do
         `shouldBe` "<section data-hero-card=\"true\"><h2>Second page</h2><p>Computed child</p></section>"
       renderHtml legacyProfileCardQuoted `shouldBe` "<p data-profile-card=\"true\">Legacy</p>"
       renderHtml avatarQuoted `shouldBe` "<p data-user-avatar=\"small\">Ada</p>"
+
+    it "lowers typed control component properties and renders framework-owned control attributes" $ do
+      let quotedActionForm =
+            [harch|
+              <Account.TypedActionForm action="/actions/subscribe" aria-label="Subscription">
+                <button type="submit">Subscribe</button>
+              </Account.TypedActionForm>
+            |]
+          renderedLink = renderHtml (pageLink controlRouteCodec (ControlContext "/") (ControlRoute "control") [] [text "Continue"])
+      renderHtml quotedActionForm
+        `shouldBe` "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"><button type=\"submit\">Subscribe</button></form>"
+      renderedLink `shouldBe` "<a href=\"/control\" data-page-link=\"true\">Continue</a>"
 
     it "rejects invalid named properties, positional props, and child forms while lowering" $
       expectAll

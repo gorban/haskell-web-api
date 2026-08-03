@@ -8,6 +8,10 @@ module App.Pages.Home
   )
 where
 
+import App.Components.Controls
+  ( actionForm,
+    pageLink,
+  )
 import App.Components.ExampleAuthor
   ( AuthorIdentity (..),
     AvatarSize (..),
@@ -18,7 +22,10 @@ import App.Components.SubscriptionEmailField
   ( subscriptionEmailField,
   )
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (TwoPageRoute)
+import App.Routes
+  ( TwoPageActionTarget (Subscribe),
+    TwoPageRoute,
+  )
 import App.Routes qualified as Routes
 import Data.Text (Text)
 import HarchWeb
@@ -26,24 +33,17 @@ import HarchWeb
     Page (..),
     Region,
     RouteRequest (..),
-    anchorTag,
-    ariaLabel,
     buttonTag,
     className,
     cssScope,
     dataAttribute,
-    dataFlag,
     element,
-    formAction,
-    formTag,
     fragment,
     harch,
     headingOneTag,
     headingTwoTag,
-    href,
     inputType,
     literalElementId,
-    method,
     mkRegionId,
     name,
     paragraphTag,
@@ -81,9 +81,9 @@ homePage routeRequest =
 
                   <p>This page is fully server-rendered on direct load and reload.</p>
 
-                  <p><a href={Routes.routeHref (Routes.Page SecondPage)} data-page-link="true">Go to the second page</a></p>
+                  <p><PageLink to={Routes.Page SecondPage}>Go to the second page</PageLink></p>
 
-                  <p><a href={Routes.routeHref (Routes.Page LiveDataPage)} data-page-link="true">See live updates</a></p>
+                  <p><PageLink to={Routes.Page LiveDataPage}>See live updates</PageLink></p>
 
                   <section data-page-example="about">
                     <h2>About this example</h2>
@@ -95,10 +95,10 @@ homePage routeRequest =
                     </AuthorAvatar>
                   </section>
 
-                  <form aria-label="Subscription" data-harch-control data-harch-action="true" action="/actions/subscribe" method="post">
+                  <ActionForm action={Subscribe} aria-label="Subscription">
                     <SubscriptionEmailField />
                     <button name="intent" value="subscribe" type="submit">Subscribe</button>
-                  </form>
+                  </ActionForm>
 
                   <Region value={subscriptionResultRegion "status" ""} />
                 </section>

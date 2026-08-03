@@ -13,8 +13,15 @@ import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Generated (pageRouteDefinition)
 import App.Pages.Home (subscriptionResultRegion)
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageRoute (..), routeCodec)
-import Data.Maybe (fromMaybe)
+import App.Routes
+  ( ApiRoute (..),
+    CustomRoute (..),
+    TwoPageAction (..),
+    TwoPageActionTarget (..),
+    TwoPageRoute (..),
+    routeCodec,
+    twoPageActionPath,
+  )
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
@@ -81,14 +88,19 @@ liveDataEventsRouteDefinition =
         pure (eventStreamResponse eventSource)
     }
 
-newtype TwoPageAction = SubscribeAction Text.Text
-
 decodeTwoPageAction :: ClientActionPayload () -> Maybe TwoPageAction
 decodeTwoPageAction actionPayload
   | clientActionMethod actionPayload == "POST",
-    clientActionPath actionPayload == "/actions/subscribe" =
-      Just (SubscribeAction (fromMaybe Text.empty (lookup "email" (clientActionFields actionPayload))))
+    clientActionPath actionPayload == twoPageActionPath Subscribe =
+      SubscribeAction <$> exactlyOneField "email" (clientActionFields actionPayload)
   | otherwise = Nothing
+
+exactlyOneField :: Text.Text -> [(Text.Text, Text.Text)] -> Maybe Text.Text
+exactlyOneField fieldName fields =
+  case [fieldValue | (name, fieldValue) <- fields, name == fieldName] of
+    [] -> Just Text.empty
+    [fieldValue] -> Just fieldValue
+    _ -> Nothing
 
 twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe ClientActionResponse)
 twoPageClientAction actionRequest =

@@ -126,14 +126,20 @@ lowerNamedComponentProperty :: MarkupAttribute -> Q (String, (Position, Exp))
 lowerNamedComponentProperty attribute =
   case attribute of
     LiteralAttribute position attributeName literal ->
-      pure (attributeName, (position, textLiteral literal))
+      pure (componentPropertyName attributeName, (position, textLiteral literal))
     ExpressionAttribute position attributeName expressionSource -> do
       expression <- parseExpression position expressionSource
-      pure (attributeName, (position, expression))
+      pure (componentPropertyName attributeName, (position, expression))
     FlagAttribute position attributeName ->
       failAt
         position
-        ("component property " <> attributeName <> " requires a quoted literal or {...} expression")
+        ("component property " <> componentPropertyName attributeName <> " requires a quoted literal or {...} expression")
+
+componentPropertyName :: String -> String
+componentPropertyName attributeName =
+  case attributeName of
+    "aria-label" -> "ariaLabel"
+    _ -> attributeName
 
 lowerPositionalComponentProperties :: MarkupAttribute -> Q ComponentProperties
 lowerPositionalComponentProperties attribute =

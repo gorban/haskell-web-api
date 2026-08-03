@@ -39,6 +39,7 @@ library
   ghc-options: -Wno-missing-home-modules
   exposed-modules:
     App.App
+    App.Components.Controls
     App.Components.ExampleAuthor
     App.Components.Layout
     App.Components.SubscriptionEmailField
