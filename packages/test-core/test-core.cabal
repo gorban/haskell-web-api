@@ -76,6 +76,14 @@ library
     TestCore.Prelude
     TestCore.SpecPreprocessor
 
+  other-modules:
+    TestCore.Browser.Config
+    TestCore.Browser.Model
+    TestCore.Browser.Model.Internal
+    TestCore.Browser.Protocol
+    TestCore.Browser.Scenario
+    TestCore.Browser.Types
+
   -- LANGUAGE extensions used by modules in this package.
   -- other-extensions:
   -- Other library packages from which modules are imported.
