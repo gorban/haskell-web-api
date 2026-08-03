@@ -1,12 +1,23 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module App.Routes
-  ( TwoPageRoute (..),
+  ( ApiRoute (..),
+    CustomRoute (..),
+    PreviewSlug,
+    TwoPageRoute (..),
+    mkPreviewSlug,
+    previewSlugText,
     routeCodec,
     routeHref,
   )
 where
 
+import App.Pages.Route.Generated
+  ( PageRoute (..),
+    pageRoutePath,
+    parsePageRoute,
+  )
+import Data.Char (isAsciiLower, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
@@ -14,64 +25,73 @@ import HarchWeb
     RouteRequest (..),
   )
 
+data ApiRoute
+  = LiveDataEvents
+  deriving (Eq, Show)
+
+newtype PreviewSlug = PreviewSlug Text
+  deriving (Eq, Show)
+
+newtype CustomRoute
+  = PreviewPage PreviewSlug
+  deriving (Eq, Show)
+
 data TwoPageRoute
-  = HomeRoute
-  | SecondRoute
-  | LiveDataRoute
-  | LiveDataEventsRoute
-  | NotFoundRoute
-
-instance Eq TwoPageRoute where
-  HomeRoute == HomeRoute = True
-  SecondRoute == SecondRoute = True
-  LiveDataRoute == LiveDataRoute = True
-  LiveDataEventsRoute == LiveDataEventsRoute = True
-  NotFoundRoute == NotFoundRoute = True
-  _ == _ = False
-
-  left /= right = not (left == right)
-
-instance Show TwoPageRoute where
-  showsPrec _ route =
-    showString $
-      case route of
-        HomeRoute -> "HomeRoute"
-        SecondRoute -> "SecondRoute"
-        LiveDataRoute -> "LiveDataRoute"
-        LiveDataEventsRoute -> "LiveDataEventsRoute"
-        NotFoundRoute -> "NotFoundRoute"
-
-  showList routes =
-    showChar '[' . renderRoutes routes
-    where
-      renderRoutes remainingRoutes =
-        case remainingRoutes of
-          [] -> showChar ']'
-          [route] -> shows route . showChar ']'
-          route : nextRoutes -> shows route . showString ", " . renderRoutes nextRoutes
+  = Page PageRoute
+  | Api ApiRoute
+  | Custom CustomRoute
+  deriving (Eq, Show)
 
 routeCodec :: RouteCodec TwoPageRoute ()
 routeCodec =
   RouteCodec
     { parseRoute = \() path ->
-        case routePath path of
-          "/" -> Just RouteRequest {requestRoute = HomeRoute, requestContext = ()}
-          "/second" -> Just RouteRequest {requestRoute = SecondRoute, requestContext = ()}
-          "/live-data" -> Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()}
-          "/live-data/events" -> Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()}
-          _ -> Nothing,
+        let normalizedPath = routePath path
+         in case normalizedPath of
+              "/live-data/events" ->
+                Just
+                  RouteRequest
+                    { requestRoute = Api LiveDataEvents,
+                      requestContext = ()
+                    }
+              _ ->
+                case parsePreviewPath normalizedPath of
+                  Just previewSlug ->
+                    Just
+                      RouteRequest
+                        { requestRoute = Custom (PreviewPage previewSlug),
+                          requestContext = ()
+                        }
+                  Nothing ->
+                    (\page -> RouteRequest {requestRoute = Page page, requestContext = ()})
+                      <$> parsePageRoute normalizedPath,
       renderRoute = routeHref . requestRoute,
-      notFoundRequest = \() -> RouteRequest {requestRoute = NotFoundRoute, requestContext = ()}
+      notFoundRequest = \() ->
+        RouteRequest {requestRoute = Page PageNotFound, requestContext = ()}
     }
 
 routeHref :: TwoPageRoute -> Text
 routeHref route =
   case route of
-    HomeRoute -> "/"
-    SecondRoute -> "/second"
-    LiveDataRoute -> "/live-data"
-    LiveDataEventsRoute -> "/live-data/events"
-    NotFoundRoute -> "/404"
+    Page page -> pageRoutePath page
+    Api LiveDataEvents -> "/live-data/events"
+    Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
+
+mkPreviewSlug :: Text -> Maybe PreviewSlug
+mkPreviewSlug value =
+  if not (Text.null value) && Text.all validSlugCharacter value
+    then Just (PreviewSlug value)
+    else Nothing
+  where
+    validSlugCharacter character =
+      isAsciiLower character || isDigit character || character == '-'
+
+previewSlugText :: PreviewSlug -> Text
+previewSlugText (PreviewSlug value) = value
+
+parsePreviewPath :: Text -> Maybe PreviewSlug
+parsePreviewPath path =
+  Text.stripPrefix "/preview/" path >>= mkPreviewSlug
 
 routePath :: Text -> Text
 routePath =

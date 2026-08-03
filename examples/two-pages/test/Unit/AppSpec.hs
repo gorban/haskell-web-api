@@ -3,7 +3,13 @@
 module Unit.AppSpec (spec) where
 
 import App.App (buildApplication, twoPageServerConfig, twoPageSite)
-import App.Routes (TwoPageRoute (..), routeHref)
+import App.Pages.Route.Generated
+  ( PageRoute (..),
+    allPageRoutes,
+    pageRoutePath,
+    parsePageRoute,
+  )
+import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageRoute (..), mkPreviewSlug, routeHref)
 import App.Routes qualified as ExampleRoutes
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -43,9 +49,11 @@ import HarchWeb
   )
 import HarchWeb qualified
 import HarchWeb.Site
-  ( siteName,
+  ( routeNavigationLabel,
+    siteName,
+    siteNavigationRoutes,
     siteRequestPolicy,
-    siteRoutes,
+    siteRouteDefinition,
     siteStaticAssets,
   )
 import Network.HTTP.Types qualified as Http
@@ -59,9 +67,19 @@ spec =
   describe "Unit.App" $ do
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
+        exerciseGeneratedPageRouteInstances
         expectAll
           ( (siteName twoPageSite `shouldBe` "two-pages-example")
-              :| [ length (siteRoutes twoPageSite) `shouldBe` 5,
+              :| [ siteNavigationRoutes twoPageSite
+                     `shouldBe` [Page HomePage, Page SecondPage, Page LiveDataPage],
+                   allPageRoutes
+                     `shouldBe` [HomePage, LiveDataPage, PageNotFound, SecondPage],
+                   map showViaDictionary allPageRoutes
+                     `shouldBe` ["HomePage", "LiveDataPage", "PageNotFound", "SecondPage"],
+                   routeNavigationLabel (siteRouteDefinition twoPageSite (Page PageNotFound))
+                     `shouldBe` Nothing,
+                   routeNavigationLabel (siteRouteDefinition twoPageSite (Api LiveDataEvents))
+                     `shouldBe` Nothing,
                    staticAssetRoots (siteStaticAssets twoPageSite)
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
                    staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes,
@@ -104,41 +122,78 @@ spec =
 
     describe "routeCodec" $
       it "parses and renders the supported two-page routes" $ do
+        let previewSlug =
+              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
         expectAll
-          ( (eqViaDictionary HomeRoute HomeRoute `shouldBe` True)
-              :| [ eqViaDictionary HomeRoute SecondRoute `shouldBe` False,
-                   eqViaDictionary LiveDataRoute LiveDataEventsRoute `shouldBe` False,
-                   neqViaDictionary HomeRoute SecondRoute `shouldBe` True,
-                   showViaDictionary HomeRoute `shouldBe` "HomeRoute",
-                   showViaDictionary SecondRoute `shouldBe` "SecondRoute",
-                   showViaDictionary LiveDataRoute `shouldBe` "LiveDataRoute",
-                   showViaDictionary LiveDataEventsRoute `shouldBe` "LiveDataEventsRoute",
-                   showViaDictionary NotFoundRoute `shouldBe` "NotFoundRoute",
-                   showsPrecViaDictionary 0 HomeRoute "" `shouldBe` "HomeRoute",
+          ( (eqViaDictionary (Page HomePage) (Page HomePage) `shouldBe` True)
+              :| [ eqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` False,
+                   eqViaDictionary (Page LiveDataPage) (Api LiveDataEvents) `shouldBe` False,
+                   neqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` True,
+                   showViaDictionary (Page HomePage) `shouldBe` "Page HomePage",
+                   showViaDictionary (Page SecondPage) `shouldBe` "Page SecondPage",
+                   showViaDictionary (Page LiveDataPage) `shouldBe` "Page LiveDataPage",
+                   showViaDictionary (Api LiveDataEvents) `shouldBe` "Api LiveDataEvents",
+                   eqViaDictionary LiveDataEvents LiveDataEvents `shouldBe` True,
+                   neqViaDictionary LiveDataEvents LiveDataEvents `shouldBe` False,
+                   showViaDictionary LiveDataEvents `shouldBe` "LiveDataEvents",
+                   showsPrecViaDictionary 11 LiveDataEvents "" `shouldSatisfy` not . null,
+                   showListViaDictionary [LiveDataEvents] "" `shouldSatisfy` not . null,
+                   eqViaDictionary previewSlug previewSlug `shouldBe` True,
+                   neqViaDictionary previewSlug previewSlug `shouldBe` False,
+                   showViaDictionary previewSlug `shouldBe` "PreviewSlug \"summer-release\"",
+                   showsPrecViaDictionary 11 previewSlug "" `shouldSatisfy` not . null,
+                   showListViaDictionary [previewSlug] "" `shouldSatisfy` not . null,
+                   eqViaDictionary (PreviewPage previewSlug) (PreviewPage previewSlug) `shouldBe` True,
+                   neqViaDictionary (PreviewPage previewSlug) (PreviewPage previewSlug)
+                     `shouldBe` False,
+                   showViaDictionary (PreviewPage previewSlug)
+                     `shouldBe` "PreviewPage (PreviewSlug \"summer-release\")",
+                   showsPrecViaDictionary 11 (PreviewPage previewSlug) ""
+                     `shouldSatisfy` not . null,
+                   showListViaDictionary [PreviewPage previewSlug] ""
+                     `shouldSatisfy` not . null,
+                   showViaDictionary (Page PageNotFound) `shouldBe` "Page PageNotFound",
+                   showsPrecViaDictionary 0 (Page HomePage) "" `shouldBe` "Page HomePage",
                    showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
-                   showListViaDictionary [HomeRoute, SecondRoute, LiveDataRoute] "" `shouldBe` "[HomeRoute, SecondRoute, LiveDataRoute]",
-                   parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = HomeRoute, requestContext = ()},
-                   parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()},
-                   parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = SecondRoute, requestContext = ()},
-                   parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = LiveDataRoute, requestContext = ()},
-                   parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()},
+                   showListViaDictionary [Page HomePage, Page SecondPage, Page LiveDataPage] "" `shouldBe` "[Page HomePage,Page SecondPage,Page LiveDataPage]",
+                   parseRoute ExampleRoutes.routeCodec () "/" `shouldBe` Just RouteRequest {requestRoute = Page HomePage, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/second" `shouldBe` Just RouteRequest {requestRoute = Page SecondPage, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = Page SecondPage, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/preview/summer-release"
+                     `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()}) <$> mkPreviewSlug "summer-release",
+                   parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
                    parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
-                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = HomeRoute, requestContext = ()} `shouldBe` "/",
-                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = SecondRoute, requestContext = ()} `shouldBe` "/second",
-                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataRoute, requestContext = ()} `shouldBe` "/live-data",
-                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = LiveDataEventsRoute, requestContext = ()} `shouldBe` "/live-data/events",
-                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = NotFoundRoute, requestContext = ()} `shouldBe` "/404",
-                   routeHref HomeRoute `shouldBe` "/",
-                   routeHref SecondRoute `shouldBe` "/second",
-                   routeHref LiveDataRoute `shouldBe` "/live-data",
-                   routeHref LiveDataEventsRoute `shouldBe` "/live-data/events",
-                   routeHref NotFoundRoute `shouldBe` "/404",
-                   notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = NotFoundRoute, requestContext = ()},
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()} `shouldBe` "/live-data/events",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page PageNotFound, requestContext = ()} `shouldBe` "/404",
+                   routeHref (Page HomePage) `shouldBe` "/",
+                   routeHref (Page SecondPage) `shouldBe` "/second",
+                   routeHref (Page LiveDataPage) `shouldBe` "/live-data",
+                   routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
+                   routeHref (Page PageNotFound) `shouldBe` "/404",
+                   notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
+                   map (parsePageRoute . pageRoutePath) allPageRoutes
+                     `shouldBe` map Just allPageRoutes,
                    parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
                  ]
           )
 
     describe "buildApplication" $ do
+      it "totally dispatches every generated page to a complete SSR page" $ do
+        responses <-
+          traverse
+            ( \pageRoute ->
+                HarchWeb.renderResponse
+                  buildApplication
+                  RouteRequest {requestRoute = Page pageRoute, requestContext = ()}
+            )
+            allPageRoutes
+        responses `shouldSatisfy` all isCompletePageResponse
+
       it "renders the home page with shared navigation and the enhancement runtime" $ do
         let application = buildApplication
             authorComponents =
@@ -204,6 +259,34 @@ spec =
               :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8",
                    lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache",
                    responseBody `shouldBe` "event: update\nid: example-1\ndata: The live update arrived.\n\n"
+                 ]
+          )
+
+      it "renders an explicit typed dynamic route as complete SSR HTML" $ do
+        let previewSlug =
+              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
+            previewRoute = Custom (PreviewPage previewSlug)
+        response <-
+          performWaiRequest
+            (toWaiApplication buildApplication)
+            (waiRequest ["preview", "summer-release"])
+        responseBody <- readResponseBody response
+        renderedResponse <-
+          HarchWeb.renderResponse
+            buildApplication
+            RouteRequest {requestRoute = previewRoute, requestContext = ()}
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "<title>Preview: summer-release</title>" responseBody
+                     `shouldBe` True,
+                   Text.isInfixOf
+                     "<section data-page=\"preview\"><h1>Preview</h1>"
+                     responseBody
+                     `shouldBe` True,
+                   Text.isInfixOf "<p>summer-release</p>" responseBody `shouldBe` True,
+                   routeNavigationLabel (siteRouteDefinition twoPageSite previewRoute)
+                     `shouldBe` Nothing,
+                   renderedResponse `shouldSatisfy` hasPageRoute previewRoute
                  ]
           )
 
@@ -344,6 +427,13 @@ spec =
               }
         fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just 422
 
+isCompletePageResponse :: HarchWeb.Response TwoPageRoute () -> Bool
+isCompletePageResponse response =
+  case response of
+    HarchWeb.PageResponse page ->
+      not (Text.null (HarchWeb.renderHtml (HarchWeb.pageBody page)))
+    _ -> False
+
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =
   Wai.defaultRequest
@@ -398,6 +488,32 @@ decodeUtf8Response :: LazyByteString.ByteString -> Text.Text
 decodeUtf8Response =
   TextEncoding.decodeUtf8 . LazyByteString.toStrict
 
+hasPageRoute :: TwoPageRoute -> HarchWeb.Response TwoPageRoute () -> Bool
+hasPageRoute expectedRoute response =
+  case response of
+    HarchWeb.PageResponse page -> HarchWeb.pageRoute page == expectedRoute
+    _ -> False
+
+exerciseGeneratedPageRouteInstances :: Expectation
+exerciseGeneratedPageRouteInstances = do
+  let routes = [HomePage, LiveDataPage, PageNotFound, SecondPage]
+  (minimumViaDictionary :: PageRoute) `shouldBe` HomePage
+  (maximumViaDictionary :: PageRoute) `shouldBe` SecondPage
+  successorViaDictionary HomePage `shouldBe` LiveDataPage
+  predecessorViaDictionary SecondPage `shouldBe` PageNotFound
+  (toEnumViaDictionary 0 :: PageRoute) `shouldBe` HomePage
+  fromEnumViaDictionary HomePage `shouldBe` 0
+  enumFromViaDictionary HomePage `shouldBe` routes
+  enumFromThenViaDictionary HomePage LiveDataPage `shouldBe` routes
+  enumFromToViaDictionary HomePage SecondPage `shouldBe` routes
+  enumFromThenToViaDictionary HomePage LiveDataPage SecondPage `shouldBe` routes
+  eqViaDictionary HomePage HomePage `shouldBe` True
+  neqViaDictionary HomePage SecondPage `shouldBe` True
+  showViaDictionary HomePage `shouldBe` "HomePage"
+  showsPrecViaDictionary 11 HomePage "" `shouldBe` "HomePage"
+  showListViaDictionary routes ""
+    `shouldBe` "[HomePage,LiveDataPage,PageNotFound,SecondPage]"
+
 eqViaDictionary :: (Eq a) => a -> a -> Bool
 eqViaDictionary = (==)
 {-# NOINLINE eqViaDictionary #-}
@@ -417,3 +533,43 @@ showsPrecViaDictionary = showsPrec
 showListViaDictionary :: (Show a) => [a] -> ShowS
 showListViaDictionary = showList
 {-# NOINLINE showListViaDictionary #-}
+
+minimumViaDictionary :: (Bounded a) => a
+minimumViaDictionary = minBound
+{-# NOINLINE minimumViaDictionary #-}
+
+maximumViaDictionary :: (Bounded a) => a
+maximumViaDictionary = maxBound
+{-# NOINLINE maximumViaDictionary #-}
+
+successorViaDictionary :: (Enum a) => a -> a
+successorViaDictionary = succ
+{-# NOINLINE successorViaDictionary #-}
+
+predecessorViaDictionary :: (Enum a) => a -> a
+predecessorViaDictionary = pred
+{-# NOINLINE predecessorViaDictionary #-}
+
+toEnumViaDictionary :: (Enum a) => Int -> a
+toEnumViaDictionary = toEnum
+{-# NOINLINE toEnumViaDictionary #-}
+
+fromEnumViaDictionary :: (Enum a) => a -> Int
+fromEnumViaDictionary = fromEnum
+{-# NOINLINE fromEnumViaDictionary #-}
+
+enumFromViaDictionary :: (Enum a) => a -> [a]
+enumFromViaDictionary = enumFrom
+{-# NOINLINE enumFromViaDictionary #-}
+
+enumFromThenViaDictionary :: (Enum a) => a -> a -> [a]
+enumFromThenViaDictionary = enumFromThen
+{-# NOINLINE enumFromThenViaDictionary #-}
+
+enumFromToViaDictionary :: (Enum a) => a -> a -> [a]
+enumFromToViaDictionary = enumFromTo
+{-# NOINLINE enumFromToViaDictionary #-}
+
+enumFromThenToViaDictionary :: (Enum a) => a -> a -> a -> [a]
+enumFromThenToViaDictionary = enumFromThenTo
+{-# NOINLINE enumFromThenToViaDictionary #-}

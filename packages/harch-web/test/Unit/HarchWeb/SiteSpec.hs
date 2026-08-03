@@ -3,7 +3,6 @@
 
 module Unit.HarchWeb.SiteSpec (spec) where
 
-import Control.Exception (SomeException, displayException, try)
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -27,12 +26,12 @@ import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site
-  ( Site (..),
-    SiteRoute (..),
+  ( RouteDefinition (..),
+    Site (..),
     buildSiteApplication,
-    pageSiteRoute,
     simpleSite,
   )
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -107,7 +106,7 @@ spec = do
           Text.isInfixOf "<script nonce=\"test-nonce\">" (HarchWeb.renderDocumentWithNonce (HarchWeb.RuntimeNonce "test-nonce") document)
             `shouldBe` True
         PageResponseWithMetadata _ _ ->
-          expectationFailure "expected pageSiteRoute to render a plain page response"
+          expectationFailure "expected pageRoute to render a plain page response"
         BodyResponse _ ->
           expectationFailure "expected a page response for the home route"
         RedirectResponse _ _ ->
@@ -211,22 +210,6 @@ spec = do
       HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
         `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/app/assets/navigation.js"]
 
-    it "fails loudly when the matched not-found route has not been configured" $ do
-      let brokenSite =
-            sampleSite
-              { siteRoutes =
-                  [ homeSiteRoute,
-                    secondSiteRoute,
-                    apiSiteRoute
-                  ]
-              }
-      result <- try (performWaiRequest (toWaiApplication (buildSiteApplication brokenSite)) (waiRequest ["missing"])) :: IO (Either SomeException Wai.Response)
-      case result of
-        Left failure ->
-          displayException failure `shouldContain` "No site route configured for matched route: NotFoundRoute"
-        Right _ ->
-          expectationFailure "expected missing not-found route configuration to fail"
-
 sampleSite :: Site SampleRoute SampleContext
 sampleSite =
   simpleSite
@@ -234,15 +217,20 @@ sampleSite =
     (SampleContext "")
     sampleRouteCodec
     samplePageShell
-    [ homeSiteRoute,
-      secondSiteRoute,
-      apiSiteRoute,
-      notFoundSiteRoute
-    ]
+    [HomeRoute, SecondRoute]
+    sampleRouteDefinition
 
-homeSiteRoute :: SiteRoute SampleRoute SampleContext
-homeSiteRoute =
-  pageSiteRoute HomeRoute (Just "Home") $ \routeRequest ->
+sampleRouteDefinition :: SampleRoute -> RouteDefinition SampleRoute SampleContext
+sampleRouteDefinition route =
+  case route of
+    HomeRoute -> homeRouteDefinition
+    SecondRoute -> secondRouteDefinition
+    StatusApiRoute -> apiRouteDefinition
+    NotFoundRoute -> notFoundRouteDefinition
+
+homeRouteDefinition :: RouteDefinition SampleRoute SampleContext
+homeRouteDefinition =
+  Site.pageRoute (Just "Home") $ \routeRequest ->
     pure
       Page
         { pageTitle = "Home",
@@ -252,9 +240,9 @@ homeSiteRoute =
           pageBootstrapHooks = []
         }
 
-secondSiteRoute :: SiteRoute SampleRoute SampleContext
-secondSiteRoute =
-  pageSiteRoute SecondRoute (Just "Second") $ \routeRequest ->
+secondRouteDefinition :: RouteDefinition SampleRoute SampleContext
+secondRouteDefinition =
+  Site.pageRoute (Just "Second") $ \routeRequest ->
     pure
       Page
         { pageTitle = "Second",
@@ -264,12 +252,11 @@ secondSiteRoute =
           pageBootstrapHooks = ["second-page"]
         }
 
-apiSiteRoute :: SiteRoute SampleRoute SampleContext
-apiSiteRoute =
-  SiteRoute
-    { siteRouteValue = StatusApiRoute,
-      siteRouteNavigationLabel = Nothing,
-      siteRouteResponse =
+apiRouteDefinition :: RouteDefinition SampleRoute SampleContext
+apiRouteDefinition =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeResponse =
         \_ ->
           pure
             ( BodyResponse
@@ -283,9 +270,9 @@ apiSiteRoute =
             )
     }
 
-notFoundSiteRoute :: SiteRoute SampleRoute SampleContext
-notFoundSiteRoute =
-  pageSiteRoute NotFoundRoute Nothing $ \routeRequest ->
+notFoundRouteDefinition :: RouteDefinition SampleRoute SampleContext
+notFoundRouteDefinition =
+  Site.pageRoute Nothing $ \routeRequest ->
     pure
       Page
         { pageTitle = "Not Found",

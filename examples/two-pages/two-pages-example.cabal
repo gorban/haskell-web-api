@@ -13,15 +13,22 @@ author: David Bruck
 maintainer: 1393236+gorban@users.noreply.github.com
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Hooks
 extra-doc-files:
   README.md
+
+extra-source-files:
+  src/App/Pages/**/*.hs
+  src/App/Pages/*.hs
 
 custom-setup
   setup-depends:
     base ^>=4.22.0.0,
-    Cabal,
+    Cabal-hooks ==3.16.*,
+    core,
     directory,
+    filepath,
+    transformers,
 
 common common
   ghc-options: -Wall
@@ -29,16 +36,24 @@ common common
 
 library
   import: common
+  ghc-options: -Wno-missing-home-modules
   exposed-modules:
     App.App
     App.Components.ExampleAuthor
     App.Components.Layout
     App.Components.SubscriptionEmailField
+    App.CustomPages.Preview
+    App.Pages.Generated
     App.Pages.Home
     App.Pages.LiveData
     App.Pages.NotFound
+    App.Pages.Route.Generated
     App.Pages.Second
     App.Routes
+
+  autogen-modules:
+    App.Pages.Generated
+    App.Pages.Route.Generated
 
   hs-source-dirs: src
   build-depends:

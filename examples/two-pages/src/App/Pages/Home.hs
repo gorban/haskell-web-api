@@ -2,7 +2,8 @@
 {-# LANGUAGE QuasiQuotes #-}
 
 module App.Pages.Home
-  ( homePage,
+  ( pageDefinition,
+    homePage,
     subscriptionResultRegion,
   )
 where
@@ -16,7 +17,9 @@ import App.Components.ExampleAuthor
 import App.Components.SubscriptionEmailField
   ( subscriptionEmailField,
   )
-import App.Routes (TwoPageRoute (..), routeHref)
+import App.Pages.Route.Generated (PageRoute (..))
+import App.Routes (TwoPageRoute)
+import App.Routes qualified as Routes
 import Data.Text (Text)
 import HarchWeb
   ( CssClass (..),
@@ -51,13 +54,19 @@ import HarchWeb
     text,
     value,
   )
+import HarchWeb.Site (RouteDefinition)
+import HarchWeb.Site qualified as Site
+
+pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition =
+  Site.pageRoute (Just "Home") homePage
 
 homePage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 homePage routeRequest =
   pure
     Page
       { pageTitle = "Home",
-        pageRoute = HomeRoute,
+        pageRoute = Routes.Page HomePage,
         pageContext = requestContext routeRequest,
         pageBody =
           [harch|
@@ -66,9 +75,9 @@ homePage routeRequest =
 
                   <p>This page is fully server-rendered on direct load and reload.</p>
 
-                  <p><a href={routeHref SecondRoute} data-page-link="true">Go to the second page</a></p>
+                  <p><a href={Routes.routeHref (Routes.Page SecondPage)} data-page-link="true">Go to the second page</a></p>
 
-                  <p><a href={routeHref LiveDataRoute} data-page-link="true">See live updates</a></p>
+                  <p><a href={Routes.routeHref (Routes.Page LiveDataPage)} data-page-link="true">See live updates</a></p>
 
                   <section data-page-example="about">
                     <h2>About this example</h2>

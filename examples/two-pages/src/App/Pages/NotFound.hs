@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module App.Pages.NotFound (notFoundPage) where
+module App.Pages.NotFound (pageDefinition, notFoundPage) where
 
-import App.Routes (TwoPageRoute (..), routeHref)
+import App.Pages.Route.Generated (PageRoute (..))
+import App.Routes (TwoPageRoute)
+import App.Routes qualified as Routes
 import HarchWeb
   ( Page (..),
     RouteRequest (..),
@@ -18,20 +20,26 @@ import HarchWeb
     sectionTag,
     text,
   )
+import HarchWeb.Site (RouteDefinition)
+import HarchWeb.Site qualified as Site
+
+pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition =
+  Site.pageRoute Nothing notFoundPage
 
 notFoundPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 notFoundPage routeRequest =
   pure
     Page
       { pageTitle = "Not Found",
-        pageRoute = NotFoundRoute,
+        pageRoute = Routes.Page PageNotFound,
         pageContext = requestContext routeRequest,
         pageBody =
           [harch|
             <section data-page="not-found">
               <h1>Not Found</h1>
               <p>The requested page could not be found.</p>
-              <p><a href={routeHref HomeRoute} data-page-link="true">Return home</a></p>
+              <p><a href={Routes.routeHref (Routes.Page HomePage)} data-page-link="true">Return home</a></p>
             </section>
           |],
         pageBootstrapHooks = []

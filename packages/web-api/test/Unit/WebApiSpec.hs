@@ -67,7 +67,7 @@ import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RequestSurface (..), RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
+import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
@@ -84,6 +84,84 @@ equalValues = (==)
 renderedValue :: (Show value) => value -> String
 renderedValue = show
 {-# NOINLINE renderedValue #-}
+
+notEqualValues :: (Eq value) => value -> value -> Bool
+notEqualValues = (/=)
+{-# NOINLINE notEqualValues #-}
+
+renderedWithPrecedence :: (Show value) => Int -> value -> ShowS
+renderedWithPrecedence = showsPrec
+{-# NOINLINE renderedWithPrecedence #-}
+
+renderedValueList :: (Show value) => [value] -> ShowS
+renderedValueList = showList
+{-# NOINLINE renderedValueList #-}
+
+minimumValue :: (Bounded value) => value
+minimumValue = minBound
+{-# NOINLINE minimumValue #-}
+
+maximumValue :: (Bounded value) => value
+maximumValue = maxBound
+{-# NOINLINE maximumValue #-}
+
+successorValue :: (Enum value) => value -> value
+successorValue = succ
+{-# NOINLINE successorValue #-}
+
+predecessorValue :: (Enum value) => value -> value
+predecessorValue = pred
+{-# NOINLINE predecessorValue #-}
+
+valueToEnum :: (Enum value) => Int -> value
+valueToEnum = toEnum
+{-# NOINLINE valueToEnum #-}
+
+valueFromEnum :: (Enum value) => value -> Int
+valueFromEnum = fromEnum
+{-# NOINLINE valueFromEnum #-}
+
+valuesFrom :: (Enum value) => value -> [value]
+valuesFrom = enumFrom
+{-# NOINLINE valuesFrom #-}
+
+valuesFromThen :: (Enum value) => value -> value -> [value]
+valuesFromThen = enumFromThen
+{-# NOINLINE valuesFromThen #-}
+
+valuesFromTo :: (Enum value) => value -> value -> [value]
+valuesFromTo = enumFromTo
+{-# NOINLINE valuesFromTo #-}
+
+valuesFromThenTo :: (Enum value) => value -> value -> value -> [value]
+valuesFromThenTo = enumFromThenTo
+{-# NOINLINE valuesFromThenTo #-}
+
+exerciseClosedRouteFamily ::
+  (Bounded value, Enum value, Eq value, Show value) =>
+  [value] ->
+  value ->
+  value ->
+  value ->
+  value ->
+  Expectation
+exerciseClosedRouteFamily values firstValue secondValue penultimateValue lastValue = do
+  minimumValue `shouldBe` firstValue
+  maximumValue `shouldBe` lastValue
+  successorValue firstValue `shouldBe` secondValue
+  predecessorValue lastValue `shouldBe` penultimateValue
+  valueToEnum 0 `shouldBe` firstValue
+  valueFromEnum firstValue `shouldBe` 0
+  valuesFrom firstValue `shouldBe` values
+  valuesFromThen firstValue secondValue `shouldBe` values
+  valuesFromTo firstValue lastValue `shouldBe` values
+  valuesFromThenTo firstValue secondValue lastValue `shouldBe` values
+  equalValues firstValue firstValue `shouldBe` True
+  notEqualValues firstValue lastValue `shouldBe` True
+  renderedValue firstValue `shouldSatisfy` not . null
+  renderedWithPrecedence 11 firstValue "" `shouldSatisfy` not . null
+  renderedValueList values "" `shouldSatisfy` not . null
+{-# NOINLINE exerciseClosedRouteFamily #-}
 
 loadHomePageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult HomePageData)
 loadHomePageForRequest pageRepository requestContext =
@@ -175,21 +253,21 @@ prefixedApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 prefixedApiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
-      HarchWeb.requestContext = prefixedRequestContext {requestSurface = ApiSurface}
+      HarchWeb.requestContext = prefixedRequestContext
     }
 
 spanishApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishApiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
-      HarchWeb.requestContext = spanishRequestContext {requestSurface = ApiSurface}
+      HarchWeb.requestContext = spanishRequestContext
     }
 
 spanishApiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishApiSecondRequest =
   HarchWeb.RouteRequest
-    { HarchWeb.requestRoute = SecondRoute,
-      HarchWeb.requestContext = spanishRequestContext {requestSurface = ApiSurface}
+    { HarchWeb.requestRoute = SecondApiRoute,
+      HarchWeb.requestContext = spanishRequestContext
     }
 
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -199,21 +277,21 @@ apiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
-      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+      HarchWeb.requestContext = defaultRequestContext
     }
 
 apiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiSecondRequest =
   HarchWeb.RouteRequest
-    { HarchWeb.requestRoute = SecondRoute,
-      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+    { HarchWeb.requestRoute = SecondApiRoute,
+      HarchWeb.requestContext = defaultRequestContext
     }
 
 apiNotFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiNotFoundRequest =
   HarchWeb.RouteRequest
-    { HarchWeb.requestRoute = NotFoundRoute,
-      HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface}
+    { HarchWeb.requestRoute = ApiNotFoundRoute,
+      HarchWeb.requestContext = defaultRequestContext
     }
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -2245,7 +2323,7 @@ spec = do
         let runtimeApplication = buildRuntimeApp defaultAppConfig environmentConfig
         HarchWeb.renderResponse
           runtimeApplication
-          (HarchWeb.RouteRequest StatusApiRoute (defaultRequestContext {requestSurface = ApiSurface}))
+          (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
           >>= (`shouldSatisfy` \case HarchWeb.BodyResponse _ -> True; _ -> False)
         HarchWeb.reportConnectionObservability
           runtimeApplication
@@ -2518,7 +2596,7 @@ spec = do
       firstSecond `shouldBe` secondSecond
 
   describe "selectRouteData" $ do
-    it "selects the same second-route domain data for page and API surfaces" $ do
+    it "selects the same second-route domain data for page and API route families" $ do
       let seededDatabaseEffect =
             buildSeededPageRepository
               DatabaseSeed
@@ -6258,7 +6336,6 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-456",
-                requestSurface = PageSurface,
                 requestPathPrefix = "",
                 requestQueryParameters = [],
                 requestSessionId = Nothing
@@ -6433,8 +6510,8 @@ spec = do
       staticRoot `shouldBe` staticRoot
       English `shouldBe` English
       Spanish `shouldBe` Spanish
-      PageSurface `shouldBe` PageSurface
-      ApiSurface `shouldBe` ApiSurface
+      Page WebApi.Route.HomePage `shouldBe` HomeRoute
+      Api WebApi.Route.StatusApi `shouldBe` StatusApiRoute
       HomeRoute `shouldBe` HomeRoute
       SecondRoute `shouldBe` SecondRoute
       StatusApiRoute `shouldBe` StatusApiRoute
@@ -6497,13 +6574,12 @@ spec = do
             { requestLocale = Spanish,
               requestLocaleIsExplicit = False,
               requestCorrelationId = Just "req-789",
-              requestSurface = PageSurface,
               requestPathPrefix = "",
               requestQueryParameters = [],
               requestSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -6514,8 +6590,8 @@ spec = do
         `shouldBe` "CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}"
       show English `shouldBe` "English"
       show Spanish `shouldBe` "Spanish"
-      show PageSurface `shouldBe` "PageSurface"
-      show ApiSurface `shouldBe` "ApiSurface"
+      show WebApi.Route.HomePage `shouldBe` "HomePage"
+      show WebApi.Route.StatusApi `shouldBe` "StatusApi"
       show (UnsupportedLocalePrefix "de") `shouldBe` "UnsupportedLocalePrefix \"de\""
       show (UnsupportedPath "/missing") `shouldBe` "UnsupportedPath \"/missing\""
       show homePageModel
@@ -6632,7 +6708,6 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-123",
-                requestSurface = PageSurface,
                 requestPathPrefix = "",
                 requestQueryParameters = [],
                 requestSessionId = Nothing
@@ -6715,7 +6790,7 @@ spec = do
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
       SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
-      PageSurface `shouldNotBe` ApiSurface
+      Page WebApi.Route.HomePage `shouldNotBe` Api WebApi.Route.StatusApi
       HomeRoute `shouldNotBe` SecondRoute
       SecondRoute `shouldNotBe` NotFoundRoute
 
@@ -6790,7 +6865,6 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-999",
-                requestSurface = PageSurface,
                 requestPathPrefix = "",
                 requestQueryParameters = [],
                 requestSessionId = Nothing
@@ -6927,7 +7001,6 @@ spec = do
               { requestLocale = Spanish,
                 requestLocaleIsExplicit = False,
                 requestCorrelationId = Just "req-list",
-                requestSurface = PageSurface,
                 requestPathPrefix = "",
                 requestQueryParameters = [],
                 requestSessionId = Nothing
@@ -6985,9 +7058,10 @@ spec = do
       show [appConfig]
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
       show [English, Spanish] `shouldBe` "[English,Spanish]"
-      show [PageSurface, ApiSurface] `shouldBe` "[PageSurface,ApiSurface]"
+      show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
+        `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -7002,16 +7076,58 @@ spec = do
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
       show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,MfaEnrollmentRoute,LoginRoute,LogoutRoute,ProfileRoute,StatusApiRoute,NotFoundRoute]"
 
+  describe "closed route families" $ do
+    it "keeps every page and API constructor enumerable, comparable, and inspectable" $ do
+      let pageRoutes = [minBound .. maxBound] :: [PageRoute]
+          apiRoutes = [minBound .. maxBound] :: [ApiRoute]
+      exerciseClosedRouteFamily
+        pageRoutes
+        WebApi.Route.HomePage
+        WebApi.Route.SecondPage
+        WebApi.Route.ProfilePage
+        WebApi.Route.PageNotFound
+      exerciseClosedRouteFamily apiRoutes StatusApi SecondApi SecondApi ApiNotFound
+      pageRoutes
+        `shouldBe` [ WebApi.Route.HomePage,
+                     WebApi.Route.SecondPage,
+                     WebApi.Route.SpacesPage,
+                     WebApi.Route.RegistrationPage,
+                     WebApi.Route.EmailVerificationPage,
+                     WebApi.Route.MfaEnrollmentPage,
+                     WebApi.Route.LoginPage,
+                     WebApi.Route.LogoutPage,
+                     WebApi.Route.ProfilePage,
+                     WebApi.Route.PageNotFound
+                   ]
+      apiRoutes `shouldBe` [StatusApi, SecondApi, ApiNotFound]
+      map renderedValue pageRoutes
+        `shouldBe` [ "HomePage",
+                     "SecondPage",
+                     "SpacesPage",
+                     "RegistrationPage",
+                     "EmailVerificationPage",
+                     "MfaEnrollmentPage",
+                     "LoginPage",
+                     "LogoutPage",
+                     "ProfilePage",
+                     "PageNotFound"
+                   ]
+      map renderedValue apiRoutes `shouldBe` ["StatusApi", "SecondApi", "ApiNotFound"]
+      renderedValue SecondApiRoute `shouldBe` "SecondApiRoute"
+      renderedValue ApiNotFoundRoute `shouldBe` "ApiNotFoundRoute"
+      equalValues (Page WebApi.Route.HomePage) (Page WebApi.Route.HomePage) `shouldBe` True
+      equalValues (Api StatusApi) (Api ApiNotFound) `shouldBe` False
+
   describe "parseRoute" $ do
     it "maps bare and default-locale paths to the same home route" $ do
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/") `shouldBe` Just HomeRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/en") `shouldBe` Just HomeRoute
       fmap HarchWeb.requestRoute (parseRoute defaultRequestContext "/404") `shouldBe` Just NotFoundRoute
 
-    it "parses API routes with the API response surface" $ do
+    it "parses API paths directly into the API route family" $ do
       parseRoute defaultRequestContext "/api/status" `shouldBe` Just apiStatusRequest
       parseRoute defaultRequestContext "/api/status?fresh=1"
-        `shouldBe` Just apiStatusRequest {HarchWeb.requestContext = defaultRequestContext {requestSurface = ApiSurface, requestQueryParameters = [("fresh", "1")]}}
+        `shouldBe` Just apiStatusRequest {HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("fresh", "1")]}}
       parseRoute defaultRequestContext "/api/second" `shouldBe` Just apiSecondRequest
       parseRoute defaultRequestContext "/api" `shouldBe` Just apiNotFoundRequest
       parseRoute defaultRequestContext "/api/404" `shouldBe` Just apiNotFoundRequest
@@ -7116,7 +7232,6 @@ spec = do
       renderRoutePath (HarchWeb.RouteRequest LoginRoute defaultRequestContext) `shouldBe` "/login"
       renderRoutePath (HarchWeb.RouteRequest LogoutRoute spanishRequestContext) `shouldBe` "/es/logout"
       renderRoutePath (HarchWeb.RouteRequest ProfileRoute spanishRequestContext) `shouldBe` "/es/profile"
-      renderRoutePath (HarchWeb.RouteRequest {HarchWeb.requestRoute = StatusApiRoute, HarchWeb.requestContext = defaultRequestContext}) `shouldBe` "/404"
       renderRoutePath apiStatusRequest `shouldBe` "/api/status"
       renderRoutePath apiSecondRequest `shouldBe` "/api/second"
       renderRoutePath apiNotFoundRequest `shouldBe` "/api/404"
@@ -7144,7 +7259,7 @@ spec = do
     it "matches locale-prefixed paths with the merged request context" $
       pureRouteMatcher "/es" `shouldBe` spanishHomeRequest
 
-    it "matches API paths with the API response surface" $ do
+    it "matches API paths into the API route family" $ do
       pureRouteMatcher "/api/status" `shouldBe` apiStatusRequest
       pureRouteMatcher "/api/second" `shouldBe` apiSecondRequest
       pureRouteMatcher "/api/missing" `shouldBe` apiNotFoundRequest
@@ -7243,9 +7358,9 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestSurface = PageSurface, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do
@@ -7992,7 +8107,7 @@ spec = do
                      (Just "logout", "/logout", "Sign out", []),
                      (Just "profile", "/profile", "Profile", []),
                      (Just "404", "/404", "Not Found", []),
-                     (Nothing, "/404", "Not Found", [])
+                     (Nothing, "/api/404", "Not Found", [])
                    ]
 
     it "keeps client-only enhancement hooks in the app seam instead of page rendering" $ do

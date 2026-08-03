@@ -27,9 +27,11 @@ import WebApi.Database
     secondPageDataSummary,
   )
 import WebApi.Route
-  ( AppLocale,
+  ( ApiRoute (..),
+    AppLocale,
     AppRequestContext,
     AppRoute (..),
+    PageRoute (..),
     requestLocale,
   )
 
@@ -116,17 +118,23 @@ emptyRouteDataSelection result = RouteDataSelection result []
 routeDataPlan :: AppRoute -> RouteDataPlan
 routeDataPlan route =
   case route of
-    HomeRoute -> LoadHomeRouteData
-    SecondRoute -> LoadSecondRouteData
-    SpacesRoute -> UseStaticRouteData SpacesRouteDataResult
-    StatusApiRoute -> BuildStatusRouteData
-    RegistrationRoute -> UseStaticRouteData RegistrationRouteDataResult
-    EmailVerificationRoute -> UseStaticRouteData EmailVerificationRouteDataResult
-    MfaEnrollmentRoute -> UseStaticRouteData MfaEnrollmentRouteDataResult
-    LoginRoute -> UseStaticRouteData LoginRouteDataResult
-    LogoutRoute -> UseStaticRouteData LogoutRouteDataResult
-    ProfileRoute -> UseStaticRouteData ProfileRouteDataResult
-    NotFoundRoute -> UseStaticRouteData NotFoundRouteDataResult
+    Page pageRoute ->
+      case pageRoute of
+        HomePage -> LoadHomeRouteData
+        SecondPage -> LoadSecondRouteData
+        SpacesPage -> UseStaticRouteData SpacesRouteDataResult
+        RegistrationPage -> UseStaticRouteData RegistrationRouteDataResult
+        EmailVerificationPage -> UseStaticRouteData EmailVerificationRouteDataResult
+        MfaEnrollmentPage -> UseStaticRouteData MfaEnrollmentRouteDataResult
+        LoginPage -> UseStaticRouteData LoginRouteDataResult
+        LogoutPage -> UseStaticRouteData LogoutRouteDataResult
+        ProfilePage -> UseStaticRouteData ProfileRouteDataResult
+        PageNotFound -> UseStaticRouteData NotFoundRouteDataResult
+    Api apiRoute ->
+      case apiRoute of
+        StatusApi -> BuildStatusRouteData
+        SecondApi -> LoadSecondRouteData
+        ApiNotFound -> UseStaticRouteData NotFoundRouteDataResult
 
 selectRouteDataWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteDataWithDatabase pageRepository routeRequest =

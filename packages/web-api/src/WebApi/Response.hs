@@ -25,7 +25,6 @@ import WebApi.Route
   ( AppLocale (..),
     AppRequestContext (..),
     AppRoute (..),
-    RequestSurface (..),
     renderRoutePath,
   )
 import WebApi.RouteData
@@ -47,10 +46,10 @@ selectResponseWithDatabase config pageRepository routeRequest =
     else
       fmap
         ( \routeDataSelection ->
-            case requestSurface (HarchWeb.requestContext routeRequest) of
-              ApiSurface ->
+            case HarchWeb.requestRoute routeRequest of
+              Api _ ->
                 HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
-              PageSurface ->
+              Page _ ->
                 renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
         )
         (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
@@ -64,7 +63,6 @@ selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkfl
 isProfilePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isProfilePageRequest routeRequest =
   HarchWeb.requestRoute routeRequest == ProfileRoute
-    && requestSurface (HarchWeb.requestContext routeRequest) == PageSurface
 
 selectProfileResponse :: AppConfig -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectProfileResponse config accountWorkflow routeRequest = do
@@ -86,7 +84,6 @@ selectProfileResponse config accountWorkflow routeRequest = do
 isHomePageRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Bool
 isHomePageRequest routeRequest =
   HarchWeb.requestRoute routeRequest == HomeRoute
-    && requestSurface (HarchWeb.requestContext routeRequest) == PageSurface
 
 spacesLocation :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 spacesLocation routeRequest =
@@ -106,7 +103,7 @@ renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection 
     SecondRouteDataResult (Left databaseError) ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
        in HarchWeb.PageResponseWithMetadata
-            (pageErrorResponseMetadata (pageFailureDiagnostics PageSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
+            (pageErrorResponseMetadata (pageFailureDiagnostics PageFailureSurface "/second" "second-page" routeDataDatabaseOperationsValue databaseError))
             renderedPage
     _ ->
       let renderedPage = renderPageFromRouteData config routeRequest routeData
@@ -138,7 +135,7 @@ renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
       jsonErrorResponseBody
         503
         (jsonErrorBody "second-page-unavailable")
-        (pageFailureDiagnostics ApiSurface "/second" "second-page" databaseOperations databaseError)
+        (pageFailureDiagnostics ApiFailureSurface "/second" "second-page" databaseOperations databaseError)
     _ ->
       jsonResponseBodyWithOperations 404 (jsonErrorBody "not-found") databaseOperations
 
@@ -214,8 +211,12 @@ data FailureDiagnostics = FailureDiagnostics
     diagnosticsLogEntries :: [Text]
   }
 
-pageFailureDiagnostics :: RequestSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
-pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperations databaseError =
+data FailureSurface
+  = PageFailureSurface
+  | ApiFailureSurface
+
+pageFailureDiagnostics :: FailureSurface -> Text -> Text -> [DatabaseOperation] -> DatabaseError -> FailureDiagnostics
+pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations databaseError =
   FailureDiagnostics
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
@@ -232,7 +233,7 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperatio
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.surface",
-              Observability.attributeValue = Observability.TextAttribute (renderRequestSurface requestSurfaceValue)
+              Observability.attributeValue = Observability.TextAttribute (renderFailureSurface failureSurface)
             }
         ]
           <> databaseOperationObservabilityAttributes databaseOperations,
@@ -241,7 +242,7 @@ pageFailureDiagnostics requestSurfaceValue routePath routeLabel databaseOperatio
             [ "Database failure while rendering required ",
               routeLabel,
               " ",
-              renderRequestSurface requestSurfaceValue,
+              renderFailureSurface failureSurface,
               " response",
               renderDatabaseOperationsSuffix databaseOperations,
               ": ",
@@ -344,8 +345,8 @@ databaseFailureCode databaseError =
     HomePageDataError _ -> "database.home-page-data"
     SecondPageDataError _ -> "database.second-page-data"
 
-renderRequestSurface :: RequestSurface -> Text
-renderRequestSurface requestSurfaceValue =
-  case requestSurfaceValue of
-    PageSurface -> "page"
-    ApiSurface -> "api"
+renderFailureSurface :: FailureSurface -> Text
+renderFailureSurface failureSurface =
+  case failureSurface of
+    PageFailureSurface -> "page"
+    ApiFailureSurface -> "api"

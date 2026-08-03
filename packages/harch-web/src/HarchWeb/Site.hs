@@ -1,15 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Site
-  ( Site (..),
-    SiteRoute (..),
+  ( RouteDefinition (..),
+    Site (..),
     buildSiteApplication,
-    pageSiteRoute,
+    pageRoute,
     simpleSite,
   )
 where
 
-import Data.List (find)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
@@ -42,10 +41,9 @@ import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import Network.Wai qualified as Wai
 
-data SiteRoute route context = SiteRoute
-  { siteRouteValue :: route,
-    siteRouteNavigationLabel :: Maybe Text,
-    siteRouteResponse :: RouteRequest route context -> IO (Response route context)
+data RouteDefinition route context = RouteDefinition
+  { routeNavigationLabel :: Maybe Text,
+    routeResponse :: RouteRequest route context -> IO (Response route context)
   }
 
 data Site route context = Site
@@ -58,7 +56,8 @@ data Site route context = Site
     siteRequestPolicy :: RequestPolicyConfig,
     siteRequestMiddleware :: [RequestMiddleware context],
     siteRouteCodec :: RouteCodec route context,
-    siteRoutes :: [SiteRoute route context],
+    siteNavigationRoutes :: [route],
+    siteRouteDefinition :: route -> RouteDefinition route context,
     siteHandleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
@@ -71,9 +70,10 @@ simpleSite ::
   context ->
   RouteCodec route context ->
   (Page route context -> PageShell route context) ->
-  [SiteRoute route context] ->
+  [route] ->
+  (route -> RouteDefinition route context) ->
   Site route context
-simpleSite name defaultContext codec shellBuilder routeDefinitions =
+simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefinition =
   Site
     { siteName = name,
       siteDefaultRequestContext = defaultContext,
@@ -84,7 +84,8 @@ simpleSite name defaultContext codec shellBuilder routeDefinitions =
       siteRequestPolicy = defaultSiteRequestPolicy,
       siteRequestMiddleware = [],
       siteRouteCodec = codec,
-      siteRoutes = routeDefinitions,
+      siteNavigationRoutes = navigationRoutes,
+      siteRouteDefinition = routeDefinition,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
       siteReportRequestObservability = \requestObservability ->
@@ -95,19 +96,17 @@ simpleSite name defaultContext codec shellBuilder routeDefinitions =
         logEntry `seq` pure ()
     }
 
-pageSiteRoute ::
-  route ->
+pageRoute ::
   Maybe Text ->
   (RouteRequest route context -> IO (Page route context)) ->
-  SiteRoute route context
-pageSiteRoute route navigationLabel renderPage =
-  SiteRoute
-    { siteRouteValue = route,
-      siteRouteNavigationLabel = navigationLabel,
-      siteRouteResponse = fmap PageResponse . renderPage
+  RouteDefinition route context
+pageRoute navigationLabel renderPage =
+  RouteDefinition
+    { routeNavigationLabel = navigationLabel,
+      routeResponse = fmap PageResponse . renderPage
     }
 
-buildSiteApplication :: (Eq route, Show route) => Site route context -> Application route context
+buildSiteApplication :: (Eq route) => Site route context -> Application route context
 buildSiteApplication site =
   HarchWeb.application
     Application
@@ -127,18 +126,11 @@ buildSiteApplication site =
         reportApplicationLog = siteReportApplicationLog site
       }
 
-renderSiteResponse :: (Eq route, Show route) => Site route context -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse :: Site route context -> RouteRequest route context -> IO (Response route context)
 renderSiteResponse site routeRequest =
-  case resolveSiteRoute site (HarchWeb.requestRoute routeRequest) of
-    Just routeDefinition ->
-      siteRouteResponse routeDefinition routeRequest
-    Nothing ->
-      ioError
-        ( userError
-            ( "No site route configured for matched route: "
-                <> show (HarchWeb.requestRoute routeRequest)
-            )
-        )
+  routeResponse
+    (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
+    routeRequest
 
 renderSitePageShell :: (Eq route) => Site route context -> Page route context -> Document route
 renderSitePageShell site page =
@@ -154,24 +146,20 @@ renderSitePageShell site page =
     )
     page
 
-resolveSiteRoute :: (Eq route) => Site route context -> route -> Maybe (SiteRoute route context)
-resolveSiteRoute site routeValue =
-  find (\routeDefinition -> siteRouteValue routeDefinition == routeValue) (siteRoutes site)
-
 siteNavigationItems :: Site route context -> [NavigationItem route]
 siteNavigationItems site =
   mapMaybe
-    ( \routeDefinition ->
+    ( \routeValue ->
         fmap
           ( \navigationLabel ->
               NavigationItem
                 { navigationLabel = navigationLabel,
-                  navigationRoute = siteRouteValue routeDefinition
+                  navigationRoute = routeValue
                 }
           )
-          (siteRouteNavigationLabel routeDefinition)
+          (routeNavigationLabel (siteRouteDefinition site routeValue))
     )
-    (siteRoutes site)
+    (siteNavigationRoutes site)
 
 addRouteNavigation :: [NavigationItem route] -> PageShell route context -> PageShell route context
 addRouteNavigation generatedNavigation shell =

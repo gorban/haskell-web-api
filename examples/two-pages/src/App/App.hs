@@ -8,11 +8,11 @@ module App.App
 where
 
 import App.Components.Layout (twoPageShell)
-import App.Pages.Home (homePage, subscriptionResultRegion)
-import App.Pages.LiveData (liveDataPage)
-import App.Pages.NotFound (notFoundPage)
-import App.Pages.Second (secondPage)
-import App.Routes (TwoPageRoute (..), routeCodec)
+import App.CustomPages.Preview (previewPageDefinition)
+import App.Pages.Generated (pageRouteDefinition)
+import App.Pages.Home (subscriptionResultRegion)
+import App.Pages.Route.Generated (PageRoute (..))
+import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageRoute (..), routeCodec)
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
@@ -35,10 +35,9 @@ import HarchWeb
     serverSentEventSourceFromList,
   )
 import HarchWeb.Site
-  ( Site (..),
-    SiteRoute (..),
+  ( RouteDefinition (..),
+    Site (..),
     buildSiteApplication,
-    pageSiteRoute,
     simpleSite,
   )
 
@@ -52,24 +51,26 @@ twoPageSite =
       ()
       routeCodec
       twoPageShell
-      [ pageSiteRoute HomeRoute (Just "Home") homePage,
-        pageSiteRoute SecondRoute (Just "Second") secondPage,
-        pageSiteRoute LiveDataRoute (Just "Live updates") liveDataPage,
-        liveDataEventsRoute,
-        pageSiteRoute NotFoundRoute Nothing notFoundPage
-      ]
+      [Page HomePage, Page SecondPage, Page LiveDataPage]
+      routeDefinition
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
       siteHandleClientAction = twoPageClientAction
     }
 
-liveDataEventsRoute :: SiteRoute TwoPageRoute ()
-liveDataEventsRoute =
-  SiteRoute
-    { siteRouteValue = LiveDataEventsRoute,
-      siteRouteNavigationLabel = Nothing,
-      siteRouteResponse = \_ -> do
+routeDefinition :: TwoPageRoute -> RouteDefinition TwoPageRoute ()
+routeDefinition route =
+  case route of
+    Page page -> pageRouteDefinition page
+    Api LiveDataEvents -> liveDataEventsRouteDefinition
+    Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
+
+liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute ()
+liveDataEventsRouteDefinition =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeResponse = \_ -> do
         eventSource <-
           serverSentEventSourceFromList
             [ServerSentEvent (Just "update") (Just "example-1") "The live update arrived."]

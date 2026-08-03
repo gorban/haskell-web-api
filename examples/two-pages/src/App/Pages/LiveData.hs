@@ -1,9 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module App.Pages.LiveData (liveDataPage) where
+module App.Pages.LiveData (pageDefinition, liveDataPage) where
 
-import App.Routes (TwoPageRoute (..))
+import App.Pages.Route.Generated (PageRoute (..))
+import App.Routes (TwoPageRoute)
+import App.Routes qualified as Routes
 import HarchWeb
   ( Page (..),
     RouteRequest (..),
@@ -20,13 +22,19 @@ import HarchWeb
     sectionTag,
     text,
   )
+import HarchWeb.Site (RouteDefinition)
+import HarchWeb.Site qualified as Site
+
+pageDefinition :: RouteDefinition TwoPageRoute ()
+pageDefinition =
+  Site.pageRoute (Just "Live updates") liveDataPage
 
 liveDataPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 liveDataPage routeRequest =
   pure
     Page
       { pageTitle = "Live updates",
-        pageRoute = LiveDataRoute,
+        pageRoute = Routes.Page LiveDataPage,
         pageContext = requestContext routeRequest,
         pageBody =
           [harch|

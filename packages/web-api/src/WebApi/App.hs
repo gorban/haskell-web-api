@@ -85,7 +85,14 @@ buildAppWithDatabaseAndReporters ::
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
-      ( (Site.simpleSite "web-api" defaultRequestContext routeCodec (buildAppPageShellConfig config) (buildAppSiteRoutes config pageRepository accountWorkflow))
+      ( ( Site.simpleSite
+            "web-api"
+            defaultRequestContext
+            routeCodec
+            (buildAppPageShellConfig config)
+            appNavigationRoutes
+            (buildAppRouteDefinition config pageRepository accountWorkflow)
+        )
           { Site.siteRequestContextFromRequest =
               requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
             Site.siteStaticAssets = staticAssets config,
@@ -102,64 +109,33 @@ buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
 buildApp config =
   buildAppWithDatabase config defaultPageRepository
 
-buildAppSiteRoutes :: AppConfig -> PageRepository -> AccountWorkflow -> [Site.SiteRoute AppRoute AppRequestContext]
-buildAppSiteRoutes config pageRepository accountWorkflow =
-  let renderSelectedResponse = selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
-   in [ Site.SiteRoute
-          { Site.siteRouteValue = HomeRoute,
-            Site.siteRouteNavigationLabel = Just "Home",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = SecondRoute,
-            Site.siteRouteNavigationLabel = Just "Second",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = SpacesRoute,
-            Site.siteRouteNavigationLabel = Just "Spaces",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = RegistrationRoute,
-            Site.siteRouteNavigationLabel = Just "Create account",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = EmailVerificationRoute,
-            Site.siteRouteNavigationLabel = Nothing,
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = MfaEnrollmentRoute,
-            Site.siteRouteNavigationLabel = Nothing,
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = LoginRoute,
-            Site.siteRouteNavigationLabel = Just "Sign in",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = LogoutRoute,
-            Site.siteRouteNavigationLabel = Nothing,
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = ProfileRoute,
-            Site.siteRouteNavigationLabel = Just "Profile",
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = StatusApiRoute,
-            Site.siteRouteNavigationLabel = Nothing,
-            Site.siteRouteResponse = renderSelectedResponse
-          },
-        Site.SiteRoute
-          { Site.siteRouteValue = NotFoundRoute,
-            Site.siteRouteNavigationLabel = Nothing,
-            Site.siteRouteResponse = renderSelectedResponse
-          }
+appNavigationRoutes :: [AppRoute]
+appNavigationRoutes =
+  [HomeRoute, SecondRoute, SpacesRoute, RegistrationRoute, LoginRoute, ProfileRoute]
+
+buildAppRouteDefinition ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  AppRoute ->
+  Site.RouteDefinition AppRoute AppRequestContext
+buildAppRouteDefinition config pageRepository accountWorkflow route =
+  Site.RouteDefinition
+    { Site.routeNavigationLabel = routeNavigationLabel route,
+      Site.routeResponse =
+        selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
+    }
+
+routeNavigationLabel :: AppRoute -> Maybe Text.Text
+routeNavigationLabel route = lookup route navigationLabels
+  where
+    navigationLabels =
+      [ (HomeRoute, "Home"),
+        (SecondRoute, "Second"),
+        (SpacesRoute, "Spaces"),
+        (RegistrationRoute, "Create account"),
+        (LoginRoute, "Sign in"),
+        (ProfileRoute, "Profile")
       ]
 
 buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext

@@ -59,6 +59,7 @@ library
   exposed-modules:
     Core.Config
     Core.Control.Error
+    Core.PageRoutes.Generator
     Core.Prelude
     Core.Setup
     Core.Setup.ContainerRuntime
@@ -77,6 +78,7 @@ library
   build-depends:
     base ^>=4.22.0.0,
     Cabal,
+    containers,
     directory,
     filepath,
     mtl,
@@ -87,6 +89,14 @@ library
 
   -- Directories containing source files.
   hs-source-dirs: src
+
+executable harch-page-routes
+  import: common
+  main-is: PageRoutes.hs
+  hs-source-dirs: app
+  build-depends:
+    base ^>=4.22.0.0,
+    core,
 
 -- Internal spec-preprocessor that compiles test-core sources directly.
 -- This avoids the package-level cycle that would occur if core-tests
@@ -144,6 +154,7 @@ test-suite core-tests
     base ^>=4.22.0.0,
     core,
     directory,
+    filepath,
     hspec,
     hspec-expectations-match,
     HUnit,
