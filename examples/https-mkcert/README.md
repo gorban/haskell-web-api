@@ -1,6 +1,6 @@
 # https-mkcert
 
-**Status:** Iterative
+**Status:** Workflow guide
 
 Show the preferred local-development HTTPS story when the developer wants a browser-trusted
 self-signed certificate.

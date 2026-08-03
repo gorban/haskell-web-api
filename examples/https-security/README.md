@@ -1,6 +1,6 @@
 # https-security
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show how to tighten browser-facing HTTPS policy after HTTPS itself is already working.
 

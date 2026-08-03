@@ -1,8 +1,8 @@
 # middleware-auth-jwt
 
-**Status:** Working
+**Status:** Implemented guide
 
-Show the desired app authoring model for:
+Show the implemented application model for:
 
 - middleware with an allowlist of public paths,
 - a protected page backed by an opaque, server-side session,

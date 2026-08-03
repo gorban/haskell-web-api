@@ -1,6 +1,6 @@
 # https-provided-certificate
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show the simplest direct HTTPS startup path using a provided certificate and private key.
 

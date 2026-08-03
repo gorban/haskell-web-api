@@ -1,175 +1,170 @@
 # two-pages
 
-**Status:** Working
+**Status:** Runnable
 
-Start here. This is the smallest example we want new users to copy first:
+This is the smallest application to copy first. It demonstrates:
 
-- two pages,
-- SSR for direct loads and reloads,
-- progressive enhancement for same-origin navigation,
-- an SSR-first live-data page with an optional `EventSource` enhancement,
-- a shared layout component,
-- no database, telemetry, HTTPS, or reverse proxy yet.
+- complete SSR documents on direct loads and reloads,
+- generated, exhaustive page routing plus explicit API and dynamic routes,
+- XML-like typed components and scoped CSS,
+- same-origin enhanced navigation with native-link fallback,
+- immediate form capture, input preservation, typed region patches, and
+- an SSR-first live-data page with deferred SSE enhancement.
 
-This example now builds with the current framework seam:
+It deliberately has no database, telemetry collector, HTTPS, or reverse-proxy prerequisite.
 
-- [two-pages-example.cabal](two-pages-example.cabal)
-- [app/Main.hs](app/Main.hs)
-- [src/App/App.hs](src/App/App.hs)
-- [src/App/Routes.hs](src/App/Routes.hs)
-- [src/App/Components/ExampleAuthor.hs](src/App/Components/ExampleAuthor.hs)
-- [src/App/Components/Layout.hs](src/App/Components/Layout.hs)
-- [src/App/Pages/Home.hs](src/App/Pages/Home.hs)
-- [src/App/Pages/Second.hs](src/App/Pages/Second.hs)
-- [public/navigation.js](public/navigation.js)
-- [test/Unit/AppSpec.hs](test/Unit/AppSpec.hs)
-- [test/E2E/AppSpec.hs](test/E2E/AppSpec.hs)
+Run it from the repository root:
 
-Run it from the repository root with:
-
-```bash
+```sh
 cabal run two-pages-example
 ```
 
 Then visit:
 
-1. `http://127.0.0.1:8080/`
-2. `http://127.0.0.1:8080/second`
-3. `http://127.0.0.1:8080/live-data`
+1. <http://127.0.0.1:8080/>
+2. <http://127.0.0.1:8080/second>
+3. <http://127.0.0.1:8080/live-data>
+4. <http://127.0.0.1:8080/preview/example>
 
-The current composition root is still lower-level than the long-term `harch` / page-discovery goal,
-but it already shows the intended workflow:
+The executable composition is in [App.App](src/App/App.hs), with route parsing in
+[App.Routes](src/App/Routes.hs) and the shared page shell in
+[App.Components.Layout](src/App/Components/Layout.hs).
 
-- define typed routes,
-- wire pages through `HarchWeb.Site`,
-- share a small layout component,
-- ship a tiny browser enhancement layer at `/assets/navigation.js`,
-- keep the app understandable before adding any effects or deployment concerns.
+## Generated page routes
 
-## Harch component forms
-
-`App.Pages.Home` contains all supported component-call forms in rendered application content:
+The Cabal setup hook discovers modules below `src/App/Pages/` and runs the `harch-page-routes` build
+tool. It generates a closed `PageRoute`, its path codec, and its exhaustive definition dispatcher:
 
 ```hs
--- Nullary props and no children.
+data PageRoute
+  = HomePage
+  | LiveDataPage
+  | PageNotFound
+  | SecondPage
+  deriving (Bounded, Enum, Eq, Show)
+
+allPageRoutes :: [PageRoute]
+allPageRoutes = [minBound .. maxBound]
+
+pageRouteDefinition :: PageRoute -> RouteDefinition TwoPageRoute ()
+pageRouteDefinition route =
+  case route of
+    HomePage -> App.Pages.Home.pageDefinition
+    LiveDataPage -> App.Pages.LiveData.pageDefinition
+    PageNotFound -> App.Pages.NotFound.pageDefinition
+    SecondPage -> App.Pages.Second.pageDefinition
+```
+
+Each discovered module exports `pageDefinition`, so adding a page cannot leave a missing runtime
+registration. The generated mapping is:
+
+| Page module | Constructor | Path | Navigation label |
+| --- | --- | --- | --- |
+| `App.Pages.Home` | `HomePage` | `/` | `Home` |
+| `App.Pages.LiveData` | `LiveDataPage` | `/live-data` | `Live data` |
+| `App.Pages.NotFound` | `PageNotFound` | `/404` | none |
+| `App.Pages.Second` | `SecondPage` | `/second` | `Second` |
+
+The application owns the route-family sum:
+
+```hs
+data TwoPageRoute
+  = Page PageRoute
+  | Api ApiRoute
+  | Custom CustomRoute
+  deriving (Eq, Show)
+```
+
+Generated pages dispatch totally through `pageRouteDefinition`. `/live-data/events` is an explicit
+typed API route, while `/preview/:slug` demonstrates an explicit dynamic path whose slug is validated
+into `PreviewSlug`. The route family determines response capability; there is no separate
+`RequestSurface` value that could disagree with it.
+
+## Typed component forms
+
+[App.Pages.Home](src/App/Pages/Home.hs) uses every supported component-call form in rendered content:
+
+```hs
+-- Nullary record props and no children.
 <SubscriptionEmailField />
 
--- Named record fields and an HTML child.
+-- Named record fields and a nested HTML child.
 <AuthorCard authorName="Harch Web team" authorRole="SSR framework maintainers">
   <p>The page and its controls are complete before optional JavaScript loads.</p>
 </AuthorCard>
 
--- Explicit positional fallback with two distinct typed arguments and an HTML child.
+-- Two distinct positional arguments and a nested HTML child.
 <AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>
   <p>Maintained as a small, runnable framework reference.</p>
 </AuthorAvatar>
 ```
 
-Prefer named fields for record props. The positional list is deliberately reserved for components
-whose public function has multiple distinct typed inputs, as `AuthorAvatar` does.
-
-## Desired generated page surface
-
-The polished version should let the composition root opt into discovered pages with one generated
-export and keep explicit custom routes alongside it:
+Braced expressions provide dynamic named values, and `children={computedChildren}` supplies a
+computed `[Html]` instead of nested markup:
 
 ```hs
-twoPageSite =
-  ( simpleSite
-      "two-pages-example"
-      ()
-      routeCodec
-      twoPageShell
-      (pagesTreeRoutes <> customRoutes)
-  )
-    { siteStaticAssets = twoPageStaticAssets,
-      siteRequestPolicy = twoPageRequestPolicy
-    }
-
-customRoutes =
-  [ pageSiteRoute NotFoundRoute Nothing notFoundPage
-  ]
+<AuthorCard authorName={currentAuthorName} authorRole={currentAuthorRole}
+            children={computedChildren} />
 ```
 
-The custom build tool should generate `pagesTreeRoutes` from `src/App/Pages/**/*.hs`, using the
-same `SiteRoute` shape the example already wires by hand today:
+Prefer named fields for cohesive record props. Use the positional `props` list only when a component's
+ordinary Haskell function intentionally takes multiple distinct typed inputs, as `AuthorAvatar` does.
+The quasiquoter lowers all forms to record construction or normal function application and then builds
+the same escaping-by-default `Html` AST.
+
+`SubscriptionEmailField` also shows that a component body can use the same quasiquoter as a page:
 
 ```hs
-pagesTreeRoutes :: [SiteRoute TwoPageRoute ()]
-pagesTreeRoutes =
-  [ pageSiteRoute HomeRoute (Just "Home") homePage,
-    pageSiteRoute SecondRoute (Just "Second") secondPage
-  ]
+subscriptionEmailField SubscriptionEmailFieldProps children =
+  [harch|
+    <label for="subscription-email">Email address</label>
+    <input id="subscription-email" name="email" type="email"
+           autocomplete="email" required />
+    {children}
+  |]
 ```
 
-For this example, the first hierarchy mapping is intentionally small:
+## Behavior with and without deferred modules
 
-| Page module | Route constructor | Path | Navigation label |
-| --- | --- | --- | --- |
-| `App.Pages.Home` | `HomeRoute` | `/` | `Home` |
-| `App.Pages.Second` | `SecondRoute` | `/second` | `Second` |
+1. Direct loads and reloads of each page return complete HTML.
+2. Annotated same-origin links upgrade to fetch/history navigation after the deferred module loads.
+3. Back and Forward retain enhanced navigation behavior.
+4. With scripts disabled, native links still perform ordinary document navigation.
+5. The subscription form can be filled and submitted while `navigation.js` is blocked. The inline
+   kernel preserves its values without navigation, and the deferred module later drains the action and
+   applies the returned `RegionPatch`.
+6. `/live-data` begins with meaningful SSR status. Its deferred `EventSource` module replaces that
+   status after an event; without scripts, the initial content remains.
 
-That keeps the first example focused on SSR, progressive enhancement, typed routes, shared layout,
-generated page routes, and custom-route composition. Database access, auth, i18n, telemetry,
-deployment concerns, and typed page-local asset generation are intentionally deferred to later
-examples.
+## Verification
 
-## Expected behavior
+Unit tests cover generated routes, dispatch, component output, actions, patches, SSE, and configuration:
 
-1. Loading `/` directly returns complete HTML rendered on the server.
-2. Loading `/second` directly also returns complete HTML rendered on the server.
-3. Clicking an in-app same-origin link upgrades to enhanced navigation rather than forcing a full
-   browser reload.
-4. Using Back and Forward keeps the app navigable.
-5. Disabling JavaScript still leaves both pages fully usable through normal links.
-6. `/live-data` starts with complete server-rendered status text. Its small deferred module opens
-   a same-origin SSE connection only after the page is usable, then replaces that status when an
-   event arrives. Browsers without JavaScript retain the rendered status rather than a blank area.
-
-## Real-browser tests
-
-Install the locked Playwright dependency and Chromium as described in the repository `SETUP.md`, then
-run the Haskell-authored browser scenarios with:
-
-```bash
-cabal test two-pages-example-tests --test-show-details=direct --test-options='--match real-browser'
+```sh
+cabal test two-pages-example-tests --test-show-details=direct --test-options='--skip E2E'
 ```
 
-Prefer semantic locators and callback assertions. CSS remains an explicit structural escape hatch:
+After installing the locked Playwright dependency and Chromium described in
+[SETUP.md](../../SETUP.md), run the real-browser scenarios:
 
-```hs
-runBrowserScenario browser $ do
-  visit homeUrl
-  assertText (byRole Heading) (`shouldBe` "Home")
-  click (byRole Link `named` "Go to the second page")
-  assertMetrics $ \metrics ->
-    $([|metrics|] `shouldMatch`
-      [p|BrowserMetrics
-           { enhancedNavigationFetchCount = 1
-           , hardNavigationCount = 0
-           }|])
+```sh
+cabal test two-pages-example-tests \
+  --test-show-details=direct \
+  --test-options='--match real-browser'
 ```
 
-Potentially expensive properties stay demand-driven. Compose only the observations needed by a test;
-the harness batches those leaves into one browser request:
+The [E2E source](test/E2E/AppSpec.hs) verifies enhanced navigation, Back/Forward, scripts-disabled
+fallbacks, early-submit preservation, eventual region patches, and the SSE update using semantic
+locators and composed retrying observations.
 
-```hs
-data FieldState = FieldState Text Bool
+## Source map
 
-fieldState target =
-  FieldState <$> inputValue target <*> isFocused target
-```
-
-## What this example is trying to standardize
-
-- SSR stays the primary rendering path.
-- Progressive enhancement is additive rather than required.
-- The smallest app should not require database setup, tracing infrastructure, TLS, or a reverse
-  proxy before someone can understand the framework shape.
-
-## What to explain in the final polished example
-
-1. direct loads of `/` and `/second` render full HTML on the server,
-2. clicking an in-app same-origin link upgrades to a fetch/replace flow,
-3. Back/Forward still works,
-4. disabling JavaScript still leaves both pages usable.
+- [SetupHooks.hs](SetupHooks.hs): page discovery and generated-module build wiring.
+- [App.App](src/App/App.hs): site composition, total route dispatch, actions, regions, and server config.
+- [App.Routes](src/App/Routes.hs): page/API/custom route sum, parsing, rendering, and dynamic slug type.
+- [App.Pages.Home](src/App/Pages/Home.hs): component forms and captured subscription control.
+- [App.CustomPages.Preview](src/App/CustomPages/Preview.hs): explicit dynamic page route.
+- [HarchWeb.Document](../../packages/harch-web/src/HarchWeb/Document.hs): embedded deferred
+  navigation/action runtime served at `/assets/navigation.js`.
+- [public/live-data.js](public/live-data.js): page-scoped SSE enhancement.
+- [Unit tests](test/Unit/AppSpec.hs) and [real-browser tests](test/E2E/AppSpec.hs).

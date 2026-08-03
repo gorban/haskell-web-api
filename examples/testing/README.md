@@ -1,6 +1,6 @@
 # testing
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show what app-specific tests should look like on top of the existing repo testing stack.
 

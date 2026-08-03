@@ -1,6 +1,6 @@
 # custom-js
 
-**Status:** Working
+**Status:** Implemented guide
 
 Show how a page can opt into a small custom browser behavior without forcing a front-end framework.
 

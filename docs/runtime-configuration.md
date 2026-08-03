@@ -1,0 +1,172 @@
+# Runtime configuration
+
+The full `web-api` application has localhost-friendly defaults. Startup reads configuration in this
+order, with each later layer overriding the earlier one:
+
+1. Defaults compiled into the application.
+2. `./.env`, for committed non-secret development settings.
+3. `./.env.local`, for machine-specific or deployed settings and secrets. This file is gitignored.
+
+Both files use `KEY=value` lines, allow blank lines, and treat lines beginning with `#` as comments.
+The smaller `two-pages-example` has its own fixed local configuration and does not need this table.
+
+## Environment variables
+
+| Config value | Description | Default |
+| --- | --- | --- |
+| `APP_MODE` | App behavior mode: `development`, `test`, or `production`. | `development` |
+| `DATABASE_HOST` | PostgreSQL host. A loopback address keeps it local to the machine. | `127.0.0.1` |
+| `DATABASE_PORT` | PostgreSQL port. | `5432` |
+| `DATABASE_NAME` | Runtime database name. | `web_api_dev` |
+| `DATABASE_USER` | Runtime database username. | `web_api_runtime` |
+| `DATABASE_PASSWORD` | Runtime database password. | `web_api` |
+| `APP_TITLE_PREFIX` | Prefix for rendered HTML page titles. | `web-api` |
+| `LISTENER_<n>_HOST` | Interface for listener `n`. | listener 0: `127.0.0.1` |
+| `LISTENER_<n>_PORT` | Port for listener `n`. | listener 0: `5001` |
+| `LISTENER_<n>_SCHEME` | `http` or `https`. | listener 0: `http` |
+| `LISTENER_<n>_TLS_SOURCE` | HTTPS source: `manual`, `shared`, `shared-wait`, or `shared-fail-fast`. `shared` is the legacy waiting alias. The older HTTPS `acme` shape is accepted, but an ACME HTTP publisher plus shared HTTPS consumer is preferred. | unset |
+| `LISTENER_<n>_TLS_CERTIFICATE_FILE` | Certificate path for manual TLS. | unset |
+| `LISTENER_<n>_TLS_PRIVATE_KEY_FILE` | Private-key path for manual TLS. | unset |
+| `LISTENER_<n>_TLS_CERTIFICATE_DIRECTORY` | Directory containing `fullchain.pem` and `privkey.pem` for shared TLS. With exactly one ACME publisher, an unset consumer reuses its effective directory. | listener-aware |
+| `LISTENER_<n>_TLS_SHARED_WAIT_SECONDS` | Optional `shared`/`shared-wait` startup timeout. Unset waits indefinitely. `shared-fail-fast` rejects this setting. | unset |
+| `LISTENER_<n>_ACME_DIRECTORY_URL` | ACME directory for a certificate-publishing listener. Prefer the HTTP listener serving `http-01`. | Let's Encrypt production directory |
+| `LISTENER_<n>_ACME_CONTACT_EMAILS` | Comma-delimited ACME contact addresses. | unset |
+| `LISTENER_<n>_ACME_DOMAINS` | Comma-delimited certificate domains. | unset |
+| `LISTENER_<n>_ACME_CERTIFICATE_DIRECTORY` | Directory where ACME publishes `fullchain.pem` and `privkey.pem`. | `./.tls/<cert-name>` |
+| `LISTENER_<n>_ACME_CERTBOT_EXECUTABLE` | Certbot executable path. | `certbot` |
+| `LISTENER_<n>_ACME_CERTBOT_ARGUMENTS` | Comma-delimited certbot overrides. Otherwise startup derives a non-interactive webroot invocation from ACME config. | unset |
+| `STATIC_ASSET_ROOT_<n>_URL_PREFIX` | URL prefix for static root `n`. | unset |
+| `STATIC_ASSET_ROOT_<n>_DIRECTORY` | Filesystem directory for static root `n`. | unset |
+| `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Allowed extension, including its leading dot. An empty value opts into extensionless files. | `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |
+| `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type paired with the indexed extension. | types for the default extensions |
+| `STATIC_CACHE_CONTROL_SECONDS` | Static response `Cache-Control` max-age. | unset |
+| `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
+| `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
+| `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |
+| `HSTS_PRELOAD` | Add HSTS `preload`; requires max-age. | `false` |
+| `CORS_ALLOWED_ORIGINS` | Comma-delimited exact origins allowed to read responses. Unset stays same-origin. | unset |
+| `CORS_ALLOWED_METHODS` | Methods returned for allowed preflights. | `GET,HEAD,OPTIONS` |
+| `CORS_ALLOWED_HEADERS` | Headers returned for allowed preflights. | `Content-Type,X-Requested-With` |
+| `CORS_MAX_AGE_SECONDS` | Optional preflight cache duration. | unset |
+| `CONTENT_SECURITY_POLICY` | CSP. Full documents add a fresh `script-src` nonce for the capture kernel. | strict same-origin policy |
+| `X_CONTENT_TYPE_OPTIONS_NOSNIFF` | Emit `X-Content-Type-Options: nosniff`. | `true` |
+| `X_XSS_PROTECTION` | Compatibility `X-XSS-Protection` value. | `1; mode=block` |
+| `REFERRER_POLICY` | Referrer policy. | `strict-origin-when-cross-origin` |
+| `PERMISSIONS_POLICY` | Browser capability policy. | common powerful features disabled |
+| `X_FRAME_OPTIONS` | Compatibility frame policy; default CSP also denies frame ancestors. | `DENY` |
+| `OTLP_TRACING_ENABLED` | Explicit tracing switch. True uses the local endpoint unless overridden; false wins over endpoint/header settings. | unset |
+| `OTLP_TRACING_ENDPOINT` | OTLP HTTP trace endpoint. | unset |
+| `OTLP_TRACING_HEADERS` | Comma-delimited trace headers in `name=value` form. | unset |
+| `OTLP_METRICS_ENDPOINT` | OTLP HTTP metrics endpoint. | unset |
+| `OTLP_METRICS_HEADERS` | Comma-delimited metric headers in `name=value` form. | unset |
+| `SETUP_AUTOSTART_DATABASE` | Allow setup tooling to plan local PostgreSQL startup if unreachable. | `true` |
+| `SETUP_AUTOSTART_JAEGER` | Allow setup tooling to plan local Jaeger startup if configured but unreachable. | `false` |
+
+The `SETUP_AUTOSTART_*` values belong to prerequisite planning, not the runtime application read by
+`cabal run exe:haskell-web-api`. Setup hooks and verification paths read them from the same layered
+files. Runtime and migration PostgreSQL identities are deliberately separate; see
+[SETUP.md](../SETUP.md) for database creation, migration, and test prerequisites. The supported
+PostgreSQL major version is currently 17.
+
+## Minimal local overrides
+
+```dotenv
+APP_MODE=development
+DATABASE_HOST=127.0.0.1
+DATABASE_PORT=5432
+DATABASE_NAME=web_api_dev
+DATABASE_USER=web_api_runtime
+DATABASE_PASSWORD=web_api
+APP_TITLE_PREFIX=web-api-dev
+LISTENER_0_HOST=127.0.0.1
+LISTENER_0_PORT=5001
+LISTENER_0_SCHEME=http
+```
+
+Run the full application with:
+
+```sh
+cabal run exe:haskell-web-api
+```
+
+## Listener and certificate examples
+
+Manual HTTPS uses an explicit certificate/key pair:
+
+```dotenv
+LISTENER_0_HOST=0.0.0.0
+LISTENER_0_PORT=5443
+LISTENER_0_SCHEME=https
+LISTENER_0_TLS_SOURCE=manual
+LISTENER_0_TLS_CERTIFICATE_FILE=/etc/web-api/tls/fullchain.pem
+LISTENER_0_TLS_PRIVATE_KEY_FILE=/etc/web-api/tls/privkey.pem
+```
+
+For ACME, an HTTP listener publishes certificate files while an HTTPS listener waits for and reloads
+them:
+
+```dotenv
+LISTENER_0_HOST=0.0.0.0
+LISTENER_0_PORT=80
+LISTENER_0_SCHEME=http
+LISTENER_0_ACME_CONTACT_EMAILS=ops@example.com
+LISTENER_0_ACME_DOMAINS=example.com,www.example.com
+LISTENER_0_ACME_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
+
+LISTENER_1_HOST=0.0.0.0
+LISTENER_1_PORT=443
+LISTENER_1_SCHEME=https
+LISTENER_1_TLS_SOURCE=shared-wait
+LISTENER_1_TLS_CERTIFICATE_DIRECTORY=/etc/web-api/acme/example.com
+LISTENER_1_TLS_SHARED_WAIT_SECONDS=120
+```
+
+Omitting `LISTENER_<n>_ACME_DIRECTORY_URL` uses the production Let's Encrypt directory. Set it
+explicitly for staging or another ACME service. The runtime image contains certbot; ordinary HTTP-only
+source builds do not require it.
+
+When `REDIRECT_HTTP_TO_HTTPS` is unset:
+
+- HTTP-only listener sets do not redirect.
+- A mixed HTTP/HTTPS set redirects to its unique HTTPS port.
+- Multiple distinct HTTPS ports still enable redirects, but omit a port so the target uses 443.
+- `/.well-known/acme-challenge/*` remains on HTTP for `http-01` validation.
+- An explicit `false` disables the derived redirect.
+
+See the focused [certificate and HTTPS guides](../examples/README.md#implemented-guides) for manual,
+shared, ACME, HSTS, redirect, and local mkcert workflows.
+
+## Assets, proxy policy, and observability
+
+```dotenv
+STATIC_ASSET_ROOT_0_URL_PREFIX=/assets
+STATIC_ASSET_ROOT_0_DIRECTORY=public
+STATIC_CACHE_CONTROL_SECONDS=3600
+
+REDIRECT_HTTP_TO_HTTPS=true
+HSTS_MAX_AGE_SECONDS=31536000
+HSTS_INCLUDE_SUBDOMAINS=true
+HSTS_PRELOAD=true
+
+OTLP_TRACING_ENABLED=true
+OTLP_TRACING_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
+OTLP_METRICS_ENDPOINT=http://127.0.0.1:4318/v1/metrics
+OTLP_METRICS_HEADERS=authorization=Bearer demo-token,x-service-name=web-api
+```
+
+Static requests are limited to configured roots and content-type extensions. Hidden path segments such
+as `.env` and `.well-known` are rejected, and extensionless files require an explicit empty-extension
+entry. Full SSR documents receive a fresh CSP nonce for the inline capture kernel; deferred modules
+remain external. CORS is same-origin unless exact origins are configured.
+
+OTLP request span names use stable route values. Unmatched requests group under `not-found`, while the
+concrete URL remains on `url.path`. The custom exporter also covers redirects, assets, CORS preflights,
+ACME challenges, connection-level TLS failures, and certificate lifecycle events that sit outside
+ordinary page handling.
+
+Scenario-oriented `.env.local` templates live in `examples/runtime-config/`, including local HTTP,
+OTLP, manual TLS, shared certificates, ACME, and reverse-proxy/TLS-offload configurations. For example:
+
+```sh
+cp examples/runtime-config/manual-tls.env ./.env.local
+```

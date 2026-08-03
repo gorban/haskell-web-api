@@ -1,50 +1,55 @@
 # Examples
 
-These examples define the desired "start small, add one feature at a time" story for `harch-web`.
+Start with a runnable application, then add one concern at a time. The labels describe what exists in
+this repository today; snippets that show future API direction are kept in the explicitly labeled
+design guide.
 
-The repository already has a combined app under `packages/web-api`, plus runtime-focused materials in
-`examples/runtime-config/` and `examples/reverse-proxy/`. This new catalog adds isolated,
-docs-first examples so someone can build up their own site feature by feature instead of starting
-from the full combined app immediately.
+## Runnable examples
 
-The design target and alignment analysis live in [../docs/design-guidance.md](../docs/design-guidance.md).
+These are Cabal packages with executable source and tests.
 
-## Status labels
-
-- **Current**: grounded in behavior already present in the repo.
-- **Iterative**: document it now, while being honest about rough edges that should later move into
-  the framework.
-- **Aspirational**: a desired file shape and workflow that still needs framework work.
-
-## Recommended order
-
-| Example | Status | Purpose |
+| Example | What it demonstrates | Run from the repository root |
 | --- | --- | --- |
-| [two-pages](two-pages/README.md) | Working | The first thing a new user should copy: two SSR pages plus progressive enhancement. |
-| [postgres-effects](postgres-effects/README.md) | Current | Add a real PostgreSQL-backed effect and the migration environment needed for it. |
-| [custom-db-adapter](custom-db-adapter/README.md) | Working | Build and test a typed non-PostgreSQL database interpreter. |
-| [logging-and-telemetry](logging-and-telemetry/README.md) | Current | Turn on logs/traces locally and show how to inspect them. |
-| [testing](testing/README.md) | Current | Show app-level unit, integration, e2e, and coverage workflows. |
-| [https-provided-certificate](https-provided-certificate/README.md) | Current | Run HTTPS directly with a provided certificate/key pair. |
-| [https-mkcert](https-mkcert/README.md) | Iterative | Show the local-dev certificate workflow we want, using mkcert-style steps. |
-| [https-acme](https-acme/README.md) | Current | Explain ACME/certbot-backed real certificate flow and its constraints. |
-| [https-security](https-security/README.md) | Current | Enable redirects, HSTS, and related browser hardening settings. |
-| [middleware-auth-jwt](middleware-auth-jwt/README.md) | Working | Use opaque sessions, CSRF, and the account profile flow for protected surfaces. |
-| [custom-js](custom-js/README.md) | Working | Add a page-scoped deferred behavior without giving up SSR-first rendering. |
-| [custom-api](custom-api/README.md) | Iterative | Add app-specific API routes beyond the normal page/data flow. |
-| [multilanguage-routing](multilanguage-routing/README.md) | Iterative | Document the target path-based i18n routing story. |
-| [reverse-proxy-awareness](reverse-proxy-awareness/README.md) | Current | Run behind nginx with trusted forwarding and optional subpath mounting. |
+| [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
+| [custom-db-adapter](custom-db-adapter/README.md) | A typed, non-PostgreSQL effect interpreter with focused tests. | `cabal test custom-db-adapter-tests` |
 
-## Next Priority
+## Implemented guides
 
-Before continuing the topic-ordered catalog, define the route-template example shape in
-[route-templates](route-templates/README.md). It should cover both path parameters such as
-`/posts/:slug` and query-string parameters such as `/search?q=...`, including how `harch` anchors
-and GET forms parameterize those routes without hand-built URLs.
+These guides point to behavior implemented and tested in the framework, full reference application,
+or tracked runtime configuration.
 
-## Notes
+| Guide | Add this concern |
+| --- | --- |
+| [PostgreSQL effects](postgres-effects/README.md) | Typed database operations, migrations, and runtime/migration identities. |
+| [Custom JavaScript](custom-js/README.md) | Deferred, page-scoped enhancement on top of complete SSR. |
+| [Custom API](custom-api/README.md) | An explicit typed API route and `RouteDefinition`. |
+| [Logging and telemetry](logging-and-telemetry/README.md) | Structured logs plus OTLP traces and metrics. |
+| [Testing](testing/README.md) | Unit, integration, real-browser, and 100% package coverage workflows. |
+| [Provided certificates](https-provided-certificate/README.md) | HTTPS with a certificate and private-key pair. |
+| [ACME / Let's Encrypt](https-acme/README.md) | Certbot-backed `http-01` issuance and shared certificate consumers. |
+| [HTTPS security](https-security/README.md) | Redirects, HSTS, CSP, CORS, and response hardening. |
+| [Authentication and sessions](middleware-auth-jwt/README.md) | Opaque sessions, CSRF, credentials, MFA, and protected routes. |
+| [Localization](multilanguage-routing/README.md) | Locale-aware page routing and localized responses. |
+| [Reverse proxy awareness](reverse-proxy-awareness/README.md) | Trusted forwarding, TLS offload, and path-prefix mounting. |
 
-- `packages/web-api` remains the combined, full-featured example app.
-- The example folders here are intentionally smaller and cleaner than `packages/web-api`.
-- The snippet files are Markdown on purpose. They are intended to communicate the desired file shape
-  and authoring model even when the current framework still needs refinement.
+## Workflow guide
+
+- [Local HTTPS with mkcert](https-mkcert/README.md) is a practical certificate-generation workflow
+  layered onto the implemented manual-certificate listener. It is a workflow, not a separate framework
+  API.
+
+## Design direction
+
+- [Route templates](route-templates/README.md) describes the intended dynamic path/query DSL. Dynamic
+  paths and query parsing are already possible as explicit typed routes, but this declarative template
+  syntax is not executable yet.
+
+## Choosing a starting point
+
+Use `two-pages` to learn the architecture without a database, telemetry collector, TLS setup, or reverse
+proxy. Add the focused guides as the application needs them. `packages/web-api` remains the combined,
+full-stack reference when you need to see all of the seams wired together.
+
+The current framework conventions and the boundary between landed behavior and future design live in
+[design guidance](../docs/design-guidance.md). Runtime environment variables are centralized in
+[runtime configuration](../docs/runtime-configuration.md).

@@ -1,6 +1,6 @@
 # reverse-proxy-awareness
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show how to run behind nginx while preventing clients from spoofing forwarding headers directly.
 

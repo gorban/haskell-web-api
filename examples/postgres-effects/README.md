@@ -1,6 +1,6 @@
 # postgres-effects
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show the smallest app that opts into real database effects while staying close to the existing repo.
 

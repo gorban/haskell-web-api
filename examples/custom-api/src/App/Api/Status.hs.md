@@ -1,21 +1,20 @@
 # src/App/Api/Status.hs
 
 ```hs
-module App.Api.Status (statusRoute) where
+module App.Api.Status (statusRouteDefinition) where
 
 import HarchWeb
   ( Response (BodyResponse)
   , ResponseBody (..)
   , RouteRequest
   )
-import HarchWeb.Site (SiteRoute (..))
+import HarchWeb.Site (RouteDefinition (..))
 
-statusRoute :: SiteRoute AppRoute AppRequestContext
-statusRoute =
-  SiteRoute
-    { siteRouteValue = StatusApiRoute
-    , siteRouteNavigationLabel = Nothing
-    , siteRouteResponse = statusResponse
+statusRouteDefinition :: RouteDefinition AppRoute AppRequestContext
+statusRouteDefinition =
+  RouteDefinition
+    { routeNavigationLabel = Nothing
+    , routeResponse = statusResponse
     }
 
 statusResponse :: RouteRequest AppRoute AppRequestContext -> IO (Response AppRoute AppRequestContext)
@@ -32,6 +31,6 @@ statusResponse _ =
     )
 ```
 
-Add `StatusApiRoute` to the app-owned route ADT and its parser/renderer, then include `statusRoute`
-in the list passed to `buildSiteApplication`. This keeps custom APIs typed without asking the
-framework to guess a CRUD model.
+Add `StatusApi` to the app-owned `ApiRoute` ADT and its parser/renderer, then return
+`statusRouteDefinition` from the `Api StatusApi` branch of the total application dispatcher. This keeps
+custom APIs typed without asking the framework to guess a CRUD model.

@@ -1,6 +1,6 @@
 # https-acme
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show the real-certificate flow for a deployed app.
 

@@ -1,6 +1,6 @@
 # Route templates
 
-**Status:** Aspirational
+**Status:** Design direction
 
 This is the next example shape to define before continuing the topic-ordered catalog. It should stay
 small and focused: one layout, a few static index links, one typed path-parameter page, and one

@@ -1,8 +1,8 @@
 # custom-db-adapter
 
-**Status:** Working
+**Status:** Runnable
 
-Document the desired seam for replacing the default PostgreSQL-backed adapter with another database
+Demonstrate the seam for replacing the default PostgreSQL-backed adapter with another database
 technology such as SQLite.
 
 This package is now a buildable alternative interpreter over the framework-owned

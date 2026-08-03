@@ -1,6 +1,6 @@
 # logging-and-telemetry
 
-**Status:** Current
+**Status:** Implemented guide
 
 Show how to run the app locally with logs and traces visible, while keeping the smallest example
 free from telemetry by default.
