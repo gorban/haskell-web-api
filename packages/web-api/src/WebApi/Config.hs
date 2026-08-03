@@ -383,6 +383,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedSmtpPassword <- requiredConfigValue "SMTP_PASSWORD"
   parsedPublicBaseUrl <- requiredConfigValue "PUBLIC_BASE_URL"
   parsedTotpEncryptionKey <- parseTotpEncryptionKey =<< requiredConfigValue "TOTP_ENCRYPTION_KEY"
+  validateProductionTotpEncryptionKey parsedMode parsedTotpEncryptionKey
   pure
     AppEnvironmentConfig
       { appMode = parsedMode,
@@ -451,6 +452,12 @@ parseTotpEncryptionKey value =
 
 defaultTotpEncryptionKey :: SecretEncryptionKey
 defaultTotpEncryptionKey = fromJust (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+validateProductionTotpEncryptionKey :: AppMode -> SecretEncryptionKey -> Either ConfigParseError ()
+validateProductionTotpEncryptionKey appMode encryptionKey =
+  if appMode == Production && encryptionKey == defaultTotpEncryptionKey
+    then Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
+    else Right ()
 
 parseAppStartupConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError AppStartupConfig
 parseAppStartupConfig committedDefaults localOverrides environmentOverrides =

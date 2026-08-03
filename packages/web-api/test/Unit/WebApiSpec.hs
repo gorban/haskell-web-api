@@ -13,6 +13,7 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (toLower)
+import Data.Either (isRight)
 import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
@@ -104,6 +105,14 @@ minimumValue = minBound
 maximumValue :: (Bounded value) => value
 maximumValue = maxBound
 {-# NOINLINE maximumValue #-}
+
+productionTotpEncryptionKey :: Secret.SecretEncryptionKey
+productionTotpEncryptionKey =
+  maybe
+    (error "expected a valid production TOTP encryption key fixture")
+    id
+    (Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
+{-# NOINLINE productionTotpEncryptionKey #-}
 
 successorValue :: (Enum value) => value -> value
 successorValue = succ
@@ -4822,7 +4831,7 @@ spec = do
 
     it "lets .env.local override committed .env defaults" $ do
       let localOverrides =
-            [ ("APP_MODE", "production"),
+            [ ("APP_MODE", "test"),
               ("DATABASE_HOST", "localhost"),
               ("DATABASE_PORT", "6432"),
               ("DATABASE_NAME", "web_api_local"),
@@ -4832,7 +4841,7 @@ spec = do
       parseAppEnvironmentConfig committedEnvDefaults localOverrides []
         `shouldBe` Right
           defaultAppEnvironmentConfig
-            { appMode = Production,
+            { appMode = Test,
               databaseConfig =
                 DatabaseConfig
                   { databaseHost = "localhost",
@@ -4894,6 +4903,15 @@ spec = do
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
       parseAppEnvironmentConfig committedEnvDefaults [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "not-a-key")
+      parseAppEnvironmentConfig committedEnvDefaults [("APP_MODE", "production")] []
+        `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
+      parseAppEnvironmentConfig
+        committedEnvDefaults
+        [ ("APP_MODE", "production"),
+          ("TOTP_ENCRYPTION_KEY", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
+        ]
+        []
+        `shouldSatisfy` isRight
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $
@@ -4926,11 +4944,12 @@ spec = do
                 let envPath = tempDirectory <> "/.env"
                     envLocalPath = tempDirectory <> "/.env.local"
                 writeFile envPath "APP_MODE=development\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nDATABASE_NAME=shared_db\nDATABASE_USER=shared_user\nDATABASE_PASSWORD=shared_password\n"
-                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\n"
+                writeFile envLocalPath "APP_MODE=test\nDATABASE_PORT=7432\nDATABASE_PASSWORD=local_password\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\n"
                 loadAppEnvironmentConfigWithFiles envPath envLocalPath
                   `shouldReturn` Right
                     defaultAppEnvironmentConfig
                       { appMode = Production,
+                        totpEncryptionKey = productionTotpEncryptionKey,
                         databaseConfig =
                           DatabaseConfig
                             { databaseHost = "db.shared",
@@ -5027,7 +5046,7 @@ spec = do
           withClearedRuntimeEnvironment $ do
             let envPath = tempDirectory <> "/.env"
                 envLocalPath = tempDirectory <> "/.env.local"
-            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
+            writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_PORT=5443\n"
             writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
             loadAppStartupConfigWithFiles envPath envLocalPath
               `shouldReturn` Right
@@ -5035,6 +5054,7 @@ spec = do
                   { startupEnvironmentConfig =
                       defaultAppEnvironmentConfig
                         { appMode = Production,
+                          totpEncryptionKey = productionTotpEncryptionKey,
                           databaseConfig =
                             DatabaseConfig
                               { databaseHost = "db.shared",
@@ -5068,7 +5088,7 @@ spec = do
                 withTemporaryEnvironment "LISTENER_0_PORT" (Just "80") $ do
                   let envPath = tempDirectory <> "/.env"
                       envLocalPath = tempDirectory <> "/.env.local"
-                  writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
+                  writeFile envPath "APP_MODE=production\nDATABASE_HOST=db.shared\nDATABASE_PORT=6432\nTOTP_ENCRYPTION_KEY=QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI\nAPP_TITLE_PREFIX=web-api-shared\nLISTENER_0_HOST=127.0.0.1\nLISTENER_0_PORT=5443\n"
                   writeFile envLocalPath "DATABASE_PASSWORD=local_password\nAPP_TITLE_PREFIX=web-api-local\nLISTENER_0_PORT=7443\n"
                   loadAppStartupConfigWithFiles envPath envLocalPath
                     `shouldReturn` Right
@@ -5076,6 +5096,7 @@ spec = do
                         { startupEnvironmentConfig =
                             defaultAppEnvironmentConfig
                               { appMode = Production,
+                                totpEncryptionKey = productionTotpEncryptionKey,
                                 databaseConfig =
                                   DatabaseConfig
                                     { databaseHost = "db.shared",

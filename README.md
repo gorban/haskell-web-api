@@ -2,7 +2,7 @@
 
 [![CI][ci-badge]][ci] [![Coverage][coverage-badge]][coverage]
 
-Harch Web is an SSR-first, progressively enhanced web architecture for Haskell. Every supported route
+Harch Web is an SSR-first, progressively enhanced web architecture for Haskell. Every supported page route
 returns a complete HTML document, while a deliberately small browser layer adds SPA-style navigation,
 typed client actions, region patches, and live updates after the first page is already useful.
 
@@ -28,7 +28,7 @@ flowchart LR
   behavior --> patches[Region patches]
 ```
 
-Every route is usable as HTML before the optional application runtime arrives. Native links remain
+Every supported page route is usable as HTML before the optional application runtime arrives. Native links remain
 links, and modeled framework forms have an event path as soon as their controls can be used. Deferred
 modules then upgrade navigation and mutations without recreating the component tree in the browser.
 
@@ -204,12 +204,9 @@ heterogeneous positional arguments:
 [harch|
   <SubscriptionEmailField />
 
-  <AuthorCard authorName={currentAuthorName} authorRole={currentAuthorRole}>
+  <AuthorCard authorName={aboutAuthorName} authorRole={aboutAuthorRole}>
     <p>This is an actual HTML child.</p>
   </AuthorCard>
-
-  <AuthorCard authorName="Computed children" authorRole={currentAuthorRole}
-              children={computedChildren} />
 
   <AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>
     <p>Two distinct typed positional values, followed by children.</p>
@@ -218,10 +215,18 @@ heterogeneous positional arguments:
 ```
 
 The quasiquoter lowers those calls to normal Haskell: record construction such as
-`authorCard (AuthorCardProps {authorName = currentAuthorName, authorRole = currentAuthorRole}) children`,
+`authorCard (AuthorCardProps {authorName = aboutAuthorName, authorRole = aboutAuthorRole}) children`,
 or the direct call `authorAvatar (AuthorIdentity "HW") CompactAvatar children`. Components produce the
 `Html` AST; only
 the final renderer serializes tags, centrally escaped text, and centrally escaped attributes.
+
+Computed children are the same typed `[Html]` value in compiled quasiquoter coverage:
+
+```hs
+let computedChildren = [element paragraphTag [] [text "Computed child"]]
+    computedChildrenQuoted =
+      [harch|<Account.HeroCard heroTitle="Second page" children={computedChildren} />|]
+```
 
 A render prop needs no separate template subsystem. The following illustration is pseudocode only:
 

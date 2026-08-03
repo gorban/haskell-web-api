@@ -6,6 +6,8 @@ order, with each later layer overriding the earlier one:
 1. Defaults compiled into the application.
 2. `./.env`, for committed non-secret development settings.
 3. `./.env.local`, for machine-specific or deployed settings and secrets. This file is gitignored.
+4. Process environment variables, for deployment and one-off overrides. This is the highest-precedence
+   layer.
 
 Both files use `KEY=value` lines, allow blank lines, and treat lines beginning with `#` as comments.
 The smaller `two-pages-example` has its own fixed local configuration and does not need this table.
@@ -20,6 +22,19 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `DATABASE_NAME` | Runtime database name. | `web_api_dev` |
 | `DATABASE_USER` | Runtime database username. | `web_api_runtime` |
 | `DATABASE_PASSWORD` | Runtime database password. | `web_api` |
+| `WEB_API_MIGRATION_DATABASE_HOST` | Migration-only PostgreSQL host, read by setup and migration commands rather than the runtime request path. | unset |
+| `WEB_API_MIGRATION_DATABASE_PORT` | Migration-only PostgreSQL port. | unset |
+| `WEB_API_MIGRATION_DATABASE_NAME` | Migration-only PostgreSQL database name. | unset |
+| `WEB_API_MIGRATION_DATABASE_USER` | Migration-only PostgreSQL user. | unset |
+| `WEB_API_MIGRATION_DATABASE_PASSWORD` | Migration-only PostgreSQL password. | unset |
+| `SMTP_HOST` | SMTP server host for application email delivery. | `127.0.0.1` |
+| `SMTP_PORT` | SMTP server port. | `5025` |
+| `SMTP_HELO_NAME` | HELO/EHLO name sent to the SMTP server. | `localhost` |
+| `SMTP_USER` | SMTP username. | `test@localhost` |
+| `SMTP_PASSWORD` | SMTP password. | `password` |
+| `EMAIL_FROM` | Sender address for application email. | `noreply@localhost` |
+| `PUBLIC_BASE_URL` | Public origin used when rendering absolute links in emails and workflows. | `http://127.0.0.1:5001` |
+| `TOTP_ENCRYPTION_KEY` | URL-safe unpadded base64 encoding of a 32-byte encryption key for stored TOTP secrets. The committed development fixture is rejected when `APP_MODE=production`. | development fixture only |
 | `APP_TITLE_PREFIX` | Prefix for rendered HTML page titles. | `web-api` |
 | `LISTENER_<n>_HOST` | Interface for listener `n`. | listener 0: `127.0.0.1` |
 | `LISTENER_<n>_PORT` | Port for listener `n`. | listener 0: `5001` |
@@ -40,6 +55,7 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `STATIC_ASSET_CONTENT_TYPE_<n>_EXTENSION` | Allowed extension, including its leading dot. An empty value opts into extensionless files. | `.css`, `.html`, `.js`, `.json`, `.svg`, `.txt` |
 | `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type paired with the indexed extension. | types for the default extensions |
 | `STATIC_CACHE_CONTROL_SECONDS` | Static response `Cache-Control` max-age. | unset |
+| `TRUST_FORWARDED_HEADERS` | Trust forwarded host/proto/prefix headers from a configured reverse proxy. Keep `false` unless the direct peer is trusted. | `false` |
 | `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
 | `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
 | `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |
@@ -62,11 +78,17 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `SETUP_AUTOSTART_DATABASE` | Allow setup tooling to plan local PostgreSQL startup if unreachable. | `true` |
 | `SETUP_AUTOSTART_JAEGER` | Allow setup tooling to plan local Jaeger startup if configured but unreachable. | `false` |
 
-The `SETUP_AUTOSTART_*` values belong to prerequisite planning, not the runtime application read by
-`cabal run exe:haskell-web-api`. Setup hooks and verification paths read them from the same layered
-files. Runtime and migration PostgreSQL identities are deliberately separate; see
-[SETUP.md](../SETUP.md) for database creation, migration, and test prerequisites. The supported
-PostgreSQL major version is currently 17.
+The `SETUP_AUTOSTART_*` values and `WEB_API_MIGRATION_DATABASE_*` credentials belong to setup and
+migration planning, not the runtime request path read by `cabal run exe:haskell-web-api`. Setup hooks
+and verification paths read them from the same four layers. Migration overrides are all-or-nothing:
+setting any one `WEB_API_MIGRATION_DATABASE_*` value requires all five. Runtime and migration PostgreSQL
+identities are deliberately separate; see [SETUP.md](../SETUP.md) for database creation, migration, and
+test prerequisites. The supported PostgreSQL major version is currently 17.
+
+The compiled SMTP credentials and `TOTP_ENCRYPTION_KEY` are localhost development fixtures, never
+production secrets. `APP_MODE=production` rejects the committed TOTP key at startup; set a fresh,
+independent 32-byte key in `.env.local` or the process environment. For deployment, prefer process
+environment injection or a secret manager over a committed file.
 
 ## Minimal local overrides
 

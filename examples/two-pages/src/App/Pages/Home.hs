@@ -61,6 +61,12 @@ pageDefinition :: RouteDefinition TwoPageRoute ()
 pageDefinition =
   Site.pageRoute (Just "Home") homePage
 
+aboutAuthorName :: Text
+aboutAuthorName = "Harch Web team"
+
+aboutAuthorRole :: Text
+aboutAuthorRole = "SSR framework maintainers"
+
 homePage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 homePage routeRequest =
   pure
@@ -81,7 +87,7 @@ homePage routeRequest =
 
                   <section data-page-example="about">
                     <h2>About this example</h2>
-                    <AuthorCard authorName="Harch Web team" authorRole="SSR framework maintainers">
+                    <AuthorCard authorName={aboutAuthorName} authorRole={aboutAuthorRole}>
                       <p>The page and its controls are complete before optional JavaScript loads.</p>
                     </AuthorCard>
                     <AuthorAvatar props={[AuthorIdentity "HW", CompactAvatar]}>

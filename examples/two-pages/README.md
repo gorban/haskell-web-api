@@ -99,12 +99,22 @@ into `PreviewSlug`. The route family determines response capability; there is no
 </AuthorAvatar>
 ```
 
-Braced expressions provide dynamic named values, and `children={computedChildren}` supplies a
-computed `[Html]` instead of nested markup:
+Braced expressions provide named values from ordinary Haskell. `App.Pages.Home` uses the compiled
+top-level `aboutAuthorName` and `aboutAuthorRole` values:
 
 ```hs
-<AuthorCard authorName={currentAuthorName} authorRole={currentAuthorRole}
-            children={computedChildren} />
+<AuthorCard authorName={aboutAuthorName} authorRole={aboutAuthorRole}>
+  <p>The page and its controls are complete before optional JavaScript loads.</p>
+</AuthorCard>
+```
+
+`children={computedChildren}` supplies a computed `[Html]` instead of nested markup. The compiled
+quasiquoter test uses that form directly:
+
+```hs
+let computedChildren = [element paragraphTag [] [text "Computed child"]]
+    computedChildrenQuoted =
+      [harch|<Account.HeroCard heroTitle="Second page" children={computedChildren} />|]
 ```
 
 Prefer named fields for cohesive record props. Use the positional `props` list only when a component's
