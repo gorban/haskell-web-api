@@ -64,7 +64,12 @@ navigationRuntimeResponse runtime requestPath =
 
 -- | Handle framework-owned responses before routing or application middleware.
 -- Each response receives the request policy headers exactly once.
-runEarlyRequestStages :: Application route context -> Wai.Request -> Text -> Http.ResponseHeaders -> ExceptT (Text, Wai.Response) IO ()
+runEarlyRequestStages ::
+  Application route action context ->
+  Wai.Request ->
+  Text ->
+  Http.ResponseHeaders ->
+  ExceptT (Text, Wai.Response) IO ()
 runEarlyRequestStages webApplication request requestPath policyResponseHeaders = do
   let requestPolicyConfig = applicationRequestPolicy webApplication
       earlyResponse path = throwError . (path,) . applyResponseHeaders policyResponseHeaders
@@ -94,8 +99,8 @@ data RequestExecutionTimings = RequestExecutionTimings
 -- routing. Grouping them keeps the lifecycle helpers focused on their
 -- changing request state rather than plumbing the same environment through
 -- every stage.
-data RoutedRequestExecution route context = RoutedRequestExecution
-  { routedRequestApplication :: Application route context,
+data RoutedRequestExecution route action context = RoutedRequestExecution
+  { routedRequestApplication :: Application route action context,
     routedRequestWaiRequest :: Wai.Request,
     routedRequestRespond :: Wai.Response -> IO Wai.ResponseReceived,
     routedRequestPolicyConfig :: RequestPolicyConfig,
@@ -104,7 +109,7 @@ data RoutedRequestExecution route context = RoutedRequestExecution
 
 -- | Adapt a typed application to WAI. Framework-owned early responses,
 -- middleware, route dispatch, and finalization all converge here.
-toWaiApplication :: (Eq route) => Application route context -> Wai.Application
+toWaiApplication :: (Eq route) => Application route action context -> Wai.Application
 toWaiApplication webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
@@ -130,7 +135,12 @@ toWaiApplication webApplication request respond = do
           policyEvaluatedAt
   either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
 
-handleRoutedRequest :: (Eq route) => RoutedRequestExecution route context -> Word64 -> Word64 -> IO Wai.ResponseReceived
+handleRoutedRequest ::
+  (Eq route) =>
+  RoutedRequestExecution route action context ->
+  Word64 ->
+  Word64 ->
+  IO Wai.ResponseReceived
 handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
@@ -159,13 +169,17 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
           }
   finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response
 
-middlewareTimingEntry :: Application route context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
+middlewareTimingEntry :: Application route action context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
 middlewareTimingEntry webApplication startedAt completedAt =
   case applicationRequestMiddleware webApplication of
     [] -> []
     _ -> [("middleware", startedAt, completedAt)]
 
-dispatchRoutedRequest :: RoutedRequestExecution route context -> RouteRequest route context -> MiddlewareResult context -> IO (Response route context)
+dispatchRoutedRequest ::
+  RoutedRequestExecution route action context ->
+  RouteRequest route context ->
+  MiddlewareResult context ->
+  IO (Response route context)
 dispatchRoutedRequest _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
 dispatchRoutedRequest
   routedRequestExecution
@@ -190,8 +204,32 @@ dispatchRoutedRequest
                     case validateClientActionCsrf request actionFields of
                       Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
                       Right () -> do
-                        maybeActionResponse <- handleClientAction webApplication ClientActionRequest {clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request), clientActionPath = requestPath, clientActionFields = actionFields, clientActionCsrfToken = lookup "_harch_csrf" actionFields, clientActionContext = routedRequestContext}
-                        pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
+                        let actionPayload =
+                              ClientActionPayload
+                                { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
+                                  clientActionPath = requestPath,
+                                  clientActionFields = actionFields,
+                                  clientActionCsrfToken = lookup "_harch_csrf" actionFields,
+                                  clientActionPayloadContext = routedRequestContext
+                                }
+                        case decodeClientAction webApplication actionPayload of
+                          Nothing ->
+                            pure
+                              (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+                          Just action -> do
+                            maybeActionResponse <-
+                              handleClientAction
+                                webApplication
+                                ClientActionRequest
+                                  { clientAction = action,
+                                    clientActionContext = routedRequestContext
+                                  }
+                            pure
+                              ( maybe
+                                  (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+                                  ClientActionBodyResponse
+                                  maybeActionResponse
+                              )
           else renderResponse webApplication routeRequest
 
 readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)
@@ -207,7 +245,14 @@ readClientActionBody request = go 0 []
             then pure (Right (LazyByteString.fromChunks (reverse chunks)))
             else go nextByteCount (chunk : chunks)
 
-finalizeRoutedResponse :: (Eq route) => RoutedRequestExecution route context -> RequestExecutionTimings -> RouteRequest route context -> Document.RuntimeNonce -> Response route context -> IO Wai.ResponseReceived
+finalizeRoutedResponse ::
+  (Eq route) =>
+  RoutedRequestExecution route action context ->
+  RequestExecutionTimings ->
+  RouteRequest route context ->
+  Document.RuntimeNonce ->
+  Response route context ->
+  IO Wai.ResponseReceived
 finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
@@ -222,7 +267,14 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runt
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
       >> respond (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
 
-buildRoutedRequestObservability :: (Eq route) => RoutedRequestExecution route context -> RequestExecutionTimings -> RouteRequest route context -> Response route context -> ResponseDiagnostics -> Observability.RequestObservability
+buildRoutedRequestObservability ::
+  (Eq route) =>
+  RoutedRequestExecution route action context ->
+  RequestExecutionTimings ->
+  RouteRequest route context ->
+  Response route context ->
+  ResponseDiagnostics ->
+  Observability.RequestObservability
 buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues =
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
@@ -270,7 +322,15 @@ intObservabilityAttribute name value =
       Observability.attributeValue = Observability.IntAttribute value
     }
 
-reportEarlyRequestObservability :: (Eq route) => Application route context -> Wai.Request -> Word64 -> Word64 -> Text -> Wai.Response -> IO ()
+reportEarlyRequestObservability ::
+  (Eq route) =>
+  Application route action context ->
+  Wai.Request ->
+  Word64 ->
+  Word64 ->
+  Text ->
+  Wai.Response ->
+  IO ()
 reportEarlyRequestObservability webApplication request requestStartedAt requestCompletedAt routePath response =
   let requestPolicyConfig = applicationRequestPolicy webApplication
       requestObservability =

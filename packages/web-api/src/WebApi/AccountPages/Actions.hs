@@ -1,23 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions
-  ( handleAccountAction,
+  ( AccountAction,
+    decodeAccountAction,
+    handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
   )
 where
 
+import Data.Maybe (fromMaybe)
 import HarchWeb qualified
 import WebApi.AccountPages.Actions.Common
-  ( accountRoutePath,
+  ( accountRoutePathForContext,
     attachClientActionFailure,
   )
+import WebApi.AccountPages.Actions.Contract
 import WebApi.AccountPages.Actions.Workflows
-  ( handleLogin,
+  ( handleLoginSubmission,
     handleLogout,
-    handleMfaEnrollment,
-    handleProfile,
-    handleRegistration,
-    handleVerification,
+    handleMfaEnrollmentSubmission,
+    handleProfileSubmission,
+    handleRegistrationSubmission,
+    handleVerificationSubmission,
     mfaEnrollmentFailureDiagnostics,
   )
 import WebApi.AppEffect
@@ -31,22 +35,71 @@ import WebApi.Route
     AppRoute (..),
   )
 
-handleAccountAction :: AccountWorkflow -> HarchWeb.ClientActionRequest AppRequestContext -> IO (Maybe HarchWeb.ClientActionResponse)
+type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+
+type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+
+handleAccountAction :: AccountWorkflow -> AccountActionRequest -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
-  traverse runSelectedAccountAction (accountActionCodec actionRequest)
+  Just <$> runSelectedAccountAction (accountActionCodec actionRequest)
   where
     runSelectedAccountAction action =
       either attachClientActionFailure id <$> runAppM (AppServices workflow) action
 
-accountActionCodec :: HarchWeb.ClientActionRequest AppRequestContext -> Maybe (AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse)
+accountActionCodec :: AccountActionRequest -> AccountActionWorkflow
 accountActionCodec actionRequest =
-  if HarchWeb.clientActionMethod actionRequest /= "POST"
-    then Nothing
-    else case HarchWeb.clientActionPath actionRequest of
-      path | path == accountRoutePath actionRequest RegistrationRoute -> Just (handleRegistration actionRequest)
-      path | path == accountRoutePath actionRequest EmailVerificationRoute -> Just (handleVerification actionRequest)
-      path | path == accountRoutePath actionRequest MfaEnrollmentRoute -> Just (handleMfaEnrollment actionRequest)
-      path | path == accountRoutePath actionRequest LoginRoute -> Just (handleLogin actionRequest)
-      path | path == accountRoutePath actionRequest ProfileRoute -> Just (handleProfile actionRequest)
-      path | path == accountRoutePath actionRequest LogoutRoute -> Just (handleLogout actionRequest)
-      _ -> Nothing
+  case HarchWeb.clientAction actionRequest of
+    RegisterAccount submission -> handleRegistrationSubmission actionRequest submission
+    VerifyEmail submission -> handleVerificationSubmission actionRequest submission
+    EnrollMfa submission -> handleMfaEnrollmentSubmission actionRequest submission
+    LoginAccount submission -> handleLoginSubmission actionRequest submission
+    UpdateProfile submission -> handleProfileSubmission actionRequest submission
+    LogoutAccount -> handleLogout actionRequest
+
+decodeAccountAction :: HarchWeb.ClientActionPayload AppRequestContext -> Maybe AccountAction
+decodeAccountAction actionPayload
+  | HarchWeb.clientActionMethod actionPayload /= "POST" = Nothing
+  | otherwise =
+      case HarchWeb.clientActionPath actionPayload of
+        path
+          | path == routePath RegistrationRoute ->
+              Just
+                ( RegisterAccount
+                    RegistrationSubmission
+                      { registrationUsernameValue = field "username",
+                        registrationEmailValue = field "email",
+                        registrationDisplayNameValue = field "displayName",
+                        registrationPasswordValue = field "password"
+                      }
+                )
+        path
+          | path == routePath EmailVerificationRoute ->
+              Just (VerifyEmail (VerificationSubmission (field "token")))
+        path
+          | path == routePath MfaEnrollmentRoute ->
+              Just
+                ( EnrollMfa
+                    MfaEnrollmentSubmission
+                      { mfaEnrollmentAccountValue = field "account",
+                        mfaEnrollmentIntentValue = field "intent",
+                        mfaEnrollmentCodeValue = field "code"
+                      }
+                )
+        path
+          | path == routePath LoginRoute ->
+              Just
+                ( LoginAccount
+                    LoginSubmission
+                      { loginEmailValue = field "email",
+                        loginUsernameValue = field "username",
+                        loginPasswordValue = field "password",
+                        loginProofValue = field "proof",
+                        loginCodeValue = field "code"
+                      }
+                )
+        path | path == routePath ProfileRoute -> Just (UpdateProfile (ProfileSubmission (field "intent")))
+        path | path == routePath LogoutRoute -> Just LogoutAccount
+        _ -> Nothing
+  where
+    field name = fromMaybe "" (lookup name (HarchWeb.clientActionFields actionPayload))
+    routePath = accountRoutePathForContext (HarchWeb.clientActionPayloadContext actionPayload)

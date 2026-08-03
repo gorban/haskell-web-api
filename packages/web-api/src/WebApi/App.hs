@@ -29,7 +29,7 @@ import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
-import WebApi.AccountPages (handleAccountAction)
+import WebApi.AccountPages (AccountAction, decodeAccountAction, handleAccountAction)
 import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
@@ -66,11 +66,18 @@ import WebApi.Route
   )
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
-buildAppWithDatabase :: AppConfig -> PageRepository -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabase ::
+  AppConfig ->
+  PageRepository ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabase config pageRepository =
   buildAppWithDatabaseAndAccountWorkflow config pageRepository unavailableAccountWorkflow
 
-buildAppWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.Application AppRoute AppRequestContext
+buildAppWithDatabaseAndAccountWorkflow ::
+  AppConfig ->
+  PageRepository ->
+  AccountWorkflow ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow =
   buildAppWithDatabaseAndReporters config pageRepository accountWorkflow ignoreRequestObservability ignoreConnectionObservability ignoreApplicationLog
 
@@ -81,7 +88,7 @@ buildAppWithDatabaseAndReporters ::
   (Observability.RequestObservability -> IO ()) ->
   (Observability.ConnectionObservability -> IO ()) ->
   (Text.Text -> IO ()) ->
-  HarchWeb.Application AppRoute AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
   config `seq`
     Site.buildSiteApplication
@@ -98,6 +105,7 @@ buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestO
             Site.siteStaticAssets = staticAssets config,
             Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
             Site.siteRequestPolicy = requestPolicy config,
+            Site.siteDecodeClientAction = decodeAccountAction,
             Site.siteReportRequestObservability = requestObservabilityReporter,
             Site.siteReportConnectionObservability = connectionObservabilityReporter,
             Site.siteReportApplicationLog = applicationLogReporter,
@@ -105,7 +113,7 @@ buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestO
           }
       )
 
-buildApp :: AppConfig -> HarchWeb.Application AppRoute AppRequestContext
+buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildApp config =
   buildAppWithDatabase config defaultPageRepository
 
@@ -138,7 +146,10 @@ routeNavigationLabel route = lookup route navigationLabels
         (ProfileRoute, "Profile")
       ]
 
-buildRuntimeApp :: AppConfig -> AppEnvironmentConfig -> HarchWeb.Application AppRoute AppRequestContext
+buildRuntimeApp ::
+  AppConfig ->
+  AppEnvironmentConfig ->
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildRuntimeApp config environmentConfig =
   let databaseConfiguration = databaseConfig environmentConfig
       pageRepository = buildRuntimePostgresPageRepository databaseConfiguration
@@ -157,7 +168,7 @@ buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
   (DatabaseConfig -> PageRepository) ->
   AppEnvironmentConfig ->
-  HarchWeb.Application AppRoute AppRequestContext
+  HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
   let pageRepository = buildPageRepository (databaseConfig environmentConfig)
    in pageRepository `seq`

@@ -2,7 +2,7 @@
 
 module Unit.AppSpec (spec) where
 
-import App.App (buildApplication, twoPageServerConfig, twoPageSite)
+import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
 import App.Pages.Route.Generated
   ( PageRoute (..),
     allPageRoutes,
@@ -19,7 +19,8 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-  ( ClientActionRequest (..),
+  ( ClientActionPayload (..),
+    ClientActionRequest (..),
     ListenerConfig (..),
     RouteRequest (..),
     appName,
@@ -183,6 +184,30 @@ spec =
           )
 
     describe "buildApplication" $ do
+      it "decodes only the modeled subscription action and preserves an absent email as validation input" $ do
+        let actionPayload method path fields =
+              ClientActionPayload
+                { clientActionMethod = method,
+                  clientActionPath = path,
+                  clientActionFields = fields,
+                  clientActionCsrfToken = Nothing,
+                  clientActionPayloadContext = ()
+                }
+        let absentEmailDecoded =
+              case HarchWeb.decodeClientAction
+                buildApplication
+                (actionPayload "POST" "/actions/subscribe" []) of
+                Just (SubscribeAction emailAddress) -> Text.null emailAddress
+                Nothing -> False
+            unknownActionRejected =
+              case HarchWeb.decodeClientAction
+                buildApplication
+                (actionPayload "POST" "/actions/missing" []) of
+                Just _ -> False
+                Nothing -> True
+        absentEmailDecoded `shouldBe` True
+        unknownActionRejected `shouldBe` True
+
       it "totally dispatches every generated page to a complete SSR page" $ do
         responses <-
           traverse
@@ -354,10 +379,7 @@ spec =
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientActionMethod = "POST",
-                clientActionPath = "/actions/subscribe",
-                clientActionFields = [("email", "ada@example")],
-                clientActionCsrfToken = Nothing,
+              { clientAction = SubscribeAction "ada@example",
                 clientActionContext = ()
               }
         expectAll
@@ -386,10 +408,7 @@ spec =
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientActionMethod = "POST",
-                clientActionPath = "/actions/subscribe",
-                clientActionFields = [("email", "ada@example.com")],
-                clientActionCsrfToken = Nothing,
+              { clientAction = SubscribeAction "ada@example.com",
                 clientActionContext = ()
               }
         expectAll
@@ -402,27 +421,12 @@ spec =
                  ]
           )
 
-      it "leaves unrelated client actions for other app routes" $
-        HarchWeb.handleClientAction
-          buildApplication
-          ClientActionRequest
-            { clientActionMethod = "POST",
-              clientActionPath = "/actions/other",
-              clientActionFields = [],
-              clientActionCsrfToken = Nothing,
-              clientActionContext = ()
-            }
-          `shouldReturn` Nothing
-
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
           HarchWeb.handleClientAction
             buildApplication
             ClientActionRequest
-              { clientActionMethod = "POST",
-                clientActionPath = "/actions/subscribe",
-                clientActionFields = [("email", "invalid")],
-                clientActionCsrfToken = Nothing,
+              { clientAction = SubscribeAction "invalid",
                 clientActionContext = ()
               }
         fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just 422

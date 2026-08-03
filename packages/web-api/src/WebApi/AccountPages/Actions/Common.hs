@@ -2,12 +2,12 @@
 
 module WebApi.AccountPages.Actions.Common
   ( accountRoutePath,
+    accountRoutePathForContext,
     accountWorkflow,
     pendingProfileForm,
     resendLabel,
     profileLoadErrorType,
     profileLoadErrorDetail,
-    submittedField,
     localized,
     actionLocale,
     mfaErrorMessage,
@@ -39,6 +39,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import WebApi.Account (AccountProfile (..), AccountStoreError (..))
+import WebApi.AccountPages.Actions.Contract (AccountAction)
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Rendering
 import WebApi.AppEffect
@@ -59,18 +60,23 @@ import WebApi.Profile (ProfileLoadError (..))
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), renderRoutePath)
 import WebApi.Session (AccountSessionStoreError (..))
 
-accountRoutePath :: HarchWeb.ClientActionRequest AppRequestContext -> AppRoute -> Text
-accountRoutePath actionRequest route =
+type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+
+accountRoutePath :: AccountActionRequest -> AppRoute -> Text
+accountRoutePath = accountRoutePathForContext . HarchWeb.clientActionContext
+
+accountRoutePathForContext :: AppRequestContext -> AppRoute -> Text
+accountRoutePathForContext requestContext route =
   renderRoutePath
     HarchWeb.RouteRequest
       { HarchWeb.requestRoute = route,
-        HarchWeb.requestContext = HarchWeb.clientActionContext actionRequest
+        HarchWeb.requestContext = requestContext
       }
 
 accountWorkflow :: AppM publicFailure AccountWorkflow
 accountWorkflow = appAccountWorkflow <$> askAppServices
 
-pendingProfileForm :: HarchWeb.ClientActionRequest AppRequestContext -> AccountProfile -> Maybe Text -> Bool -> PendingProfileForm
+pendingProfileForm :: AccountActionRequest -> AccountProfile -> Maybe Text -> Bool -> PendingProfileForm
 pendingProfileForm actionRequest profile message isError =
   PendingProfileForm
     { pendingProfileFormEmail = Email.emailAddressText (accountProfileEmail profile),
@@ -79,7 +85,7 @@ pendingProfileForm actionRequest profile message isError =
       pendingProfileFormResendLabel = resendLabel actionRequest
     }
 
-resendLabel :: HarchWeb.ClientActionRequest AppRequestContext -> Text
+resendLabel :: AccountActionRequest -> Text
 resendLabel actionRequest = localized actionRequest "Resend verification email" "Reenviar correo de verificacion"
 
 profileLoadErrorType :: ProfileLoadError -> Text
@@ -94,22 +100,16 @@ profileLoadErrorDetail loadError =
     ProfileSessionStoreError storeError -> sessionStoreErrorMessage storeError
     ProfileAccountStoreError storeError -> accountStoreErrorDetail storeError
 
-submittedField :: HarchWeb.ClientActionRequest context -> Text -> Text
-submittedField actionRequest name =
-  case [value | (fieldName, value) <- HarchWeb.clientActionFields actionRequest, fieldName == name] of
-    [value] -> value
-    _ -> Text.empty
-
-localized :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Text -> Text
+localized :: AccountActionRequest -> Text -> Text -> Text
 localized actionRequest english spanish =
   case actionLocale actionRequest of
     English -> english
     Spanish -> spanish
 
-actionLocale :: HarchWeb.ClientActionRequest AppRequestContext -> AppLocale
+actionLocale :: AccountActionRequest -> AppLocale
 actionLocale = requestLocale . HarchWeb.clientActionContext
 
-mfaErrorMessage :: HarchWeb.ClientActionRequest AppRequestContext -> MfaEnrollmentError -> Text
+mfaErrorMessage :: AccountActionRequest -> MfaEnrollmentError -> Text
 mfaErrorMessage actionRequest errorValue =
   case errorValue of
     MfaEnrollmentAccountIsNotEligible -> localized actionRequest "Verify your email address before enrolling an authenticator." "Verifica tu direccion de correo antes de registrar un autenticador."
@@ -226,7 +226,7 @@ logoutResponse locale logoutPath status message isError headers =
       HarchWeb.clientActionLogEntries = []
     }
 
-profileResponse :: HarchWeb.ClientActionRequest AppRequestContext -> Int -> PendingProfileForm -> HarchWeb.ClientActionResponse
+profileResponse :: AccountActionRequest -> Int -> PendingProfileForm -> HarchWeb.ClientActionResponse
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,

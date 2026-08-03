@@ -13,7 +13,8 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestPolicyConfig)
 import HarchWeb.Server.Response
-  ( ClientActionRequest,
+  ( ClientActionPayload,
+    ClientActionRequest,
     ClientActionResponse,
     MiddlewareResult (..),
     RequestMiddleware (..),
@@ -22,7 +23,7 @@ import HarchWeb.Server.Response
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.Wai qualified as Wai
 
-data Application route context = Application
+data Application route action context = Application
   { appName :: Text,
     defaultRequestContext :: context,
     requestContextFromRequest :: Wai.Request -> context -> context,
@@ -32,14 +33,15 @@ data Application route context = Application
     applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
-    handleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
+    decodeClientAction :: ClientActionPayload context -> Maybe action,
+    handleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),
     reportConnectionObservability :: Observability.ConnectionObservability -> IO (),
     reportApplicationLog :: Text -> IO ()
   }
 
-application :: Application route context -> Application route context
+application :: Application route action context -> Application route action context
 application = id
 
 middlewareResultContext :: MiddlewareResult context -> context

@@ -92,7 +92,7 @@ responseBodyDiagnostics responseBodyValue =
       diagnosticLogEntries = responseLogEntries responseBodyValue
     }
 
-responseStatusCode :: (Eq route) => Application route context -> Response route context -> Int
+responseStatusCode :: (Eq route) => Application route action context -> Response route context -> Int
 responseStatusCode webApplication response =
   case response of
     PageResponse page -> if isNotFoundPage webApplication page then 404 else 200
@@ -112,7 +112,13 @@ responseKind response =
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
     EventStreamResponse _ _ -> Observability.BodyResponseKind
 
-toWaiResponse :: (Eq route) => Http.ResponseHeaders -> Document.RuntimeNonce -> Application route context -> Response route context -> Wai.Response
+toWaiResponse ::
+  (Eq route) =>
+  Http.ResponseHeaders ->
+  Document.RuntimeNonce ->
+  Application route action context ->
+  Response route context ->
+  Wai.Response
 toWaiResponse additionalHeaders runtimeNonce webApplication response =
   case response of
     PageResponse page ->
@@ -166,7 +172,7 @@ toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
         flush
         streamEvents write flush
 
-isNotFoundPage :: (Eq route) => Application route context -> Page route context -> Bool
+isNotFoundPage :: (Eq route) => Application route action context -> Page route context -> Bool
 isNotFoundPage webApplication page =
   let pageRequestContext = Document.pageContext page
    in pageRequestContext `seq`

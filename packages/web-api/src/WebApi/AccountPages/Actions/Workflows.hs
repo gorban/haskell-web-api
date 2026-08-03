@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions.Workflows
-  ( handleRegistration,
-    handleVerification,
-    handleMfaEnrollment,
-    handleLogin,
+  ( handleRegistrationSubmission,
+    handleVerificationSubmission,
+    handleMfaEnrollmentSubmission,
+    handleLoginSubmission,
     handleLogout,
-    handleProfile,
+    handleProfileSubmission,
     mfaEnrollmentFailureDiagnostics,
   )
 where
@@ -40,6 +40,7 @@ import WebApi.Account
     resendEmailVerificationAt,
   )
 import WebApi.AccountPages.Actions.Common
+import WebApi.AccountPages.Actions.Contract
 import WebApi.AccountPages.Forms
 import WebApi.AppEffect
   ( AccountWorkflow (..),
@@ -76,84 +77,13 @@ import WebApi.Session
     issueAccountSession,
   )
 
-data RegistrationSubmission = RegistrationSubmission
-  { registrationUsernameValue :: Text,
-    registrationEmailValue :: Text,
-    registrationDisplayNameValue :: Text,
-    registrationPasswordValue :: Text
-  }
+type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
 
-newtype VerificationSubmission = VerificationSubmission
-  { verificationTokenValue :: Text
-  }
+type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 
-data MfaEnrollmentSubmission = MfaEnrollmentSubmission
-  { mfaEnrollmentAccountValue :: Text,
-    mfaEnrollmentIntentValue :: Text,
-    mfaEnrollmentCodeValue :: Text
-  }
+type ParsedRegistration = (Text, Text, Text, Text, Username.Username, Email.EmailAddress)
 
-data LoginSubmission = LoginSubmission
-  { loginEmailValue :: Text,
-    loginUsernameValue :: Text,
-    loginPasswordValue :: Text,
-    loginProofValue :: Text,
-    loginCodeValue :: Text
-  }
-
-newtype ProfileSubmission = ProfileSubmission
-  { profileIntentValue :: Text
-  }
-
-handleRegistration :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-handleRegistration actionRequest = handleRegistrationSubmission actionRequest (registrationSubmission actionRequest)
-
-handleVerification :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-handleVerification actionRequest = handleVerificationSubmission actionRequest (verificationSubmission actionRequest)
-
-handleMfaEnrollment :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-handleMfaEnrollment actionRequest = handleMfaEnrollmentSubmission actionRequest (mfaEnrollmentSubmission actionRequest)
-
-handleLogin :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-handleLogin actionRequest = handleLoginSubmission actionRequest (loginSubmission actionRequest)
-
-handleProfile :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-handleProfile actionRequest = handleProfileSubmission actionRequest (profileSubmission actionRequest)
-
-registrationSubmission :: HarchWeb.ClientActionRequest context -> RegistrationSubmission
-registrationSubmission actionRequest =
-  RegistrationSubmission
-    { registrationUsernameValue = submittedField actionRequest "username",
-      registrationEmailValue = submittedField actionRequest "email",
-      registrationDisplayNameValue = submittedField actionRequest "displayName",
-      registrationPasswordValue = submittedField actionRequest "password"
-    }
-
-verificationSubmission :: HarchWeb.ClientActionRequest context -> VerificationSubmission
-verificationSubmission actionRequest = VerificationSubmission {verificationTokenValue = submittedField actionRequest "token"}
-
-mfaEnrollmentSubmission :: HarchWeb.ClientActionRequest context -> MfaEnrollmentSubmission
-mfaEnrollmentSubmission actionRequest =
-  MfaEnrollmentSubmission
-    { mfaEnrollmentAccountValue = submittedField actionRequest "account",
-      mfaEnrollmentIntentValue = submittedField actionRequest "intent",
-      mfaEnrollmentCodeValue = submittedField actionRequest "code"
-    }
-
-loginSubmission :: HarchWeb.ClientActionRequest context -> LoginSubmission
-loginSubmission actionRequest =
-  LoginSubmission
-    { loginEmailValue = submittedField actionRequest "email",
-      loginUsernameValue = submittedField actionRequest "username",
-      loginPasswordValue = submittedField actionRequest "password",
-      loginProofValue = submittedField actionRequest "proof",
-      loginCodeValue = submittedField actionRequest "code"
-    }
-
-profileSubmission :: HarchWeb.ClientActionRequest context -> ProfileSubmission
-profileSubmission actionRequest = ProfileSubmission {profileIntentValue = submittedField actionRequest "intent"}
-
-handleRegistrationSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> RegistrationSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleRegistrationSubmission :: AccountActionRequest -> RegistrationSubmission -> AccountActionWorkflow
 handleRegistrationSubmission actionRequest submission =
   case parseRegistrationForm actionRequest submission of
     Left response -> pure response
@@ -177,7 +107,10 @@ handleRegistrationSubmission actionRequest submission =
             (Password.mkPassword passwordValue)
       interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult
 
-parseRegistrationForm :: HarchWeb.ClientActionRequest AppRequestContext -> RegistrationSubmission -> Either HarchWeb.ClientActionResponse (Text, Text, Text, Text, Username.Username, Email.EmailAddress)
+parseRegistrationForm ::
+  AccountActionRequest ->
+  RegistrationSubmission ->
+  Either HarchWeb.ClientActionResponse ParsedRegistration
 parseRegistrationForm actionRequest submission =
   let usernameValue = registrationUsernameValue submission
       emailValue = registrationEmailValue submission
@@ -191,7 +124,13 @@ parseRegistrationForm actionRequest submission =
         (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path 422 (form (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
         (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
 
-interpretRegistrationResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Text -> Text -> Either RegistrationError RegistrationResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretRegistrationResult ::
+  AccountActionRequest ->
+  Text ->
+  Text ->
+  Text ->
+  Either RegistrationError RegistrationResult ->
+  AccountActionWorkflow
 interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult =
   let path = accountRoutePath actionRequest RegistrationRoute
       response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
@@ -203,7 +142,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
         Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
         Left RegistrationClockOverflow -> throwClientActionFailure (response 503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
 
-handleVerificationSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> VerificationSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleVerificationSubmission :: AccountActionRequest -> VerificationSubmission -> AccountActionWorkflow
 handleVerificationSubmission actionRequest submission =
   let tokenValue = verificationTokenValue submission
       path = accountRoutePath actionRequest EmailVerificationRoute
@@ -219,7 +158,7 @@ handleVerificationSubmission actionRequest submission =
             Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
             Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
 
-handleMfaEnrollmentSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> MfaEnrollmentSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleMfaEnrollmentSubmission :: AccountActionRequest -> MfaEnrollmentSubmission -> AccountActionWorkflow
 handleMfaEnrollmentSubmission actionRequest submission =
   let accountValue = mfaEnrollmentAccountValue submission
       path = accountRoutePath actionRequest MfaEnrollmentRoute
@@ -231,7 +170,7 @@ handleMfaEnrollmentSubmission actionRequest submission =
             "confirm" -> confirmMfaAction actionRequest path accountId (mfaEnrollmentCodeValue submission)
             _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
 
-startMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+startMfaAction :: AccountActionRequest -> Text -> Account.AccountId -> AccountActionWorkflow
 startMfaAction actionRequest path accountId = do
   workflow <- accountWorkflow
   now <- liftAppIO (accountWorkflowClock workflow)
@@ -240,7 +179,7 @@ startMfaAction actionRequest path accountId = do
     Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
     Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentStartFailure "mfa-account" errorValue
 
-confirmMfaAction :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> Text -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+confirmMfaAction :: AccountActionRequest -> Text -> Account.AccountId -> Text -> AccountActionWorkflow
 confirmMfaAction actionRequest path accountId codeValue =
   case Totp.mkTotpCode codeValue of
     Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
@@ -253,7 +192,14 @@ confirmMfaAction actionRequest path accountId codeValue =
         Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
         Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentConfirmFailure "mfa-code" errorValue
 
-interpretMfaFailure :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Account.AccountId -> FailureCode -> Text -> MfaEnrollmentError -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretMfaFailure ::
+  AccountActionRequest ->
+  Text ->
+  Account.AccountId ->
+  FailureCode ->
+  Text ->
+  MfaEnrollmentError ->
+  AccountActionWorkflow
 interpretMfaFailure actionRequest path accountId failureCodeValue focusId errorValue =
   let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
    in case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
@@ -271,7 +217,7 @@ mfaEnrollmentFailureDiagnostics failureCodeValue errorValue =
   where
     failureDiagnostics = buildFailureDiagnostics failureCodeValue
 
-handleLoginSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> LoginSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleLoginSubmission :: AccountActionRequest -> LoginSubmission -> AccountActionWorkflow
 handleLoginSubmission actionRequest submission =
   case parseLoginForm actionRequest submission of
     Left response -> pure response
@@ -282,7 +228,10 @@ handleLoginSubmission actionRequest submission =
       loginResult <- liftAppIO (completePasswordLoginWithIdentifier (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds identifier (Password.mkPassword passwordValue) proof)
       interpretLoginResult actionRequest emailValue nowNanoseconds loginResult
 
-parseLoginForm :: HarchWeb.ClientActionRequest AppRequestContext -> LoginSubmission -> Either HarchWeb.ClientActionResponse (Text, Text, LoginIdentifier, MfaLoginProof)
+parseLoginForm ::
+  AccountActionRequest ->
+  LoginSubmission ->
+  Either HarchWeb.ClientActionResponse (Text, Text, LoginIdentifier, MfaLoginProof)
 parseLoginForm actionRequest submission =
   let emailValue = loginEmailValue submission
       usernameValue = loginUsernameValue submission
@@ -299,7 +248,12 @@ parseLoginForm actionRequest submission =
         (_, _, Nothing) -> Left (loginResponse (actionLocale actionRequest) path 422 (loginForm (localized actionRequest "Enter a valid authenticator or recovery code." "Introduce un codigo de autenticador o recuperacion valido.") True) (Just "login-code") [])
         (Just identifier, True, Just proof) -> Right (if Text.null emailValue then usernameValue else emailValue, passwordValue, identifier, proof)
 
-interpretLoginResult :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> PasswordMfaLoginResult -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretLoginResult ::
+  AccountActionRequest ->
+  Text ->
+  Word64 ->
+  PasswordMfaLoginResult ->
+  AccountActionWorkflow
 interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
   let path = accountRoutePath actionRequest LoginRoute
       loginForm message = LoginForm emailValue (Just message)
@@ -314,7 +268,7 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
         PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
         PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
 
-issueLoginSession :: HarchWeb.ClientActionRequest AppRequestContext -> Text -> Word64 -> Account.AccountId -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+issueLoginSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId -> AccountActionWorkflow
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   workflow <- accountWorkflow
   issuedSession <- liftAppIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
@@ -324,7 +278,7 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
     Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
 
-handleLogout :: HarchWeb.ClientActionRequest AppRequestContext -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =
   let path = accountRoutePath actionRequest LogoutRoute
    in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
@@ -336,7 +290,7 @@ handleLogout actionRequest =
             Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path 503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
             Right _ -> pure (logoutResponse (actionLocale actionRequest) path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
 
-handleProfileSubmission :: HarchWeb.ClientActionRequest AppRequestContext -> ProfileSubmission -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handleProfileSubmission :: AccountActionRequest -> ProfileSubmission -> AccountActionWorkflow
 handleProfileSubmission actionRequest submission = do
   workflow <- accountWorkflow
   now <- liftAppIO (accountWorkflowClock workflow)
@@ -347,7 +301,13 @@ handleProfileSubmission actionRequest submission = do
     Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest 409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest "Your email address is already verified." "Tu direccion de correo ya esta verificada.")) True (resendLabel actionRequest)))
     Right (ProfilePending profile) -> handlePendingProfile actionRequest submission workflow now profile
 
-handlePendingProfile :: HarchWeb.ClientActionRequest AppRequestContext -> ProfileSubmission -> AccountWorkflow -> Word64 -> AccountProfile -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+handlePendingProfile ::
+  AccountActionRequest ->
+  ProfileSubmission ->
+  AccountWorkflow ->
+  Word64 ->
+  AccountProfile ->
+  AccountActionWorkflow
 handlePendingProfile actionRequest submission workflow now profile =
   case profileIntentValue submission of
     "resend-verification" -> do
@@ -364,7 +324,11 @@ handlePendingProfile actionRequest submission workflow now profile =
       interpretProfileResendResult actionRequest profile resendResult
     _ -> pure (profileResponse actionRequest 422 (pendingProfileForm actionRequest profile (Just (localized actionRequest "Choose a profile action." "Elige una accion de perfil.")) True))
 
-interpretProfileResendResult :: HarchWeb.ClientActionRequest AppRequestContext -> AccountProfile -> Either ResendVerificationError () -> AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+interpretProfileResendResult ::
+  AccountActionRequest ->
+  AccountProfile ->
+  Either ResendVerificationError () ->
+  AccountActionWorkflow
 interpretProfileResendResult actionRequest profile resendResult =
   let form message = pendingProfileForm actionRequest profile (Just message)
    in case resendResult of

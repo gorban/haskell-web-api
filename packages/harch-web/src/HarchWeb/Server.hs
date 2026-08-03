@@ -1,3 +1,5 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+
 -- | Typed application, request, response, and middleware contracts.
 --
 -- The framework facade re-exports this module. Private focused modules own
@@ -5,6 +7,7 @@
 module HarchWeb.Server
   ( module HarchWeb.Server.Config,
     Application (..),
+    ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
     MiddlewareResult (..),

@@ -13,6 +13,7 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
   ( Application (..),
+    ClientActionPayload,
     ClientActionRequest,
     ClientActionResponse,
     Document,
@@ -46,7 +47,7 @@ data RouteDefinition route context = RouteDefinition
     routeResponse :: RouteRequest route context -> IO (Response route context)
   }
 
-data Site route context = Site
+data Site route action context = Site
   { siteName :: Text,
     siteDefaultRequestContext :: context,
     siteRequestContextFromRequest :: Wai.Request -> context -> context,
@@ -58,7 +59,8 @@ data Site route context = Site
     siteRouteCodec :: RouteCodec route context,
     siteNavigationRoutes :: [route],
     siteRouteDefinition :: route -> RouteDefinition route context,
-    siteHandleClientAction :: ClientActionRequest context -> IO (Maybe ClientActionResponse),
+    siteDecodeClientAction :: ClientActionPayload context -> Maybe action,
+    siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
     siteReportConnectionObservability :: Observability.ConnectionObservability -> IO (),
@@ -72,7 +74,7 @@ simpleSite ::
   (Page route context -> PageShell route context) ->
   [route] ->
   (route -> RouteDefinition route context) ->
-  Site route context
+  Site route () context
 simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefinition =
   Site
     { siteName = name,
@@ -86,6 +88,7 @@ simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefiniti
       siteRouteCodec = codec,
       siteNavigationRoutes = navigationRoutes,
       siteRouteDefinition = routeDefinition,
+      siteDecodeClientAction = const Nothing,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
       siteReportRequestObservability = \requestObservability ->
@@ -106,7 +109,7 @@ pageRoute navigationLabel renderPage =
       routeResponse = fmap PageResponse . renderPage
     }
 
-buildSiteApplication :: (Eq route) => Site route context -> Application route context
+buildSiteApplication :: (Eq route) => Site route action context -> Application route action context
 buildSiteApplication site =
   HarchWeb.application
     Application
@@ -119,6 +122,7 @@ buildSiteApplication site =
         applicationRequestMiddleware = siteRequestMiddleware site,
         routeCodec = siteRouteCodec site,
         renderResponse = renderSiteResponse site,
+        decodeClientAction = siteDecodeClientAction site,
         handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
         reportRequestObservability = siteReportRequestObservability site,
@@ -126,13 +130,13 @@ buildSiteApplication site =
         reportApplicationLog = siteReportApplicationLog site
       }
 
-renderSiteResponse :: Site route context -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse :: Site route action context -> RouteRequest route context -> IO (Response route context)
 renderSiteResponse site routeRequest =
   routeResponse
     (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
     routeRequest
 
-renderSitePageShell :: (Eq route) => Site route context -> Page route context -> Document route
+renderSitePageShell :: (Eq route) => Site route action context -> Page route context -> Document route
 renderSitePageShell site page =
   buildPageShell
     (siteRouteCodec site)
@@ -146,7 +150,7 @@ renderSitePageShell site page =
     )
     page
 
-siteNavigationItems :: Site route context -> [NavigationItem route]
+siteNavigationItems :: Site route action context -> [NavigationItem route]
 siteNavigationItems site =
   mapMaybe
     ( \routeValue ->
@@ -168,7 +172,11 @@ addRouteNavigation generatedNavigation shell =
         generatedNavigation <> shellNavigationItems shell
     }
 
-addFrameworkShellConventions :: Site route context -> Page route context -> PageShell route context -> PageShell route context
+addFrameworkShellConventions ::
+  Site route action context ->
+  Page route context ->
+  PageShell route context ->
+  PageShell route context
 addFrameworkShellConventions site page shell =
   shell
     { shellNavigationAttributes =

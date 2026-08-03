@@ -230,11 +230,14 @@ defaultRequestPolicy =
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
 
-sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute TestContext
+sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute Text TestContext
 sampleApplicationWithStaticAssets staticAssetsConfig =
   sampleApplicationWithConfig staticAssetsConfig defaultRequestPolicy
 
-sampleApplicationWithConfig :: StaticAssetsConfig -> RequestPolicyConfig -> Application TestRoute TestContext
+sampleApplicationWithConfig ::
+  StaticAssetsConfig ->
+  RequestPolicyConfig ->
+  Application TestRoute Text TestContext
 sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
@@ -246,6 +249,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationRequestMiddleware = [],
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
+      decodeClientAction = Just . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -253,11 +257,11 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       reportApplicationLog = const (pure ())
     }
 
-sampleApplication :: Application TestRoute TestContext
+sampleApplication :: Application TestRoute Text TestContext
 sampleApplication =
   sampleApplicationWithStaticAssets emptyStaticAssets
 
-trustedForwardedApplication :: Application TestRoute TestContext
+trustedForwardedApplication :: Application TestRoute Text TestContext
 trustedForwardedApplication =
   sampleApplicationWithConfig
     emptyStaticAssets
@@ -450,7 +454,7 @@ fakeCertbotScriptPreamble =
     "fi"
   ]
 
-rootPathApplication :: Application TestRoute TestContext
+rootPathApplication :: Application TestRoute Text TestContext
 rootPathApplication =
   Application
     { appName = "root-path",
@@ -462,6 +466,7 @@ rootPathApplication =
       applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
+      decodeClientAction = Just . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -993,7 +998,20 @@ spec = do
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
-          clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
+          clientActionPayload =
+            ClientActionPayload
+              { clientActionMethod = "POST",
+                clientActionPath = "/actions/subscribe",
+                clientActionFields = [("email", "ada@example.com")],
+                clientActionCsrfToken = Nothing,
+                clientActionPayloadContext = defaultContext
+              }
+          clientActionRequest :: ClientActionRequest Text TestContext
+          clientActionRequest =
+            ClientActionRequest
+              { clientAction = "/actions/subscribe",
+                clientActionContext = defaultContext
+              }
           regionPatch = testRegionPatch "status-region" "Ready"
           clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
@@ -1071,10 +1089,12 @@ spec = do
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
       responseObservabilityAttributes responseBodyValue `shouldBe` []
       responseLogEntries responseBodyValue `shouldBe` []
-      clientActionMethod clientActionRequest `shouldBe` "POST"
-      clientActionPath clientActionRequest `shouldBe` "/actions/subscribe"
-      clientActionFields clientActionRequest `shouldBe` [("email", "ada@example.com")]
-      clientActionCsrfToken clientActionRequest `shouldBe` Nothing
+      clientActionMethod clientActionPayload `shouldBe` "POST"
+      clientActionPath clientActionPayload `shouldBe` "/actions/subscribe"
+      clientActionFields clientActionPayload `shouldBe` [("email", "ada@example.com")]
+      clientActionCsrfToken clientActionPayload `shouldBe` Nothing
+      clientActionPayloadContext clientActionPayload `shouldBe` defaultContext
+      clientAction clientActionRequest `shouldBe` "/actions/subscribe"
       clientActionContext clientActionRequest `shouldBe` defaultContext
       regionPatchId regionPatch `shouldBe` "status-region"
       regionPatchHtml regionPatch `shouldBe` "<p id=\"status-region\" data-harch-region=\"true\">Ready</p>"
@@ -1149,8 +1169,18 @@ spec = do
           redirectResponseValue = RedirectResponse body "/spaces"
           otherRedirectResponseValue :: Response TestRoute TestContext
           otherRedirectResponseValue = RedirectResponse otherBody "/other"
-          clientActionRequest = ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [("email", "ada@example.com")], clientActionCsrfToken = Just "csrf-token", clientActionContext = defaultContext}
-          otherClientActionRequest = ClientActionRequest {clientActionMethod = "GET", clientActionPath = "/actions/other", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = spanishContext}
+          clientActionRequest :: ClientActionRequest Text TestContext
+          clientActionRequest =
+            ClientActionRequest
+              { clientAction = "/actions/subscribe",
+                clientActionContext = defaultContext
+              }
+          otherClientActionRequest :: ClientActionRequest Text TestContext
+          otherClientActionRequest =
+            ClientActionRequest
+              { clientAction = "/actions/other",
+                clientActionContext = spanishContext
+              }
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
           clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
@@ -1248,8 +1278,8 @@ spec = do
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
-      show clientActionRequest `shouldBe` "ClientActionRequest {clientActionMethod = \"POST\", clientActionPath = \"/actions/subscribe\", clientActionFields = [(\"email\",\"ada@example.com\")], clientActionCsrfToken = Just \"csrf-token\", clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
-      show [clientActionRequest] `shouldContain` "ClientActionRequest {clientActionMethod = \"POST\""
+      show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
+      show [clientActionRequest] `shouldContain` "ClientActionRequest {clientAction = \"/actions/subscribe\""
       (regionPatch == regionPatch) `shouldBe` True
       (regionPatch /= otherRegionPatch) `shouldBe` True
       show regionPatch `shouldContain` "ReplaceRegion"
@@ -1267,7 +1297,22 @@ spec = do
       defaultRequestContext sampleApplication `shouldBe` defaultContext
       requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       applicationStaticAssets sampleApplication `shouldBe` emptyStaticAssets
-      handleClientAction sampleApplication ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = defaultContext}
+      decodeClientAction
+        sampleApplication
+        ClientActionPayload
+          { clientActionMethod = "POST",
+            clientActionPath = "/actions/subscribe",
+            clientActionFields = [],
+            clientActionCsrfToken = Nothing,
+            clientActionPayloadContext = defaultContext
+          }
+        `shouldBe` Just "/actions/subscribe"
+      handleClientAction
+        sampleApplication
+        ClientActionRequest
+          { clientAction = "/actions/subscribe",
+            clientActionContext = defaultContext
+          }
         `shouldReturn` Nothing
       parseRoute codec defaultContext "/known" `shouldBe` Just request
       parseRoute codec defaultContext "/data" `shouldBe` Just RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}
@@ -1608,10 +1653,7 @@ spec = do
       maybeCapturedActionRequest
         `shouldBe` Just
           ClientActionRequest
-            { clientActionMethod = "POST",
-              clientActionPath = "/es/known",
-              clientActionFields = [("email", "ada@example.com"), ("_csrf", "csrf-token"), ("_harch_csrf", "csrf-token"), ("intent", "subscribe"), ("blank", "")],
-              clientActionCsrfToken = Just "csrf-token",
+            { clientAction = "/es/known",
               clientActionContext = spanishContext
             }
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422

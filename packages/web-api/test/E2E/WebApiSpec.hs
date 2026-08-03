@@ -127,19 +127,42 @@ spec =
             )
             `shouldReturn` Right ()
 
-    it "keeps Spanish registration SSR and its immediate failure patch localized" $
+    it "preserves Spanish registration input until the delayed runtime sends its localized patch" $
       withBrowserApp $ \browser appConfig ->
         HarchWeb.withLocalTestServer (buildAppWithDatabaseAndAccountWorkflow appConfig defaultPageRepository localizedRegistrationWorkflow) $ \server -> do
           let registrationUrl = HarchWeb.localServerBaseUrl server <> "/es/register"
+              usernameField = byLabel "Nombre de usuario"
+              emailField = byLabel "Direccion de correo"
+              passwordField = byLabel "Contrasena"
           runBrowserScenario
             browser
             ( do
+                blockRequestsMatching "**/assets/navigation.js"
                 visit registrationUrl
                 assertText (byRole Heading) (`shouldBe` "Crea tu cuenta")
-                fill (byLabel "Nombre de usuario") "person_01"
-                fill (byLabel "Direccion de correo") "person@example.test"
-                fill (byLabel "Contrasena") "correct horse battery staple"
+                fill usernameField "person_01"
+                fill emailField "person@example.test"
+                fill passwordField "correct horse battery staple"
                 click (byRole Button `named` "Crear cuenta")
+                assertAll
+                  ( (,,,,)
+                      <$> currentUrl
+                      <*> inputValue usernameField
+                      <*> inputValue emailField
+                      <*> inputValue passwordField
+                      <*> browserMetrics
+                  )
+                  ( \(url, username, email, password, metrics) ->
+                      (url `shouldBe` registrationUrl)
+                        :| [ username `shouldBe` "person_01",
+                             email `shouldBe` "person@example.test",
+                             password `shouldBe` "correct horse battery staple",
+                             $( [|metrics|]
+                                  `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|]
+                              )
+                           ]
+                  )
+                releaseRequestsMatching "**/assets/navigation.js"
                 assertAll
                   ((,) <$> browserMetrics <*> textContent (byText "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion."))
                   ( \(metrics, message) ->

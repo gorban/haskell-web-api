@@ -3,6 +3,7 @@
 module Unit.WebApi.ProfileSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
@@ -21,7 +22,7 @@ import WebApi.Account
     AccountStore (..),
     AccountStoreError (..),
   )
-import WebApi.AccountPages (PendingProfileForm (..), handleAccountAction, renderPendingProfileRegion)
+import WebApi.AccountPages (PendingProfileForm (..), decodeAccountAction, handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -89,16 +90,28 @@ spec =
 
     it "resends pending-profile verification through a localized client-action patch" $ do
       let actionRequest requestContext fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath =
-                  case WebApi.Route.requestLocale requestContext of
-                    WebApi.Route.English -> "/profile"
-                    WebApi.Route.Spanish -> "/es/profile",
-                HarchWeb.clientActionFields = fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = requestContext
-              }
+            fromMaybe
+              (error "expected a recognized profile action fixture")
+              ( do
+                  action <-
+                    decodeAccountAction
+                      HarchWeb.ClientActionPayload
+                        { HarchWeb.clientActionMethod = "POST",
+                          HarchWeb.clientActionPath = profileActionPath requestContext,
+                          HarchWeb.clientActionFields = fields,
+                          HarchWeb.clientActionCsrfToken = Nothing,
+                          HarchWeb.clientActionPayloadContext = requestContext
+                        }
+                  pure
+                    HarchWeb.ClientActionRequest
+                      { HarchWeb.clientAction = action,
+                        HarchWeb.clientActionContext = requestContext
+                      }
+              )
+          profileActionPath requestContext =
+            case WebApi.Route.requestLocale requestContext of
+              WebApi.Route.English -> "/profile"
+              WebApi.Route.Spanish -> "/es/profile"
           store replacementResult =
             AccountStore
               { createPendingAccount = \_ -> error "unexpected account creation",

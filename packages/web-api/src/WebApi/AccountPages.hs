@@ -1,10 +1,12 @@
 module WebApi.AccountPages
-  ( AccountWorkflow (..),
+  ( AccountAction,
+    AccountWorkflow (..),
     LoginForm (..),
     MfaEnrollmentForm (..),
     PendingProfileForm (..),
     RegistrationForm (..),
     VerificationForm (..),
+    decodeAccountAction,
     emptyRegistrationForm,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,

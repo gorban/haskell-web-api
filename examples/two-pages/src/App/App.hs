@@ -4,6 +4,7 @@ module App.App
   ( buildApplication,
     twoPageServerConfig,
     twoPageSite,
+    TwoPageAction (..),
   )
 where
 
@@ -13,9 +14,11 @@ import App.Pages.Generated (pageRouteDefinition)
 import App.Pages.Home (subscriptionResultRegion)
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageRoute (..), routeCodec)
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
+    ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
     ListenerConfig (..),
@@ -41,10 +44,10 @@ import HarchWeb.Site
     simpleSite,
   )
 
-buildApplication :: Application TwoPageRoute ()
+buildApplication :: Application TwoPageRoute TwoPageAction ()
 buildApplication = buildSiteApplication twoPageSite
 
-twoPageSite :: Site TwoPageRoute ()
+twoPageSite :: Site TwoPageRoute TwoPageAction ()
 twoPageSite =
   ( simpleSite
       "two-pages-example"
@@ -56,6 +59,7 @@ twoPageSite =
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
+      siteDecodeClientAction = decodeTwoPageAction,
       siteHandleClientAction = twoPageClientAction
     }
 
@@ -77,16 +81,25 @@ liveDataEventsRouteDefinition =
         pure (eventStreamResponse eventSource)
     }
 
-twoPageClientAction :: ClientActionRequest () -> IO (Maybe ClientActionResponse)
+newtype TwoPageAction = SubscribeAction Text.Text
+
+decodeTwoPageAction :: ClientActionPayload () -> Maybe TwoPageAction
+decodeTwoPageAction actionPayload
+  | clientActionMethod actionPayload == "POST",
+    clientActionPath actionPayload == "/actions/subscribe" =
+      Just (SubscribeAction (fromMaybe Text.empty (lookup "email" (clientActionFields actionPayload))))
+  | otherwise = Nothing
+
+twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe ClientActionResponse)
 twoPageClientAction actionRequest =
   pure $
-    case (clientActionMethod actionRequest, clientActionPath actionRequest) of
-      ("POST", "/actions/subscribe") ->
+    case clientAction actionRequest of
+      SubscribeAction emailAddress ->
         Just
-          ( case lookup "email" (clientActionFields actionRequest) of
-              Just emailAddress
-                | "@" `Text.isInfixOf` emailAddress,
-                  "." `Text.isInfixOf` emailAddress ->
+          ( case emailAddress of
+              value
+                | "@" `Text.isInfixOf` value,
+                  "." `Text.isInfixOf` value ->
                     ClientActionResponse
                       { clientActionStatus = 200,
                         clientActionPatches = subscriptionPatch "status" "Thanks. Your subscription request is ready.",
@@ -105,7 +118,6 @@ twoPageClientAction actionRequest =
                     clientActionLogEntries = []
                   }
           )
-      _ -> Nothing
 
 subscriptionPatch :: Text.Text -> Text.Text -> [RegionPatch]
 subscriptionPatch liveRole message =

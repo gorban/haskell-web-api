@@ -34,7 +34,12 @@ import System.IO (Handle, hFlush, hPutStrLn)
 import System.Posix.Signals (Handler (Catch), installHandler, sigINT, sigTERM)
 import Text.Read (readMaybe)
 
-runServer :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> IO ()
+runServer ::
+  (Eq route, HasServerConfig config) =>
+  Handle ->
+  config ->
+  Application route action context ->
+  IO ()
 runServer outputHandle config webApplication =
   either
     (ioError . userError)
@@ -46,7 +51,13 @@ validatedServerStartupPlan config = do
   startupPlan <- first (("Invalid listener startup plan: " <>) . show) (planServerStartup config)
   maybe (Right startupPlan) Left (runtimeStartupValidationError startupPlan)
 
-runServerWithStartupPlan :: (Eq route, HasServerConfig config) => Handle -> config -> Application route context -> ServerStartupPlan -> IO ()
+runServerWithStartupPlan ::
+  (Eq route, HasServerConfig config) =>
+  Handle ->
+  config ->
+  Application route action context ->
+  ServerStartupPlan ->
+  IO ()
 runServerWithStartupPlan outputHandle config webApplication startupPlan = do
   let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
   challengeStore <- AcmeChallengeStore <$> newMVar []
@@ -75,7 +86,11 @@ runServerWithStartupPlan outputHandle config webApplication startupPlan = do
               )
         )
 
-toRuntimeWaiApplication :: (Eq route) => AcmeChallengeStore -> Application route context -> Wai.Application
+toRuntimeWaiApplication ::
+  (Eq route) =>
+  AcmeChallengeStore ->
+  Application route action context ->
+  Wai.Application
 toRuntimeWaiApplication challengeStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
@@ -85,7 +100,15 @@ toRuntimeWaiApplication challengeStore webApplication request respond = do
     (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)
     maybeChallengeResponse
 
-respondAcmeChallenge :: (Eq route) => Application route context -> Wai.Request -> RequestPolicyConfig -> Word64 -> (Wai.Response -> IO Wai.ResponseReceived) -> Wai.Response -> IO Wai.ResponseReceived
+respondAcmeChallenge ::
+  (Eq route) =>
+  Application route action context ->
+  Wai.Request ->
+  RequestPolicyConfig ->
+  Word64 ->
+  (Wai.Response -> IO Wai.ResponseReceived) ->
+  Wai.Response ->
+  IO Wai.ResponseReceived
 respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond challengeResponse = do
   challengeResponseReportedAt <- challengeResponse `seq` getMonotonicTimeNSec
   reportEarlyRequestObservability

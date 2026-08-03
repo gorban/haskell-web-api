@@ -12,7 +12,8 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
-  ( ClientActionRequest (..),
+  ( ClientActionPayload (..),
+    ClientActionRequest (..),
     HtmlAttribute (..),
     Page (..),
     PageShell (..),
@@ -82,9 +83,29 @@ spec = do
                ]
         )
       siteRequestContextFromRequest sampleSite (waiRequest ["second"]) (SampleContext "/app") `shouldBe` SampleContext "/app"
-      siteHandleClientAction sampleSite ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
+      siteHandleClientAction
+        sampleSite
+        ClientActionRequest
+          { clientAction = (),
+            clientActionContext = SampleContext ""
+          }
         `shouldReturn` Nothing
-      HarchWeb.handleClientAction siteApplication ClientActionRequest {clientActionMethod = "POST", clientActionPath = "/actions/subscribe", clientActionFields = [], clientActionCsrfToken = Nothing, clientActionContext = SampleContext ""}
+      let actionPayload =
+            ClientActionPayload
+              { clientActionMethod = "POST",
+                clientActionPath = "/actions/sample",
+                clientActionFields = [],
+                clientActionCsrfToken = Nothing,
+                clientActionPayloadContext = SampleContext ""
+              }
+      siteDecodeClientAction sampleSite actionPayload `shouldBe` Nothing
+      HarchWeb.decodeClientAction siteApplication actionPayload `shouldBe` Nothing
+      HarchWeb.handleClientAction
+        siteApplication
+        ClientActionRequest
+          { clientAction = (),
+            clientActionContext = SampleContext ""
+          }
         `shouldReturn` Nothing
       length (HarchWeb.applicationRequestMiddleware siteApplication) `shouldBe` 0
       siteReportRequestObservability sampleSite requestObservability `shouldReturn` ()
@@ -210,7 +231,7 @@ spec = do
       HarchWeb.documentRuntimeDescriptors (HarchWeb.pageShell siteApplication page)
         `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/app/assets/navigation.js"]
 
-sampleSite :: Site SampleRoute SampleContext
+sampleSite :: Site SampleRoute () SampleContext
 sampleSite =
   simpleSite
     "sample"

@@ -17,7 +17,7 @@ import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -51,7 +51,7 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
-import WebApi.AccountPages (AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountAction, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -74,8 +74,36 @@ import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites, toSetupPrerequisiteConfig)
 
-pureApplication :: HarchWeb.Application AppRoute AppRequestContext
+pureApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext
 pureApplication = buildApp defaultAppConfig
+
+type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
+
+typedAccountActionRequest ::
+  Text ->
+  Text ->
+  [(Text, Text)] ->
+  AppRequestContext ->
+  AccountActionRequest
+typedAccountActionRequest method path fields requestContext =
+  fromMaybe
+    (error "expected a recognized account action test fixture")
+    ( do
+        action <-
+          decodeAccountAction
+            HarchWeb.ClientActionPayload
+              { HarchWeb.clientActionMethod = method,
+                HarchWeb.clientActionPath = path,
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionPayloadContext = requestContext
+              }
+        pure
+          HarchWeb.ClientActionRequest
+            { HarchWeb.clientAction = action,
+              HarchWeb.clientActionContext = requestContext
+            }
+    )
 
 equalValues :: (Eq value) => value -> value -> Bool
 equalValues = (==)
@@ -186,7 +214,7 @@ loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Eith
 loadSecondPageValueForRequest pageRepository requestContext =
   databaseResultValue <$> loadSecondPageForRequest pageRepository requestContext
 
-trustedForwardedApplication :: HarchWeb.Application AppRoute AppRequestContext
+trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext
 trustedForwardedApplication =
   buildApp
     defaultAppConfig
@@ -3243,13 +3271,7 @@ spec = do
       let runtimeApplication = buildRuntimeAppWithDatabaseBuilder defaultAppConfig (const defaultPageRepository) defaultAppEnvironmentConfig
       HarchWeb.handleClientAction
         runtimeApplication
-        HarchWeb.ClientActionRequest
-          { HarchWeb.clientActionMethod = "POST",
-            HarchWeb.clientActionPath = "/register",
-            HarchWeb.clientActionFields = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")],
-            HarchWeb.clientActionCsrfToken = Nothing,
-            HarchWeb.clientActionContext = defaultRequestContext
-          }
+        (typedAccountActionRequest "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")] defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable")
 
     it "renders complete SSR registration and verification forms with escaped values" $ do
@@ -3369,16 +3391,18 @@ spec = do
                     <> "?token="
                     <> Account.emailVerificationTokenText verificationToken
               }
-          request method path fields locale =
-            HarchWeb.ClientActionRequest
+          request method path fields locale = typedAccountActionRequest method path fields (defaultRequestContext {requestLocale = locale})
+          rawAction method path =
+            HarchWeb.ClientActionPayload
               { HarchWeb.clientActionMethod = method,
                 HarchWeb.clientActionPath = path,
-                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionFields = [],
                 HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = locale}
+                HarchWeb.clientActionPayloadContext = defaultRequestContext
               }
-      handleAccountAction workflow (request "GET" "/register" [] English) `shouldReturn` Nothing
-      handleAccountAction workflow (request "POST" "/missing" [] English) `shouldReturn` Nothing
+      isNothing (decodeAccountAction (rawAction "GET" "/register")) `shouldBe` True
+      isNothing (decodeAccountAction (rawAction "POST" "/missing")) `shouldBe` True
+      isJust (decodeAccountAction (rawAction "POST" "/register")) `shouldBe` True
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
@@ -3408,13 +3432,7 @@ spec = do
       unconfiguredAction <-
         HarchWeb.handleClientAction
           pureApplication
-          HarchWeb.ClientActionRequest
-            { HarchWeb.clientActionMethod = "POST",
-              HarchWeb.clientActionPath = "/register",
-              HarchWeb.clientActionFields = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")],
-              HarchWeb.clientActionCsrfToken = Nothing,
-              HarchWeb.clientActionContext = defaultRequestContext
-            }
+          (typedAccountActionRequest "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")] defaultRequestContext)
       unconfiguredAction `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       let unconfiguredStore = accountWorkflowStore unavailableAccountWorkflow
       assertAccountStoreError
@@ -3475,14 +3493,7 @@ spec = do
           emailAddress = requiredEmailAddress "person@example.test"
           token = requiredVerificationToken (Text.replicate 43 "a")
           storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
-          request path fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = path,
-                HarchWeb.clientActionFields = fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
-              }
+          request path fields = typedAccountActionRequest "POST" path fields defaultRequestContext
           workflowFor accountStore now emailDelivery =
             AccountWorkflow
               { accountWorkflowStore = accountStore,
@@ -3507,11 +3518,7 @@ spec = do
           validRegistration = [("username", "person_01"), ("email", "person@example.test"), ("password", "correct horse battery staple")]
           validToken = [("token", Account.emailVerificationTokenText token)]
           delivery = Email.EmailDelivery (\message -> Email.emailMessageSubject message `shouldBe` "Verify your email address")
-          spanishAction path fields =
-            (request path fields)
-              { HarchWeb.clientActionPath = "/es" <> path,
-                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = Spanish}
-              }
+          spanishAction path fields = typedAccountActionRequest "POST" ("/es" <> path) fields (defaultRequestContext {requestLocale = Spanish})
       alreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       alreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
       spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
@@ -3612,14 +3619,7 @@ spec = do
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
               }
-          loginRequest fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/login",
-                HarchWeb.clientActionFields = fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
-              }
+          loginRequest fields = typedAccountActionRequest "POST" "/login" fields defaultRequestContext
           loginFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
       invalidEmail <- handleAccountAction workflow (loginRequest [("email", "not an identifier!")])
       invalidEmail `shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address"
@@ -3639,14 +3639,7 @@ spec = do
           _ -> expectationFailure "expected exactly one saved session" >> pure (error "unreachable")
       Session.sessionPrincipal loggedInSession `shouldBe` accountId
       Session.sessionIssuedAtNanoseconds loggedInSession `shouldBe` 500
-      let logoutRequest =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/logout",
-                HarchWeb.clientActionFields = [],
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext {requestSessionId = Just (Session.sessionId loggedInSession)}
-              }
+      let logoutRequest = typedAccountActionRequest "POST" "/logout" [] (defaultRequestContext {requestSessionId = Just (Session.sessionId loggedInSession)})
       logoutResult <- handleAccountAction workflow logoutRequest
       case logoutResult of
         Nothing -> expectationFailure "expected logout action response"
@@ -3665,26 +3658,9 @@ spec = do
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 8) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
           confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1)
-          loginRequest requestContext fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/login",
-                HarchWeb.clientActionFields = fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = requestContext
-              }
-          spanishLoginRequest fields =
-            (loginRequest spanishRequestContext fields)
-              { HarchWeb.clientActionPath = "/es/login"
-              }
-          logoutRequest requestContext =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/logout",
-                HarchWeb.clientActionFields = [],
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = requestContext
-              }
+          loginRequest requestContext fields = typedAccountActionRequest "POST" "/login" fields requestContext
+          spanishLoginRequest fields = typedAccountActionRequest "POST" "/es/login" fields spanishRequestContext
+          logoutRequest = typedAccountActionRequest "POST" "/logout" []
           workflowFor credentialResult enrollmentResult sessionSaveResult invalidationResult =
             unavailableAccountWorkflow
               { accountWorkflowCredentialStore = AccountCredentialStore (\_ -> pure credentialResult) (\receivedUsername -> receivedUsername `seq` pure credentialResult),
@@ -3789,7 +3765,7 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
       handleAccountAction validWorkflow (logoutRequest defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out")
-      handleAccountAction validWorkflow ((logoutRequest spanishRequestContext) {HarchWeb.clientActionPath = "/es/logout"})
+      handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] spanishRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion")
       let sessionId = fromMaybe (error "expected valid session id") (Session.mkSessionId "0123456789ABCDEF0123456789ABCDEF0123456789ABC")
           sessionContext = defaultRequestContext {requestSessionId = Just sessionId}
@@ -3799,7 +3775,7 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "Sign-out is temporarily unavailable")
       handleAccountAction
         (workflowFor (Right Nothing) (Right Nothing) (Right True) (Left AccountSessionStoreUnavailable))
-        ((logoutRequest (spanishRequestContext {requestSessionId = Just sessionId})) {HarchWeb.clientActionPath = "/es/logout"})
+        (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestSessionId = Just sessionId}))
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 Nothing "no esta disponible")
       logoutSuccess <- handleAccountAction validWorkflow (logoutRequest sessionContext)
       case logoutSuccess of
@@ -3807,7 +3783,7 @@ spec = do
           forceShowValue response `shouldBe` True
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a logout action response"
-      spanishLogoutSuccess <- handleAccountAction validWorkflow ((logoutRequest (spanishRequestContext {requestSessionId = Just sessionId})) {HarchWeb.clientActionPath = "/es/logout"})
+      spanishLogoutSuccess <- handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] (spanishRequestContext {requestSessionId = Just sessionId}))
       spanishLogoutSuccess `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has cerrado sesion"
 
     it "captures a complete authenticator enrollment and returns recovery codes in one patch" $ do
@@ -3839,14 +3815,7 @@ spec = do
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
               }
-          request path actionContext fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = path,
-                HarchWeb.clientActionFields = ("account", Account.accountIdText accountId) : fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = actionContext
-              }
+          request path actionContext fields = typedAccountActionRequest "POST" path (("account", Account.accountIdText accountId) : fields) actionContext
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
       started `shouldSatisfy` \case
         Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
@@ -3892,19 +3861,8 @@ spec = do
 
     it "returns every MFA enrollment action error as a localized region patch" $ do
       let accountId = requiredAccountId "account_01"
-          request fields =
-            HarchWeb.ClientActionRequest
-              { HarchWeb.clientActionMethod = "POST",
-                HarchWeb.clientActionPath = "/mfa",
-                HarchWeb.clientActionFields = ("account", Account.accountIdText accountId) : fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionContext = defaultRequestContext
-              }
-          spanishRequest fields =
-            (request fields)
-              { HarchWeb.clientActionPath = "/es/mfa",
-                HarchWeb.clientActionContext = defaultRequestContext {requestLocale = Spanish}
-              }
+          request fields = typedAccountActionRequest "POST" "/mfa" (("account", Account.accountIdText accountId) : fields) defaultRequestContext
+          spanishRequest fields = typedAccountActionRequest "POST" "/es/mfa" (("account", Account.accountIdText accountId) : fields) (defaultRequestContext {requestLocale = Spanish})
           workflowFor mfaStore =
             unavailableAccountWorkflow
               { accountWorkflowMfaStore = mfaStore,
@@ -8227,6 +8185,21 @@ spec = do
   describe "buildApp" $ do
     it "constructs the application description against the HarchWeb facade" $
       HarchWeb.appName pureApplication `shouldBe` "web-api"
+
+    it "stores the account action decoder used by the WAI adapter" $ do
+      let recognized =
+            case HarchWeb.decodeClientAction
+              pureApplication
+              HarchWeb.ClientActionPayload
+                { HarchWeb.clientActionMethod = "POST",
+                  HarchWeb.clientActionPath = "/register",
+                  HarchWeb.clientActionFields = [],
+                  HarchWeb.clientActionCsrfToken = Nothing,
+                  HarchWeb.clientActionPayloadContext = defaultRequestContext
+                } of
+              Just _ -> True
+              Nothing -> False
+      recognized `shouldBe` True
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext

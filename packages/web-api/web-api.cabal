@@ -68,6 +68,7 @@ library
     WebApi.AccountPages
     WebApi.AccountPages.Actions
     WebApi.AccountPages.Actions.Common
+    WebApi.AccountPages.Actions.Contract
     WebApi.AccountPages.Actions.Workflows
     WebApi.AccountPages.Forms
     WebApi.AccountPages.Rendering

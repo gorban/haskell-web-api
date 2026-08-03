@@ -33,12 +33,12 @@ data RunningLocalTestServer = RunningLocalTestServer
     runningLocalServerThreadId :: ThreadId
   }
 
-withLocalTestServer :: (Eq route) => Application route context -> (LocalTestServer -> IO a) -> IO a
+withLocalTestServer :: (Eq route) => Application route action context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer =
   bracket (startLocalTestServer webApplication) stopLocalTestServer $
     useLocalServer . runningLocalServerInfo
 
-startLocalTestServer :: (Eq route) => Application route context -> IO RunningLocalTestServer
+startLocalTestServer :: (Eq route) => Application route action context -> IO RunningLocalTestServer
 startLocalTestServer webApplication = do
   listeningSocket <- openLoopbackSocket
   localPort <- socketPort listeningSocket

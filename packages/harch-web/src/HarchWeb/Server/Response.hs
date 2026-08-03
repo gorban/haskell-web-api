@@ -2,7 +2,8 @@
 
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response
-  ( ClientActionRequest (..),
+  ( ClientActionPayload (..),
+    ClientActionRequest (..),
     ClientActionResponse (..),
     MiddlewareResult (..),
     RegionPatch,
@@ -71,11 +72,19 @@ data MiddlewareResult context
 
 -- | A same-origin form action captured before deferred behavior modules load.
 -- Form fields preserve their authored order, including the successful submitter.
-data ClientActionRequest context = ClientActionRequest
+data ClientActionPayload context = ClientActionPayload
   { clientActionMethod :: Text,
     clientActionPath :: Text,
     clientActionFields :: [(Text, Text)],
     clientActionCsrfToken :: Maybe Text,
+    clientActionPayloadContext :: context
+  }
+  deriving (Eq, Show)
+
+-- | The application action after its codec has consumed the transport payload.
+-- Handlers receive only this typed action and their request context.
+data ClientActionRequest action context = ClientActionRequest
+  { clientAction :: action,
     clientActionContext :: context
   }
   deriving (Eq, Show)
