@@ -96,6 +96,8 @@ library
     HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Markup.Internal
     HarchWeb.Markup.Quasi
+    HarchWeb.Markup.Quasi.Lowering
+    HarchWeb.Markup.Quasi.Parser
     HarchWeb.Observability.Otlp
     HarchWeb.Observability.Otlp.Export
     HarchWeb.Observability.Otlp.Wire
