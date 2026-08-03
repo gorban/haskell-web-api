@@ -13,7 +13,6 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (toLower)
-import Data.Either (isRight)
 import Data.Foldable (toList)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
@@ -4910,7 +4909,7 @@ spec = do
           ("TOTP_ENCRYPTION_KEY", "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
         ]
         []
-        `shouldSatisfy` isRight
+        `shouldBe` Right defaultAppEnvironmentConfig {appMode = Production, totpEncryptionKey = productionTotpEncryptionKey}
 
   describe "loadAppEnvironmentConfigWithFiles" $ do
     it "loads the documented .env then .env.local layers" $
