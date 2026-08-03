@@ -2,13 +2,16 @@
 
 module WebApi.AccountPages.Actions
   ( AccountAction,
+    AccountActionDecodeError (..),
     decodeAccountAction,
+    decodeAccountActionWithError,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
   )
 where
 
-import Data.Maybe (fromMaybe)
+import Data.Either (fromRight)
+import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.AccountPages.Actions.Common
   ( accountRoutePathForContext,
@@ -39,6 +42,9 @@ type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppReques
 
 type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
 
+newtype AccountActionDecodeError
+  = DuplicateAccountActionField Text
+
 handleAccountAction :: AccountWorkflow -> AccountActionRequest -> IO (Maybe HarchWeb.ClientActionResponse)
 handleAccountAction workflow actionRequest =
   Just <$> runSelectedAccountAction (accountActionCodec actionRequest)
@@ -57,49 +63,50 @@ accountActionCodec actionRequest =
     LogoutAccount -> handleLogout actionRequest
 
 decodeAccountAction :: HarchWeb.ClientActionPayload AppRequestContext -> Maybe AccountAction
-decodeAccountAction actionPayload
-  | HarchWeb.clientActionMethod actionPayload /= "POST" = Nothing
+decodeAccountAction = fromRight Nothing . decodeAccountActionWithError
+
+decodeAccountActionWithError :: HarchWeb.ClientActionPayload AppRequestContext -> Either AccountActionDecodeError (Maybe AccountAction)
+decodeAccountActionWithError actionPayload
+  | HarchWeb.clientActionMethod actionPayload /= "POST" = Right Nothing
   | otherwise =
       case HarchWeb.clientActionPath actionPayload of
         path
           | path == routePath RegistrationRoute ->
-              Just
-                ( RegisterAccount
-                    RegistrationSubmission
-                      { registrationUsernameValue = field "username",
-                        registrationEmailValue = field "email",
-                        registrationDisplayNameValue = field "displayName",
-                        registrationPasswordValue = field "password"
-                      }
-                )
+              Just . RegisterAccount
+                <$> ( RegistrationSubmission
+                        <$> field "username"
+                        <*> field "email"
+                        <*> field "displayName"
+                        <*> field "password"
+                    )
         path
           | path == routePath EmailVerificationRoute ->
-              Just (VerifyEmail (VerificationSubmission (field "token")))
+              Just . VerifyEmail . VerificationSubmission <$> field "token"
         path
           | path == routePath MfaEnrollmentRoute ->
-              Just
-                ( EnrollMfa
-                    MfaEnrollmentSubmission
-                      { mfaEnrollmentAccountValue = field "account",
-                        mfaEnrollmentIntentValue = field "intent",
-                        mfaEnrollmentCodeValue = field "code"
-                      }
-                )
+              Just . EnrollMfa
+                <$> ( MfaEnrollmentSubmission
+                        <$> field "account"
+                        <*> field "intent"
+                        <*> field "code"
+                    )
         path
           | path == routePath LoginRoute ->
-              Just
-                ( LoginAccount
-                    LoginSubmission
-                      { loginEmailValue = field "email",
-                        loginUsernameValue = field "username",
-                        loginPasswordValue = field "password",
-                        loginProofValue = field "proof",
-                        loginCodeValue = field "code"
-                      }
-                )
-        path | path == routePath ProfileRoute -> Just (UpdateProfile (ProfileSubmission (field "intent")))
-        path | path == routePath LogoutRoute -> Just LogoutAccount
-        _ -> Nothing
+              Just . LoginAccount
+                <$> ( LoginSubmission
+                        <$> field "email"
+                        <*> field "username"
+                        <*> field "password"
+                        <*> field "proof"
+                        <*> field "code"
+                    )
+        path | path == routePath ProfileRoute -> Just . UpdateProfile . ProfileSubmission <$> field "intent"
+        path | path == routePath LogoutRoute -> Right (Just LogoutAccount)
+        _ -> Right Nothing
   where
-    field name = fromMaybe "" (lookup name (HarchWeb.clientActionFields actionPayload))
+    field name =
+      case [fieldValue | (fieldName, fieldValue) <- HarchWeb.clientActionFields actionPayload, fieldName == name] of
+        [] -> Right ""
+        [fieldValue] -> Right fieldValue
+        _ -> Left (DuplicateAccountActionField name)
     routePath = accountRoutePathForContext (HarchWeb.clientActionPayloadContext actionPayload)

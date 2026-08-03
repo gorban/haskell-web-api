@@ -47,11 +47,12 @@ import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
+import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
-import WebApi.AccountPages (AccountAction, AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountAction, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionDecodeError (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountAction, decodeAccountActionWithError, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -3392,17 +3393,39 @@ spec = do
                     <> Account.emailVerificationTokenText verificationToken
               }
           request method path fields locale = typedAccountActionRequest method path fields (defaultRequestContext {requestLocale = locale})
-          rawAction method path =
+          rawAction method path fields =
             HarchWeb.ClientActionPayload
               { HarchWeb.clientActionMethod = method,
                 HarchWeb.clientActionPath = path,
-                HarchWeb.clientActionFields = [],
+                HarchWeb.clientActionFields = fields,
                 HarchWeb.clientActionCsrfToken = Nothing,
                 HarchWeb.clientActionPayloadContext = defaultRequestContext
               }
-      isNothing (decodeAccountAction (rawAction "GET" "/register")) `shouldBe` True
-      isNothing (decodeAccountAction (rawAction "POST" "/missing")) `shouldBe` True
-      isJust (decodeAccountAction (rawAction "POST" "/register")) `shouldBe` True
+      isNothing (decodeAccountAction (rawAction "GET" "/register" [])) `shouldBe` True
+      isNothing (decodeAccountAction (rawAction "POST" "/missing" [])) `shouldBe` True
+      isJust (decodeAccountAction (rawAction "POST" "/register" [])) `shouldBe` True
+      let assertDuplicateField path fieldName =
+            case decodeAccountActionWithError (rawAction "POST" path [(fieldName, "first"), (fieldName, "second")]) of
+              Left (DuplicateAccountActionField duplicateFieldName) -> duplicateFieldName `shouldBe` fieldName
+              Right _ -> expectationFailure "expected duplicate account action fields to be rejected"
+      expectAll
+        ( assertDuplicateField "/register" "username"
+            :| [ assertDuplicateField "/register" "email",
+                 assertDuplicateField "/register" "displayName",
+                 assertDuplicateField "/register" "password",
+                 assertDuplicateField "/verify" "token",
+                 assertDuplicateField "/mfa" "account",
+                 assertDuplicateField "/mfa" "intent",
+                 assertDuplicateField "/mfa" "code",
+                 assertDuplicateField "/login" "email",
+                 assertDuplicateField "/login" "username",
+                 assertDuplicateField "/login" "password",
+                 assertDuplicateField "/login" "proof",
+                 assertDuplicateField "/login" "code",
+                 assertDuplicateField "/profile" "intent"
+               ]
+        )
+      isNothing (decodeAccountAction (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")])) `shouldBe` True
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)

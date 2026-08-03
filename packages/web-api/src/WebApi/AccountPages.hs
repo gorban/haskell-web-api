@@ -1,5 +1,6 @@
 module WebApi.AccountPages
   ( AccountAction,
+    AccountActionDecodeError (..),
     AccountWorkflow (..),
     LoginForm (..),
     MfaEnrollmentForm (..),
@@ -7,6 +8,7 @@ module WebApi.AccountPages
     RegistrationForm (..),
     VerificationForm (..),
     decodeAccountAction,
+    decodeAccountActionWithError,
     emptyRegistrationForm,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
