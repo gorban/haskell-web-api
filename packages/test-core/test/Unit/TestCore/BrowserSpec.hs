@@ -110,10 +110,13 @@ spec = do
               visit "http://localhost/"
               setCookie "http://localhost/" "session" "opaque-session"
               click (byRole Link `named` "Continue")
+              scriptResult <- runPageScript "true"
               fill emailField "person@example.com"
               submit (byRole Form `named` "Registration")
               blockRequestsMatching "**/enhancements.js"
               releaseRequestsMatching "**/enhancements.js"
+              blockRequestsMatching "**/failure.js"
+              failBlockedRequestsMatching "**/failure.js"
               assertAll
                 ((,,,,) <$> fieldState <*> attributeValue emailField "aria-busy" <*> isVisible (within (byRole Navigation) (byRole Link `named` "Home")) <*> currentUrl <*> browserMetrics)
                 ( \(actualFieldState, busyAttribute, homeLinkVisible, url, metrics) ->
@@ -128,8 +131,9 @@ spec = do
               historyForward
               reload
               visitWithoutScripts "http://localhost/no-js"
+              pure scriptResult
           )
-          `shouldReturn` Right ()
+          `shouldReturn` Right (Aeson.Bool True)
 
     it "encodes every semantic locator and role while exercising both applicative APIs" $
       withFakeRunner "normal" $ \config -> do
@@ -441,6 +445,7 @@ spec = do
           "      reply(request.id, 'ok', values);",
           "      continue;",
           "    }",
+          "    if (request.command === 'runPageScript') { reply(request.id, 'ok', request.source === 'true'); continue; }",
           "    if (request.command === 'finish') {",
           "      if (mode === 'scenario-and-finish-error' || mode === 'finish-error') { reply(request.id, 'error', null, 'finish failed'); return; }",
           "      if (mode === 'finish-invalid') { reply(request.id, 'ok', 'invalid finish value'); return; }",

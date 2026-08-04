@@ -180,8 +180,10 @@ cabal test two-pages-example-tests \
 
 The [E2E source](test/E2E/AppSpec.hs) verifies enhanced navigation, Back/Forward, default
 scripts-disabled non-submission for exclusive client actions, early-submit preservation, delayed handler
-arrival, a permanently blocked action becoming visibly recoverable until cancellation, eventual region
-patches, and the SSE update using semantic locators and composed retrying observations.
+arrival (including after the liveness threshold), cancellation before late registration, throwing,
+rejected, and never-settling handlers, deferred-script failure, stale settlement rejection, multiple
+pending controls, conditional leave warning, eventual region patches, and the SSE update using semantic
+locators and composed retrying observations.
 
 ## Source map
 

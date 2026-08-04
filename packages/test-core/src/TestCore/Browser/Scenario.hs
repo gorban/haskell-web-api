@@ -16,6 +16,8 @@ module TestCore.Browser.Scenario
     assertVisible,
     blockRequestsMatching,
     click,
+    failBlockedRequestsMatching,
+    runPageScript,
     fill,
     historyBack,
     historyForward,
@@ -107,6 +109,12 @@ reload = simpleCommand "reload" []
 click :: Locator -> BrowserScenario ()
 click locator = simpleCommand "click" ["locator" .= locator]
 
+-- | Evaluate a test-owned expression in the current page. This is deliberately
+-- limited to E2E fixtures that need to control browser-only failure modes which
+-- ordinary user interactions cannot induce deterministically.
+runPageScript :: Text -> BrowserScenario Value
+runPageScript source = command "runPageScript" ["source" .= source]
+
 fill :: Locator -> Text -> BrowserScenario ()
 fill locator value = simpleCommand "fill" ["locator" .= locator, "value" .= value]
 
@@ -124,6 +132,12 @@ blockRequestsMatching patternText = simpleCommand "blockRequestsMatching" ["patt
 
 releaseRequestsMatching :: Text -> BrowserScenario ()
 releaseRequestsMatching patternText = simpleCommand "releaseRequestsMatching" ["pattern" .= patternText]
+
+-- | Fail requests that were deliberately held with 'blockRequestsMatching'.
+-- This lets an E2E fixture prove the browser's real script-error path after a
+-- control has already been captured.
+failBlockedRequestsMatching :: Text -> BrowserScenario ()
+failBlockedRequestsMatching patternText = simpleCommand "failBlockedRequestsMatching" ["pattern" .= patternText]
 
 observe :: BrowserObservation a -> BrowserScenario a
 observe observation = do

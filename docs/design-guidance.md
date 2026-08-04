@@ -146,7 +146,8 @@ exclusive client handler. Native submission is explicit because client-only effe
 server/CSRF endpoint. Conditional leave confirmation installs `beforeunload` only while an unresolved
 eligible action exists, and is a best-effort warning. Retry for an indeterminate mutation is safe only
 with the same idempotency identity and a server deduplication boundary; otherwise keep the action visibly
-recoverable. See the delayed-module browser proof in
+recoverable. See the real-browser lifecycle proofs—delayed registration, cancellation, handler failure and
+non-settlement, script failure, multiple controls, and conditional leave warning—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
 ## Current capability and remaining design direction

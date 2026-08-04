@@ -114,10 +114,11 @@ requires a stable idempotency identity and a server deduplication boundary, othe
 visibly indeterminate rather than risking a duplicate effect.
 
 Future framework event types must extend this capture contract before a corresponding enabled control
-can be introduced. The [real-browser delayed-module test][capture-e2e] blocks the module, submits
-immediately, proves input preservation without a reload, releases the module, and observes the eventual
-typed region patch. It proves immediate capture and delayed handler arrival—not cross-navigation delivery
-or the reliability of arbitrary application effects.
+can be introduced. The [real-browser capture suite][capture-e2e] blocks the module, submits immediately,
+proves input preservation without a reload, delayed handler arrival, cancellation before late registration,
+handler exception/rejection/non-settlement, script-load failure, control-local multiple pending work, and
+the opt-in leave warning. It proves immediate capture and bounded in-document ownership—not
+cross-navigation delivery or the reliability of arbitrary application effects.
 
 ### Rendering trade-offs
 

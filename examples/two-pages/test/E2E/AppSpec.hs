@@ -129,6 +129,144 @@ spec =
                   (status `shouldBe` "Action cancelled.")
                     :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])]
               )
+            releaseRequestsMatching "**/assets/navigation.js"
+            assertAll
+              ((,) <$> textContent actionStatus <*> browserMetrics)
+              ( \(status, metrics) ->
+                  (status `shouldBe` "Action cancelled.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "lets a handler arrive after the liveness threshold without replaying a cancellation" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            assertEventually (textContent actionStatus) (`shouldBe` "Still waiting for this action to be handled.")
+            releaseRequestsMatching "**/assets/navigation.js"
+            assertAll
+              ((,) <$> textContent (css "#subscription-result") <*> browserMetrics)
+              ( \(result, metrics) ->
+                  (result `shouldBe` "Thanks. Your subscription request is ready.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 1}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "shows immediate recoverable outcomes for throwing and rejected handlers" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+            handler =
+              "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction) => { const email = capturedAction.fields.find(([name]) => name === 'email')?.[1]; if (email === 'throw@example.com') { throw new Error('test failure'); } return Promise.reject(new Error('test rejection')); });"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            _ <- runPageScript handler
+            fill emailField "throw@example.com"
+            submit subscriptionForm
+            assertText actionStatus (`shouldBe` "This action needs your attention.")
+            fill emailField "reject@example.com"
+            submit subscriptionForm
+            assertText actionStatus (`shouldBe` "This action needs your attention.")
+          )
+          `shouldReturn` Right ()
+
+    it "keeps an unsettled claim local, rejects stale settlement, and warns only opted-in unresolved actions" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+            handler =
+              "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (_capturedAction, settlement) => { window.__harchTestSettlement = settlement; });"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            _ <- runPageScript "document.querySelector('form[data-harch-action=\"true\"]').dataset.harchActionCapabilities = 'conditional-leave-confirmation';"
+            _ <- runPageScript handler
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            assertEventually (textContent actionStatus) (`shouldBe` "Still waiting for this action to be handled.")
+            assertAttribute subscriptionForm "aria-busy" (`shouldBe` Just "true")
+            _ <- runPageScript "const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
+            assertAttribute (css "body") "data-harch-before-unload" (`shouldBe` Just "true")
+            click (byRole Button `named` "Cancel action")
+            _ <- runPageScript "document.body.dataset.harchStaleSettlement = String(window.__harchTestSettlement.completed()); const event = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(event); document.body.dataset.harchBeforeUnload = String(event.defaultPrevented);"
+            assertAll
+              ((,,) <$> textContent actionStatus <*> attributeValue (css "body") "data-harch-stale-settlement" <*> attributeValue (css "body") "data-harch-before-unload")
+              ( \(status, staleSettlement, beforeUnload) ->
+                  (status `shouldBe` "Action cancelled.")
+                    :| [ staleSettlement `shouldBe` Just "false",
+                         beforeUnload `shouldBe` Just "false"
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "keeps multiple pending controls and their input snapshots independent" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            firstForm = byRole Form `named` "Subscription"
+            secondForm = byRole Form `named` "Second subscription"
+            firstEmail = within firstForm (byLabel "Email address")
+            secondEmail = within secondForm (byLabel "Second email address")
+            firstStatus = within firstForm (css "[data-harch-action-status]")
+            secondStatus = within secondForm (css "[data-harch-action-status]")
+            addSecondControl =
+              "const first = document.querySelector('form[data-harch-action=\"true\"]'); const second = first.cloneNode(true); second.setAttribute('aria-label', 'Second subscription'); const label = second.querySelector('label'); const input = second.querySelector('input[name=\"email\"]'); label.htmlFor = 'second-subscription-email'; label.textContent = 'Second email address'; input.id = 'second-subscription-email'; first.after(second);"
+            handler =
+              "window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, () => {});"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            _ <- runPageScript addSecondControl
+            _ <- runPageScript handler
+            fill firstEmail "first@example.com"
+            fill secondEmail "second@example.com"
+            submit firstForm
+            submit secondForm
+            assertAll
+              ((,,,,) <$> textContent firstStatus <*> textContent secondStatus <*> inputValue firstEmail <*> inputValue secondEmail <*> browserMetrics)
+              ( \(firstState, secondState, firstValue, secondValue, metrics) ->
+                  (firstState `shouldBe` "Still waiting for this action to be handled.")
+                    :| [ secondState `shouldBe` "Still waiting for this action to be handled.",
+                         firstValue `shouldBe` "first@example.com",
+                         secondValue `shouldBe` "second@example.com",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "reports a deferred-script failure locally after an action has been captured" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            failBlockedRequestsMatching "**/assets/navigation.js"
+            assertAll
+              ((,) <$> textContent actionStatus <*> browserMetrics)
+              ( \(status, metrics) ->
+                  (status `shouldBe` "This action needs your attention.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])]
+              )
           )
           `shouldReturn` Right ()
 

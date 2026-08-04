@@ -65,6 +65,7 @@ async function execute(request) {
     case 'setCookie': return setCookie(request.url, request.name, request.value);
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
+    case 'runPageScript': return requirePage().evaluate(requireString(request.source, 'page script'));
     case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
     case 'submit': return resolveLocator(request.locator).evaluate((form) => {
       if (!(form instanceof HTMLFormElement)) throw new Error('submit locator must resolve to a form');
@@ -74,6 +75,7 @@ async function execute(request) {
     case 'historyForward': return requirePage().goForward({ waitUntil: 'commit', timeout: timeout() });
     case 'blockRequestsMatching': return blockRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'releaseRequestsMatching': return releaseRequestsMatching(requireString(request.pattern, 'request pattern'));
+    case 'failBlockedRequestsMatching': return failBlockedRequestsMatching(requireString(request.pattern, 'request pattern'));
     case 'observeMany': return observeMany(request.observations);
     case 'finish': return finish(request.failure);
     default: throw new Error(`unsupported browser command: ${request.command}`);
@@ -155,6 +157,22 @@ async function releaseRequestsMatching(pattern) {
   await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
     try {
       await route.continue();
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  }));
+  await state.context.unroute(pattern, blocked.handler);
+  return null;
+}
+
+async function failBlockedRequestsMatching(pattern) {
+  const blocked = state.blockedRequests.get(pattern);
+  if (!blocked) throw new Error(`request pattern is not blocked: ${pattern}`);
+  state.blockedRequests.delete(pattern);
+  await Promise.all(blocked.pendingRoutes.map(async ({ route, resolve, reject }) => {
+    try {
+      await route.abort('failed');
       resolve();
     } catch (error) {
       reject(error);
