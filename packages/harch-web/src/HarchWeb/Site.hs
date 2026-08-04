@@ -13,8 +13,8 @@ import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import HarchWeb
   ( Application (..),
-    ClientActionPayload,
     ClientActionDecodeResult,
+    ClientActionPayload,
     ClientActionRequest,
     ClientActionResponse,
     Document,

@@ -94,15 +94,14 @@ spec =
               (error "expected a recognized profile action fixture")
               ( do
                   action <-
-                    case
-                        decodeAccountActionResult
-                          HarchWeb.ClientActionPayload
-                            { HarchWeb.clientActionMethod = "POST",
-                              HarchWeb.clientActionPath = profileActionPath requestContext,
-                              HarchWeb.clientActionFields = fields,
-                              HarchWeb.clientActionCsrfToken = Nothing,
-                              HarchWeb.clientActionPayloadContext = requestContext
-                            } of
+                    case decodeAccountActionResult
+                      HarchWeb.ClientActionPayload
+                        { HarchWeb.clientActionMethod = "POST",
+                          HarchWeb.clientActionPath = profileActionPath requestContext,
+                          HarchWeb.clientActionFields = fields,
+                          HarchWeb.clientActionCsrfToken = Nothing,
+                          HarchWeb.clientActionPayloadContext = requestContext
+                        } of
                       HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
                       _ -> Nothing
                   pure

@@ -90,15 +90,14 @@ typedAccountActionRequest method path fields requestContext =
     (error "expected a recognized account action test fixture")
     ( do
         action <-
-          case
-              decodeAccountActionResult
-                HarchWeb.ClientActionPayload
-                  { HarchWeb.clientActionMethod = method,
-                    HarchWeb.clientActionPath = path,
-                    HarchWeb.clientActionFields = fields,
-                    HarchWeb.clientActionCsrfToken = Nothing,
-                    HarchWeb.clientActionPayloadContext = requestContext
-                  } of
+          case decodeAccountActionResult
+            HarchWeb.ClientActionPayload
+              { HarchWeb.clientActionMethod = method,
+                HarchWeb.clientActionPath = path,
+                HarchWeb.clientActionFields = fields,
+                HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionPayloadContext = requestContext
+              } of
             HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
             _ -> Nothing
         pure
