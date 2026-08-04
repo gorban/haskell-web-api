@@ -205,8 +205,18 @@ spec =
                 (actionPayload "POST" "/actions/missing" []) of
                 Just _ -> False
                 Nothing -> True
-        absentEmailDecoded `shouldBe` True
-        unknownActionRejected `shouldBe` True
+            duplicateEmailRejected =
+              case HarchWeb.decodeClientAction
+                buildApplication
+                (actionPayload "POST" "/actions/subscribe" [("email", "first@example.com"), ("email", "second@example.com")]) of
+                Just _ -> False
+                Nothing -> True
+        expectAll
+          ( (absentEmailDecoded `shouldBe` True)
+              :| [ unknownActionRejected `shouldBe` True,
+                   duplicateEmailRejected `shouldBe` True
+                 ]
+          )
 
       it "totally dispatches every generated page to a complete SSR page" $ do
         responses <-

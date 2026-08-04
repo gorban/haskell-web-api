@@ -13,13 +13,12 @@ where
 
 import Data.Text (Text)
 import HarchWeb.Markup
-import HarchWeb.Routing (RouteCodec, routeHref)
 
-pageLink :: RouteCodec route context -> context -> route -> [Attribute] -> [Html] -> Html
-pageLink codec context target attributes =
+pageLink :: (route -> Text) -> route -> [Attribute] -> [Html] -> Html
+pageLink renderPageTarget target attributes =
   element
     anchorTag
-    (href (routeHref codec context target) : dataAttribute "page-link" "true" : attributes)
+    (href (renderPageTarget target) : dataAttribute "page-link" "true" : attributes)
 
 actionForm :: (action -> Text) -> action -> [Attribute] -> [Html] -> Html
 actionForm renderActionTarget target attributes =

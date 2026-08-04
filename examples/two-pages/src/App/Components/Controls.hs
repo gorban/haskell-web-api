@@ -9,7 +9,7 @@ where
 import App.Routes
   ( TwoPageActionTarget,
     TwoPageRoute,
-    routeCodec,
+    routeHref,
     twoPageActionPath,
   )
 import Data.Text (Text)
@@ -21,7 +21,7 @@ newtype PageLinkProps = PageLinkProps
   }
 
 pageLink :: PageLinkProps -> [HarchWeb.Html] -> HarchWeb.Html
-pageLink PageLinkProps {to} = Controls.pageLink routeCodec () to []
+pageLink PageLinkProps {to} = Controls.pageLink routeHref to []
 
 data ActionFormProps = ActionFormProps
   { action :: TwoPageActionTarget,

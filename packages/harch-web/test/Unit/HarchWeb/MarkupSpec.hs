@@ -48,18 +48,8 @@ literalChildrenRejected =
 
 newtype ControlRoute = ControlRoute Text.Text
 
-newtype ControlContext = ControlContext Text.Text
-
-controlRouteCodec :: RouteCodec ControlRoute ControlContext
-controlRouteCodec =
-  RouteCodec
-    { parseRoute = \controlContext path ->
-        if path == "/control"
-          then Just RouteRequest {requestRoute = ControlRoute "control", requestContext = controlContext}
-          else Nothing,
-      renderRoute = \RouteRequest {requestRoute = ControlRoute target, requestContext = ControlContext prefix} -> prefix <> target,
-      notFoundRequest = \controlContext -> RouteRequest {requestRoute = ControlRoute "control", requestContext = controlContext}
-    }
+controlRouteHref :: ControlRoute -> Text.Text
+controlRouteHref (ControlRoute target) = "/" <> target
 
 spec :: Spec
 spec = do
@@ -125,7 +115,7 @@ spec = do
                 <button type="submit">Subscribe</button>
               </Account.TypedActionForm>
             |]
-          renderedLink = renderHtml (pageLink controlRouteCodec (ControlContext "/") (ControlRoute "control") [] [text "Continue"])
+          renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [] [text "Continue"])
       renderHtml quotedActionForm
         `shouldBe` "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"><button type=\"submit\">Subscribe</button></form>"
       renderedLink `shouldBe` "<a href=\"/control\" data-page-link=\"true\">Continue</a>"
