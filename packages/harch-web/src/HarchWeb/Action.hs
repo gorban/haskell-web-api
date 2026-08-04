@@ -251,8 +251,8 @@ duplicateEndpoint :: [ActionEndpoint target context action] -> Maybe (ActionMeth
 duplicateEndpoint endpoints =
   listToMaybe
     [ identity
-      | (index, identity) <- zip [0 ..] identities,
-        identity `elem` drop (index + 1) identities
+    | (index, identity) <- zip [0 ..] identities,
+      identity `elem` drop (index + 1) identities
     ]
   where
     identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ActionEndpoint _ endpointActionPath _ <- endpoints]
