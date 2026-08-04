@@ -21,7 +21,7 @@ Then open <http://127.0.0.1:8080/>. See [SETUP.md](SETUP.md) for development pre
 flowchart LR
   request[Request] --> route[Typed route]
   route --> ssr[Complete SSR document]
-  ssr --> capture[Immediate capture or native fallback]
+  ssr --> capture[Immediate capture and visible ownership]
   capture --> paint[Browser paint]
   paint --> modules[Deferred modules]
   modules --> behavior[Enhanced navigation and actions]
@@ -90,15 +90,34 @@ the race reliably, but a real user can reach the same enabled control during the
 
 ### Harch Web's capture contract
 
-Harch does not ship a framework control until its immediate event path or a native browser fallback
-exists. Today, the nonce-protected inline kernel captures modeled form submissions and their field
-values before the deferred action module loads. Native links remain actionable as ordinary navigation.
-The deferred runtime drains captured submissions and upgrades links and actions to SPA-style behavior.
+> Once captured by the kernel, an action remains owned and visibly pending until its handler confirms
+> completion, reports a visible unresolved/recoverable outcome, or the user cancels it. Deferred behavior
+> may arrive arbitrarily late without silently losing the action.
+
+Harch does not ship a framework control until its immediate event path exists. The nonce-protected inline
+kernel captures a modeled form submission and its input snapshot before the deferred action module loads,
+keeps that envelope in memory, and updates only the originating control's accessible status region. A
+deferred module registers a handler, claims work without removing it, and must settle the claim with its
+identity; stale consumers cannot settle another handler's action. Exceptions, rejected promises, module
+load errors, and actions that outlive the liveness threshold become visible recoverable states rather than
+silent completion. Its rendered UTF-8 source is capped at 12 KiB by a unit-test regression budget; action
+transport and region patching remain in the deferred module. Native links remain ordinary navigation.
+
+This is a bounded ownership guarantee, not an eventual-execution or durable-delivery promise. It begins
+only after the inline kernel captures the event and ends on navigation, reload, tab/browser termination,
+or process failure. Time cannot distinguish slow loading from permanent failure, so the liveness threshold
+changes feedback only; it never retries, submits, cancels, or transfers work. Arbitrary client-only effects
+cannot have a universal native submission fallback without changing their meaning. Native submission is
+therefore an explicit per-action capability, not the default; `beforeunload` is likewise an opt-in,
+best-effort warning for unresolved actions, not a delivery mechanism. Retrying an indeterminate mutation
+requires a stable idempotency identity and a server deduplication boundary, otherwise the action remains
+visibly indeterminate rather than risking a duplicate effect.
 
 Future framework event types must extend this capture contract before a corresponding enabled control
 can be introduced. The [real-browser delayed-module test][capture-e2e] blocks the module, submits
-immediately, proves the input is
-preserved without a reload, releases the module, and observes the eventual typed region patch.
+immediately, proves input preservation without a reload, releases the module, and observes the eventual
+typed region patch. It proves immediate capture and delayed handler arrival—not cross-navigation delivery
+or the reliability of arbitrary application effects.
 
 ### Rendering trade-offs
 

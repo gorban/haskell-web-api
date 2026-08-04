@@ -41,7 +41,10 @@ module HarchWeb.Action
   )
 where
 
-import Data.List.NonEmpty (NonEmpty (..))
+import Data.Functor.Compose (Compose (..), getCompose)
+import Data.List (nub)
+import Data.List.NonEmpty (NonEmpty (..), nonEmpty)
+import Data.Maybe (fromJust, listToMaybe)
 import Data.Text (Text)
 
 -- | Methods supported by the client-action protocol. Forms can author POST
@@ -53,7 +56,7 @@ data ActionMethod
   | ActionPut
   | ActionPatch
   | ActionDelete
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Show)
 
 actionMethodText :: ActionMethod -> Text
 actionMethodText methodValue =
@@ -100,42 +103,19 @@ data ActionEndpoint target context action = ActionEndpoint target (ActionPath co
 
 newtype ActionCodec target context action = ActionCodec [ActionEndpoint target context action]
 
-newtype ActionDecoder action = ActionDecoder
-  { runActionDecoder :: [(Text, Text)] -> ParseResult action
-  }
+type ActionDecoder action = Compose ((->) [(Text, Text)]) (Compose ((,) [ClientActionParseError]) Maybe) action
 
-newtype FormField value = FormField ([(Text, Text)] -> ParseResult value)
+newtype FormField value = FormField ([(Text, Text)] -> ([ClientActionParseError], Maybe value))
 
 newtype FieldValue value = FieldValue
   { runFieldValue :: Text -> Maybe value
   }
 
-data ParseResult value
-  = Parsed value
-  | ParseErrors (NonEmpty ClientActionParseError)
+runActionDecoder :: ActionDecoder action -> [(Text, Text)] -> ([ClientActionParseError], Maybe action)
+runActionDecoder decoder fields = getCompose (getCompose decoder fields)
 
-instance Functor ParseResult where
-  fmap transform parsed =
-    case parsed of
-      Parsed value -> Parsed (transform value)
-      ParseErrors errors -> ParseErrors errors
-
-instance Applicative ParseResult where
-  pure = Parsed
-  functionResult <*> valueResult =
-    case (functionResult, valueResult) of
-      (Parsed transform, Parsed value) -> Parsed (transform value)
-      (ParseErrors leftErrors, ParseErrors rightErrors) -> ParseErrors (leftErrors <> rightErrors)
-      (ParseErrors errors, _) -> ParseErrors errors
-      (_, ParseErrors errors) -> ParseErrors errors
-
-instance Functor ActionDecoder where
-  fmap transform (ActionDecoder decode) = ActionDecoder (fmap transform . decode)
-
-instance Applicative ActionDecoder where
-  pure value = ActionDecoder (const (pure value))
-  ActionDecoder decodeFunction <*> ActionDecoder decodeValue =
-    ActionDecoder $ \fields -> decodeFunction fields <*> decodeValue fields
+actionDecoder :: ([(Text, Text)] -> ([ClientActionParseError], Maybe action)) -> ActionDecoder action
+actionDecoder decode = Compose (Compose . decode)
 
 action :: target -> ActionPath context -> ActionDecoder actionValue -> ActionEndpoint target context actionValue
 action = ActionEndpoint
@@ -168,13 +148,15 @@ decodeAction :: ActionCodec target context action -> ClientActionPayload context
 decodeAction (ActionCodec endpoints) payload =
   case filter (matchesActionPath payload) endpoints of
     [] -> UnrecognizedClientAction
-    pathMatches ->
-      case filter (matchesActionMethod payload) pathMatches of
-        [] -> MethodNotAllowedClientAction (declaredMethods pathMatches)
+    firstPathMatch : remainingPathMatches ->
+      case filter (matchesActionMethod payload) (firstPathMatch : remainingPathMatches) of
+        [] -> MethodNotAllowedClientAction (declaredMethods (firstPathMatch :| remainingPathMatches))
         ActionEndpoint _ _ decoder : _ ->
           case runActionDecoder decoder (clientActionFields payload) of
-            Parsed decodedAction -> DecodedClientAction decodedAction
-            ParseErrors parseErrors -> MalformedClientAction parseErrors
+            (parseErrors, decodedAction) ->
+              case nonEmpty parseErrors of
+                Just parseErrorValues -> decodedAction `seq` MalformedClientAction parseErrorValues
+                Nothing -> DecodedClientAction (fromJust decodedAction)
 
 matchesActionPath :: ClientActionPayload context -> ActionEndpoint target context action -> Bool
 matchesActionPath payload (ActionEndpoint _ endpointActionPath _) =
@@ -193,34 +175,37 @@ methodAt methodValue identity render =
     }
 
 get :: Text -> ActionPath context
-get path = getAt path (const path)
+get = staticPath ActionGet
 
 getAt :: Text -> (context -> Text) -> ActionPath context
 getAt = methodAt ActionGet
 
 post :: Text -> ActionPath context
-post path = postAt path (const path)
+post = staticPath ActionPost
 
 postAt :: Text -> (context -> Text) -> ActionPath context
 postAt = methodAt ActionPost
 
 put :: Text -> ActionPath context
-put path = putAt path (const path)
+put = staticPath ActionPut
 
 putAt :: Text -> (context -> Text) -> ActionPath context
 putAt = methodAt ActionPut
 
 patch :: Text -> ActionPath context
-patch path = patchAt path (const path)
+patch = staticPath ActionPatch
 
 patchAt :: Text -> (context -> Text) -> ActionPath context
 patchAt = methodAt ActionPatch
 
 delete :: Text -> ActionPath context
-delete path = deleteAt path (const path)
+delete = staticPath ActionDelete
 
 deleteAt :: Text -> (context -> Text) -> ActionPath context
 deleteAt = methodAt ActionDelete
+
+staticPath :: ActionMethod -> Text -> ActionPath context
+staticPath methodValue path = methodAt methodValue path (const path)
 
 formField :: Text -> FieldValue value -> FormField value
 formField fieldName valueDecoder =
@@ -228,33 +213,33 @@ formField fieldName valueDecoder =
     case [fieldValue | (name, fieldValue) <- fields, name == fieldName] of
       [fieldValue] ->
         maybe
-          (ParseErrors (InvalidActionField fieldName :| []))
-          Parsed
+          ([InvalidActionField fieldName], Nothing)
+          (\value -> ([], Just value))
           (runFieldValue valueDecoder fieldValue)
-      [] -> ParseErrors (MissingActionField fieldName :| [])
-      _ -> ParseErrors (DuplicateActionField fieldName :| [])
+      [] -> ([MissingActionField fieldName], Nothing)
+      _ -> ([DuplicateActionField fieldName], Nothing)
 
 required :: FormField value -> ActionDecoder value
-required (FormField decode) = ActionDecoder decode
+required (FormField decode) = actionDecoder decode
 
 exactlyOne :: FormField value -> ActionDecoder value
 exactlyOne = required
 
 optional :: FormField value -> ActionDecoder (Maybe value)
 optional (FormField decode) =
-  ActionDecoder $ \fields ->
+  actionDecoder $ \fields ->
     case decode fields of
-      Parsed value -> Parsed (Just value)
-      ParseErrors (MissingActionField _ :| []) -> Parsed Nothing
-      ParseErrors errors -> ParseErrors errors
+      ([], Just value) -> ([], Just (Just value))
+      ([MissingActionField _], Nothing) -> ([], Just Nothing)
+      (parseErrors, _) -> (parseErrors, Nothing)
 
 singleOrDefault :: value -> FormField value -> ActionDecoder value
 singleOrDefault defaultValue (FormField decode) =
-  ActionDecoder $ \fields ->
+  actionDecoder $ \fields ->
     case decode fields of
-      Parsed value -> Parsed value
-      ParseErrors (MissingActionField _ :| []) -> Parsed defaultValue
-      ParseErrors errors -> ParseErrors errors
+      ([], Just value) -> ([], Just value)
+      ([MissingActionField _], Nothing) -> ([], Just defaultValue)
+      parseErrors -> parseErrors
 
 textValue :: FieldValue Text
 textValue = FieldValue Just
@@ -264,29 +249,17 @@ parseField = FieldValue
 
 duplicateEndpoint :: [ActionEndpoint target context action] -> Maybe (ActionMethod, Text)
 duplicateEndpoint endpoints =
-  case [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ActionEndpoint _ endpointActionPath _ <- endpoints] of
-    [] -> Nothing
-    identity : identities -> if identity `elem` identities then Just identity else firstDuplicate identities
+  listToMaybe
+    [ identity
+      | (index, identity) <- zip [0 ..] identities,
+        identity `elem` drop (index + 1) identities
+    ]
   where
-    firstDuplicate remaining =
-      case remaining of
-        [] -> Nothing
-        identity : identities ->
-          if identity `elem` identities
-            then Just identity
-            else firstDuplicate identities
+    identities = [(actionPathMethod endpointActionPath, actionPathIdentity endpointActionPath) | ActionEndpoint _ endpointActionPath _ <- endpoints]
 
-declaredMethods :: [ActionEndpoint target context action] -> NonEmpty ActionMethod
-declaredMethods (ActionEndpoint _ endpointActionPath _ : remainingEndpoints) =
-  actionPathMethod endpointActionPath :| uniqueMethods remainingEndpoints [actionPathMethod endpointActionPath]
-declaredMethods [] = error "declaredMethods requires a matched endpoint"
-
-uniqueMethods :: [ActionEndpoint target context action] -> [ActionMethod] -> [ActionMethod]
-uniqueMethods endpoints seen =
-  case endpoints of
-    [] -> []
-    ActionEndpoint _ endpointActionPath _ : remainingEndpoints ->
-      let methodValue = actionPathMethod endpointActionPath
-       in if methodValue `elem` seen
-            then uniqueMethods remainingEndpoints seen
-            else methodValue : uniqueMethods remainingEndpoints (seen <> [methodValue])
+declaredMethods :: NonEmpty (ActionEndpoint target context action) -> NonEmpty ActionMethod
+declaredMethods (ActionEndpoint _ endpointActionPath _ :| remainingEndpoints) =
+  firstMethod :| nub (filter (/= firstMethod) (map endpointMethod remainingEndpoints))
+  where
+    firstMethod = actionPathMethod endpointActionPath
+    endpointMethod (ActionEndpoint _ actionPathValue _) = actionPathMethod actionPathValue

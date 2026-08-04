@@ -154,6 +154,13 @@ rejection, method mismatch, and duplicate-field parse outcome. Framework transpo
 corresponding safe `404`, `405` with `Allow`, and `400` responses; a decoded invalid subscription remains
 the example's localized `422` region patch.
 
+The subscription form also renders a control-local accessible recovery region. The inline kernel captures
+the submission and input snapshot before `/assets/navigation.js` is available, marks that same form pending,
+and retains its envelope until the deferred handler completes, reports a recoverable outcome, or the user
+cancels. A delayed module is not considered failed merely because time passes; the visible state can change
+to delayed without retrying or submitting. This example uses the default exclusive-client capability, so
+scripts-disabled native submission is intentionally not the fallback for this client action.
+
 ## Verification
 
 Unit tests cover generated routes, dispatch, component output, actions, patches, SSE, and configuration:
@@ -171,9 +178,10 @@ cabal test two-pages-example-tests \
   --test-options='--match real-browser'
 ```
 
-The [E2E source](test/E2E/AppSpec.hs) verifies enhanced navigation, Back/Forward, scripts-disabled
-fallbacks, early-submit preservation, eventual region patches, and the SSE update using semantic
-locators and composed retrying observations.
+The [E2E source](test/E2E/AppSpec.hs) verifies enhanced navigation, Back/Forward, default
+scripts-disabled non-submission for exclusive client actions, early-submit preservation, delayed handler
+arrival, a permanently blocked action becoming visibly recoverable until cancellation, eventual region
+patches, and the SSE update using semantic locators and composed retrying observations.
 
 ## Source map
 

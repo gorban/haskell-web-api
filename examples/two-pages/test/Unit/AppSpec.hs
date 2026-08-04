@@ -261,7 +261,8 @@ spec =
                    Text.isInfixOf "<a href=\"/second\" data-page-link=\"true\">Go to the second page</a>" responseBody `shouldBe` True,
                    Text.isInfixOf "<a href=\"/live-data\" data-page-link=\"true\">See live updates</a>" responseBody `shouldBe` True,
                    Text.isInfixOf authorComponents responseBody `shouldBe` True,
-                   Text.isInfixOf "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\">" responseBody `shouldBe` True,
+                   Text.isInfixOf "data-harch-action-method=\"post\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "action=\"/actions/subscribe\" method=\"dialog\"" responseBody `shouldBe` True,
                    Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True,
                    Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True,
                    Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True,
@@ -355,7 +356,7 @@ spec =
                    Text.isInfixOf "window.location.assign" responseBody `shouldBe` True,
                    Text.isInfixOf "X-Harch-Action" responseBody `shouldBe` True,
                    Text.isInfixOf "actionUrl.origin !== window.location.origin" responseBody `shouldBe` True,
-                   Text.isInfixOf "drainCapturedActions" responseBody `shouldBe` True
+                   Text.isInfixOf "captureKernel.register" responseBody `shouldBe` True
                  ]
           )
 

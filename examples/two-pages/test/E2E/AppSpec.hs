@@ -90,6 +90,48 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "does not perform a native submission for the default exclusive client action when scripts are disabled" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+        ( runBrowserScenario browser $ do
+            visitWithoutScripts homeUrl
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            assertAll
+              ((,,) <$> currentUrl <*> inputValue emailField <*> browserMetrics)
+              ( \(url, email, metrics) ->
+                  (url `shouldBe` homeUrl)
+                    :| [ email `shouldBe` "ada@example.com",
+                         $([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])
+                       ]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "keeps a permanently blocked action visibly recoverable until the user cancels it" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = css "[data-harch-action-status]"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            fill emailField "ada@example.com"
+            submit subscriptionForm
+            assertEventually (textContent actionStatus) (`shouldBe` "Still waiting for this action to be handled.")
+            click (byRole Button `named` "Cancel action")
+            assertAll
+              ((,) <$> textContent actionStatus <*> browserMetrics)
+              ( \(status, metrics) ->
+                  (status `shouldBe` "Action cancelled.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {hardNavigationCount = 0, mutationRequestCount = 0}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
     it "keeps reload and script-disabled navigation fully server rendered" $
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"

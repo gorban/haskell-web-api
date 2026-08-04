@@ -29,6 +29,7 @@ module HarchWeb.Markup.Implementation
     formTag,
     formAction,
     href,
+    hidden,
     inputTag,
     inputType,
     inputMode,
@@ -126,6 +127,9 @@ role = attribute (AttributeName "role")
 
 href :: Text -> Attribute
 href = attribute (AttributeName "href")
+
+hidden :: Attribute
+hidden = booleanAttribute (AttributeName "hidden")
 
 inputType :: Text -> Attribute
 inputType = attribute (AttributeName "type")

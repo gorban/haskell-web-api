@@ -9,6 +9,7 @@ module HarchWeb.Markup.Attributes
     dataFlag,
     elementId,
     formAction,
+    hidden,
     href,
     inputMode,
     inputType,

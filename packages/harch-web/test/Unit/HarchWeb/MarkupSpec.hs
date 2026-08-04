@@ -123,10 +123,17 @@ spec = do
               </Account.TypedActionForm>
             |]
           renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [text "Continue"])
-      renderHtml quotedActionForm
-        `shouldBe` "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"><button type=\"submit\">Subscribe</button></form>"
-      renderHtml (actionForm controlActionCodec () "/actions/subscribe" defaultActionFormAttributes [])
-        `shouldBe` "<form data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"></form>"
+          renderedActionForm = renderHtml quotedActionForm
+          renderedEmptyActionForm = renderHtml (actionForm controlActionCodec () "/actions/subscribe" defaultActionFormAttributes [])
+      expectAll
+        ( (Text.isInfixOf "aria-label=\"Subscription\"" renderedActionForm `shouldBe` True)
+            :| [ Text.isInfixOf "data-harch-action-method=\"post\"" renderedActionForm `shouldBe` True,
+                 Text.isInfixOf "method=\"dialog\"" renderedActionForm `shouldBe` True,
+                 Text.isInfixOf "<button type=\"submit\">Subscribe</button>" renderedActionForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-status" renderedEmptyActionForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-cancel" renderedEmptyActionForm `shouldBe` True
+               ]
+        )
       renderedLink `shouldBe` "<a href=\"/control\" data-page-link=\"true\">Continue</a>"
 
     it "rejects invalid named properties, positional props, and child forms while lowering" $

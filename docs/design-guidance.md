@@ -11,7 +11,7 @@ with [two-pages](../examples/two-pages/README.md).
 Every supported page route renders a complete document for direct loads, reloads, crawlers, and
 scripts-disabled navigation. JavaScript enhances declared surfaces; it does not define whether the page
 exists. Native links remain navigable, and a modeled framework control must have an immediate capture
-path or native fallback before it is shipped enabled.
+path before it is shipped enabled; a native fallback is an explicit action capability, not a default.
 
 ### Apps have a small composition root
 
@@ -124,6 +124,30 @@ validation can return the existing localized `422` region patch. Independent fie
 applicative so missing, duplicate, and syntactically invalid fields are reported in declaration order.
 Those parse errors expose only stable constructors and field names—never submitted values. Keep business
 validation separate from this protocol parsing boundary.
+
+### Captured actions have local, bounded ownership
+
+The inline capture kernel owns a captured action in memory until a deferred handler confirms completion,
+reports a visible recoverable outcome, or the user cancels it. It records the input snapshot only for that
+live document, associates it with the originating control, and updates the control-local `status` region;
+it does not log submitted values, persist them in browser storage, run application behavior, transport
+actions, or patch regions. Deferred modules register generic handlers, claim matching actions without
+removing them, and settle with a claim identity so stale or duplicate consumers cannot settle another
+handler's work.
+
+Pending feedback is immediate. A liveness threshold may change it to a visible delayed state, but time is
+not evidence that loading failed and never triggers submit, retry, cancellation, or ownership transfer.
+Synchronous exceptions, rejected promises, and module-load failures become local recoverable states.
+This proves ownership after capture only: it does not promise eventual handler execution, delivery across
+navigation/reload, survival of tab or process termination, or cross-device durability.
+
+`ActionFormAttributes` declares capabilities rather than making framework-wide promises. The default is an
+exclusive client handler. Native submission is explicit because client-only effects may have no compatible
+server/CSRF endpoint. Conditional leave confirmation installs `beforeunload` only while an unresolved
+eligible action exists, and is a best-effort warning. Retry for an indeterminate mutation is safe only
+with the same idempotency identity and a server deduplication boundary; otherwise keep the action visibly
+recoverable. See the delayed-module browser proof in
+[two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
 ## Current capability and remaining design direction
 

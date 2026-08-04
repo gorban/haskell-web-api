@@ -595,8 +595,187 @@ spec = do
           renderedForm = renderHtml (actionForm testActionCodec prefixedContext "save" defaultActionFormAttributes [text "Save"])
       Action.actionPath testActionCodec prefixedContext "save" `shouldBe` "/app/known"
       Action.actionMethod testActionCodec "save" `shouldBe` Action.ActionPost
-      renderedForm
-        `shouldBe` "<form data-harch-control data-harch-action=\"true\" action=\"/app/known\" method=\"post\">Save</form>"
+      expectAll
+        ( (Text.isInfixOf "data-harch-action-method=\"post\"" renderedForm `shouldBe` True)
+            :| [ Text.isInfixOf "data-harch-action-capabilities=\"exclusive-client-handler\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "action=\"/app/known\" method=\"dialog\"" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-status" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-cancel" renderedForm `shouldBe` True
+               ]
+        )
+
+    it "renders only explicitly declared native fallback and recovery capabilities" $ do
+      let nativeAttributes =
+            defaultActionFormAttributes
+              { actionFormCapabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]
+              }
+          nativeForm = renderHtml (actionForm testActionCodec defaultContext "save" nativeAttributes [])
+          nativeGetForm = renderHtml (actionForm testActionCodec defaultContext "read" nativeAttributes [])
+      expectAll
+        ( (Text.isInfixOf "method=\"post\"" nativeForm `shouldBe` True)
+            :| [ Text.isInfixOf "method=\"get\"" nativeGetForm `shouldBe` True,
+                 Text.isInfixOf "handler-safe-retry,conditional-leave-confirmation,idempotent-mutation-retry,native-fallback" nativeForm `shouldBe` True,
+                 actionReadyCopy defaultActionRecoveryCopy `shouldBe` "Ready.",
+                 actionPendingCopy defaultActionRecoveryCopy `shouldBe` "Submitting…",
+                 actionDelayedCopy defaultActionRecoveryCopy `shouldBe` "Still waiting for this action to be handled.",
+                 actionRecoverableCopy defaultActionRecoveryCopy `shouldBe` "This action needs your attention.",
+                 actionCancelledCopy defaultActionRecoveryCopy `shouldBe` "Action cancelled.",
+                 actionCancelCopy defaultActionRecoveryCopy `shouldBe` "Cancel action",
+                 show NativeFallback `shouldBe` "NativeFallback",
+                 showList [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback] "" `shouldSatisfy` (not . null),
+                 sum [fromEnum (left == right) | left <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback], right <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]] `shouldBe` 5,
+                 sum [fromEnum (left /= right) | left <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback], right <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]] `shouldBe` 20
+               ]
+        )
+
+    it "keeps the first-fold capture kernel within its rendered source budget" $
+      ByteString.length (TextEncoding.encodeUtf8 defaultCaptureKernelScript)
+        `shouldSatisfy` (<= defaultCaptureKernelByteBudget)
+
+    it "covers every method helper, empty codec, and public action result values" $ do
+      let methodCodec :: Action.ActionCodec Text TestContext Text
+          methodCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec
+                [ Action.action "get" (Action.get "/get") (pure "get"),
+                  Action.action "put" (Action.put "/put") (pure "put"),
+                  Action.action "patch" (Action.patch "/patch") (pure "patch"),
+                  Action.action "delete" (Action.delete "/delete") (pure "delete"),
+                  Action.action "dynamic" (Action.methodAt Action.ActionPost "/dynamic" (\actionContext -> testContextPathPrefix actionContext <> "/dynamic")) (Action.exactlyOne (Action.formField "name" Action.textValue))
+                ]
+          payload methodValue path fields =
+            Action.ClientActionPayload
+              { Action.clientActionMethod = methodValue,
+                Action.clientActionPath = path,
+                Action.clientActionFields = fields,
+                Action.clientActionCsrfToken = Just "csrf",
+                Action.clientActionPayloadContext = defaultContext {testContextPathPrefix = "/app"}
+              }
+      expectAll
+        ( (map Action.actionMethodText [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete] `shouldBe` ["GET", "POST", "PUT", "PATCH", "DELETE"])
+            :| [ Action.decodeAction methodCodec (payload "GET" "/get" []) `shouldBe` Action.DecodedClientAction "get",
+                 Action.decodeAction methodCodec (payload "PUT" "/put" []) `shouldBe` Action.DecodedClientAction "put",
+                 Action.decodeAction methodCodec (payload "PATCH" "/patch" []) `shouldBe` Action.DecodedClientAction "patch",
+                 Action.decodeAction methodCodec (payload "DELETE" "/delete" []) `shouldBe` Action.DecodedClientAction "delete",
+                 Action.actionPath methodCodec (defaultContext {testContextPathPrefix = "/app"}) "dynamic" `shouldBe` "/app/dynamic",
+                 Action.decodeAction methodCodec (payload "POST" "/app/dynamic" [("name", "Ada")]) `shouldBe` Action.DecodedClientAction "Ada",
+                 Action.decodeAction (Action.emptyActionCodec :: Action.ActionCodec Text TestContext Text) (payload "POST" "/missing" []) `shouldBe` Action.UnrecognizedClientAction,
+                 Action.DuplicateActionField "name" /= Action.InvalidActionField "name" `shouldBe` True,
+                 Action.DuplicateActionEndpoint Action.ActionPost "/same" /= Action.DuplicateActionEndpoint Action.ActionGet "/same" `shouldBe` True
+               ]
+        )
+
+    it "keeps action protocol equality total for every constructor" $ do
+      let methods = [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete]
+          payload = Action.ClientActionPayload "POST" "/action" [("name", "Ada")] (Just "csrf") defaultContext
+          payloads =
+            [ payload,
+              payload {Action.clientActionMethod = "GET"},
+              payload {Action.clientActionPath = "/other"},
+              payload {Action.clientActionFields = []},
+              payload {Action.clientActionCsrfToken = Nothing},
+              payload {Action.clientActionPayloadContext = spanishContext}
+            ]
+          parseErrors = [Action.MissingActionField "name", Action.DuplicateActionField "name", Action.InvalidActionField "name"]
+          decodedResults :: [Action.ClientActionDecodeResult Text]
+          decodedResults =
+            [ Action.DecodedClientAction "saved",
+              Action.UnrecognizedClientAction,
+              Action.MethodNotAllowedClientAction (Action.ActionGet :| [Action.ActionPost]),
+              Action.MalformedClientAction (Action.MissingActionField "name" :| [Action.InvalidActionField "name"])
+            ]
+      expectAll
+        ( (methods == methods `shouldBe` True)
+            :| [ methods /= reverse methods `shouldBe` True,
+                 sum [fromEnum (left == right) | left <- methods, right <- methods] `shouldBe` length methods,
+                 sum [fromEnum (left /= right) | left <- methods, right <- methods] `shouldBe` length methods * (length methods - 1),
+                 sum [length (show methodValue) + length (showList [methodValue] "") | methodValue <- methods] `shouldSatisfy` (> 0),
+                 sum [fromEnum (left == right) | left <- payloads, right <- payloads] `shouldBe` length payloads,
+                 sum [fromEnum (left /= right) | left <- payloads, right <- payloads] `shouldBe` length payloads * (length payloads - 1),
+                 sum [length (show payloadValue) + length (showList [payloadValue] "") | payloadValue <- payloads] `shouldSatisfy` (> 0),
+                 map (== Action.InvalidActionField "name") parseErrors `shouldBe` [False, False, True],
+                 sum [fromEnum (left == right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors,
+                 sum [fromEnum (left /= right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors * (length parseErrors - 1),
+                 sum [length (show parseError) + length (showList [parseError] "") | parseError <- parseErrors] `shouldSatisfy` (> 0),
+                 decodedResults == decodedResults `shouldBe` True,
+                 decodedResults /= reverse decodedResults `shouldBe` True,
+                 sum [fromEnum (left == right) | left <- decodedResults, right <- decodedResults] `shouldBe` length decodedResults,
+                 sum [fromEnum (left /= right) | left <- decodedResults, right <- decodedResults] `shouldBe` length decodedResults * (length decodedResults - 1),
+                 sum [length (show decodedResult) + length (showList [decodedResult] "") | decodedResult <- decodedResults] `shouldSatisfy` (> 0),
+                 length (show (Action.DuplicateActionEndpoint Action.ActionPost "/same")) `shouldSatisfy` (> 0),
+                 length (showList [Action.DuplicateActionEndpoint Action.ActionPost "/same"] "") `shouldSatisfy` (> 0)
+               ]
+        )
+
+    it "makes static helpers, recovery decoders, and method negotiation observable through the codec" $ do
+      let staticCodec :: Action.ActionCodec Text TestContext Text
+          staticCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec
+                [ Action.action "get" (Action.get "/get") (pure "get"),
+                  Action.action "post" (Action.post "/post") (pure "post"),
+                  Action.action "put" (Action.put "/put") (pure "put"),
+                  Action.action "patch" (Action.patch "/patch") (pure "patch"),
+                  Action.action "delete" (Action.delete "/delete") (pure "delete")
+                ]
+          duplicateMethodCodec :: Action.ActionCodec Text TestContext Text
+          duplicateMethodCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec
+                [ Action.action "first-get" (Action.getAt "/first-get" (const "/same")) (pure "first-get"),
+                  Action.action "second-get" (Action.getAt "/second-get" (const "/same")) (pure "second-get"),
+                  Action.action "post" (Action.postAt "/post" (const "/same")) (pure "post"),
+                  Action.action "put" (Action.putAt "/put" (const "/same")) (pure "put")
+                ]
+          dynamicMethodCodec :: Action.ActionCodec Text TestContext Text
+          dynamicMethodCodec =
+            either (const (error "invalid dynamic action codec")) id $
+              Action.actionCodec
+                [ Action.action "put" (Action.putAt "/put" (const "/put")) (pure "put"),
+                  Action.action "patch" (Action.patchAt "/patch" (const "/patch")) (pure "patch"),
+                  Action.action "delete" (Action.deleteAt "/delete" (const "/delete")) (pure "delete")
+                ]
+          optionalCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" (Action.parseField nonEmptyValue)))]
+          defaultCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" (Action.parseField nonEmptyValue)))]
+          actionPayload methodValue path fields =
+            Action.ClientActionPayload methodValue path fields Nothing defaultContext
+          nonEmptyValue fieldText = if Text.null fieldText then Nothing else Just fieldText
+      expectAll
+        ( (map (Action.actionPath staticCodec defaultContext) ["get", "post", "put", "patch", "delete"] `shouldBe` ["/get", "/post", "/put", "/patch", "/delete"])
+            :| [ map (Action.actionMethod staticCodec) ["get", "post", "put", "patch", "delete"] `shouldBe` [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete],
+                 Action.decodeAction duplicateMethodCodec (actionPayload "PUT" "/same" []) `shouldBe` Action.MethodNotAllowedClientAction (Action.ActionGet :| [Action.ActionPost, Action.ActionPut]),
+                 show (Action.decodeAction duplicateMethodCodec (actionPayload "PUT" "/same" [])) `shouldBe` "MethodNotAllowedClientAction (ActionGet :| [ActionPost,ActionPut])",
+                 map (Action.actionPath dynamicMethodCodec defaultContext) ["put", "patch", "delete"] `shouldBe` ["/put", "/patch", "/delete"],
+                 Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "Ada")]) `shouldBe` Action.DecodedClientAction (Just "Ada"),
+                 Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "")]) `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "name" :| []),
+                 Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "Ada"), ("name", "Grace")]) `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "name" :| []),
+                 Action.decodeAction defaultCodec (actionPayload "POST" "/default" [("name", "Ada")]) `shouldBe` Action.DecodedClientAction "Ada",
+                 Action.decodeAction defaultCodec (actionPayload "POST" "/default" [("name", "")]) `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "name" :| []),
+                 Action.decodeAction defaultCodec (actionPayload "POST" "/default" [("name", "Ada"), ("name", "Grace")]) `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "name" :| [])
+               ]
+        )
+
+    it "rejects undeclared targets and non-native action methods at the rendering boundary" $ do
+      let emptyCodec :: Action.ActionCodec Text TestContext Text
+          emptyCodec = Action.emptyActionCodec
+          unsupportedCodec :: Action.ActionCodec Text TestContext Text
+          unsupportedCodec =
+            either (const (error "invalid test action codec")) id $
+              Action.actionCodec [Action.action "put" (Action.put "/put") (pure "put")]
+          nativeAttributes = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback]}
+      missingPath <- try (evaluate (Text.length (Action.actionPath emptyCodec defaultContext "missing"))) :: IO (Either SomeException Int)
+      missingMethod <- try (evaluate (Action.actionMethod emptyCodec "missing")) :: IO (Either SomeException Action.ActionMethod)
+      unsupportedForm <- try (evaluate (Text.length (renderHtml (actionForm unsupportedCodec defaultContext "put" nativeAttributes [])))) :: IO (Either SomeException Int)
+      expectAll
+        ( (either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingPath `shouldBe` True)
+            :| [ either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingMethod `shouldBe` True,
+                 either (Text.isInfixOf "HTML forms only support GET and POST client actions" . Text.pack . displayException) (const False) unsupportedForm `shouldBe` True
+               ]
+        )
 
     it "matches declared paths and methods, and reports unknown paths or the allowed methods precisely" $ do
       let payload methodValue path =
@@ -614,7 +793,7 @@ spec = do
 
     it "accumulates field errors deterministically and supports required, optional, defaulted, and parsed values" $ do
       let validationCodec =
-            either (error . show) id $
+            either (const (error "invalid test action codec")) id $
               Action.actionCodec
                 [ Action.action
                     ()
@@ -633,15 +812,19 @@ spec = do
                 Action.clientActionPayloadContext = ()
               }
           defaultCodec =
-            either (error . show) id $
+            either (const (error "invalid test action codec")) id $
               Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" Action.textValue))]
           optionalCodec =
-            either (error . show) id $
+            either (const (error "invalid test action codec")) id $
               Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" Action.textValue))]
       Action.decodeAction validationCodec (validationPayload [("email", "one"), ("email", "two")])
         `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "email" :| [Action.MissingActionField "code"])
       Action.decodeAction validationCodec (validationPayload [("email", "one"), ("code", "invalid")])
         `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "code" :| [])
+      Action.decodeAction validationCodec (validationPayload [("email", "one"), ("code", "valid")])
+        `shouldBe` Action.DecodedClientAction ("one", "valid")
+      Action.decodeAction validationCodec (validationPayload [("code", "valid")])
+        `shouldBe` Action.MalformedClientAction (Action.MissingActionField "email" :| [])
       Action.decodeAction defaultCodec ((validationPayload []) {Action.clientActionPath = "/default"})
         `shouldBe` Action.DecodedClientAction "guest"
       Action.decodeAction optionalCodec ((validationPayload []) {Action.clientActionPath = "/optional"})
@@ -649,8 +832,28 @@ spec = do
 
     it "rejects ambiguous endpoint declarations during codec construction" $ do
       case Action.actionCodec [Action.action () (Action.post "/duplicate") (pure ()), Action.action () (Action.post "/duplicate") (pure ())] of
-        Left codecError -> codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/duplicate"
+        Left codecError -> do
+          codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/duplicate"
+          show codecError `shouldBe` "DuplicateActionEndpoint ActionPost \"/duplicate\""
         Right _ -> expectationFailure "expected duplicate endpoint construction to fail"
+
+    it "rejects a later duplicate declaration after checking every earlier endpoint" $ do
+      let codec =
+            Action.actionCodec
+              [ Action.action "first" (Action.post "/first") (pure "first"),
+                Action.action "second" (Action.post "/second") (pure "second"),
+                Action.action "duplicate" (Action.post "/first") (pure "duplicate")
+              ] :: Either Action.ActionCodecError (Action.ActionCodec Text TestContext Text)
+      case codec of
+        Left codecError -> do
+          codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/first"
+          show codecError `shouldBe` "DuplicateActionEndpoint ActionPost \"/first\""
+        Right _ -> expectationFailure "expected a later duplicate endpoint declaration to fail"
+
+    it "constructs an empty action codec without a duplicate endpoint" $
+      case Action.actionCodec [] :: Either Action.ActionCodecError (Action.ActionCodec Text TestContext Text) of
+        Left _ -> expectationFailure "an empty codec must not have a duplicate endpoint"
+        Right _ -> pure ()
 
   describe "shared config coverage" $ do
     it "reads exported selectors from the shared server config records" $ do
@@ -1125,8 +1328,8 @@ spec = do
       Text.isInfixOf "function navigateTo" defaultNavigationRuntimeScript `shouldBe` True
       expectAll
         ( (Text.isInfixOf "const CapturedEvent = Object.freeze({ Submit: 'submit' });" defaultCaptureKernelScript `shouldBe` True)
-            :| [ Text.isInfixOf "function dispatchCapturedEvent(capturedEventTypes, capturedEvent)" defaultNavigationRuntimeScript `shouldBe` True,
-                 Text.isInfixOf "case capturedEventTypes.Submit:" defaultNavigationRuntimeScript `shouldBe` True,
+            :| [ Text.isInfixOf "captureKernel.register(captureKernel.eventTypes.Submit" defaultNavigationRuntimeScript `shouldBe` True,
+                 Text.isInfixOf "settlement.completed();" defaultNavigationRuntimeScript `shouldBe` True,
                  Text.isInfixOf "['click', 'input', 'change', 'keydown', 'submit']" defaultCaptureKernelScript `shouldBe` False
                ]
         )
