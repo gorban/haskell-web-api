@@ -2,8 +2,11 @@
 
 ## 0.1.2.0
 
-1. Added a new `HarchWeb.Site` wrapper that lets composition roots assemble typed route definitions, shared page-shell configuration, and route-derived navigation without directly building the lower-level `Application` record.
-2. Switched the first-party `web-api` composition root onto that `HarchWeb.Site` path while preserving current page/API behavior and keeping the route-aware shell output stable under the existing test suite.
+1. Added declarative `ActionCodec` endpoint definitions shared by typed client-action forms and server
+   decoding. The protocol now distinguishes unknown paths (`404`), method mismatches (`405` with `Allow`),
+   malformed matched fields (`400`), and application validation responses (`422`).
+2. Added a new `HarchWeb.Site` wrapper that lets composition roots assemble typed route definitions, shared page-shell configuration, and route-derived navigation without directly building the lower-level `Application` record.
+3. Switched the first-party `web-api` composition root onto that `HarchWeb.Site` path while preserving current page/API behavior and keeping the route-aware shell output stable under the existing test suite.
 
 ## 0.1.1.0
 

@@ -22,6 +22,7 @@ import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
+import HarchWeb.Action (decodeAction)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
@@ -29,7 +30,7 @@ import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
-import WebApi.AccountPages (AccountAction, decodeAccountActionResult, handleAccountAction)
+import WebApi.AccountPages (AccountAction, accountActions, handleAccountAction)
 import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
@@ -105,7 +106,7 @@ buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestO
             Site.siteStaticAssets = staticAssets config,
             Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
             Site.siteRequestPolicy = requestPolicy config,
-            Site.siteDecodeClientAction = decodeAccountActionResult,
+            Site.siteDecodeClientAction = decodeAction accountActions,
             Site.siteReportRequestObservability = requestObservabilityReporter,
             Site.siteReportConnectionObservability = connectionObservabilityReporter,
             Site.siteReportApplicationLog = applicationLogReporter,

@@ -71,7 +71,7 @@ renderPageModel config routeRequest pageModel =
     { HarchWeb.pageTitle = Text.concat [appTitlePrefix config, ": ", routeTitle (HarchWeb.requestRoute routeRequest)],
       HarchWeb.pageRoute = HarchWeb.requestRoute routeRequest,
       HarchWeb.pageContext = HarchWeb.requestContext routeRequest,
-      HarchWeb.pageBody = renderPageBodyForLocale (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
+      HarchWeb.pageBody = renderPageBodyForLocale (HarchWeb.requestContext routeRequest) (requestLocale (HarchWeb.requestContext routeRequest)) pageModel,
       HarchWeb.pageBootstrapHooks = pageEnhancementHooks (HarchWeb.requestRoute routeRequest)
     }
 

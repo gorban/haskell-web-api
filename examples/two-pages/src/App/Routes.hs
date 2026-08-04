@@ -12,6 +12,7 @@ module App.Routes
     previewSlugText,
     routeCodec,
     routeHref,
+    twoPageActions,
     twoPageNavigationPath,
     twoPageActionPath,
   )
@@ -29,6 +30,16 @@ import HarchWeb
   ( RouteCodec (..),
     RouteRequest (..),
   )
+import HarchWeb.Action
+  ( ActionCodec,
+    action,
+    actionCodec,
+    actionPath,
+    formField,
+    post,
+    singleOrDefault,
+    textValue,
+  )
 
 data ApiRoute
   = LiveDataEvents
@@ -36,6 +47,7 @@ data ApiRoute
 
 data TwoPageActionTarget
   = Subscribe
+  deriving (Eq)
 
 data TwoPageNavigationTarget
   = NavigationPage PageRoute
@@ -92,9 +104,18 @@ routeHref route =
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
 
 twoPageActionPath :: TwoPageActionTarget -> Text
-twoPageActionPath actionTarget =
-  case actionTarget of
-    Subscribe -> "/actions/subscribe"
+twoPageActionPath = actionPath twoPageActions ()
+
+twoPageActions :: ActionCodec TwoPageActionTarget () TwoPageAction
+twoPageActions =
+  case actionCodec
+    [ action
+        Subscribe
+        (post "/actions/subscribe")
+        (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))
+    ] of
+    Left codecError -> error (show codecError)
+    Right codec -> codec
 
 twoPageNavigationPath :: TwoPageNavigationTarget -> Text
 twoPageNavigationPath navigationTarget =

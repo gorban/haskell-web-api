@@ -7,6 +7,7 @@ module Unit.HarchWeb.MarkupSpec (spec) where
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb
+import HarchWeb.Action qualified as Action
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Markup.Unsafe qualified as Unsafe
 import Test.Hspec
@@ -50,6 +51,12 @@ newtype ControlRoute = ControlRoute Text.Text
 
 controlRouteHref :: ControlRoute -> Text.Text
 controlRouteHref (ControlRoute target) = "/" <> target
+
+controlActionCodec :: Action.ActionCodec Text.Text () Text.Text
+controlActionCodec =
+  case Action.actionCodec [Action.action "/actions/subscribe" (Action.post "/actions/subscribe") (pure "/actions/subscribe")] of
+    Left codecError -> error (show codecError)
+    Right codec -> codec
 
 spec :: Spec
 spec = do
@@ -118,7 +125,7 @@ spec = do
           renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [text "Continue"])
       renderHtml quotedActionForm
         `shouldBe` "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"><button type=\"submit\">Subscribe</button></form>"
-      renderHtml (actionForm id "/actions/subscribe" defaultActionFormAttributes [])
+      renderHtml (actionForm controlActionCodec () "/actions/subscribe" defaultActionFormAttributes [])
         `shouldBe` "<form data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"></form>"
       renderedLink `shouldBe` "<a href=\"/control\" data-page-link=\"true\">Continue</a>"
 

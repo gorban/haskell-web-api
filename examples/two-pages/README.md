@@ -146,6 +146,14 @@ subscriptionEmailField SubscriptionEmailFieldProps children =
 6. `/live-data` begins with meaningful SSR status. Its deferred `EventSource` module replaces that
    status after an event; without scripts, the initial content remains.
 
+The subscription target is declared once in `App.Routes.twoPageActions` as an
+`ActionCodec TwoPageActionTarget () TwoPageAction`. `App.Components.Controls.actionForm` passes that
+codec and a typed `Subscribe` target to `HarchWeb.Controls.actionForm`; the same declaration decodes the
+captured request in `App.App`. The focused unit test proves the `POST` subscription path, unknown-path
+rejection, method mismatch, and duplicate-field parse outcome. Framework transport tests cover the
+corresponding safe `404`, `405` with `Allow`, and `400` responses; a decoded invalid subscription remains
+the example's localized `422` region patch.
+
 ## Verification
 
 Unit tests cover generated routes, dispatch, component output, actions, patches, SSE, and configuration:
@@ -171,7 +179,10 @@ locators and composed retrying observations.
 
 - [SetupHooks.hs](SetupHooks.hs): page discovery and generated-module build wiring.
 - [App.App](src/App/App.hs): site composition, total route dispatch, actions, regions, and server config.
-- [App.Routes](src/App/Routes.hs): page/API/custom route sum, parsing, rendering, and dynamic slug type.
+- [App.Routes](src/App/Routes.hs): page/API/custom route sum, parsing, rendering, dynamic slug type, and
+  the shared subscription `ActionCodec`.
+- [App.Components.Controls](src/App/Components/Controls.hs): page-only navigation links and the typed
+  `ActionForm` wrapper that prints its target and method from `twoPageActions`.
 - [App.Pages.Home](src/App/Pages/Home.hs): component forms and captured subscription control.
 - [App.CustomPages.Preview](src/App/CustomPages/Preview.hs): explicit dynamic page route.
 - [HarchWeb.Document](../../packages/harch-web/src/HarchWeb/Document.hs): embedded deferred

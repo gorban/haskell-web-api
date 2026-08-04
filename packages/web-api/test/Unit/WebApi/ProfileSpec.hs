@@ -9,6 +9,7 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account (AccountId, emailVerificationTokenText, mkAccountId, storedVerificationTokenDigest)
+import HarchWeb.Action qualified as Action
 import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
@@ -22,7 +23,7 @@ import WebApi.Account
     AccountStore (..),
     AccountStoreError (..),
   )
-import WebApi.AccountPages (PendingProfileForm (..), decodeAccountActionResult, handleAccountAction, renderPendingProfileRegion)
+import WebApi.AccountPages (AccountActionTarget (..), PendingProfileForm (..), accountActions, handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -94,7 +95,8 @@ spec =
               (error "expected a recognized profile action fixture")
               ( do
                   action <-
-                    case decodeAccountActionResult
+                    case Action.decodeAction
+                      accountActions
                       HarchWeb.ClientActionPayload
                         { HarchWeb.clientActionMethod = "POST",
                           HarchWeb.clientActionPath = profileActionPath requestContext,
@@ -173,8 +175,8 @@ spec =
           registrationAction = CallToAction "Create account" RegistrationRoute "/register"
           signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
           signedOutModel = SignedOutProfilePage "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing "/profile" "Resend verification email" signOutAction
-          pendingModelWithIdentity = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" (Just "pending-person") (Just "Pending Person") "/profile" "Resend verification email" signOutAction
+          pendingModel = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction
+          pendingModelWithIdentity = PendingProfilePage "Profile" "Verify your email address before continuing." "person@example.test" (Just "pending-person") (Just "Pending Person") UpdateProfileTarget "Resend verification email" signOutAction
           authenticatedModel = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
           authenticatedModelWithIdentity = AuthenticatedProfilePage "Profile" "You are signed in." "person@example.test" (Just "authenticated-person") (Just "Authenticated Person") signOutAction
           unavailableModel = UnavailableProfilePage "Profile" "Your profile is temporarily unavailable." signInAction
@@ -212,7 +214,7 @@ spec =
                    `shouldBe` False,
                  (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
                    `shouldBe` True,
-                 renderPendingProfileRegion "/profile" (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+                 renderPendingProfileRegion defaultRequestContext (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
                    `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
                ]
         )

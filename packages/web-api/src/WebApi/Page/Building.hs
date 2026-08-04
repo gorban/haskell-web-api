@@ -16,6 +16,7 @@ import HarchWeb qualified
 import HarchWeb.Email qualified as Email
 import HarchWeb.Username qualified as Username
 import WebApi.Account (AccountProfile (..))
+import WebApi.AccountPages.Actions.Contract (AccountActionTarget (..))
 import WebApi.AccountPages.Forms
   ( LoginForm (..),
     MfaEnrollmentForm (..),
@@ -62,11 +63,11 @@ buildPageModelFromRouteData routeRequest routeData =
           }
     RegistrationRouteDataResult ->
       RegistrationPage
-        (renderRoutePath (HarchWeb.RouteRequest RegistrationRoute (HarchWeb.requestContext routeRequest)))
+        RegisterAccountTarget
         emptyRegistrationForm
     EmailVerificationRouteDataResult ->
       EmailVerificationPage
-        (renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute (HarchWeb.requestContext routeRequest)))
+        VerifyEmailTarget
         VerificationForm
           { verificationFormToken =
               fromMaybe Text.empty (lookup "token" (requestQueryParameters (HarchWeb.requestContext routeRequest))),
@@ -75,15 +76,15 @@ buildPageModelFromRouteData routeRequest routeData =
           }
     MfaEnrollmentRouteDataResult ->
       MfaEnrollmentPage
-        (renderRoutePath (HarchWeb.RouteRequest MfaEnrollmentRoute (HarchWeb.requestContext routeRequest)))
+        EnrollMfaTarget
         (MfaEnrollmentForm (fromMaybe Text.empty (lookup "account" (requestQueryParameters (HarchWeb.requestContext routeRequest)))) Nothing [] Nothing False)
     LoginRouteDataResult ->
       LoginPage
-        (renderRoutePath (HarchWeb.RouteRequest LoginRoute (HarchWeb.requestContext routeRequest)))
+        LoginAccountTarget
         (LoginForm Text.empty Nothing False)
     LogoutRouteDataResult ->
       LogoutPage
-        (renderRoutePath (HarchWeb.RouteRequest LogoutRoute (HarchWeb.requestContext routeRequest)))
+        LogoutAccountTarget
     ProfileRouteDataResult ->
       ProfilePage (buildProfilePageModel routeRequest ProfileUnauthenticated)
     _ ->
@@ -111,7 +112,7 @@ buildProfilePageModel routeRequest profileState =
           profileEmail = Email.emailAddressText (accountProfileEmail profile),
           profileUsername = Username.usernameText <$> accountProfileUsername profile,
           profileDisplayName = accountProfileDisplayName profile,
-          profileResendPath = renderRoutePath (HarchWeb.RouteRequest ProfileRoute (HarchWeb.requestContext routeRequest)),
+          profileResendPath = UpdateProfileTarget,
           profileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
           profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
         }

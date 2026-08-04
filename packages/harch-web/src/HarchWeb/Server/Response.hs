@@ -18,6 +18,10 @@ module HarchWeb.Server.Response
 where
 
 import Data.Text (Text)
+import HarchWeb.Action
+  ( ClientActionDecodeResult (..),
+    ClientActionPayload (..),
+  )
 import HarchWeb.Document (Page)
 import HarchWeb.Markup (RegionPatch)
 import HarchWeb.Observability qualified as Observability
@@ -69,26 +73,6 @@ newtype RequestMiddleware context = RequestMiddleware
 data MiddlewareResult context
   = ContinueMiddleware context
   | HaltMiddleware context ResponseBody
-  deriving (Eq, Show)
-
--- | A same-origin form action captured before deferred behavior modules load.
--- Form fields preserve their authored order, including the successful submitter.
-data ClientActionPayload context = ClientActionPayload
-  { clientActionMethod :: Text,
-    clientActionPath :: Text,
-    clientActionFields :: [(Text, Text)],
-    clientActionCsrfToken :: Maybe Text,
-    clientActionPayloadContext :: context
-  }
-  deriving (Eq, Show)
-
--- | Decoding distinguishes an action that does not belong to this application
--- from one whose recognized payload is malformed. The server maps the latter
--- to a safe 400 response instead of treating it as a missing endpoint.
-data ClientActionDecodeResult action
-  = DecodedClientAction action
-  | UnrecognizedClientAction
-  | MalformedClientAction
   deriving (Eq, Show)
 
 -- | The application action after its codec has consumed the transport payload.

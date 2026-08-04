@@ -171,55 +171,55 @@ sessionStoreErrorMessage storeError =
     AccountSessionStoreUnavailable -> "account session store unavailable"
     AccountSessionStoreCorruptData -> "account session store returned corrupt data"
 
-registrationResponse :: AppLocale -> Text -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-registrationResponse locale registrationPath status form focusId =
+registrationResponse :: AppLocale -> AppRequestContext -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
+registrationResponse locale requestContext status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (registrationRegion locale registrationPath form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (registrationRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-verificationResponse :: AppLocale -> Text -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-verificationResponse locale verificationPath status form focusId =
+verificationResponse :: AppLocale -> AppRequestContext -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
+verificationResponse locale requestContext status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion locale verificationPath form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-mfaEnrollmentResponse :: AppLocale -> Text -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
-mfaEnrollmentResponse locale mfaEnrollmentPath status form focusId =
+mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse locale requestContext status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion locale mfaEnrollmentPath form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-loginResponse :: AppLocale -> Text -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-loginResponse locale loginPath status form focusId headers =
+loginResponse :: AppLocale -> AppRequestContext -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+loginResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (loginRegion locale loginPath form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (loginRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-logoutResponse :: AppLocale -> Text -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
-logoutResponse locale logoutPath status message isError headers =
+logoutResponse :: AppLocale -> AppRequestContext -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+logoutResponse locale requestContext status message isError headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion locale logoutPath ((,isError) <$> message)),
+      HarchWeb.clientActionPatches = replaceRegionPatch (logoutRegion requestContext locale ((,isError) <$> message)),
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
@@ -230,7 +230,7 @@ profileResponse :: AccountActionRequest -> Int -> PendingProfileForm -> HarchWeb
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (accountRoutePath actionRequest ProfileRoute) form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (HarchWeb.clientActionContext actionRequest) form),
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],

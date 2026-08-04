@@ -10,7 +10,7 @@ These are Cabal packages with executable source and tests.
 
 | Example | What it demonstrates | Run from the repository root |
 | --- | --- | --- |
-| [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
+| [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, an `ActionCodec` shared by typed forms and dispatch, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
 | [custom-db-adapter](custom-db-adapter/README.md) | A typed, non-PostgreSQL effect interpreter with focused tests. | `cabal test custom-db-adapter-tests` |
 
 ## Implemented guides

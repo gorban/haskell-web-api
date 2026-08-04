@@ -9,7 +9,7 @@ where
 import App.Routes
   ( TwoPageActionTarget,
     TwoPageNavigationTarget,
-    twoPageActionPath,
+    twoPageActions,
     twoPageNavigationPath,
   )
 import Data.Text (Text)
@@ -30,4 +30,4 @@ data ActionFormProps = ActionFormProps
 
 actionForm :: ActionFormProps -> [HarchWeb.Html] -> HarchWeb.Html
 actionForm ActionFormProps {action, ariaLabel} =
-  Controls.actionForm twoPageActionPath action Controls.ActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}
+  Controls.actionForm twoPageActions () action Controls.ActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}

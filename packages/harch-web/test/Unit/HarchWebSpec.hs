@@ -18,6 +18,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
+import HarchWeb.Action qualified as Action
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Security qualified as Security
@@ -79,6 +80,21 @@ defaultContext = TestContext {requestLanguage = "en", testContextPathPrefix = ""
 
 spanishContext :: TestContext
 spanishContext = TestContext {requestLanguage = "es", testContextPathPrefix = ""}
+
+testActionCodec :: Action.ActionCodec Text TestContext Text
+testActionCodec =
+  case Action.actionCodec
+    [ Action.action
+        "save"
+        (Action.postAt "/known" renderKnownActionPath)
+        (("save:" <>) <$> Action.required (Action.formField "email" Action.textValue)),
+      Action.action "read" (Action.getAt "/known" renderKnownActionPath) (pure "read")
+    ] of
+    Left codecError -> error (show codecError)
+    Right codec -> codec
+
+renderKnownActionPath :: TestContext -> Text
+renderKnownActionPath requestContext = applyTestPathPrefix (testContextPathPrefix requestContext) "/known"
 
 sampleCodec :: RouteCodec TestRoute TestContext
 sampleCodec =
@@ -573,6 +589,69 @@ waiRequestWithRemoteHostAndHeaders segments remoteHost headers =
 
 spec :: Spec
 spec = do
+  describe "HarchWeb.Action" $ do
+    it "prints codec paths and methods from the same declarations used for parsing and form markup" $ do
+      let prefixedContext = defaultContext {testContextPathPrefix = "/app"}
+          renderedForm = renderHtml (actionForm testActionCodec prefixedContext "save" defaultActionFormAttributes [text "Save"])
+      Action.actionPath testActionCodec prefixedContext "save" `shouldBe` "/app/known"
+      Action.actionMethod testActionCodec "save" `shouldBe` Action.ActionPost
+      renderedForm
+        `shouldBe` "<form data-harch-control data-harch-action=\"true\" action=\"/app/known\" method=\"post\">Save</form>"
+
+    it "matches declared paths and methods, and reports unknown paths or the allowed methods precisely" $ do
+      let payload methodValue path =
+            Action.ClientActionPayload
+              { Action.clientActionMethod = methodValue,
+                Action.clientActionPath = path,
+                Action.clientActionFields = [("email", "ada@example.test")],
+                Action.clientActionCsrfToken = Nothing,
+                Action.clientActionPayloadContext = defaultContext
+              }
+      Action.decodeAction testActionCodec (payload "POST" "/known") `shouldBe` Action.DecodedClientAction "save:ada@example.test"
+      Action.decodeAction testActionCodec (payload "GET" "/known") `shouldBe` Action.DecodedClientAction "read"
+      Action.decodeAction testActionCodec (payload "PUT" "/known") `shouldBe` Action.MethodNotAllowedClientAction (Action.ActionPost :| [Action.ActionGet])
+      Action.decodeAction testActionCodec (payload "POST" "/missing") `shouldBe` Action.UnrecognizedClientAction
+
+    it "accumulates field errors deterministically and supports required, optional, defaulted, and parsed values" $ do
+      let validationCodec =
+            either (error . show) id $
+              Action.actionCodec
+                [ Action.action
+                    ()
+                    (Action.post "/validate")
+                    ( (,)
+                        <$> Action.required (Action.formField "email" Action.textValue)
+                        <*> Action.required (Action.formField "code" (Action.parseField (\fieldText -> if fieldText == "valid" then Just fieldText else Nothing)))
+                    )
+                ]
+          validationPayload fields =
+            Action.ClientActionPayload
+              { Action.clientActionMethod = "POST",
+                Action.clientActionPath = "/validate",
+                Action.clientActionFields = fields,
+                Action.clientActionCsrfToken = Nothing,
+                Action.clientActionPayloadContext = ()
+              }
+          defaultCodec =
+            either (error . show) id $
+              Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" Action.textValue))]
+          optionalCodec =
+            either (error . show) id $
+              Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" Action.textValue))]
+      Action.decodeAction validationCodec (validationPayload [("email", "one"), ("email", "two")])
+        `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "email" :| [Action.MissingActionField "code"])
+      Action.decodeAction validationCodec (validationPayload [("email", "one"), ("code", "invalid")])
+        `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "code" :| [])
+      Action.decodeAction defaultCodec ((validationPayload []) {Action.clientActionPath = "/default"})
+        `shouldBe` Action.DecodedClientAction "guest"
+      Action.decodeAction optionalCodec ((validationPayload []) {Action.clientActionPath = "/optional"})
+        `shouldBe` Action.DecodedClientAction Nothing
+
+    it "rejects ambiguous endpoint declarations during codec construction" $ do
+      case Action.actionCodec [Action.action () (Action.post "/duplicate") (pure ()), Action.action () (Action.post "/duplicate") (pure ())] of
+        Left codecError -> codecError `shouldBe` Action.DuplicateActionEndpoint Action.ActionPost "/duplicate"
+        Right _ -> expectationFailure "expected duplicate endpoint construction to fail"
+
   describe "shared config coverage" $ do
     it "reads exported selectors from the shared server config records" $ do
       let certbotConfig = CertbotConfig {certbotExecutable = "certbot", certbotArguments = ["certonly", "--webroot"]}
@@ -1749,6 +1828,54 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
       Wai.responseStatus response `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json; charset=utf-8")
+
+    it "maps codec unknown, method, malformed, and domain action outcomes to safe protocol responses" $ do
+      let actionApplication =
+            sampleApplication
+              { decodeClientAction = Action.decodeAction testActionCodec,
+                handleClientAction =
+                  const
+                    ( pure
+                        ( Just
+                            ClientActionResponse
+                              { clientActionStatus = 422,
+                                clientActionPatches = [],
+                                clientActionFocusId = Nothing,
+                                clientActionHeaders = [],
+                                clientActionObservabilityAttributes = [],
+                                clientActionLogEntries = []
+                              }
+                        )
+                    )
+              }
+          requestFor methodValue path bodyChunks =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk bodyChunks)
+              ( (waiRequest path)
+                  { Wai.requestMethod = methodValue,
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "harch-csrf=csrf-token")
+                      ]
+                  }
+              )
+      unknownChunks <- newIORef ["_harch_csrf=csrf-token"]
+      wrongMethodChunks <- newIORef ["_harch_csrf=csrf-token"]
+      malformedChunks <- newIORef ["_harch_csrf=csrf-token"]
+      domainChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token"]
+      unknownResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["missing"] unknownChunks)
+      wrongMethodResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "PUT" ["known"] wrongMethodChunks)
+      malformedResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["known"] malformedChunks)
+      domainResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["known"] domainChunks)
+      Wai.responseStatus unknownResponse `shouldBe` Http.status404
+      Wai.responseStatus wrongMethodResponse `shouldBe` Http.status405
+      lookup "Allow" (Wai.responseHeaders wrongMethodResponse) `shouldBe` Just "POST, GET"
+      Wai.responseStatus malformedResponse `shouldBe` Http.status400
+      readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      Wai.responseStatus domainResponse `shouldBe` Http.status422
 
     it "renders typed redirects with the location header and standard response metadata" $ do
       let typedRedirect = redirectResponse 302 "/spaces" :: Response TestRoute TestContext

@@ -14,6 +14,13 @@ module HarchWeb.Controls
 where
 
 import Data.Text (Text)
+import Data.Text qualified as Text
+import HarchWeb.Action
+  ( ActionCodec,
+    ActionMethod (..),
+    actionMethod,
+    actionPath,
+  )
 import HarchWeb.Markup
 
 -- | The optional non-routing attributes of a client action form. Framework
@@ -32,14 +39,30 @@ pageLink renderPageTarget target =
     anchorTag
     [href (renderPageTarget target), dataAttribute "page-link" "true"]
 
-actionForm :: (action -> Text) -> action -> ActionFormAttributes -> [Html] -> Html
-actionForm renderActionTarget target attributes =
+actionForm :: (Eq target) => ActionCodec target context action -> context -> target -> ActionFormAttributes -> [Html] -> Html
+actionForm codec context target attributes =
   element
     formTag
     ( maybe [] (pure . ariaLabel) (actionFormAriaLabel attributes)
         <> [ dataFlag "harch-control",
              dataAttribute "harch-action" "true",
-             formAction (renderActionTarget target),
-             method "post"
+             formAction (actionPath codec context target),
+             method (formMethod (actionMethod codec target))
            ]
     )
+
+formMethod :: ActionMethod -> Text
+formMethod actionMethodValue =
+  case actionMethodValue of
+    ActionGet -> "get"
+    ActionPost -> "post"
+    _ -> error ("HTML forms only support GET and POST client actions, not " <> Text.unpack (Text.toLower (showActionMethod actionMethodValue)))
+
+showActionMethod :: ActionMethod -> Text
+showActionMethod actionMethodValue =
+  case actionMethodValue of
+    ActionGet -> "GET"
+    ActionPost -> "POST"
+    ActionPut -> "PUT"
+    ActionPatch -> "PATCH"
+    ActionDelete -> "DELETE"

@@ -211,12 +211,17 @@ spec =
               case HarchWeb.decodeClientAction
                 buildApplication
                 (actionPayload "POST" "/actions/subscribe" [("email", "first@example.com"), ("email", "second@example.com")]) of
-                HarchWeb.MalformedClientAction -> True
+                HarchWeb.MalformedClientAction _ -> True
+                _ -> False
+            wrongMethodRejected =
+              case HarchWeb.decodeClientAction buildApplication (actionPayload "GET" "/actions/subscribe" []) of
+                HarchWeb.MethodNotAllowedClientAction _ -> True
                 _ -> False
         expectAll
           ( (absentEmailDecoded `shouldBe` True)
               :| [ unknownActionRejected `shouldBe` True,
-                   duplicateEmailRejected `shouldBe` True
+                   duplicateEmailRejected `shouldBe` True,
+                   wrongMethodRejected `shouldBe` True
                  ]
           )
 

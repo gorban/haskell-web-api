@@ -4,6 +4,7 @@
 module HarchWeb.Server.ClientAction
   ( ClientActionProtocolError (..),
     clientActionProtocolErrorResponse,
+    clientActionMethodNotAllowedResponse,
     clientActionResponseBody,
     isClientActionRequest,
     maxClientActionBodyBytes,
@@ -17,10 +18,12 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as JsonEncoding
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb.Action (ActionMethod, actionMethodText)
 import HarchWeb.Markup (regionPatchHtml, regionPatchId)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Server.Response
@@ -30,7 +33,6 @@ import Network.Wai qualified as Wai
 data ClientActionProtocolError
   = InvalidClientActionEncoding
   | ClientActionBodyTooLarge
-  | ClientActionMethodNotAllowed
   | ClientActionUnsupportedMediaType
   | ClientActionOriginRejected
   | ClientActionCsrfRejected
@@ -46,7 +48,6 @@ isClientActionRequest request = lookup "X-Harch-Action" (Wai.requestHeaders requ
 
 validateClientActionRequest :: Text -> Wai.Request -> Either ClientActionProtocolError ()
 validateClientActionRequest expectedOrigin request
-  | Wai.requestMethod request /= "POST" = Left ClientActionMethodNotAllowed
   | not (formUrlEncodedRequest request) = Left ClientActionUnsupportedMediaType
   | requestOrigin request /= Just expectedOrigin = Left ClientActionOriginRejected
   | otherwise = Right ()
@@ -103,7 +104,6 @@ clientActionProtocolErrorResponse protocolError =
         case protocolError of
           InvalidClientActionEncoding -> 400
           ClientActionBodyTooLarge -> 413
-          ClientActionMethodNotAllowed -> 405
           ClientActionUnsupportedMediaType -> 415
           ClientActionOriginRejected -> 403
           ClientActionCsrfRejected -> 403
@@ -124,6 +124,19 @@ clientActionProtocolErrorResponse protocolError =
         case protocolError of
           ClientActionPayloadMalformed -> ["client action decode failure: malformed"]
           _ -> []
+    }
+
+clientActionMethodNotAllowedResponse :: NonEmpty.NonEmpty ActionMethod -> ClientActionResponse
+clientActionMethodNotAllowedResponse allowedMethods =
+  ClientActionResponse
+    { clientActionStatus = 405,
+      clientActionPatches = [],
+      clientActionFocusId = Nothing,
+      clientActionHeaders =
+        [ ("Allow", TextEncoding.encodeUtf8 (Text.intercalate ", " (map actionMethodText (NonEmpty.toList allowedMethods))))
+        ],
+      clientActionObservabilityAttributes = [],
+      clientActionLogEntries = []
     }
 
 clientActionResponseBody :: ClientActionResponse -> ResponseBody

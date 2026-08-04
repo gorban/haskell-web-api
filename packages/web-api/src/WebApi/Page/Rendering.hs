@@ -18,13 +18,13 @@ import WebApi.AccountPages.Rendering
     renderVerificationPageHtml,
   )
 import WebApi.Page.Model
-import WebApi.Route (AppLocale (..))
+import WebApi.Route (AppLocale (..), AppRequestContext, defaultRequestContext)
 
 renderPageBody :: AppPageModel -> Text
-renderPageBody = HarchWeb.renderHtml . renderPageBodyForLocale English
+renderPageBody = HarchWeb.renderHtml . renderPageBodyForLocale defaultRequestContext English
 
-renderPageBodyForLocale :: AppLocale -> AppPageModel -> HarchWeb.Html
-renderPageBodyForLocale locale pageModel =
+renderPageBodyForLocale :: AppRequestContext -> AppLocale -> AppPageModel -> HarchWeb.Html
+renderPageBodyForLocale context locale pageModel =
   case pageModel of
     HomePage homePage ->
       HarchWeb.element
@@ -52,18 +52,18 @@ renderPageBodyForLocale locale pageModel =
         [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (spacesHeading spacesPage)],
           HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (spacesSummary spacesPage)]
         ]
-    RegistrationPage registrationPath registrationForm ->
-      renderRegistrationPageHtml locale registrationPath registrationForm
-    EmailVerificationPage verificationPath verificationForm ->
-      renderVerificationPageHtml locale verificationPath verificationForm
-    MfaEnrollmentPage mfaEnrollmentPath mfaEnrollmentForm ->
-      renderMfaEnrollmentPageHtml locale mfaEnrollmentPath mfaEnrollmentForm
-    LoginPage loginPath loginForm ->
-      renderLoginPageHtml locale loginPath loginForm
-    LogoutPage logoutPath ->
-      renderLogoutPageHtml locale logoutPath
+    RegistrationPage _ registrationForm ->
+      renderRegistrationPageHtml context locale registrationForm
+    EmailVerificationPage _ verificationForm ->
+      renderVerificationPageHtml context locale verificationForm
+    MfaEnrollmentPage _ mfaEnrollmentForm ->
+      renderMfaEnrollmentPageHtml context locale mfaEnrollmentForm
+    LoginPage _ loginForm ->
+      renderLoginPageHtml context locale loginForm
+    LogoutPage _ ->
+      renderLogoutPageHtml context locale
     ProfilePage profilePage ->
-      renderProfilePageBody profilePage
+      renderProfilePageBody context profilePage
     NotFoundPage notFoundPage ->
       HarchWeb.element
         HarchWeb.sectionTag
@@ -73,13 +73,13 @@ renderPageBodyForLocale locale pageModel =
           renderCallToAction (notFoundPrimaryAction notFoundPage)
         ]
 
-renderProfilePageBody :: ProfilePageModel -> HarchWeb.Html
-renderProfilePageBody profilePage =
+renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
+renderProfilePageBody context profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
+    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath = _, profileResendLabel, profileSignOutAction} ->
+      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml context (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
     AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
       profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->

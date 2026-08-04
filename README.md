@@ -42,8 +42,8 @@ actually ship.
 - Generated page-route algebras, exhaustive dispatch, explicit dynamic/API routes, and typed URL
   rendering.
 - XML-like, escaping-by-default markup whose components are ordinary typed Haskell functions.
-- A nonce-protected immediate capture kernel, deferred navigation, typed client actions, region
-  patches, and Server-Sent Events (SSE).
+- A nonce-protected immediate capture kernel, deferred navigation, declarative client-action codecs,
+  region patches, and Server-Sent Events (SSE).
 - Typed PostgreSQL effects and migrations, with an app-owned adapter seam for other databases or data
   sources.
 - OTLP traces and metrics, low-cardinality route naming, and stable expected-error classification.
@@ -111,6 +111,32 @@ with a narrowly scoped enhancement layer.
 | Hydrated SSR framework | Better initial content than a pure SPA and access to rich client ecosystems. | It may render the application on both server and client, serialize overlapping state, ship substantial client code, and expose a pre-hydration interaction gap. Harch does not recreate its component tree in the browser; enhancement operates on declared navigation surfaces and typed regions. |
 | Blazor WebAssembly | A full .NET client environment, static hosting, and offline-capable PWAs. | The browser downloads and initializes the .NET runtime, Razor components, dependencies, and assemblies; Microsoft documents larger downloads and longer component startup. Blazor Server has a smaller initial payload, but every interaction crosses the network, every browser screen owns a server circuit, and interactivity fails when the connection does. See [Microsoft's hosting comparison][blazor-hosting]. Harch needs neither a browser language runtime nor a persistent per-tab UI circuit. |
 | Traditional pure SSR / multi-page app | Excellent no-JavaScript behavior, direct HTTP semantics, and crawler visibility. | Dynamic rendering can increase TTFB, and navigation or mutation normally requests and replaces a full document. Harch keeps that complete baseline while deferred navigation and typed region patches avoid routine full-page reloads. |
+
+### Portability and alternatives
+
+The SSR baseline, native-form fallback, capture-before-deferred-runtime rule, explicit input decoding,
+and safe failure boundaries are architectural choices—not guarantees unique to Haskell. Choose the
+implementation path that lets the application uphold them with acceptable opportunity cost and the
+ecosystem it needs.
+
+| Path | Closest fit and deliberate gap |
+| --- | --- |
+| Rust: Axum with Maud or Askama | Axum's `Form<T>` extracts URL-encoded HTML-form submissions into `Deserialize` types; Maud supplies a Rust macro HTML DSL, while Askama derives templates from typed structs with auto-escaping. Application Rust can meet an application-owned memory-safety requirement without `unsafe`, but that does not remove reviewed `unsafe`, FFI, native-library, or dependency boundaries. The app must still design native fallback, early-event capture, action dispatch, and patch envelopes. [Axum Form][axum-form] [Maud][maud] [Askama][askama] |
+| Rust: Leptos actions and islands | `ActionForm` connects a typed server action to a URL-encoded POST form; it degrades to a browser submit without JS/WASM and can avoid a reload with it. It is the nearest Rust full-stack action surface, but its hydration/islands and result ownership are a different runtime model from Harch's small capture kernel and region-patch protocol. [Leptos ActionForm][leptos-action-form] |
+| SvelteKit form actions | Native `POST` form actions work without JavaScript and `use:enhance` can progressively enhance them. SvelteKit supplies typed application scaffolding in TypeScript, but its client-runtime and action-result model remain distinct; it does not itself establish Harch's capture lifecycle or codec/parser-printer invariant. [SvelteKit form actions][svelte-actions] |
+| Phoenix LiveView | Function components and `phx-change`/`phx-submit` forms provide a mature server-driven interactive model. Its normal interaction path is a persistent LiveView process/socket rather than Harch's request/response patch protocol, so connection-loss and runtime-failure behavior must be evaluated on that model. [Phoenix form bindings][phoenix-forms] |
+| Yesod with Hamlet or Lucid | Yesod forms already pair parsing and rendering fields and expose applicative form construction; Hamlet/Lucid offer established Haskell markup paths. Adopting them trades this repository's codec/capture/patch design for their conventions and ecosystem, not for a weaker type discipline. [Yesod forms][yesod-forms] [Lucid][lucid] |
+
+Rust macro and derive templates can retain an EDSL-like or typed template surface: Maud expands an
+`html!` macro and Askama generates a `Template` implementation. Stable Rust procedural macros operate
+on token streams and are unhygienic, however, so their authoring and diagnostics are not identical to
+Haskell quotation and reification; that is an ergonomics comparison, not a claim that either language
+is universally more expressive. [Rust procedural macros][rust-proc-macros]
+
+None of these entries makes a throughput, latency, or memory-superiority claim. Compare real
+application benchmarks, failure recovery, existing-team experience, and integration requirements. In
+all cases, native dependencies, browser engines, foreign code, and transitive packages remain part of
+the security and maintenance boundary.
 
 ### A smaller runtime dependency surface
 
@@ -180,6 +206,13 @@ query values, API endpoints, and custom pages remain explicit, typed branches in
 - Database operations determine their result types instead of returning one loosely typed envelope.
 - Component record fields are required by their constructors and checked by the quasiquoter.
 - Text and attribute escaping is centralized in the `Html` renderer; trusted HTML is a separate API.
+- A single `ActionCodec target context action` owns each modeled action's target, method,
+  context-aware path printer, and applicative field decoder. `ActionForm` obtains its target and method
+  from that codec, preventing separately maintained form and dispatch routes from drifting.
+- The action boundary distinguishes an unknown path (`404`), known path with an undeclared method
+  (`405` with `Allow`), malformed matched fields (`400`), and decoded submissions rejected by ordinary
+  domain validation (`422` with a safe region patch). Field parse errors contain stable constructors and
+  field names, never submitted values.
 - Client actions use typed responses, same-origin transport, CSRF/session boundaries, and security
   headers rather than page POSTs or full-page mutation reloads.
 
@@ -273,6 +306,14 @@ The project targets Linux and macOS directly. On Windows, use WSL2 or Docker wit
 [next-components]: https://nextjs.org/docs/app/getting-started/server-and-client-components
 [react-functions]: https://react.dev/reference/rsc/server-functions
 [svelte-actions]: https://svelte.dev/docs/kit/form-actions
+[axum-form]: https://docs.rs/axum/latest/axum/struct.Form.html
+[maud]: https://maud.lambda.xyz/
+[askama]: https://docs.rs/askama/latest/askama/
+[leptos-action-form]: https://book.leptos.dev/progressive_enhancement/action_form.html
+[phoenix-forms]: https://phoenix-live-view.hexdocs.pm/form-bindings.html
+[yesod-forms]: https://www.yesodweb.com/book/forms
+[lucid]: https://hackage.haskell.org/package/lucid
+[rust-proc-macros]: https://doc.rust-lang.org/reference/procedural-macros.html
 [svelte-hydration-report]: https://github.com/sveltejs/kit/discussions/13455
 [capture-e2e]: examples/two-pages/test/E2E/AppSpec.hs
 [google-js-seo]: https://developers.google.com/search/docs/crawling-indexing/javascript/javascript-seo-basics

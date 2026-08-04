@@ -16,6 +16,7 @@ where
 import Data.Text (Text)
 import HarchWeb (Html, dataAttribute, element, headingTwoTag, paragraphTag, sectionTag, text)
 import HarchWeb qualified
+import HarchWeb.Action qualified as Action
 
 newtype HeroCardProps = HeroCardProps
   { heroTitle :: Text
@@ -51,4 +52,10 @@ data TypedActionFormProps = TypedActionFormProps
 
 typedActionForm :: TypedActionFormProps -> [Html] -> Html
 typedActionForm TypedActionFormProps {action, ariaLabel} =
-  HarchWeb.actionForm id action HarchWeb.defaultActionFormAttributes {HarchWeb.actionFormAriaLabel = Just ariaLabel}
+  HarchWeb.actionForm typedActionCodec () action HarchWeb.defaultActionFormAttributes {HarchWeb.actionFormAriaLabel = Just ariaLabel}
+
+typedActionCodec :: Action.ActionCodec Text () Text
+typedActionCodec =
+  case Action.actionCodec [Action.action "/actions/subscribe" (Action.post "/actions/subscribe") (pure "/actions/subscribe")] of
+    Left codecError -> error (show codecError)
+    Right codec -> codec

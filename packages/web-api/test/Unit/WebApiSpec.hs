@@ -23,6 +23,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
+import HarchWeb.Action qualified as Action
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
@@ -51,7 +52,7 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
-import WebApi.AccountPages (AccountAction, AccountActionDecodeError (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountActionResult, decodeAccountActionWithError, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -90,7 +91,8 @@ typedAccountActionRequest method path fields requestContext =
     (error "expected a recognized account action test fixture")
     ( do
         action <-
-          case decodeAccountActionResult
+          case Action.decodeAction
+            accountActions
             HarchWeb.ClientActionPayload
               { HarchWeb.clientActionMethod = method,
                 HarchWeb.clientActionPath = path,
@@ -3184,19 +3186,19 @@ spec = do
       selectRouteDataSelectionWithDatabase defaultPageRepository profileRequestValue
         `shouldReturn` RouteDataSelection ProfileRouteDataResult []
       buildPageModelFromRouteData registrationRequest RegistrationRouteDataResult
-        `shouldBe` RegistrationPage "/register" emptyRegistrationForm
+        `shouldBe` RegistrationPage RegisterAccountTarget emptyRegistrationForm
       buildPageModelFromRouteData verificationRequest EmailVerificationRouteDataResult
-        `shouldBe` EmailVerificationPage "/verify" (VerificationForm "prefilled-token" Nothing False)
+        `shouldBe` EmailVerificationPage VerifyEmailTarget (VerificationForm "prefilled-token" Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest EmailVerificationRoute defaultRequestContext) EmailVerificationRouteDataResult
-        `shouldBe` EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False)
+        `shouldBe` EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False)
       buildPageModelFromRouteData mfaRequest MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest MfaEnrollmentRoute defaultRequestContext) MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage "/mfa" (MfaEnrollmentForm Text.empty Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Text.empty Nothing [] Nothing False)
       buildPageModelFromRouteData loginRequest LoginRouteDataResult
-        `shouldBe` LoginPage "/login" (LoginForm Text.empty Nothing False)
+        `shouldBe` LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False)
       buildPageModelFromRouteData logoutRequest LogoutRouteDataResult
-        `shouldBe` LogoutPage "/logout"
+        `shouldBe` LogoutPage LogoutAccountTarget
       buildPageModelFromRouteData profileRequestValue ProfileRouteDataResult
         `shouldBe` ProfilePage
           SignedOutProfilePage
@@ -3288,16 +3290,16 @@ spec = do
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
       if MfaEnrollmentForm "account_01" Nothing [] Nothing False /= MfaEnrollmentForm "account_01" Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
-      show (RegistrationPage "/register" (RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False))
-        `shouldBe` "RegistrationPage \"/register\" (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
-      show (EmailVerificationPage "/verify" (VerificationForm "token" (Just "ready") False))
-        `shouldBe` "EmailVerificationPage \"/verify\" (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
-      show (MfaEnrollmentPage "/mfa" (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
-        `shouldBe` "MfaEnrollmentPage \"/mfa\" \"account_01\" Nothing False"
-      show (LoginPage "/login" (LoginForm "person@example.test" Nothing False))
-        `shouldBe` "LoginPage \"/login\" \"person@example.test\" Nothing False"
-      show (LogoutPage "/logout") `shouldBe` "LogoutPage \"/logout\""
-      renderRegistrationPage Spanish "/es/register" (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (Just "Ready <now>") False)
+      show (RegistrationPage RegisterAccountTarget (RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False))
+        `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
+      show (EmailVerificationPage VerifyEmailTarget (VerificationForm "token" (Just "ready") False))
+        `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
+      show (MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
+        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget \"account_01\" Nothing False"
+      show (LoginPage LoginAccountTarget (LoginForm "person@example.test" Nothing False))
+        `shouldBe` "LoginPage LoginAccountTarget \"person@example.test\" Nothing False"
+      show (LogoutPage LogoutAccountTarget) `shouldBe` "LogoutPage LogoutAccountTarget"
+      renderRegistrationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (Just "Ready <now>") False)
         `shouldSatisfy` \html ->
           "Nombre de usuario" `Text.isInfixOf` html
             && "Nombre para mostrar (opcional)" `Text.isInfixOf` html
@@ -3305,19 +3307,19 @@ spec = do
             && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html
             && "Person &amp; Example" `Text.isInfixOf` html
             && "Ready &lt;now&gt;" `Text.isInfixOf` html
-      renderRegistrationRegion English "/register" (RegistrationForm Text.empty Text.empty Text.empty (Just "No") True)
+      renderRegistrationRegion defaultRequestContext English (RegistrationForm Text.empty Text.empty Text.empty (Just "No") True)
         `shouldSatisfy` Text.isInfixOf "data-error-state=\"true\""
-      renderVerificationPage English "/verify" (VerificationForm "token&value" Nothing False)
+      renderVerificationPage defaultRequestContext English (VerificationForm "token&value" Nothing False)
         `shouldSatisfy` \html ->
           "<section data-page=\"email-verification\">" `Text.isPrefixOf` html
             && "value=\"token&amp;value\"" `Text.isInfixOf` html
-      renderVerificationPage Spanish "/es/verify" (VerificationForm Text.empty Nothing False)
+      renderVerificationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` Text.isInfixOf "Verifica tu direccion de correo"
-      renderVerificationRegion English "/verify" (VerificationForm Text.empty Nothing False)
+      renderVerificationRegion defaultRequestContext English (VerificationForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderRegistrationRegion English "/register" (RegistrationForm "'>&" "'>&" "'>&" Nothing False)
+      renderRegistrationRegion defaultRequestContext English (RegistrationForm "'>&" "'>&" "'>&" Nothing False)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
-      let spanishMfaPage = renderMfaEnrollmentPage Spanish "/es/mfa" (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
+      let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
       spanishMfaPage
         `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
       mapM_
@@ -3329,9 +3331,9 @@ spec = do
           "Codigos de recuperacion",
           "Guarda estos codigos. No se mostraran de nuevo."
         ]
-      renderMfaEnrollmentRegion English "/mfa" (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
+      renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
-      let spanishLoginPage = renderLoginPage Spanish "/es/login" (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
+      let spanishLoginPage = renderLoginPage (defaultRequestContext {requestLocale = Spanish}) Spanish (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
       spanishLoginPage
         `shouldSatisfy` \html -> "data-page=\"login\"" `Text.isInfixOf` html && "action=\"/es/login\"" `Text.isInfixOf` html && "autocomplete=\"username\"" `Text.isInfixOf` html && "person@example.test&quot; onclick=&quot;bad" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html
       mapM_
@@ -3344,14 +3346,14 @@ spec = do
           "Codigo de recuperacion",
           "Codigo de verificacion"
         ]
-      renderLoginRegion English "/login" (LoginForm Text.empty Nothing False)
+      renderLoginRegion defaultRequestContext English (LoginForm Text.empty Nothing False)
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
-      renderLogoutPage English "/logout" `shouldSatisfy` Text.isInfixOf "data-harch-control"
-      Text.length (renderLogoutPage English "/logout") `shouldSatisfy` (> 0)
-      let spanishLogoutPage = renderLogoutPage Spanish "/es/logout"
+      renderLogoutPage defaultRequestContext English `shouldSatisfy` Text.isInfixOf "data-harch-control"
+      Text.length (renderLogoutPage defaultRequestContext English) `shouldSatisfy` (> 0)
+      let spanishLogoutPage = renderLogoutPage (defaultRequestContext {requestLocale = Spanish}) Spanish
       spanishLogoutPage `shouldSatisfy` Text.isInfixOf "Cerrar sesion"
       spanishLogoutPage `shouldSatisfy` Text.isInfixOf ">Cerrar sesion</button>"
-      renderLogoutRegion English "/logout" (Just "Signed <out>") True
+      renderLogoutRegion defaultRequestContext English (Just "Signed <out>") True
         `shouldSatisfy` \html -> "data-error-state=\"true\"" `Text.isInfixOf` html && "Signed &lt;out&gt;" `Text.isInfixOf` html
       pageEnhancementHooks RegistrationRoute `shouldBe` []
       pageEnhancementHooks EmailVerificationRoute `shouldBe` []
@@ -3408,19 +3410,19 @@ spec = do
                 HarchWeb.clientActionCsrfToken = Nothing,
                 HarchWeb.clientActionPayloadContext = defaultRequestContext
               }
-      case decodeAccountActionResult (rawAction "GET" "/register" []) of
-        HarchWeb.UnrecognizedClientAction -> pure ()
-        _ -> expectationFailure "expected non-POST action to be unrecognized"
-      case decodeAccountActionResult (rawAction "POST" "/missing" []) of
+      case Action.decodeAction accountActions (rawAction "GET" "/register" []) of
+        HarchWeb.MethodNotAllowedClientAction _ -> pure ()
+        _ -> expectationFailure "expected declared path with an unsupported method to be rejected"
+      case Action.decodeAction accountActions (rawAction "POST" "/missing" []) of
         HarchWeb.UnrecognizedClientAction -> pure ()
         _ -> expectationFailure "expected unknown action path to be unrecognized"
-      case decodeAccountActionResult (rawAction "POST" "/register" []) of
+      case Action.decodeAction accountActions (rawAction "POST" "/register" []) of
         HarchWeb.DecodedClientAction _ -> pure ()
         _ -> expectationFailure "expected registration action to decode"
       let assertDuplicateField path fieldName =
-            case decodeAccountActionWithError (rawAction "POST" path [(fieldName, "first"), (fieldName, "second")]) of
-              Left (DuplicateAccountActionField duplicateFieldName) -> duplicateFieldName `shouldBe` fieldName
-              Right _ -> expectationFailure "expected duplicate account action fields to be rejected"
+            case Action.decodeAction accountActions (rawAction "POST" path [(fieldName, "first"), (fieldName, "second")]) of
+              HarchWeb.MalformedClientAction (Action.DuplicateActionField duplicateFieldName :| []) -> duplicateFieldName `shouldBe` fieldName
+              _ -> expectationFailure "expected duplicate account action fields to be rejected"
       expectAll
         ( assertDuplicateField "/register" "username"
             :| [ assertDuplicateField "/register" "email",
@@ -3438,8 +3440,8 @@ spec = do
                  assertDuplicateField "/profile" "intent"
                ]
         )
-      case decodeAccountActionResult (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")]) of
-        HarchWeb.MalformedClientAction -> pure ()
+      case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")]) of
+        HarchWeb.MalformedClientAction _ -> pure ()
         _ -> expectationFailure "expected duplicate action fields to be malformed"
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
@@ -6804,11 +6806,11 @@ spec = do
       HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
       SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
-      RegistrationPage "/register" emptyRegistrationForm `shouldNotBe` HomePage homePageModel
-      EmailVerificationPage "/verify" (VerificationForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
-      MfaEnrollmentPage "/mfa" (MfaEnrollmentForm Text.empty Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
-      LoginPage "/login" (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
-      LogoutPage "/logout" `shouldNotBe` HomePage homePageModel
+      RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` HomePage homePageModel
+      EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
+      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Text.empty Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
+      LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
+      LogoutPage LogoutAccountTarget `shouldNotBe` HomePage homePageModel
       ProfilePage (UnavailableProfilePage "Profile" "Unavailable" callToAction) `shouldNotBe` HomePage homePageModel
       NotFoundPage notFoundPageModel `shouldNotBe` HomePage homePageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
@@ -7994,7 +7996,7 @@ spec = do
       homePageModel <- buildPageModel homeRequest
       renderPageBody homePageModel
         `shouldBe` "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
-      renderPageBody (RegistrationPage "/register" emptyRegistrationForm)
+      renderPageBody (RegistrationPage RegisterAccountTarget emptyRegistrationForm)
         `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
       let pendingProfile =
             renderPageBody
@@ -8005,7 +8007,7 @@ spec = do
                       "person@example.test"
                       (Just "person_01")
                       (Just "Person Example")
-                      "/profile"
+                      UpdateProfileTarget
                       "Resend verification email"
                       (CallToAction "Sign out" LogoutRoute "/logout")
                   )

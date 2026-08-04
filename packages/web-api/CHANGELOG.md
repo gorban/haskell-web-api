@@ -2,6 +2,7 @@
 
 ## 0.1.2.0
 
+* Account forms and action dispatch now share `accountActions :: ActionCodec AccountActionTarget AppRequestContext AccountAction`, eliminating duplicated action paths, methods, and field lookup helpers while preserving localized `422` patches for expected domain rejection.
 * `web-api` now builds its `HarchWeb.Application` through the new `HarchWeb.Site` wrapper, keeping app-owned routes and shell details in the composition root while avoiding direct construction of the lower-level framework record.
 
 ## 0.1.1.0

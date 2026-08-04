@@ -216,7 +216,10 @@ dispatchRoutedRequest
                           UnrecognizedClientAction ->
                             pure
                               (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                          MalformedClientAction ->
+                          MethodNotAllowedClientAction allowedMethods ->
+                            pure
+                              (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
+                          MalformedClientAction _ ->
                             pure
                               (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
                           DecodedClientAction action -> do

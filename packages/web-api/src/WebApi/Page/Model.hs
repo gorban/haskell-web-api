@@ -10,6 +10,7 @@ module WebApi.Page.Model
 where
 
 import Data.Text (Text)
+import WebApi.AccountPages.Actions.Contract (AccountActionTarget)
 import WebApi.AccountPages.Forms
   ( LoginForm (..),
     MfaEnrollmentForm (..),
@@ -68,7 +69,7 @@ data ProfilePageModel
         profileEmail :: Text,
         profileUsername :: Maybe Text,
         profileDisplayName :: Maybe Text,
-        profileResendPath :: Text,
+        profileResendPath :: AccountActionTarget,
         profileResendLabel :: Text,
         profileSignOutAction :: CallToAction
       }
@@ -115,11 +116,11 @@ data AppPageModel
   = HomePage HomePageModel
   | SecondPage SecondPageModel
   | SpacesPage SpacesPageModel
-  | RegistrationPage Text RegistrationForm
-  | EmailVerificationPage Text VerificationForm
-  | MfaEnrollmentPage Text MfaEnrollmentForm
-  | LoginPage Text LoginForm
-  | LogoutPage Text
+  | RegistrationPage AccountActionTarget RegistrationForm
+  | EmailVerificationPage AccountActionTarget VerificationForm
+  | MfaEnrollmentPage AccountActionTarget MfaEnrollmentForm
+  | LoginPage AccountActionTarget LoginForm
+  | LogoutPage AccountActionTarget
   | ProfilePage ProfilePageModel
   | NotFoundPage NotFoundPageModel
 
@@ -158,31 +159,31 @@ equalSpacesPage left right =
     SpacesPage page -> left == page
     _ -> False
 
-equalRegistrationPage :: Text -> RegistrationForm -> AppPageModel -> Bool
+equalRegistrationPage :: AccountActionTarget -> RegistrationForm -> AppPageModel -> Bool
 equalRegistrationPage leftPath leftForm right =
   case right of
     RegistrationPage path form -> (leftPath, leftForm) == (path, form)
     _ -> False
 
-equalEmailVerificationPage :: Text -> VerificationForm -> AppPageModel -> Bool
+equalEmailVerificationPage :: AccountActionTarget -> VerificationForm -> AppPageModel -> Bool
 equalEmailVerificationPage leftPath leftForm right =
   case right of
     EmailVerificationPage path form -> (leftPath, leftForm) == (path, form)
     _ -> False
 
-equalMfaEnrollmentPage :: Text -> MfaEnrollmentForm -> AppPageModel -> Bool
+equalMfaEnrollmentPage :: AccountActionTarget -> MfaEnrollmentForm -> AppPageModel -> Bool
 equalMfaEnrollmentPage leftPath leftForm right =
   case right of
     MfaEnrollmentPage path form -> (leftPath, leftForm) == (path, form)
     _ -> False
 
-equalLoginPage :: Text -> LoginForm -> AppPageModel -> Bool
+equalLoginPage :: AccountActionTarget -> LoginForm -> AppPageModel -> Bool
 equalLoginPage leftPath leftForm right =
   case right of
     LoginPage path form -> (leftPath, leftForm) == (path, form)
     _ -> False
 
-equalLogoutPage :: Text -> AppPageModel -> Bool
+equalLogoutPage :: AccountActionTarget -> AppPageModel -> Bool
 equalLogoutPage leftPath right =
   case right of
     LogoutPage path -> leftPath == path

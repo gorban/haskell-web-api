@@ -109,6 +109,22 @@ The application owns:
 - authentication/authorization policy and custom middleware, and
 - custom API payloads and handlers.
 
+### Client-action codecs own both sides of a submission
+
+Declare each modeled client action once with `HarchWeb.Action.ActionCodec target context action`. Its
+endpoint declaration owns the typed action target, HTTP method, context-aware path printer, and
+applicative decoder. Render framework forms with `HarchWeb.Controls.actionForm` from that codec; do not
+repeat action paths, methods, or application-owned field lookups in the component and server layers.
+The codec rejects duplicate method/path identities at construction.
+
+Server dispatch first matches the rendered path and declared method, then runs only that endpoint's
+decoder. An unknown path is `404`; a known path with no declared method is `405` with `Allow`; malformed
+matched fields are `400`; and a successful decode stays on the application rail, where expected domain
+validation can return the existing localized `422` region patch. Independent fields use the accumulating
+applicative so missing, duplicate, and syntactically invalid fields are reported in declaration order.
+Those parse errors expose only stable constructors and field names—never submitted values. Keep business
+validation separate from this protocol parsing boundary.
+
 ## Current capability and remaining design direction
 
 | Area | State | Guidance |
@@ -118,7 +134,7 @@ The application owns:
 | Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. |
 | Typed markup and component calls | Implemented | Prefer named record fields; reserve positional `props` for distinct typed values. |
 | Scoped CSS names | Implemented | Use `cssScope`; typed CSS authoring remains future work. |
-| Typed client actions and region patches | Implemented | Mutate with action responses and `RegionPatch`, not page POST/reload workflows. |
+| Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |

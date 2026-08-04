@@ -70,7 +70,6 @@ import WebApi.Profile
   )
 import WebApi.Route
   ( AppRequestContext (..),
-    AppRoute (..),
   )
 import WebApi.Session
   ( AccountSessionStore (..),
@@ -116,7 +115,7 @@ parseRegistrationForm actionRequest submission =
       emailValue = registrationEmailValue submission
       displayNameValue = registrationDisplayNameValue submission
       passwordValue = registrationPasswordValue submission
-      path = accountRoutePath actionRequest RegistrationRoute
+      path = HarchWeb.clientActionContext actionRequest
       form = RegistrationForm usernameValue emailValue displayNameValue
    in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
         (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path 422 (form (Just (localized actionRequest "Use a username with 3 to 20 letters, numbers, underscores, or hyphens." "Usa un nombre de usuario de 3 a 20 letras, numeros, guiones bajos o guiones.")) True) (Just "registration-username"))
@@ -132,7 +131,7 @@ interpretRegistrationResult ::
   Either RegistrationError RegistrationResult ->
   AccountActionWorkflow
 interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult =
-  let path = accountRoutePath actionRequest RegistrationRoute
+  let path = HarchWeb.clientActionContext actionRequest
       response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
    in case registrationResult of
         Right RegistrationAlreadyRegistered -> pure (response 202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
@@ -145,7 +144,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
 handleVerificationSubmission :: AccountActionRequest -> VerificationSubmission -> AccountActionWorkflow
 handleVerificationSubmission actionRequest submission =
   let tokenValue = verificationTokenValue submission
-      path = accountRoutePath actionRequest EmailVerificationRoute
+      path = HarchWeb.clientActionContext actionRequest
    in case Account.mkEmailVerificationToken tokenValue of
         Nothing -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
         Just token -> do
@@ -161,7 +160,7 @@ handleVerificationSubmission actionRequest submission =
 handleMfaEnrollmentSubmission :: AccountActionRequest -> MfaEnrollmentSubmission -> AccountActionWorkflow
 handleMfaEnrollmentSubmission actionRequest submission =
   let accountValue = mfaEnrollmentAccountValue submission
-      path = accountRoutePath actionRequest MfaEnrollmentRoute
+      path = HarchWeb.clientActionContext actionRequest
    in case Account.mkAccountId accountValue of
         Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm accountValue Nothing [] (Just (localized actionRequest "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
         Just accountId ->
@@ -170,7 +169,7 @@ handleMfaEnrollmentSubmission actionRequest submission =
             "confirm" -> confirmMfaAction actionRequest path accountId (mfaEnrollmentCodeValue submission)
             _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
 
-startMfaAction :: AccountActionRequest -> Text -> Account.AccountId -> AccountActionWorkflow
+startMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> AccountActionWorkflow
 startMfaAction actionRequest path accountId = do
   workflow <- accountWorkflow
   now <- liftAppIO (accountWorkflowClock workflow)
@@ -179,7 +178,7 @@ startMfaAction actionRequest path accountId = do
     Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
     Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentStartFailure "mfa-account" errorValue
 
-confirmMfaAction :: AccountActionRequest -> Text -> Account.AccountId -> Text -> AccountActionWorkflow
+confirmMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> Text -> AccountActionWorkflow
 confirmMfaAction actionRequest path accountId codeValue =
   case Totp.mkTotpCode codeValue of
     Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
@@ -194,7 +193,7 @@ confirmMfaAction actionRequest path accountId codeValue =
 
 interpretMfaFailure ::
   AccountActionRequest ->
-  Text ->
+  AppRequestContext ->
   Account.AccountId ->
   FailureCode ->
   Text ->
@@ -236,7 +235,7 @@ parseLoginForm actionRequest submission =
   let emailValue = loginEmailValue submission
       usernameValue = loginUsernameValue submission
       passwordValue = loginPasswordValue submission
-      path = accountRoutePath actionRequest LoginRoute
+      path = HarchWeb.clientActionContext actionRequest
       loginForm message = LoginForm emailValue (Just message)
       maybeIdentifier =
         (LoginEmailAddress <$> Email.mkEmailAddress emailValue)
@@ -255,7 +254,7 @@ interpretLoginResult ::
   PasswordMfaLoginResult ->
   AccountActionWorkflow
 interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
-  let path = accountRoutePath actionRequest LoginRoute
+  let path = HarchWeb.clientActionContext actionRequest
       loginForm message = LoginForm emailValue (Just message)
       response status message isError = loginResponse (actionLocale actionRequest) path status (loginForm message isError)
       unavailable focusId = response 503 (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True focusId []
@@ -272,7 +271,7 @@ issueLoginSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   workflow <- accountWorkflow
   issuedSession <- liftAppIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
-  let path = accountRoutePath actionRequest LoginRoute
+  let path = HarchWeb.clientActionContext actionRequest
       form message = LoginForm emailValue (Just message)
   case issuedSession of
     Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
@@ -280,7 +279,7 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =
-  let path = accountRoutePath actionRequest LogoutRoute
+  let path = HarchWeb.clientActionContext actionRequest
    in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
         Nothing -> pure (logoutResponse (actionLocale actionRequest) path 200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [])
         Just sessionToken -> do

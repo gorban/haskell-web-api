@@ -17,16 +17,13 @@ import App.Routes
   ( ApiRoute (..),
     CustomRoute (..),
     TwoPageAction (..),
-    TwoPageActionTarget (..),
     TwoPageRoute (..),
     routeCodec,
-    twoPageActionPath,
+    twoPageActions,
   )
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
-    ClientActionDecodeResult (..),
-    ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
     ListenerConfig (..),
@@ -45,6 +42,7 @@ import HarchWeb
     replaceRegion,
     serverSentEventSourceFromList,
   )
+import HarchWeb.Action (decodeAction)
 import HarchWeb.Site
   ( RouteDefinition (..),
     Site (..),
@@ -67,7 +65,7 @@ twoPageSite =
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
-      siteDecodeClientAction = decodeTwoPageAction,
+      siteDecodeClientAction = decodeAction twoPageActions,
       siteHandleClientAction = twoPageClientAction
     }
 
@@ -88,20 +86,6 @@ liveDataEventsRouteDefinition =
             [ServerSentEvent (Just "update") (Just "example-1") "The live update arrived."]
         pure (eventStreamResponse eventSource)
     }
-
-decodeTwoPageAction :: ClientActionPayload () -> ClientActionDecodeResult TwoPageAction
-decodeTwoPageAction actionPayload
-  | clientActionMethod actionPayload == "POST",
-    clientActionPath actionPayload == twoPageActionPath Subscribe =
-      maybe MalformedClientAction (DecodedClientAction . SubscribeAction) (exactlyOneField "email" (clientActionFields actionPayload))
-  | otherwise = UnrecognizedClientAction
-
-exactlyOneField :: Text.Text -> [(Text.Text, Text.Text)] -> Maybe Text.Text
-exactlyOneField fieldName fields =
-  case [fieldValue | (name, fieldValue) <- fields, name == fieldName] of
-    [] -> Just Text.empty
-    [fieldValue] -> Just fieldValue
-    _ -> Nothing
 
 twoPageClientAction :: ClientActionRequest TwoPageAction () -> IO (Maybe ClientActionResponse)
 twoPageClientAction actionRequest =
