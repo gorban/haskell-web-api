@@ -22,6 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Markup (regionPatchHtml, regionPatchId)
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Server.Response
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -33,6 +34,7 @@ data ClientActionProtocolError
   | ClientActionUnsupportedMediaType
   | ClientActionOriginRejected
   | ClientActionCsrfRejected
+  | ClientActionPayloadMalformed
   | ClientActionNotFound
   deriving (Eq, Show)
 
@@ -105,11 +107,23 @@ clientActionProtocolErrorResponse protocolError =
           ClientActionUnsupportedMediaType -> 415
           ClientActionOriginRejected -> 403
           ClientActionCsrfRejected -> 403
+          ClientActionPayloadMalformed -> 400
           ClientActionNotFound -> 404,
       responseContentType = "application/json; charset=utf-8",
       responseBody = "{\"patches\":[],\"focusId\":null}",
-      responseObservabilityAttributes = [],
-      responseLogEntries = []
+      responseObservabilityAttributes =
+        case protocolError of
+          ClientActionPayloadMalformed ->
+            [ Observability.ObservabilityAttribute
+                { Observability.attributeName = "harch.client_action.decode_failure",
+                  Observability.attributeValue = Observability.TextAttribute "malformed"
+                }
+            ]
+          _ -> [],
+      responseLogEntries =
+        case protocolError of
+          ClientActionPayloadMalformed -> ["client action decode failure: malformed"]
+          _ -> []
     }
 
 clientActionResponseBody :: ClientActionResponse -> ResponseBody

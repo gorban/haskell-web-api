@@ -13,7 +13,8 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec, RouteRequest)
 import HarchWeb.Security (RequestPolicyConfig)
 import HarchWeb.Server.Response
-  ( ClientActionPayload,
+  ( ClientActionDecodeResult,
+    ClientActionPayload,
     ClientActionRequest,
     ClientActionResponse,
     MiddlewareResult (..),
@@ -33,7 +34,7 @@ data Application route action context = Application
     applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
     renderResponse :: RouteRequest route context -> IO (Response route context),
-    decodeClientAction :: ClientActionPayload context -> Maybe action,
+    decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     handleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),

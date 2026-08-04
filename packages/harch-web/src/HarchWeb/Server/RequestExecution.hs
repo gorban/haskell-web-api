@@ -213,10 +213,13 @@ dispatchRoutedRequest
                                   clientActionPayloadContext = routedRequestContext
                                 }
                         case decodeClientAction webApplication actionPayload of
-                          Nothing ->
+                          UnrecognizedClientAction ->
                             pure
                               (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                          Just action -> do
+                          MalformedClientAction ->
+                            pure
+                              (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
+                          DecodedClientAction action -> do
                             maybeActionResponse <-
                               handleClientAction
                                 webApplication

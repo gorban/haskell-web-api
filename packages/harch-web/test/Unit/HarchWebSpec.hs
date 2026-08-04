@@ -249,7 +249,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationRequestMiddleware = [],
       routeCodec = sampleCodec,
       renderResponse = pure . renderSampleResponse,
-      decodeClientAction = Just . clientActionPath,
+      decodeClientAction = DecodedClientAction . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -466,7 +466,7 @@ rootPathApplication =
       applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
       renderResponse = pure . PageResponse . samplePage,
-      decodeClientAction = Just . clientActionPath,
+      decodeClientAction = DecodedClientAction . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -1306,7 +1306,7 @@ spec = do
             clientActionCsrfToken = Nothing,
             clientActionPayloadContext = defaultContext
           }
-        `shouldBe` Just "/actions/subscribe"
+        `shouldBe` DecodedClientAction "/actions/subscribe"
       handleClientAction
         sampleApplication
         ClientActionRequest

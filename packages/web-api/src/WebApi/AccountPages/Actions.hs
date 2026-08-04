@@ -3,14 +3,13 @@
 module WebApi.AccountPages.Actions
   ( AccountAction,
     AccountActionDecodeError (..),
-    decodeAccountAction,
+    decodeAccountActionResult,
     decodeAccountActionWithError,
     handleAccountAction,
     mfaEnrollmentFailureDiagnostics,
   )
 where
 
-import Data.Either (fromRight)
 import Data.Text (Text)
 import HarchWeb qualified
 import WebApi.AccountPages.Actions.Common
@@ -62,8 +61,12 @@ accountActionCodec actionRequest =
     UpdateProfile submission -> handleProfileSubmission actionRequest submission
     LogoutAccount -> handleLogout actionRequest
 
-decodeAccountAction :: HarchWeb.ClientActionPayload AppRequestContext -> Maybe AccountAction
-decodeAccountAction = fromRight Nothing . decodeAccountActionWithError
+decodeAccountActionResult :: HarchWeb.ClientActionPayload AppRequestContext -> HarchWeb.ClientActionDecodeResult AccountAction
+decodeAccountActionResult actionPayload =
+  case decodeAccountActionWithError actionPayload of
+    Left _ -> HarchWeb.MalformedClientAction
+    Right Nothing -> HarchWeb.UnrecognizedClientAction
+    Right (Just action) -> HarchWeb.DecodedClientAction action
 
 decodeAccountActionWithError :: HarchWeb.ClientActionPayload AppRequestContext -> Either AccountActionDecodeError (Maybe AccountAction)
 decodeAccountActionWithError actionPayload

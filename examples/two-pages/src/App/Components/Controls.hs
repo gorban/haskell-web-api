@@ -8,20 +8,20 @@ where
 
 import App.Routes
   ( TwoPageActionTarget,
-    TwoPageRoute,
-    routeHref,
+    TwoPageNavigationTarget,
     twoPageActionPath,
+    twoPageNavigationPath,
   )
 import Data.Text (Text)
 import HarchWeb qualified
 import HarchWeb.Controls qualified as Controls
 
 newtype PageLinkProps = PageLinkProps
-  { to :: TwoPageRoute
+  { to :: TwoPageNavigationTarget
   }
 
 pageLink :: PageLinkProps -> [HarchWeb.Html] -> HarchWeb.Html
-pageLink PageLinkProps {to} = Controls.pageLink routeHref to []
+pageLink PageLinkProps {to} = Controls.pageLink twoPageNavigationPath to
 
 data ActionFormProps = ActionFormProps
   { action :: TwoPageActionTarget,
@@ -30,4 +30,4 @@ data ActionFormProps = ActionFormProps
 
 actionForm :: ActionFormProps -> [HarchWeb.Html] -> HarchWeb.Html
 actionForm ActionFormProps {action, ariaLabel} =
-  Controls.actionForm twoPageActionPath action [HarchWeb.ariaLabel ariaLabel]
+  Controls.actionForm twoPageActionPath action Controls.defaultActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}

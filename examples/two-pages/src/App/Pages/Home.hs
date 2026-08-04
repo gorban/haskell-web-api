@@ -24,6 +24,7 @@ import App.Components.SubscriptionEmailField
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes
   ( TwoPageActionTarget (Subscribe),
+    TwoPageNavigationTarget (NavigationPage),
     TwoPageRoute,
   )
 import App.Routes qualified as Routes
@@ -81,9 +82,9 @@ homePage routeRequest =
 
                   <p>This page is fully server-rendered on direct load and reload.</p>
 
-                  <p><PageLink to={Routes.Page SecondPage}>Go to the second page</PageLink></p>
+                  <p><PageLink to={NavigationPage SecondPage}>Go to the second page</PageLink></p>
 
-                  <p><PageLink to={Routes.Page LiveDataPage}>See live updates</PageLink></p>
+                  <p><PageLink to={NavigationPage LiveDataPage}>See live updates</PageLink></p>
 
                   <section data-page-example="about">
                     <h2>About this example</h2>

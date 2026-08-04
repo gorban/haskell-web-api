@@ -98,8 +98,8 @@ spec = do
                 clientActionCsrfToken = Nothing,
                 clientActionPayloadContext = SampleContext ""
               }
-      siteDecodeClientAction sampleSite actionPayload `shouldBe` Nothing
-      HarchWeb.decodeClientAction siteApplication actionPayload `shouldBe` Nothing
+      siteDecodeClientAction sampleSite actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
+      HarchWeb.decodeClientAction siteApplication actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
       HarchWeb.handleClientAction
         siteApplication
         ClientActionRequest

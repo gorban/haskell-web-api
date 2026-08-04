@@ -25,6 +25,7 @@ import App.Routes
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
+    ClientActionDecodeResult (..),
     ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
@@ -88,12 +89,12 @@ liveDataEventsRouteDefinition =
         pure (eventStreamResponse eventSource)
     }
 
-decodeTwoPageAction :: ClientActionPayload () -> Maybe TwoPageAction
+decodeTwoPageAction :: ClientActionPayload () -> ClientActionDecodeResult TwoPageAction
 decodeTwoPageAction actionPayload
   | clientActionMethod actionPayload == "POST",
     clientActionPath actionPayload == twoPageActionPath Subscribe =
-      SubscribeAction <$> exactlyOneField "email" (clientActionFields actionPayload)
-  | otherwise = Nothing
+      maybe MalformedClientAction (DecodedClientAction . SubscribeAction) (exactlyOneField "email" (clientActionFields actionPayload))
+  | otherwise = UnrecognizedClientAction
 
 exactlyOneField :: Text.Text -> [(Text.Text, Text.Text)] -> Maybe Text.Text
 exactlyOneField fieldName fields =

@@ -9,7 +9,7 @@ import App.Pages.Route.Generated
     pageRoutePath,
     parsePageRoute,
   )
-import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageRoute (..), mkPreviewSlug, routeHref)
+import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, routeHref, twoPageNavigationPath)
 import App.Routes qualified as ExampleRoutes
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -176,6 +176,8 @@ spec =
                    routeHref (Page LiveDataPage) `shouldBe` "/live-data",
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
+                   twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
+                   twoPageNavigationPath (NavigationPreview previewSlug) `shouldBe` "/preview/summer-release",
                    notFoundRequest ExampleRoutes.routeCodec () `shouldBe` RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
                    map (parsePageRoute . pageRoutePath) allPageRoutes
                      `shouldBe` map Just allPageRoutes,
@@ -197,20 +199,20 @@ spec =
               case HarchWeb.decodeClientAction
                 buildApplication
                 (actionPayload "POST" "/actions/subscribe" []) of
-                Just (SubscribeAction emailAddress) -> Text.null emailAddress
-                Nothing -> False
+                HarchWeb.DecodedClientAction (SubscribeAction emailAddress) -> Text.null emailAddress
+                _ -> False
             unknownActionRejected =
               case HarchWeb.decodeClientAction
                 buildApplication
                 (actionPayload "POST" "/actions/missing" []) of
-                Just _ -> False
-                Nothing -> True
+                HarchWeb.UnrecognizedClientAction -> True
+                _ -> False
             duplicateEmailRejected =
               case HarchWeb.decodeClientAction
                 buildApplication
                 (actionPayload "POST" "/actions/subscribe" [("email", "first@example.com"), ("email", "second@example.com")]) of
-                Just _ -> False
-                Nothing -> True
+                HarchWeb.MalformedClientAction -> True
+                _ -> False
         expectAll
           ( (absentEmailDecoded `shouldBe` True)
               :| [ unknownActionRejected `shouldBe` True,

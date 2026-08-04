@@ -7,7 +7,7 @@ module WebApi.AccountPages
     PendingProfileForm (..),
     RegistrationForm (..),
     VerificationForm (..),
-    decodeAccountAction,
+    decodeAccountActionResult,
     decodeAccountActionWithError,
     emptyRegistrationForm,
     handleAccountAction,

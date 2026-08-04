@@ -14,10 +14,10 @@ import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (toLower)
 import Data.Foldable (toList)
-import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe, isJust, isNothing, mapMaybe)
+import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -51,7 +51,7 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
-import WebApi.AccountPages (AccountAction, AccountActionDecodeError (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountAction, decodeAccountActionWithError, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionDecodeError (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), decodeAccountActionResult, decodeAccountActionWithError, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -90,14 +90,17 @@ typedAccountActionRequest method path fields requestContext =
     (error "expected a recognized account action test fixture")
     ( do
         action <-
-          decodeAccountAction
-            HarchWeb.ClientActionPayload
-              { HarchWeb.clientActionMethod = method,
-                HarchWeb.clientActionPath = path,
-                HarchWeb.clientActionFields = fields,
-                HarchWeb.clientActionCsrfToken = Nothing,
-                HarchWeb.clientActionPayloadContext = requestContext
-              }
+          case
+              decodeAccountActionResult
+                HarchWeb.ClientActionPayload
+                  { HarchWeb.clientActionMethod = method,
+                    HarchWeb.clientActionPath = path,
+                    HarchWeb.clientActionFields = fields,
+                    HarchWeb.clientActionCsrfToken = Nothing,
+                    HarchWeb.clientActionPayloadContext = requestContext
+                  } of
+            HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
+            _ -> Nothing
         pure
           HarchWeb.ClientActionRequest
             { HarchWeb.clientAction = action,
@@ -371,6 +374,12 @@ readResponseBody response = do
       (pure ())
   chunks <- readIORef chunksReference
   pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
+
+nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
+nextRequestBodyChunk chunksReference =
+  atomicModifyIORef' chunksReference $ \case
+    [] -> ([], ByteString.empty)
+    chunk : remainingChunks -> (remainingChunks, chunk)
 
 waiRequest :: [Text] -> Wai.Request
 waiRequest segments =
@@ -3400,9 +3409,15 @@ spec = do
                 HarchWeb.clientActionCsrfToken = Nothing,
                 HarchWeb.clientActionPayloadContext = defaultRequestContext
               }
-      isNothing (decodeAccountAction (rawAction "GET" "/register" [])) `shouldBe` True
-      isNothing (decodeAccountAction (rawAction "POST" "/missing" [])) `shouldBe` True
-      isJust (decodeAccountAction (rawAction "POST" "/register" [])) `shouldBe` True
+      case decodeAccountActionResult (rawAction "GET" "/register" []) of
+        HarchWeb.UnrecognizedClientAction -> pure ()
+        _ -> expectationFailure "expected non-POST action to be unrecognized"
+      case decodeAccountActionResult (rawAction "POST" "/missing" []) of
+        HarchWeb.UnrecognizedClientAction -> pure ()
+        _ -> expectationFailure "expected unknown action path to be unrecognized"
+      case decodeAccountActionResult (rawAction "POST" "/register" []) of
+        HarchWeb.DecodedClientAction _ -> pure ()
+        _ -> expectationFailure "expected registration action to decode"
       let assertDuplicateField path fieldName =
             case decodeAccountActionWithError (rawAction "POST" path [(fieldName, "first"), (fieldName, "second")]) of
               Left (DuplicateAccountActionField duplicateFieldName) -> duplicateFieldName `shouldBe` fieldName
@@ -3424,7 +3439,9 @@ spec = do
                  assertDuplicateField "/profile" "intent"
                ]
         )
-      isNothing (decodeAccountAction (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")])) `shouldBe` True
+      case decodeAccountActionResult (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")]) of
+        HarchWeb.MalformedClientAction -> pure ()
+        _ -> expectationFailure "expected duplicate action fields to be malformed"
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
@@ -8226,9 +8243,29 @@ spec = do
                   HarchWeb.clientActionCsrfToken = Nothing,
                   HarchWeb.clientActionPayloadContext = defaultRequestContext
                 } of
-              Just _ -> True
-              Nothing -> False
+              HarchWeb.DecodedClientAction _ -> True
+              _ -> False
       recognized `shouldBe` True
+
+    it "returns a safe bad-request response for duplicate fields in a recognized action" $ do
+      actionBodyChunks <- newIORef ["email=first%40example.com&email=second%40example.com&_harch_csrf=csrf-token"]
+      let actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["register"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "harch-csrf=csrf-token")
+                      ]
+                  }
+              )
+      response <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) actionRequest
+      Wai.responseStatus response `shouldBe` Http.status400
+      readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
 
     it "stores the default request context used by the WAI adapter" $
       HarchWeb.defaultRequestContext pureApplication `shouldBe` defaultRequestContext

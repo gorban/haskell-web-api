@@ -14,6 +14,7 @@ import Data.Text (Text)
 import HarchWeb
   ( Application (..),
     ClientActionPayload,
+    ClientActionDecodeResult,
     ClientActionRequest,
     ClientActionResponse,
     Document,
@@ -59,7 +60,7 @@ data Site route action context = Site
     siteRouteCodec :: RouteCodec route context,
     siteNavigationRoutes :: [route],
     siteRouteDefinition :: route -> RouteDefinition route context,
-    siteDecodeClientAction :: ClientActionPayload context -> Maybe action,
+    siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
@@ -88,7 +89,7 @@ simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefiniti
       siteRouteCodec = codec,
       siteNavigationRoutes = navigationRoutes,
       siteRouteDefinition = routeDefinition,
-      siteDecodeClientAction = const Nothing,
+      siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
       siteReportRequestObservability = \requestObservability ->

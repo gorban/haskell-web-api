@@ -2,7 +2,8 @@
 
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response
-  ( ClientActionPayload (..),
+  ( ClientActionDecodeResult (..),
+    ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
     MiddlewareResult (..),
@@ -79,6 +80,15 @@ data ClientActionPayload context = ClientActionPayload
     clientActionCsrfToken :: Maybe Text,
     clientActionPayloadContext :: context
   }
+  deriving (Eq, Show)
+
+-- | Decoding distinguishes an action that does not belong to this application
+-- from one whose recognized payload is malformed. The server maps the latter
+-- to a safe 400 response instead of treating it as a missing endpoint.
+data ClientActionDecodeResult action
+  = DecodedClientAction action
+  | UnrecognizedClientAction
+  | MalformedClientAction
   deriving (Eq, Show)
 
 -- | The application action after its codec has consumed the transport payload.

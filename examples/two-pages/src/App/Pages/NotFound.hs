@@ -5,7 +5,7 @@ module App.Pages.NotFound (pageDefinition, notFoundPage) where
 
 import App.Components.Controls (pageLink)
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (TwoPageRoute)
+import App.Routes (TwoPageNavigationTarget (NavigationPage), TwoPageRoute)
 import App.Routes qualified as Routes
 import HarchWeb
   ( Page (..),
@@ -38,7 +38,7 @@ notFoundPage routeRequest =
             <section data-page="not-found">
               <h1>Not Found</h1>
               <p>The requested page could not be found.</p>
-              <p><PageLink to={Routes.Page HomePage}>Return home</PageLink></p>
+              <p><PageLink to={NavigationPage HomePage}>Return home</PageLink></p>
             </section>
           |],
         pageBootstrapHooks = []

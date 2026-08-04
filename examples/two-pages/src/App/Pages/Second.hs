@@ -5,7 +5,7 @@ module App.Pages.Second (pageDefinition, secondPage) where
 
 import App.Components.Controls (pageLink)
 import App.Pages.Route.Generated (PageRoute (..))
-import App.Routes (TwoPageRoute)
+import App.Routes (TwoPageNavigationTarget (NavigationPage), TwoPageRoute)
 import App.Routes qualified as Routes
 import HarchWeb
   ( Page (..),
@@ -38,7 +38,7 @@ secondPage routeRequest =
             <section data-page="second">
               <h1>Second</h1>
               <p>This page also returns full HTML when loaded directly.</p>
-              <p><PageLink to={Routes.Page HomePage}>Back home</PageLink></p>
+              <p><PageLink to={NavigationPage HomePage}>Back home</PageLink></p>
             </section>
           |],
         pageBootstrapHooks = ["second-page"]

@@ -22,7 +22,7 @@ import WebApi.Account
     AccountStore (..),
     AccountStoreError (..),
   )
-import WebApi.AccountPages (PendingProfileForm (..), decodeAccountAction, handleAccountAction, renderPendingProfileRegion)
+import WebApi.AccountPages (PendingProfileForm (..), decodeAccountActionResult, handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -94,14 +94,17 @@ spec =
               (error "expected a recognized profile action fixture")
               ( do
                   action <-
-                    decodeAccountAction
-                      HarchWeb.ClientActionPayload
-                        { HarchWeb.clientActionMethod = "POST",
-                          HarchWeb.clientActionPath = profileActionPath requestContext,
-                          HarchWeb.clientActionFields = fields,
-                          HarchWeb.clientActionCsrfToken = Nothing,
-                          HarchWeb.clientActionPayloadContext = requestContext
-                        }
+                    case
+                        decodeAccountActionResult
+                          HarchWeb.ClientActionPayload
+                            { HarchWeb.clientActionMethod = "POST",
+                              HarchWeb.clientActionPath = profileActionPath requestContext,
+                              HarchWeb.clientActionFields = fields,
+                              HarchWeb.clientActionCsrfToken = Nothing,
+                              HarchWeb.clientActionPayloadContext = requestContext
+                            } of
+                      HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
+                      _ -> Nothing
                   pure
                     HarchWeb.ClientActionRequest
                       { HarchWeb.clientAction = action,

@@ -115,9 +115,11 @@ spec = do
                 <button type="submit">Subscribe</button>
               </Account.TypedActionForm>
             |]
-          renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [] [text "Continue"])
+          renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [text "Continue"])
       renderHtml quotedActionForm
         `shouldBe` "<form aria-label=\"Subscription\" data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"><button type=\"submit\">Subscribe</button></form>"
+      renderHtml (actionForm id "/actions/subscribe" defaultActionFormAttributes [])
+        `shouldBe` "<form data-harch-control data-harch-action=\"true\" action=\"/actions/subscribe\" method=\"post\"></form>"
       renderedLink `shouldBe` "<a href=\"/control\" data-page-link=\"true\">Continue</a>"
 
     it "rejects invalid named properties, positional props, and child forms while lowering" $

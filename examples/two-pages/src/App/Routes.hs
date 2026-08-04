@@ -6,11 +6,13 @@ module App.Routes
     PreviewSlug,
     TwoPageAction (..),
     TwoPageActionTarget (..),
+    TwoPageNavigationTarget (..),
     TwoPageRoute (..),
     mkPreviewSlug,
     previewSlugText,
     routeCodec,
     routeHref,
+    twoPageNavigationPath,
     twoPageActionPath,
   )
 where
@@ -34,6 +36,10 @@ data ApiRoute
 
 data TwoPageActionTarget
   = Subscribe
+
+data TwoPageNavigationTarget
+  = NavigationPage PageRoute
+  | NavigationPreview PreviewSlug
 
 newtype TwoPageAction = SubscribeAction Text
 
@@ -89,6 +95,12 @@ twoPageActionPath :: TwoPageActionTarget -> Text
 twoPageActionPath actionTarget =
   case actionTarget of
     Subscribe -> "/actions/subscribe"
+
+twoPageNavigationPath :: TwoPageNavigationTarget -> Text
+twoPageNavigationPath navigationTarget =
+  case navigationTarget of
+    NavigationPage page -> pageRoutePath page
+    NavigationPreview previewSlug -> "/preview/" <> previewSlugText previewSlug
 
 mkPreviewSlug :: Text -> Maybe PreviewSlug
 mkPreviewSlug value =

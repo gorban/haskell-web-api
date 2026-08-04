@@ -7,6 +7,7 @@
 module HarchWeb.Server
   ( module HarchWeb.Server.Config,
     Application (..),
+    ClientActionDecodeResult (..),
     ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
