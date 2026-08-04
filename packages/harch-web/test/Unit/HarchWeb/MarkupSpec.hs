@@ -53,12 +53,12 @@ newtype ControlContext = ControlContext Text.Text
 controlRouteCodec :: RouteCodec ControlRoute ControlContext
 controlRouteCodec =
   RouteCodec
-    { parseRoute = \context path ->
+    { parseRoute = \controlContext path ->
         if path == "/control"
-          then Just RouteRequest {requestRoute = ControlRoute "control", requestContext = context}
+          then Just RouteRequest {requestRoute = ControlRoute "control", requestContext = controlContext}
           else Nothing,
       renderRoute = \RouteRequest {requestRoute = ControlRoute target, requestContext = ControlContext prefix} -> prefix <> target,
-      notFoundRequest = \context -> RouteRequest {requestRoute = ControlRoute "control", requestContext = context}
+      notFoundRequest = \controlContext -> RouteRequest {requestRoute = ControlRoute "control", requestContext = controlContext}
     }
 
 spec :: Spec
