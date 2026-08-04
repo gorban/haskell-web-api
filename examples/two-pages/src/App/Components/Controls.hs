@@ -30,4 +30,4 @@ data ActionFormProps = ActionFormProps
 
 actionForm :: ActionFormProps -> [HarchWeb.Html] -> HarchWeb.Html
 actionForm ActionFormProps {action, ariaLabel} =
-  Controls.actionForm twoPageActionPath action Controls.defaultActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}
+  Controls.actionForm twoPageActionPath action Controls.ActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}
