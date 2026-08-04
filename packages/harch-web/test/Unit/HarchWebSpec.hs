@@ -10,6 +10,7 @@ import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (isHexDigit)
+import Data.Either (fromRight)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -639,7 +640,7 @@ spec = do
     it "covers every method helper, empty codec, and public action result values" $ do
       let methodCodec :: Action.ActionCodec Text TestContext Text
           methodCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec
                 [ Action.action "get" (Action.get "/get") (pure "get"),
                   Action.action "put" (Action.put "/put") (pure "put"),
@@ -718,7 +719,7 @@ spec = do
     it "makes static helpers, recovery decoders, and method negotiation observable through the codec" $ do
       let staticCodec :: Action.ActionCodec Text TestContext Text
           staticCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec
                 [ Action.action "get" (Action.get "/get") (pure "get"),
                   Action.action "post" (Action.post "/post") (pure "post"),
@@ -728,7 +729,7 @@ spec = do
                 ]
           duplicateMethodCodec :: Action.ActionCodec Text TestContext Text
           duplicateMethodCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec
                 [ Action.action "first-get" (Action.getAt "/first-get" (const "/same")) (pure "first-get"),
                   Action.action "second-get" (Action.getAt "/second-get" (const "/same")) (pure "second-get"),
@@ -737,17 +738,17 @@ spec = do
                 ]
           dynamicMethodCodec :: Action.ActionCodec Text TestContext Text
           dynamicMethodCodec =
-            either (const (error "invalid dynamic action codec")) id $
+            fromRight (error "invalid dynamic action codec") $
               Action.actionCodec
                 [ Action.action "put" (Action.putAt "/put" (const "/put")) (pure "put"),
                   Action.action "patch" (Action.patchAt "/patch" (const "/patch")) (pure "patch"),
                   Action.action "delete" (Action.deleteAt "/delete" (const "/delete")) (pure "delete")
                 ]
           optionalCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" (Action.parseField nonEmptyValue)))]
           defaultCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" (Action.parseField nonEmptyValue)))]
           actionPayload methodValue path fields =
             Action.ClientActionPayload methodValue path fields Nothing defaultContext
@@ -772,7 +773,7 @@ spec = do
           emptyCodec = Action.emptyActionCodec
           unsupportedCodec :: Action.ActionCodec Text TestContext Text
           unsupportedCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action "put" (Action.put "/put") (pure "put")]
           nativeAttributes =
             defaultActionFormAttributes
@@ -814,7 +815,7 @@ spec = do
 
     it "accumulates field errors deterministically and supports required, optional, defaulted, and parsed values" $ do
       let validationCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec
                 [ Action.action
                     ()
@@ -833,10 +834,10 @@ spec = do
                 Action.clientActionPayloadContext = ()
               }
           defaultCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" Action.textValue))]
           optionalCodec =
-            either (const (error "invalid test action codec")) id $
+            fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action () (Action.post "/optional") (Action.optional (Action.formField "name" Action.textValue))]
       Action.decodeAction validationCodec (validationPayload [("email", "one"), ("email", "two")])
         `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "email" :| [Action.MissingActionField "code"])
