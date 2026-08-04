@@ -11,7 +11,7 @@ where
 import App.Components.Layout (twoPageShell)
 import App.CustomPages.Preview (previewPageDefinition)
 import App.Pages.Generated (pageRouteDefinition)
-import App.Pages.Home (subscriptionResultRegion)
+import App.Pages.Home (nativeSubscriptionFallbackPage, subscriptionResultRegion)
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes
   ( ApiRoute (..),
@@ -21,6 +21,9 @@ import App.Routes
     routeCodec,
     twoPageActions,
   )
+import Control.Monad (join)
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text qualified as Text
 import HarchWeb
   ( Application,
@@ -28,9 +31,12 @@ import HarchWeb
     ClientActionResponse (..),
     ListenerConfig (..),
     ListenerScheme (..),
+    MiddlewareResult (..),
     ObservabilityConfig (..),
     RegionPatch,
+    RequestMiddleware (..),
     RequestPolicyConfig (..),
+    ResponseBody (..),
     ServerConfig (..),
     ServerSentEvent (..),
     StaticAssetRoot (..),
@@ -49,6 +55,9 @@ import HarchWeb.Site
     buildSiteApplication,
     simpleSite,
   )
+import HarchWeb.Site qualified as Site
+import Network.HTTP.Types.URI qualified as HttpUri
+import Network.Wai qualified as Wai
 
 buildApplication :: Application TwoPageRoute TwoPageAction ()
 buildApplication = buildSiteApplication twoPageSite
@@ -65,6 +74,7 @@ twoPageSite =
   )
     { siteStaticAssets = twoPageStaticAssets,
       siteRequestPolicy = twoPageRequestPolicy,
+      siteRequestMiddleware = [RequestMiddleware nativeFallbackCsrfMiddleware],
       siteDecodeClientAction = decodeAction twoPageActions,
       siteHandleClientAction = twoPageClientAction
     }
@@ -75,6 +85,7 @@ routeDefinition route =
     Page page -> pageRouteDefinition page
     Api LiveDataEvents -> liveDataEventsRouteDefinition
     Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
+    Custom NativeSubscriptionFallback -> Site.pageRoute Nothing nativeSubscriptionFallbackPage
 
 liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute ()
 liveDataEventsRouteDefinition =
@@ -115,6 +126,44 @@ twoPageClientAction actionRequest =
                     clientActionLogEntries = []
                   }
           )
+
+nativeFallbackCsrfMiddleware :: Wai.Request -> () -> IO (MiddlewareResult ())
+nativeFallbackCsrfMiddleware request requestContext
+  | Wai.requestMethod request == "POST",
+    Wai.rawPathInfo request == "/native-subscribe" = do
+      requestBody <- Wai.strictRequestBody request
+      pure
+        ( case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
+            (Just cookieToken, Just submittedToken)
+              | cookieToken == submittedToken -> ContinueMiddleware requestContext
+            _ ->
+              HaltMiddleware
+                requestContext
+                ResponseBody
+                  { responseStatus = 403,
+                    responseContentType = "text/plain; charset=utf-8",
+                    responseBody = "Native fallback CSRF validation failed.",
+                    responseObservabilityAttributes = [],
+                    responseLogEntries = []
+                  }
+        )
+  | otherwise = pure (ContinueMiddleware requestContext)
+
+nativeFallbackCsrfToken :: Wai.Request -> Maybe ByteString.ByteString
+nativeFallbackCsrfToken request =
+  lookup "harch-native-fallback-csrf" (requestCookies request)
+
+nativeFallbackSubmittedToken :: LazyByteString.ByteString -> Maybe ByteString.ByteString
+nativeFallbackSubmittedToken requestBody =
+  join (lookup "_harch_csrf" (HttpUri.parseQuery (LazyByteString.toStrict requestBody)))
+
+requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
+requestCookies request =
+  maybe [] (map parseCookie . ByteString.split 59) (lookup "Cookie" (Wai.requestHeaders request))
+  where
+    parseCookie cookie =
+      let (cookieName, valueWithSeparator) = ByteString.break (== 61) (ByteString.dropWhile (== 32) cookie)
+       in (cookieName, ByteString.drop 1 valueWithSeparator)
 
 subscriptionPatch :: Text.Text -> Text.Text -> [RegionPatch]
 subscriptionPatch liveRole message =

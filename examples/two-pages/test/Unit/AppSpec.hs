@@ -3,6 +3,8 @@
 module Unit.AppSpec (spec) where
 
 import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
+import App.Components.Controls qualified as ExampleControls
+import App.Pages.Home (nativeSubscriptionFallbackPage)
 import App.Pages.Route.Generated
   ( PageRoute (..),
     allPageRoutes,
@@ -125,9 +127,12 @@ spec =
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
               maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
+        actionTargetReference <- newIORef ()
+        actionTarget <- readIORef actionTargetReference
         expectAll
           ( (eqViaDictionary (Page HomePage) (Page HomePage) `shouldBe` True)
               :| [ eqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` False,
+                   eqViaDictionary actionTarget () `shouldBe` True,
                    eqViaDictionary (Page LiveDataPage) (Api LiveDataEvents) `shouldBe` False,
                    neqViaDictionary (Page HomePage) (Page SecondPage) `shouldBe` True,
                    showViaDictionary (Page HomePage) `shouldBe` "Page HomePage",
@@ -153,6 +158,8 @@ spec =
                      `shouldSatisfy` not . null,
                    showListViaDictionary [PreviewPage previewSlug] ""
                      `shouldSatisfy` not . null,
+                   eqViaDictionary NativeSubscriptionFallback NativeSubscriptionFallback `shouldBe` True,
+                   showViaDictionary NativeSubscriptionFallback `shouldBe` "NativeSubscriptionFallback",
                    showViaDictionary (Page PageNotFound) `shouldBe` "Page PageNotFound",
                    showsPrecViaDictionary 0 (Page HomePage) "" `shouldBe` "Page HomePage",
                    showListViaDictionary ([] :: [TwoPageRoute]) "" `shouldBe` "[]",
@@ -162,6 +169,7 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/second?utm=demo" `shouldBe` Just RouteRequest {requestRoute = Page SecondPage, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/live-data" `shouldBe` Just RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()},
+                   parseRoute ExampleRoutes.routeCodec () "/native-subscribe" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/preview/summer-release"
                      `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()}) <$> mkPreviewSlug "summer-release",
                    parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
@@ -170,11 +178,15 @@ spec =
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()} `shouldBe` "/live-data/events",
+                   renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()} `shouldBe` "/native-subscribe",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page PageNotFound, requestContext = ()} `shouldBe` "/404",
                    routeHref (Page HomePage) `shouldBe` "/",
                    routeHref (Page SecondPage) `shouldBe` "/second",
                    routeHref (Page LiveDataPage) `shouldBe` "/live-data",
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
+                   routeHref (Custom NativeSubscriptionFallback) `shouldBe` "/native-subscribe",
+                   ExampleRoutes.twoPageActionContext `shouldBe` (),
+                   ExampleRoutes.twoPageActionPath () `shouldBe` "/actions/subscribe",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
                    twoPageNavigationPath (NavigationPreview previewSlug) `shouldBe` "/preview/summer-release",
@@ -236,6 +248,15 @@ spec =
             allPageRoutes
         responses `shouldSatisfy` all isCompletePageResponse
 
+      it "renders the native fallback route as a complete SSR page" $ do
+        nativePage <- nativeSubscriptionFallbackPage RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()}
+        expectAll
+          ( (HarchWeb.pageRoute nativePage `shouldBe` Custom NativeSubscriptionFallback)
+              :| [ Text.isInfixOf "Subscription received" (HarchWeb.renderHtml (HarchWeb.pageBody nativePage)) `shouldBe` True,
+                   routeNavigationLabel (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback)) `shouldBe` Nothing
+                 ]
+          )
+
       it "renders the home page with shared navigation and the enhancement runtime" $ do
         let application = buildApplication
             authorComponents =
@@ -247,6 +268,7 @@ spec =
                   "</section><div data-example-author-avatar=\"compact\"><p>HW</p>",
                   "<p>Maintained as a small, runnable framework reference.</p></div></section>"
                 ]
+        let componentForm = HarchWeb.renderHtml (ExampleControls.actionForm ExampleControls.ActionFormProps {ExampleControls.action = (), ExampleControls.ariaLabel = "Component subscription"} [])
         response <- performWaiRequest (toWaiApplication application) (waiRequest [])
         responseBody <- readResponseBody response
         expectAll
@@ -263,11 +285,15 @@ spec =
                    Text.isInfixOf authorComponents responseBody `shouldBe` True,
                    Text.isInfixOf "data-harch-action-method=\"post\"" responseBody `shouldBe` True,
                    Text.isInfixOf "action=\"/actions/subscribe\" method=\"dialog\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "action=\"/native-subscribe\" method=\"post\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "data-harch-action-path=\"/actions/subscribe\"" responseBody `shouldBe` True,
+                   Text.isInfixOf "name=\"_harch_csrf\" value=\"two-pages-native-fallback\"" responseBody `shouldBe` True,
                    Text.isInfixOf "<p id=\"subscription-result\" data-harch-region=\"true\" role=\"status\"></p>" responseBody `shouldBe` True,
                    Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True,
                    Text.isInfixOf "new FormData(target, submitter)" responseBody `shouldBe` True,
                    Text.isInfixOf "event.preventDefault()" responseBody `shouldBe` True,
-                   Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+                   Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True,
+                   Text.isInfixOf "aria-label=\"Component subscription\"" componentForm `shouldBe` True
                  ]
           )
 
@@ -439,6 +465,27 @@ spec =
                  ]
           )
 
+      it "accepts only a matching CSRF cookie and form token for the native fallback" $ do
+        validRequest <- nativeFallbackRequest "_harch_csrf=two-pages-native-fallback" "harch-native-fallback-csrf=two-pages-native-fallback"
+        mismatchedRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
+        missingRequest <- nativeFallbackRequest "email=native%40example.com" ""
+        validResponse <- performWaiRequest (toWaiApplication buildApplication) validRequest
+        mismatchedResponse <- performWaiRequest (toWaiApplication buildApplication) mismatchedRequest
+        missingResponse <- performWaiRequest (toWaiApplication buildApplication) missingRequest
+        validBody <- readResponseBody validResponse
+        mismatchedBody <- readResponseBody mismatchedResponse
+        missingBody <- readResponseBody missingResponse
+        expectAll
+          ( (Wai.responseStatus validResponse `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "<title>Subscription received</title>" validBody `shouldBe` True,
+                   lookup Http.hContentType (Wai.responseHeaders mismatchedResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   Wai.responseStatus mismatchedResponse `shouldBe` Http.status403,
+                   Text.isInfixOf "Native fallback CSRF validation failed." mismatchedBody `shouldBe` True,
+                   Wai.responseStatus missingResponse `shouldBe` Http.status403,
+                   Text.isInfixOf "Native fallback CSRF validation failed." missingBody `shouldBe` True
+                 ]
+          )
+
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
           HarchWeb.handleClientAction
@@ -455,6 +502,22 @@ isCompletePageResponse response =
     HarchWeb.PageResponse page ->
       not (Text.null (HarchWeb.renderHtml (HarchWeb.pageBody page)))
     _ -> False
+
+nativeFallbackRequest :: ByteString.ByteString -> ByteString.ByteString -> IO Wai.Request
+nativeFallbackRequest requestBody csrfCookie = do
+  requestBodyChunks <- newIORef [requestBody]
+  pure
+    ( Wai.setRequestBodyChunks
+        (nextRequestBodyChunk requestBodyChunks)
+        ( (waiRequest ["native-subscribe"])
+            { Wai.requestMethod = "POST",
+              Wai.requestHeaders = [(Http.hContentType, "application/x-www-form-urlencoded")] <> maybe [] (pure . ("Cookie",)) (nonEmptyCookie csrfCookie)
+            }
+        )
+    )
+
+nonEmptyCookie :: ByteString.ByteString -> Maybe ByteString.ByteString
+nonEmptyCookie cookie = if ByteString.null cookie then Nothing else Just cookie
 
 waiRequest :: [Text.Text] -> Wai.Request
 waiRequest segments =

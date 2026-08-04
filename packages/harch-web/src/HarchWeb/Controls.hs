@@ -9,6 +9,7 @@ module HarchWeb.Controls
   ( ActionCapability (..),
     ActionFormAttributes (..),
     ActionRecoveryCopy (..),
+    NativeActionFallback (..),
     actionForm,
     defaultActionFormAttributes,
     defaultActionRecoveryCopy,
@@ -61,12 +62,22 @@ defaultActionRecoveryCopy =
       actionCancelCopy = "Cancel action"
     }
 
+-- | An explicitly authored non-JavaScript submission endpoint. Applications
+-- provide the endpoint and CSRF field from their server-side form workflow;
+-- enhancement continues to use the action codec's typed endpoint.
+data NativeActionFallback = NativeActionFallback
+  { nativeActionFallbackPath :: Text,
+    nativeActionFallbackMethod :: ActionMethod,
+    nativeActionFallbackCsrfToken :: Text
+  }
+
 -- | The optional non-routing attributes of a client action form. Framework
 -- owned attributes are deliberately absent, so the target, method, capture
 -- markers, and recovery region cannot be overridden by callers.
 data ActionFormAttributes = ActionFormAttributes
   { actionFormAriaLabel :: Maybe Text,
     actionFormCapabilities :: [ActionCapability],
+    actionFormNativeFallback :: Maybe NativeActionFallback,
     actionFormRecoveryCopy :: ActionRecoveryCopy
   }
 
@@ -75,6 +86,7 @@ defaultActionFormAttributes =
   ActionFormAttributes
     { actionFormAriaLabel = Nothing,
       actionFormCapabilities = [ExclusiveClientHandler],
+      actionFormNativeFallback = Nothing,
       actionFormRecoveryCopy = defaultActionRecoveryCopy
     }
 
@@ -91,6 +103,7 @@ actionForm codec context target attributes children =
     ( maybe [] (pure . ariaLabel) (actionFormAriaLabel attributes)
         <> [ dataFlag "harch-control",
              dataAttribute "harch-action" "true",
+             dataAttribute "harch-action-path" (actionPath codec context target),
              dataAttribute "harch-action-method" (formMethod (actionMethod codec target)),
              dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes)),
              dataAttribute "harch-action-ready-copy" (actionReadyCopy recoveryCopy),
@@ -98,17 +111,19 @@ actionForm codec context target attributes children =
              dataAttribute "harch-action-delayed-copy" (actionDelayedCopy recoveryCopy),
              dataAttribute "harch-action-recoverable-copy" (actionRecoverableCopy recoveryCopy),
              dataAttribute "harch-action-cancelled-copy" (actionCancelledCopy recoveryCopy),
-             formAction (actionPath codec context target),
-             method (nativeMethod attributes (actionMethod codec target))
+             formAction (formTarget codec context target nativeFallback),
+             method (nativeMethod nativeFallback)
            ]
     )
     ( children
+        <> nativeCsrfField nativeFallback
         <> [ actionStatus attributes,
              actionCancel attributes
            ]
     )
   where
     recoveryCopy = actionFormRecoveryCopy attributes
+    nativeFallback = requireNativeFallback attributes
 
 actionStatus :: ActionFormAttributes -> Html
 actionStatus attributes =
@@ -131,10 +146,31 @@ actionCancel attributes =
     ]
     [text (actionCancelCopy (actionFormRecoveryCopy attributes))]
 
-nativeMethod :: ActionFormAttributes -> ActionMethod -> Text
-nativeMethod attributes actionMethodValue
-  | NativeFallback `elem` actionFormCapabilities attributes = formMethod actionMethodValue
-  | otherwise = "dialog"
+requireNativeFallback :: ActionFormAttributes -> Maybe NativeActionFallback
+requireNativeFallback attributes =
+  case (NativeFallback `elem` actionFormCapabilities attributes, actionFormNativeFallback attributes) of
+    (False, Nothing) -> Nothing
+    (True, Just fallback) -> Just fallback
+    (True, Nothing) -> error "NativeFallback requires an explicit NativeActionFallback endpoint and CSRF token"
+    (False, Just _) -> error "NativeActionFallback requires the NativeFallback capability"
+
+formTarget :: (Eq target) => ActionCodec target context action -> context -> target -> Maybe NativeActionFallback -> Text
+formTarget codec context target = maybe (actionPath codec context target) nativeActionFallbackPath
+
+nativeMethod :: Maybe NativeActionFallback -> Text
+nativeMethod = maybe "dialog" (formMethod . nativeActionFallbackMethod)
+
+nativeCsrfField :: Maybe NativeActionFallback -> [Html]
+nativeCsrfField =
+  maybe [] $ \fallback ->
+    [ element
+        inputTag
+        [ inputType "hidden",
+          name "_harch_csrf",
+          value (nativeActionFallbackCsrfToken fallback)
+        ]
+        []
+    ]
 
 renderCapabilities :: [ActionCapability] -> Text
 renderCapabilities = Text.intercalate "," . map renderCapability

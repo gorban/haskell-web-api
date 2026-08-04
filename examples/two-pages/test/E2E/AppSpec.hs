@@ -110,6 +110,42 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "uses an explicitly authored CSRF-protected native fallback when scripts are disabled" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            fallbackForm = byRole Form `named` "Native fallback subscription"
+            fallbackEmail = byLabel "Native fallback email address"
+        ( runBrowserScenario browser $ do
+            visitWithoutScripts homeUrl
+            setCookie homeUrl "harch-native-fallback-csrf" "two-pages-native-fallback"
+            visitWithoutScripts homeUrl
+            fill fallbackEmail "native@example.com"
+            submit fallbackForm
+            assertAll
+              ((,) <$> textContent (byRole Heading `named` "Subscription received") <*> browserMetrics)
+              ( \(heading, metrics) ->
+                  (heading `shouldBe` "Subscription received")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
+    it "rejects the native fallback when its CSRF cookie is absent" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            fallbackForm = byRole Form `named` "Native fallback subscription"
+        ( runBrowserScenario browser $ do
+            visitWithoutScripts homeUrl
+            submit fallbackForm
+            assertAll
+              ((,) <$> textContent (css "body") <*> browserMetrics)
+              ( \(body, metrics) ->
+                  (body `shouldBe` "Native fallback CSRF validation failed.")
+                    :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
+              )
+          )
+          `shouldReturn` Right ()
+
     it "keeps a permanently blocked action visibly recoverable until the user cancels it" $
       withBrowserAndServer $ \browser server -> do
         let homeUrl = localServerBaseUrl server <> "/"

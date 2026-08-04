@@ -36,6 +36,7 @@ module HarchWeb.Action
     put,
     putAt,
     required,
+    singleActionCodec,
     singleOrDefault,
     textValue,
   )
@@ -128,6 +129,10 @@ actionCodec endpoints =
   case duplicateEndpoint endpoints of
     Nothing -> Right (ActionCodec endpoints)
     Just (methodValue, pathIdentity) -> Left (DuplicateActionEndpoint methodValue pathIdentity)
+
+-- | A one-endpoint codec is intrinsically free of duplicate endpoint declarations.
+singleActionCodec :: target -> ActionPath context -> ActionDecoder action -> ActionCodec target context action
+singleActionCodec target path decoder = ActionCodec [action target path decoder]
 
 emptyActionCodec :: ActionCodec target context action
 emptyActionCodec = ActionCodec []

@@ -5,13 +5,14 @@ module App.Routes
     CustomRoute (..),
     PreviewSlug,
     TwoPageAction (..),
-    TwoPageActionTarget (..),
+    TwoPageActionTarget,
     TwoPageNavigationTarget (..),
     TwoPageRoute (..),
     mkPreviewSlug,
     previewSlugText,
     routeCodec,
     routeHref,
+    twoPageActionContext,
     twoPageActions,
     twoPageNavigationPath,
     twoPageActionPath,
@@ -32,11 +33,10 @@ import HarchWeb
   )
 import HarchWeb.Action
   ( ActionCodec,
-    action,
-    actionCodec,
     actionPath,
     formField,
     post,
+    singleActionCodec,
     singleOrDefault,
     textValue,
   )
@@ -45,9 +45,7 @@ data ApiRoute
   = LiveDataEvents
   deriving (Eq, Show)
 
-data TwoPageActionTarget
-  = Subscribe
-  deriving (Eq)
+type TwoPageActionTarget = ()
 
 data TwoPageNavigationTarget
   = NavigationPage PageRoute
@@ -58,8 +56,9 @@ newtype TwoPageAction = SubscribeAction Text
 newtype PreviewSlug = PreviewSlug Text
   deriving (Eq, Show)
 
-newtype CustomRoute
+data CustomRoute
   = PreviewPage PreviewSlug
+  | NativeSubscriptionFallback
   deriving (Eq, Show)
 
 data TwoPageRoute
@@ -78,6 +77,12 @@ routeCodec =
                 Just
                   RouteRequest
                     { requestRoute = Api LiveDataEvents,
+                      requestContext = ()
+                    }
+              "/native-subscribe" ->
+                Just
+                  RouteRequest
+                    { requestRoute = Custom NativeSubscriptionFallback,
                       requestContext = ()
                     }
               _ ->
@@ -102,20 +107,20 @@ routeHref route =
     Page page -> pageRoutePath page
     Api LiveDataEvents -> "/live-data/events"
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
+    Custom NativeSubscriptionFallback -> "/native-subscribe"
 
 twoPageActionPath :: TwoPageActionTarget -> Text
-twoPageActionPath = actionPath twoPageActions ()
+twoPageActionPath = actionPath twoPageActions $! twoPageActionContext
+
+twoPageActionContext :: ()
+twoPageActionContext = ()
 
 twoPageActions :: ActionCodec TwoPageActionTarget () TwoPageAction
 twoPageActions =
-  case actionCodec
-    [ action
-        Subscribe
-        (post "/actions/subscribe")
-        (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))
-    ] of
-    Left codecError -> error (show codecError)
-    Right codec -> codec
+  singleActionCodec
+    ()
+    (post "/actions/subscribe")
+    (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))
 
 twoPageNavigationPath :: TwoPageNavigationTarget -> Text
 twoPageNavigationPath navigationTarget =

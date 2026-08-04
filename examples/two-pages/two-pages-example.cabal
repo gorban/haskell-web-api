@@ -59,8 +59,11 @@ library
   hs-source-dirs: src
   build-depends:
     base ^>=4.22.0.0,
+    bytestring,
     harch-web,
+    http-types,
     text,
+    wai,
 
 executable two-pages-example
   import: common

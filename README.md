@@ -113,6 +113,12 @@ best-effort warning for unresolved actions, not a delivery mechanism. Retrying a
 requires a stable idempotency identity and a server deduplication boundary, otherwise the action remains
 visibly indeterminate rather than risking a duplicate effect.
 
+An action declaring `NativeFallback` must also provide a `NativeActionFallback`: a server-owned endpoint,
+its HTML form method, and the CSRF form value from that endpoint's normal server-side workflow. The browser
+uses that endpoint only when JavaScript is unavailable; the capture kernel retains the codec's action path
+for the enhanced request. The [example's scripts-disabled browser test][capture-e2e] posts through such a
+fallback and proves its CSRF gate and complete SSR response.
+
 Future framework event types must extend this capture contract before a corresponding enabled control
 can be introduced. The [real-browser capture suite][capture-e2e] blocks the module, submits immediately,
 proves input preservation without a reload, delayed handler arrival, cancellation before late registration,

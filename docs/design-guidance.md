@@ -143,7 +143,9 @@ navigation/reload, survival of tab or process termination, or cross-device durab
 
 `ActionFormAttributes` declares capabilities rather than making framework-wide promises. The default is an
 exclusive client handler. Native submission is explicit because client-only effects may have no compatible
-server/CSRF endpoint. Conditional leave confirmation installs `beforeunload` only while an unresolved
+server/CSRF endpoint. `NativeFallback` requires a `NativeActionFallback` value with that endpoint, method,
+and the server workflow's CSRF form value; enhanced dispatch remains on the typed action codec path.
+Conditional leave confirmation installs `beforeunload` only while an unresolved
 eligible action exists, and is a best-effort warning. Retry for an indeterminate mutation is safe only
 with the same idempotency identity and a server deduplication boundary; otherwise keep the action visibly
 recoverable. See the real-browser lifecycle proofs—delayed registration, cancellation, handler failure and

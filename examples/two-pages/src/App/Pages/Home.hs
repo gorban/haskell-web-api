@@ -4,6 +4,7 @@
 module App.Pages.Home
   ( pageDefinition,
     homePage,
+    nativeSubscriptionFallbackPage,
     subscriptionResultRegion,
   )
 where
@@ -23,14 +24,17 @@ import App.Components.SubscriptionEmailField
   )
 import App.Pages.Route.Generated (PageRoute (..))
 import App.Routes
-  ( TwoPageActionTarget (Subscribe),
+  ( CustomRoute (NativeSubscriptionFallback),
     TwoPageNavigationTarget (NavigationPage),
     TwoPageRoute,
+    twoPageActionContext,
+    twoPageActions,
   )
 import App.Routes qualified as Routes
 import Data.Text (Text)
 import HarchWeb
   ( CssClass (..),
+    Html,
     Page (..),
     Region,
     RouteRequest (..),
@@ -39,11 +43,15 @@ import HarchWeb
     cssScope,
     dataAttribute,
     element,
+    elementId,
     fragment,
     harch,
     headingOneTag,
     headingTwoTag,
+    inputTag,
     inputType,
+    labelFor,
+    labelTag,
     literalElementId,
     mkRegionId,
     name,
@@ -53,8 +61,11 @@ import HarchWeb
     role,
     sectionTag,
     text,
+    toHtml,
     value,
   )
+import HarchWeb.Action qualified as Action
+import HarchWeb.Controls qualified as Controls
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
 
@@ -96,14 +107,47 @@ homePage routeRequest =
                     </AuthorAvatar>
                   </section>
 
-                  <ActionForm action={Subscribe} aria-label="Subscription">
+                  <ActionForm action={()} aria-label="Subscription">
                     <SubscriptionEmailField />
                     <button name="intent" value="subscribe" type="submit">Subscribe</button>
                   </ActionForm>
 
+                  {nativeSubscriptionFallbackForm}
+
                   <Region value={subscriptionResultRegion "status" ""} />
                 </section>
           |],
+        pageBootstrapHooks = []
+      }
+
+nativeSubscriptionFallbackForm :: Html
+nativeSubscriptionFallbackForm =
+  (Controls.actionForm twoPageActions $! twoPageActionContext)
+    ()
+    Controls.defaultActionFormAttributes
+      { Controls.actionFormAriaLabel = Just "Native fallback subscription",
+        Controls.actionFormCapabilities = [Controls.NativeFallback],
+        Controls.actionFormNativeFallback =
+          Just
+            Controls.NativeActionFallback
+              { Controls.nativeActionFallbackPath = "/native-subscribe",
+                Controls.nativeActionFallbackMethod = Action.ActionPost,
+                Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
+              }
+      }
+    [ element labelTag [labelFor (literalElementId "native-subscription-email")] [text "Native fallback email address"],
+      element inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"] [],
+      element buttonTag [inputType "submit"] [text "Submit with native fallback"]
+    ]
+
+nativeSubscriptionFallbackPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
+nativeSubscriptionFallbackPage routeRequest =
+  pure
+    Page
+      { pageTitle = "Subscription received",
+        pageRoute = Routes.Custom NativeSubscriptionFallback,
+        pageContext = requestContext routeRequest,
+        pageBody = element sectionTag [dataAttribute "page" "native-subscription"] [element headingOneTag [] [text "Subscription received"], element paragraphTag [] [text "The native fallback accepted this submission."]],
         pageBootstrapHooks = []
       }
 
