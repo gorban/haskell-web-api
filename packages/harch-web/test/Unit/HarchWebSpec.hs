@@ -601,15 +601,19 @@ spec = do
             :| [ Text.isInfixOf "data-harch-action-capabilities=\"exclusive-client-handler\"" renderedForm `shouldBe` True,
                  Text.isInfixOf "action=\"/app/known\" method=\"dialog\"" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-status" renderedForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-retry" renderedForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-cancel" renderedForm `shouldBe` True
                ]
         )
 
     it "renders only explicitly declared native fallback and recovery capabilities" $ do
-      let nativeAttributes =
+      let idempotency = ActionIdempotency "mutation-1"
+          nativeFallback = NativeActionFallback "/native-subscribe" Action.ActionPost "csrf-token"
+          nativeAttributes =
             defaultActionFormAttributes
               { actionFormCapabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback],
-                actionFormNativeFallback = Just (NativeActionFallback "/native-subscribe" Action.ActionPost "csrf-token")
+                actionFormIdempotency = Just idempotency,
+                actionFormNativeFallback = Just nativeFallback
               }
           nativeForm = renderHtml (actionForm testActionCodec defaultContext "save" nativeAttributes [])
           nativeGetForm = renderHtml (actionForm testActionCodec defaultContext "read" nativeAttributes [])
@@ -619,13 +623,19 @@ spec = do
                  Text.isInfixOf "action=\"/native-subscribe\" method=\"post\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-path=\"/known\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "name=\"_harch_csrf\" value=\"csrf-token\"" nativeForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action-idempotency-key=\"mutation-1\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "handler-safe-retry,conditional-leave-confirmation,idempotent-mutation-retry,native-fallback" nativeForm `shouldBe` True,
                  actionReadyCopy defaultActionRecoveryCopy `shouldBe` "Ready.",
                  actionPendingCopy defaultActionRecoveryCopy `shouldBe` "Submitting…",
                  actionDelayedCopy defaultActionRecoveryCopy `shouldBe` "Still waiting for this action to be handled.",
                  actionRecoverableCopy defaultActionRecoveryCopy `shouldBe` "This action needs your attention.",
                  actionCancelledCopy defaultActionRecoveryCopy `shouldBe` "Action cancelled.",
+                 actionRetryCopy defaultActionRecoveryCopy `shouldBe` "Retry action",
                  actionCancelCopy defaultActionRecoveryCopy `shouldBe` "Cancel action",
+                 actionIdempotencyKey idempotency `shouldBe` "mutation-1",
+                 nativeActionFallbackPath nativeFallback `shouldBe` "/native-subscribe",
+                 nativeActionFallbackMethod nativeFallback `shouldBe` Action.ActionPost,
+                 nativeActionFallbackCsrfToken nativeFallback `shouldBe` "csrf-token",
                  show NativeFallback `shouldBe` "NativeFallback",
                  showList [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback] "" `shouldSatisfy` (not . null),
                  sum [fromEnum (left == right) | left <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback], right <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]] `shouldBe` 5,
@@ -656,6 +666,7 @@ spec = do
                 Action.clientActionPath = path,
                 Action.clientActionFields = fields,
                 Action.clientActionCsrfToken = Just "csrf",
+                Action.clientActionIdempotencyKey = Nothing,
                 Action.clientActionPayloadContext = defaultContext {testContextPathPrefix = "/app"}
               }
       expectAll
@@ -676,13 +687,15 @@ spec = do
 
     it "keeps action protocol equality total for every constructor" $ do
       let methods = [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete]
-          payload = Action.ClientActionPayload "POST" "/action" [("name", "Ada")] (Just "csrf") defaultContext
+          idempotencyKey = "retry-1"
+          payload = Action.ClientActionPayload "POST" "/action" [("name", "Ada")] (Just "csrf") Nothing defaultContext
           payloads =
             [ payload,
               payload {Action.clientActionMethod = "GET"},
               payload {Action.clientActionPath = "/other"},
               payload {Action.clientActionFields = []},
               payload {Action.clientActionCsrfToken = Nothing},
+              payload {Action.clientActionIdempotencyKey = Just idempotencyKey},
               payload {Action.clientActionPayloadContext = spanishContext}
             ]
           parseErrors = [Action.MissingActionField "name", Action.DuplicateActionField "name", Action.InvalidActionField "name"]
@@ -751,7 +764,7 @@ spec = do
             fromRight (error "invalid test action codec") $
               Action.actionCodec [Action.action () (Action.post "/default") (Action.singleOrDefault "guest" (Action.formField "name" (Action.parseField nonEmptyValue)))]
           actionPayload methodValue path fields =
-            Action.ClientActionPayload methodValue path fields Nothing defaultContext
+            Action.ClientActionPayload methodValue path fields Nothing Nothing defaultContext
           nonEmptyValue fieldText = if Text.null fieldText then Nothing else Just fieldText
       expectAll
         ( (map (Action.actionPath staticCodec defaultContext) ["get", "post", "put", "patch", "delete"] `shouldBe` ["/get", "/post", "/put", "/patch", "/delete"])
@@ -781,21 +794,34 @@ spec = do
                 actionFormNativeFallback = Just (NativeActionFallback "/native" Action.ActionPost "csrf-token")
               }
           missingNativeFallback = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback]}
+          missingIdempotency = defaultActionFormAttributes {actionFormCapabilities = [IdempotentMutationRetry]}
+          emptyIdempotency =
+            defaultActionFormAttributes
+              { actionFormCapabilities = [IdempotentMutationRetry],
+                actionFormIdempotency = Just (ActionIdempotency "")
+              }
           undeclaredNativeFallback =
             defaultActionFormAttributes
               { actionFormNativeFallback = Just (NativeActionFallback "/native" Action.ActionPost "csrf-token")
               }
+          undeclaredIdempotency = defaultActionFormAttributes {actionFormIdempotency = Just (ActionIdempotency "mutation-1")}
       missingPath <- try (evaluate (Text.length (Action.actionPath emptyCodec defaultContext "missing"))) :: IO (Either SomeException Int)
       missingMethod <- try (evaluate (Action.actionMethod emptyCodec "missing")) :: IO (Either SomeException Action.ActionMethod)
       unsupportedForm <- try (evaluate (Text.length (renderHtml (actionForm unsupportedCodec defaultContext "put" nativeAttributes [])))) :: IO (Either SomeException Int)
       missingFallbackForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" missingNativeFallback [])))) :: IO (Either SomeException Int)
       undeclaredFallbackForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" undeclaredNativeFallback [])))) :: IO (Either SomeException Int)
+      missingIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" missingIdempotency [])))) :: IO (Either SomeException Int)
+      emptyIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" emptyIdempotency [])))) :: IO (Either SomeException Int)
+      undeclaredIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" undeclaredIdempotency [])))) :: IO (Either SomeException Int)
       expectAll
         ( (either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingPath `shouldBe` True)
             :| [ either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingMethod `shouldBe` True,
                  either (Text.isInfixOf "HTML forms only support GET and POST client actions" . Text.pack . displayException) (const False) unsupportedForm `shouldBe` True,
                  either (Text.isInfixOf "NativeFallback requires an explicit NativeActionFallback endpoint and CSRF token" . Text.pack . displayException) (const False) missingFallbackForm `shouldBe` True,
-                 either (Text.isInfixOf "NativeActionFallback requires the NativeFallback capability" . Text.pack . displayException) (const False) undeclaredFallbackForm `shouldBe` True
+                 either (Text.isInfixOf "NativeActionFallback requires the NativeFallback capability" . Text.pack . displayException) (const False) undeclaredFallbackForm `shouldBe` True,
+                 either (Text.isInfixOf "IdempotentMutationRetry requires an ActionIdempotency key" . Text.pack . displayException) (const False) missingIdempotencyForm `shouldBe` True,
+                 either (Text.isInfixOf "IdempotentMutationRetry requires a non-empty ActionIdempotency key" . Text.pack . displayException) (const False) emptyIdempotencyForm `shouldBe` True,
+                 either (Text.isInfixOf "ActionIdempotency requires the IdempotentMutationRetry capability" . Text.pack . displayException) (const False) undeclaredIdempotencyForm `shouldBe` True
                ]
         )
 
@@ -806,6 +832,7 @@ spec = do
                 Action.clientActionPath = path,
                 Action.clientActionFields = [("email", "ada@example.test")],
                 Action.clientActionCsrfToken = Nothing,
+                Action.clientActionIdempotencyKey = Nothing,
                 Action.clientActionPayloadContext = defaultContext
               }
       Action.decodeAction testActionCodec (payload "POST" "/known") `shouldBe` Action.DecodedClientAction "save:ada@example.test"
@@ -831,6 +858,7 @@ spec = do
                 Action.clientActionPath = "/validate",
                 Action.clientActionFields = fields,
                 Action.clientActionCsrfToken = Nothing,
+                Action.clientActionIdempotencyKey = Nothing,
                 Action.clientActionPayloadContext = ()
               }
           defaultCodec =
@@ -1309,12 +1337,14 @@ spec = do
                 clientActionPath = "/actions/subscribe",
                 clientActionFields = [("email", "ada@example.com")],
                 clientActionCsrfToken = Nothing,
+                clientActionIdempotencyKey = Nothing,
                 clientActionPayloadContext = defaultContext
               }
           clientActionRequest :: ClientActionRequest Text TestContext
           clientActionRequest =
             ClientActionRequest
               { clientAction = "/actions/subscribe",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = defaultContext
               }
           regionPatch = testRegionPatch "status-region" "Ready"
@@ -1398,8 +1428,10 @@ spec = do
       clientActionPath clientActionPayload `shouldBe` "/actions/subscribe"
       clientActionFields clientActionPayload `shouldBe` [("email", "ada@example.com")]
       clientActionCsrfToken clientActionPayload `shouldBe` Nothing
+      clientActionIdempotencyKey clientActionPayload `shouldBe` Nothing
       clientActionPayloadContext clientActionPayload `shouldBe` defaultContext
       clientAction clientActionRequest `shouldBe` "/actions/subscribe"
+      clientActionRequestIdempotencyKey clientActionRequest `shouldBe` Nothing
       clientActionContext clientActionRequest `shouldBe` defaultContext
       regionPatchId regionPatch `shouldBe` "status-region"
       regionPatchHtml regionPatch `shouldBe` "<p id=\"status-region\" data-harch-region=\"true\">Ready</p>"
@@ -1478,12 +1510,14 @@ spec = do
           clientActionRequest =
             ClientActionRequest
               { clientAction = "/actions/subscribe",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = defaultContext
               }
           otherClientActionRequest :: ClientActionRequest Text TestContext
           otherClientActionRequest =
             ClientActionRequest
               { clientAction = "/actions/other",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = spanishContext
               }
           regionPatch = testRegionPatch "status-region" "Ready"
@@ -1583,7 +1617,7 @@ spec = do
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
-      show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
+      show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
       show [clientActionRequest] `shouldContain` "ClientActionRequest {clientAction = \"/actions/subscribe\""
       (regionPatch == regionPatch) `shouldBe` True
       (regionPatch /= otherRegionPatch) `shouldBe` True
@@ -1609,6 +1643,7 @@ spec = do
             clientActionPath = "/actions/subscribe",
             clientActionFields = [],
             clientActionCsrfToken = Nothing,
+            clientActionIdempotencyKey = Nothing,
             clientActionPayloadContext = defaultContext
           }
         `shouldBe` DecodedClientAction "/actions/subscribe"
@@ -1616,6 +1651,7 @@ spec = do
         sampleApplication
         ClientActionRequest
           { clientAction = "/actions/subscribe",
+            clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = defaultContext
           }
         `shouldReturn` Nothing
@@ -1950,7 +1986,7 @@ spec = do
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["es", "known"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "retry-1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
                   }
               )
       response <- performWaiRequest (toWaiApplication actionApplication) capturedActionRequest
@@ -1959,6 +1995,25 @@ spec = do
         `shouldBe` Just
           ClientActionRequest
             { clientAction = "/es/known",
+              clientActionRequestIdempotencyKey = Just "retry-1",
+              clientActionContext = spanishContext
+            }
+      invalidIdempotencyBodyChunks <- newIORef ["email=ada%40example.com&_harch_csrf=csrf-token"]
+      let invalidIdempotencyRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk invalidIdempotencyBodyChunks)
+              ( capturedActionRequest
+                  { Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "\255"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                  }
+              )
+      writeIORef actionRequestReference Nothing
+      _ <- performWaiRequest (toWaiApplication actionApplication) invalidIdempotencyRequest
+      invalidIdempotencyActionRequest <- readIORef actionRequestReference
+      invalidIdempotencyActionRequest
+        `shouldBe` Just
+          ClientActionRequest
+            { clientAction = "/es/known",
+              clientActionRequestIdempotencyKey = Nothing,
               clientActionContext = spanishContext
             }
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422

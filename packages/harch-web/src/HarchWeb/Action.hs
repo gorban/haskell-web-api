@@ -9,6 +9,7 @@ module HarchWeb.Action
     ActionMethod (..),
     ActionPath,
     ClientActionDecodeResult (..),
+    ClientActionIdempotencyKey,
     ClientActionParseError (..),
     ClientActionPayload (..),
     FieldValue,
@@ -73,9 +74,15 @@ data ClientActionPayload context = ClientActionPayload
     clientActionPath :: Text,
     clientActionFields :: [(Text, Text)],
     clientActionCsrfToken :: Maybe Text,
+    clientActionIdempotencyKey :: Maybe ClientActionIdempotencyKey,
     clientActionPayloadContext :: context
   }
   deriving (Eq, Show)
+
+-- | A client-generated identity carried unchanged across explicitly
+-- idempotent retries. The action handler uses it at its server-side
+-- deduplication boundary; it is never logged by the framework.
+type ClientActionIdempotencyKey = Text
 
 data ClientActionParseError
   = MissingActionField Text

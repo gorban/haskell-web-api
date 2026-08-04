@@ -87,6 +87,7 @@ spec = do
         sampleSite
         ClientActionRequest
           { clientAction = (),
+            clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = SampleContext ""
           }
         `shouldReturn` Nothing
@@ -96,6 +97,7 @@ spec = do
                 clientActionPath = "/actions/sample",
                 clientActionFields = [],
                 clientActionCsrfToken = Nothing,
+                clientActionIdempotencyKey = Nothing,
                 clientActionPayloadContext = SampleContext ""
               }
       siteDecodeClientAction sampleSite actionPayload `shouldBe` HarchWeb.UnrecognizedClientAction
@@ -104,6 +106,7 @@ spec = do
         siteApplication
         ClientActionRequest
           { clientAction = (),
+            clientActionRequestIdempotencyKey = Nothing,
             clientActionContext = SampleContext ""
           }
         `shouldReturn` Nothing

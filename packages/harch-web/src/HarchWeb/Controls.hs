@@ -8,6 +8,7 @@
 module HarchWeb.Controls
   ( ActionCapability (..),
     ActionFormAttributes (..),
+    ActionIdempotency (..),
     ActionRecoveryCopy (..),
     NativeActionFallback (..),
     actionForm,
@@ -48,6 +49,7 @@ data ActionRecoveryCopy = ActionRecoveryCopy
     actionDelayedCopy :: Text,
     actionRecoverableCopy :: Text,
     actionCancelledCopy :: Text,
+    actionRetryCopy :: Text,
     actionCancelCopy :: Text
   }
 
@@ -59,8 +61,17 @@ defaultActionRecoveryCopy =
       actionDelayedCopy = "Still waiting for this action to be handled.",
       actionRecoverableCopy = "This action needs your attention.",
       actionCancelledCopy = "Action cancelled.",
+      actionRetryCopy = "Retry action",
       actionCancelCopy = "Cancel action"
     }
+
+-- | The stable identity supplied with every attempt of an explicitly
+-- idempotent client action. The server action handler receives the same value
+-- in 'HarchWeb.ClientActionRequest' and is responsible for its durable
+-- deduplication boundary.
+newtype ActionIdempotency = ActionIdempotency
+  { actionIdempotencyKey :: Text
+  }
 
 -- | An explicitly authored non-JavaScript submission endpoint. Applications
 -- provide the endpoint and CSRF field from their server-side form workflow;
@@ -77,6 +88,7 @@ data NativeActionFallback = NativeActionFallback
 data ActionFormAttributes = ActionFormAttributes
   { actionFormAriaLabel :: Maybe Text,
     actionFormCapabilities :: [ActionCapability],
+    actionFormIdempotency :: Maybe ActionIdempotency,
     actionFormNativeFallback :: Maybe NativeActionFallback,
     actionFormRecoveryCopy :: ActionRecoveryCopy
   }
@@ -86,6 +98,7 @@ defaultActionFormAttributes =
   ActionFormAttributes
     { actionFormAriaLabel = Nothing,
       actionFormCapabilities = [ExclusiveClientHandler],
+      actionFormIdempotency = Nothing,
       actionFormNativeFallback = Nothing,
       actionFormRecoveryCopy = defaultActionRecoveryCopy
     }
@@ -105,8 +118,10 @@ actionForm codec context target attributes children =
              dataAttribute "harch-action" "true",
              dataAttribute "harch-action-path" (actionPath codec context target),
              dataAttribute "harch-action-method" (formMethod (actionMethod codec target)),
-             dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes)),
-             dataAttribute "harch-action-ready-copy" (actionReadyCopy recoveryCopy),
+             dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes))
+           ]
+        <> maybe [] (pure . dataAttribute "harch-action-idempotency-key" . actionIdempotencyKey) idempotency
+        <> [ dataAttribute "harch-action-ready-copy" (actionReadyCopy recoveryCopy),
              dataAttribute "harch-action-pending-copy" (actionPendingCopy recoveryCopy),
              dataAttribute "harch-action-delayed-copy" (actionDelayedCopy recoveryCopy),
              dataAttribute "harch-action-recoverable-copy" (actionRecoverableCopy recoveryCopy),
@@ -118,12 +133,14 @@ actionForm codec context target attributes children =
     ( children
         <> nativeCsrfField nativeFallback
         <> [ actionStatus attributes,
+             actionRetry attributes,
              actionCancel attributes
            ]
     )
   where
     recoveryCopy = actionFormRecoveryCopy attributes
     nativeFallback = requireNativeFallback attributes
+    idempotency = requireIdempotency attributes
 
 actionStatus :: ActionFormAttributes -> Html
 actionStatus attributes =
@@ -146,6 +163,16 @@ actionCancel attributes =
     ]
     [text (actionCancelCopy (actionFormRecoveryCopy attributes))]
 
+actionRetry :: ActionFormAttributes -> Html
+actionRetry attributes =
+  element
+    buttonTag
+    [ dataFlag "harch-action-retry",
+      inputType "button",
+      hidden
+    ]
+    [text (actionRetryCopy (actionFormRecoveryCopy attributes))]
+
 requireNativeFallback :: ActionFormAttributes -> Maybe NativeActionFallback
 requireNativeFallback attributes =
   case (NativeFallback `elem` actionFormCapabilities attributes, actionFormNativeFallback attributes) of
@@ -153,6 +180,16 @@ requireNativeFallback attributes =
     (True, Just fallback) -> Just fallback
     (True, Nothing) -> error "NativeFallback requires an explicit NativeActionFallback endpoint and CSRF token"
     (False, Just _) -> error "NativeActionFallback requires the NativeFallback capability"
+
+requireIdempotency :: ActionFormAttributes -> Maybe ActionIdempotency
+requireIdempotency attributes =
+  case (IdempotentMutationRetry `elem` actionFormCapabilities attributes, actionFormIdempotency attributes) of
+    (False, Nothing) -> Nothing
+    (True, Just idempotency)
+      | Text.null (actionIdempotencyKey idempotency) -> error "IdempotentMutationRetry requires a non-empty ActionIdempotency key"
+      | otherwise -> Just idempotency
+    (True, Nothing) -> error "IdempotentMutationRetry requires an ActionIdempotency key and a server deduplication boundary"
+    (False, Just _) -> error "ActionIdempotency requires the IdempotentMutationRetry capability"
 
 formTarget :: (Eq target) => ActionCodec target context action -> context -> target -> Maybe NativeActionFallback -> Text
 formTarget codec context target = maybe (actionPath codec context target) nativeActionFallbackPath

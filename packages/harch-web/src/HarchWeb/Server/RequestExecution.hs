@@ -210,6 +210,7 @@ dispatchRoutedRequest
                                   clientActionPath = requestPath,
                                   clientActionFields = actionFields,
                                   clientActionCsrfToken = lookup "_harch_csrf" actionFields,
+                                  clientActionIdempotencyKey = requestIdempotencyKey request,
                                   clientActionPayloadContext = routedRequestContext
                                 }
                         case decodeClientAction webApplication actionPayload of
@@ -228,6 +229,7 @@ dispatchRoutedRequest
                                 webApplication
                                 ClientActionRequest
                                   { clientAction = action,
+                                    clientActionRequestIdempotencyKey = requestIdempotencyKey request,
                                     clientActionContext = routedRequestContext
                                   }
                             pure
@@ -237,6 +239,11 @@ dispatchRoutedRequest
                                   maybeActionResponse
                               )
           else renderResponse webApplication routeRequest
+
+requestIdempotencyKey :: Wai.Request -> Maybe ClientActionIdempotencyKey
+requestIdempotencyKey request =
+  lookup "Idempotency-Key" (Wai.requestHeaders request)
+    >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
 
 readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)
 readClientActionBody request = go 0 []

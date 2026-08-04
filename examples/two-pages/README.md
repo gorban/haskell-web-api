@@ -161,6 +161,12 @@ cancels. A delayed module is not considered failed merely because time passes; t
 to delayed without retrying or submitting. This example uses the default exclusive-client capability, so
 scripts-disabled native submission is intentionally not the fallback for this client action.
 
+The lifecycle suite also demonstrates the two explicit retry contracts. `HandlerSafeRetry` exposes a
+control-local retry only after a recoverable handler result and reuses the captured values. An
+`IdempotentMutationRetry` retains its `ActionIdempotency` key across attempts and forwards it to the typed
+server action request; an application must use that value at its durable deduplication boundary. Neither
+contract causes an automatic retry.
+
 The adjacent “Native fallback subscription” form demonstrates the opt-in alternative. It supplies a
 server-owned fallback endpoint and CSRF form value; with scripts disabled it posts to a complete SSR
 confirmation page only when the matching CSRF cookie is present. Its enhanced path continues to use the

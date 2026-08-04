@@ -205,6 +205,7 @@ spec =
                   clientActionPath = path,
                   clientActionFields = fields,
                   clientActionCsrfToken = Nothing,
+                  clientActionIdempotencyKey = Nothing,
                   clientActionPayloadContext = ()
                 }
         let absentEmailDecoded =
@@ -424,6 +425,7 @@ spec =
             buildApplication
             ClientActionRequest
               { clientAction = SubscribeAction "ada@example",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
         expectAll
@@ -453,6 +455,7 @@ spec =
             buildApplication
             ClientActionRequest
               { clientAction = SubscribeAction "ada@example.com",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
         expectAll
@@ -492,6 +495,7 @@ spec =
             buildApplication
             ClientActionRequest
               { clientAction = SubscribeAction "invalid",
+                clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
         fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just 422

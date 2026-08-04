@@ -148,8 +148,12 @@ and the server workflow's CSRF form value; enhanced dispatch remains on the type
 Conditional leave confirmation installs `beforeunload` only while an unresolved
 eligible action exists, and is a best-effort warning. Retry for an indeterminate mutation is safe only
 with the same idempotency identity and a server deduplication boundary; otherwise keep the action visibly
-recoverable. See the real-browser lifecycle proofs—delayed registration, cancellation, handler failure and
-non-settlement, script failure, multiple controls, and conditional leave warning—in
+recoverable. `HandlerSafeRetry` exposes a local retry control only after a recoverable handler outcome;
+it reclaims the retained envelope without automatic replay. `IdempotentMutationRetry` requires an
+`ActionIdempotency` value and forwards the same key with every retry to the typed server action request,
+whose application handler supplies the durable deduplication boundary. See the real-browser lifecycle
+proofs—delayed registration, cancellation, handler failure and non-settlement, script failure, multiple
+controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
 ## Current capability and remaining design direction

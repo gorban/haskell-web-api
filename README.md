@@ -113,6 +113,14 @@ best-effort warning for unresolved actions, not a delivery mechanism. Retrying a
 requires a stable idempotency identity and a server deduplication boundary, otherwise the action remains
 visibly indeterminate rather than risking a duplicate effect.
 
+`HandlerSafeRetry` makes a retry button available only after a recoverable handler outcome; it reclaims
+the retained envelope only when a handler is present and never retries automatically. An
+`IdempotentMutationRetry` additionally requires `ActionIdempotency`; the same key is retained with the
+snapshot and forwarded as `Idempotency-Key` to `ClientActionRequest`, where the application must use it at
+its durable deduplication boundary. The browser lifecycle test proves both attempts see the same captured
+values and that an idempotent retry keeps its identity. Neither capability turns an indeterminate default
+mutation into a retryable one.
+
 An action declaring `NativeFallback` must also provide a `NativeActionFallback`: a server-owned endpoint,
 its HTML form method, and the CSRF form value from that endpoint's normal server-side workflow. The browser
 uses that endpoint only when JavaScript is unavailable; the capture kernel retains the codec's action path
@@ -123,7 +131,7 @@ Future framework event types must extend this capture contract before a correspo
 can be introduced. The [real-browser capture suite][capture-e2e] blocks the module, submits immediately,
 proves input preservation without a reload, delayed handler arrival, cancellation before late registration,
 handler exception/rejection/non-settlement, script-load failure, control-local multiple pending work, and
-the opt-in leave warning. It proves immediate capture and bounded in-document ownership—not
+the opt-in leave warning and retry capability policy. It proves immediate capture and bounded in-document ownership—not
 cross-navigation delivery or the reliability of arbitrary application effects.
 
 ### Rendering trade-offs

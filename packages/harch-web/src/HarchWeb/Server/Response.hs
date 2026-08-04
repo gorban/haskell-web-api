@@ -3,6 +3,7 @@
 -- | Private typed request and response contracts for the WAI server pipeline.
 module HarchWeb.Server.Response
   ( ClientActionDecodeResult (..),
+    ClientActionIdempotencyKey,
     ClientActionPayload (..),
     ClientActionRequest (..),
     ClientActionResponse (..),
@@ -20,6 +21,7 @@ where
 import Data.Text (Text)
 import HarchWeb.Action
   ( ClientActionDecodeResult (..),
+    ClientActionIdempotencyKey,
     ClientActionPayload (..),
   )
 import HarchWeb.Document (Page)
@@ -76,9 +78,13 @@ data MiddlewareResult context
   deriving (Eq, Show)
 
 -- | The application action after its codec has consumed the transport payload.
--- Handlers receive only this typed action and their request context.
+-- Handlers receive only this typed action, an optional retry identity, and
+-- their request context. A non-'Nothing' identity is supplied only by an
+-- explicitly idempotent control; the handler is its durable deduplication
+-- boundary and must not log the key.
 data ClientActionRequest action context = ClientActionRequest
   { clientAction :: action,
+    clientActionRequestIdempotencyKey :: Maybe ClientActionIdempotencyKey,
     clientActionContext :: context
   }
   deriving (Eq, Show)

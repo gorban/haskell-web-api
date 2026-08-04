@@ -151,7 +151,7 @@ spec =
         let homeUrl = localServerBaseUrl server <> "/"
             subscriptionForm = byRole Form `named` "Subscription"
             emailField = byLabel "Email address"
-            actionStatus = css "[data-harch-action-status]"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
         ( runBrowserScenario browser $ do
             blockRequestsMatching "**/assets/navigation.js"
             visit homeUrl
@@ -215,6 +215,46 @@ spec =
             fill emailField "reject@example.com"
             submit subscriptionForm
             assertText actionStatus (`shouldBe` "This action needs your attention.")
+            assertAttribute (within subscriptionForm (css "[data-harch-action-retry]")) "hidden" (`shouldBe` Just "")
+          )
+          `shouldReturn` Right ()
+
+    it "retries only declared safe handlers and preserves the idempotency identity for mutation retries" $
+      withBrowserAndServer $ \browser server -> do
+        let homeUrl = localServerBaseUrl server <> "/"
+            subscriptionForm = byRole Form `named` "Subscription"
+            emailField = byLabel "Email address"
+            actionStatus = within subscriptionForm (css "[data-harch-action-status]")
+            retryButton = within subscriptionForm (byRole Button `named` "Retry action")
+            handlerSafeRetry =
+              "let attempts = 0; document.querySelector('form[data-harch-action=\"true\"]').dataset.harchActionCapabilities = 'handler-safe-retry'; window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction, settlement) => { attempts += 1; document.body.dataset.harchRetryEvidence = String(attempts) + ':' + capturedAction.fields.find(([name]) => name === 'email')?.[1]; if (attempts === 1) { return Promise.reject(new Error('recoverable')); } settlement.completed(); });"
+            idempotentRetry =
+              "let attempts = 0; const form = document.querySelector('form[data-harch-action=\"true\"]'); form.dataset.harchActionCapabilities = 'idempotent-mutation-retry'; form.dataset.harchActionIdempotencyKey = 'mutation-1'; window.__harchCaptureKernel.register(window.__harchCaptureKernel.eventTypes.Submit, (capturedAction, settlement) => { attempts += 1; document.body.dataset.harchIdempotencyEvidence = String(attempts) + ':' + capturedAction.idempotencyKey; if (attempts === 1) { return Promise.reject(new Error('recoverable')); } settlement.completed(); });"
+        ( runBrowserScenario browser $ do
+            blockRequestsMatching "**/assets/navigation.js"
+            visit homeUrl
+            _ <- runPageScript handlerSafeRetry
+            fill emailField "safe@example.com"
+            submit subscriptionForm
+            assertText actionStatus (`shouldBe` "This action needs your attention.")
+            click retryButton
+            assertAll
+              ((,) <$> textContent actionStatus <*> attributeValue (css "body") "data-harch-retry-evidence")
+              ( \(status, evidence) ->
+                  (status `shouldBe` "Completed.")
+                    :| [evidence `shouldBe` Just "2:safe@example.com"]
+              )
+            _ <- runPageScript idempotentRetry
+            fill emailField "idempotent@example.com"
+            submit subscriptionForm
+            assertText actionStatus (`shouldBe` "This action needs your attention.")
+            click retryButton
+            assertAll
+              ((,) <$> textContent actionStatus <*> attributeValue (css "body") "data-harch-idempotency-evidence")
+              ( \(status, evidence) ->
+                  (status `shouldBe` "Completed.")
+                    :| [evidence `shouldBe` Just "2:mutation-1"]
+              )
           )
           `shouldReturn` Right ()
 

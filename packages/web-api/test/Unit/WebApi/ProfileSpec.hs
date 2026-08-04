@@ -102,6 +102,7 @@ spec =
                           HarchWeb.clientActionPath = profileActionPath requestContext,
                           HarchWeb.clientActionFields = fields,
                           HarchWeb.clientActionCsrfToken = Nothing,
+                          HarchWeb.clientActionIdempotencyKey = Nothing,
                           HarchWeb.clientActionPayloadContext = requestContext
                         } of
                       HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
@@ -109,6 +110,7 @@ spec =
                   pure
                     HarchWeb.ClientActionRequest
                       { HarchWeb.clientAction = action,
+                        HarchWeb.clientActionRequestIdempotencyKey = Nothing,
                         HarchWeb.clientActionContext = requestContext
                       }
               )

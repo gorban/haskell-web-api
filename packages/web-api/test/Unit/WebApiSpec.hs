@@ -98,6 +98,7 @@ typedAccountActionRequest method path fields requestContext =
                 HarchWeb.clientActionPath = path,
                 HarchWeb.clientActionFields = fields,
                 HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionIdempotencyKey = Nothing,
                 HarchWeb.clientActionPayloadContext = requestContext
               } of
             HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
@@ -105,6 +106,7 @@ typedAccountActionRequest method path fields requestContext =
         pure
           HarchWeb.ClientActionRequest
             { HarchWeb.clientAction = action,
+              HarchWeb.clientActionRequestIdempotencyKey = Nothing,
               HarchWeb.clientActionContext = requestContext
             }
     )
@@ -3408,6 +3410,7 @@ spec = do
                 HarchWeb.clientActionPath = path,
                 HarchWeb.clientActionFields = fields,
                 HarchWeb.clientActionCsrfToken = Nothing,
+                HarchWeb.clientActionIdempotencyKey = Nothing,
                 HarchWeb.clientActionPayloadContext = defaultRequestContext
               }
       case Action.decodeAction accountActions (rawAction "GET" "/register" []) of
@@ -8242,6 +8245,7 @@ spec = do
                   HarchWeb.clientActionPath = "/register",
                   HarchWeb.clientActionFields = [],
                   HarchWeb.clientActionCsrfToken = Nothing,
+                  HarchWeb.clientActionIdempotencyKey = Nothing,
                   HarchWeb.clientActionPayloadContext = defaultRequestContext
                 } of
               HarchWeb.DecodedClientAction _ -> True
