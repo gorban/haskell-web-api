@@ -156,6 +156,33 @@ proofs—delayed registration, cancellation, handler failure and non-settlement,
 controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
+### A declarative API endpoint library exists ahead of dispatch wiring
+
+`HarchWeb.Api` declares a method-aware HTTP endpoint (`apiEndpoint target method (at "/path")`) and
+matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
+`NoApiRouteMatch` (`404`), a matched path with no accepting method is `ApiMethodNotAllowed` (`405`, with
+`apiAllowHeaderValue` rendering `Allow` from every declared method at that path plus the `HEAD`/`OPTIONS`
+it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`. `RequestCodec` decodes query and
+header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
+independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
+matching `HarchWeb.Action`'s decoder shape. `selectRepresentation` negotiates a response media type from
+a server-preference-ordered list and an optional `Accept` header per RFC 9110 §12.5.1 (quality weights,
+wildcards, specificity precedence, `q=0` exclusion, `406` when nothing is acceptable).
+
+`HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
+(`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
+body than the boundary delimiter's length, `parseMultipartFieldDisposition` for a part's `name`/`filename`,
+and `consumeMultipartBody`/`consumeMultipartRequestBody` to drive the scanner against a chunked body
+(any `IO ByteString` source, or a WAI `Request` directly), enforcing `MultipartLimits` (max field bytes,
+max file bytes, max part count) and spooling file parts to a caller-owned temporary file rather than
+buffering them.
+
+Both modules are implemented and fully unit-tested as standalone library capabilities, but neither is yet
+the application's default dispatcher: continue routing real applications through the existing
+`RouteCodec`/`ApiRoute` pattern shown in the [custom API guide](../examples/custom-api/README.md) until
+method-aware `ApiEndpoint` dispatch, native multipart form upload, and CSRF/AA capture coordination for
+file uploads are wired in.
+
 ## Current capability and remaining design direction
 
 | Area | State | Guidance |
@@ -169,6 +196,8 @@ controls, conditional leave warning, and safe/idempotent retry—in
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
+| `HarchWeb.Api` endpoint matching, codecs, and `Accept` negotiation | Implemented, not yet wired into dispatch | Usable as a standalone library today; keep routing real applications through `RouteCodec`/`ApiRoute` until it becomes the default dispatcher. |
+| `HarchWeb.Api.Multipart` bounded streaming consumer | Implemented, not yet wired into native forms | Drive it directly from a WAI request today; native upload-form/CSRF/AA capture coordination is not built yet. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
 | Automatic database-to-live-view subscriptions | Design direction | Use explicit SSE today; do not imply automatic subscriptions exist. |
