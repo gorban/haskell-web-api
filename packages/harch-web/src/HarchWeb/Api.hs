@@ -23,14 +23,38 @@ module HarchWeb.Api
     at,
     matchApiEndpoints,
     apiAllowHeaderValue,
+    ApiRequestData (..),
+    ApiRequestSource (..),
+    ApiRequestParseError (..),
+    ApiFieldValue,
+    RequestField,
+    RequestCodec,
+    apiTextValue,
+    parseApiField,
+    queryField,
+    headerField,
+    requiredField,
+    optionalField,
+    fieldWithDefault,
+    runRequestCodec,
+    ApiResponseBody (..),
+    apiJsonResponse,
+    apiTextResponse,
+    apiBytesResponse,
   )
 where
 
+import Data.Aeson (ToJSON)
+import Data.Aeson qualified as Aeson
+import Data.ByteString (ByteString)
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.Functor.Compose (Compose (..), getCompose)
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is never declared directly:
 -- a matched @GET@ endpoint answers a @HEAD@ request with the same target,
@@ -128,3 +152,122 @@ apiAllowHeaderValue declaredMethodsValue =
         <> ["HEAD" | ApiGet `elem` declaredMethodsValue]
         <> ["OPTIONS"]
     )
+
+-- | The pre-parsed request data a 'RequestCodec' decodes from. Path capture
+-- and body sources are documented future extensions; only query parameters
+-- and headers are supported today.
+data ApiRequestData = ApiRequestData
+  { apiRequestQueryParameters :: [(Text, Text)],
+    apiRequestHeaders :: [(Text, Text)]
+  }
+  deriving (Eq, Show)
+
+-- | The declared source of an individual request field.
+data ApiRequestSource
+  = ApiQuerySource
+  | ApiHeaderSource
+  deriving (Eq, Show)
+
+data ApiRequestParseError
+  = MissingApiField ApiRequestSource Text
+  | DuplicateApiField ApiRequestSource Text
+  | InvalidApiField ApiRequestSource Text
+  deriving (Eq, Show)
+
+newtype ApiFieldValue value = ApiFieldValue
+  { runApiFieldValue :: Text -> Maybe value
+  }
+
+-- | An unvalidated field value, kept as-is.
+apiTextValue :: ApiFieldValue Text
+apiTextValue = ApiFieldValue Just
+
+parseApiField :: (Text -> Maybe value) -> ApiFieldValue value
+parseApiField = ApiFieldValue
+
+newtype RequestField value = RequestField (ApiRequestData -> ([ApiRequestParseError], Maybe value))
+
+-- | An accumulating-validation applicative: independent field errors from
+-- separate 'RequestCodec' combinators concatenate rather than short-circuit,
+-- matching 'HarchWeb.Action.ActionDecoder'.
+type RequestCodec value = Compose ((->) ApiRequestData) (Compose ((,) [ApiRequestParseError]) Maybe) value
+
+requestCodec :: (ApiRequestData -> ([ApiRequestParseError], Maybe value)) -> RequestCodec value
+requestCodec decode = Compose (Compose . decode)
+
+runRequestCodec :: RequestCodec value -> ApiRequestData -> ([ApiRequestParseError], Maybe value)
+runRequestCodec codec requestData = getCompose (getCompose codec requestData)
+
+sourceFields :: ApiRequestSource -> ApiRequestData -> [(Text, Text)]
+sourceFields source requestData =
+  case source of
+    ApiQuerySource -> apiRequestQueryParameters requestData
+    ApiHeaderSource -> apiRequestHeaders requestData
+
+requestField :: ApiRequestSource -> Text -> ApiFieldValue value -> RequestField value
+requestField source fieldName valueDecoder =
+  RequestField $ \requestData ->
+    case [fieldValue | (name, fieldValue) <- sourceFields source requestData, name == fieldName] of
+      [fieldValue] ->
+        maybe
+          ([InvalidApiField source fieldName], Nothing)
+          (\value -> ([], Just value))
+          (runApiFieldValue valueDecoder fieldValue)
+      [] -> ([MissingApiField source fieldName], Nothing)
+      _ -> ([DuplicateApiField source fieldName], Nothing)
+
+-- | Declare a field sourced from the request's query parameters.
+queryField :: Text -> ApiFieldValue value -> RequestField value
+queryField = requestField ApiQuerySource
+
+-- | Declare a field sourced from the request's headers.
+headerField :: Text -> ApiFieldValue value -> RequestField value
+headerField = requestField ApiHeaderSource
+
+requiredField :: RequestField value -> RequestCodec value
+requiredField (RequestField decode) = requestCodec decode
+
+optionalField :: RequestField value -> RequestCodec (Maybe value)
+optionalField (RequestField decode) =
+  requestCodec $ \requestData ->
+    case decode requestData of
+      ([], Just value) -> ([], Just (Just value))
+      ([MissingApiField _ _], Nothing) -> ([], Just Nothing)
+      (parseErrors, _) -> (parseErrors, Nothing)
+
+fieldWithDefault :: value -> RequestField value -> RequestCodec value
+fieldWithDefault defaultValue (RequestField decode) =
+  requestCodec $ \requestData ->
+    case decode requestData of
+      ([], Just value) -> ([], Just value)
+      ([MissingApiField _ _], Nothing) -> ([], Just defaultValue)
+      parseErrors -> parseErrors
+
+-- | A rendered API response body. Content negotiation and streaming bodies
+-- are documented future extensions; every response today is fully buffered.
+data ApiResponseBody = ApiResponseBody
+  { apiResponseContentType :: Text,
+    apiResponseBodyBytes :: ByteString
+  }
+  deriving (Eq, Show)
+
+apiJsonResponse :: (ToJSON value) => value -> ApiResponseBody
+apiJsonResponse value =
+  ApiResponseBody
+    { apiResponseContentType = "application/json; charset=utf-8",
+      apiResponseBodyBytes = LazyByteString.toStrict (Aeson.encode value)
+    }
+
+apiTextResponse :: Text -> ApiResponseBody
+apiTextResponse bodyText =
+  ApiResponseBody
+    { apiResponseContentType = "text/plain; charset=utf-8",
+      apiResponseBodyBytes = TextEncoding.encodeUtf8 bodyText
+    }
+
+apiBytesResponse :: Text -> ByteString -> ApiResponseBody
+apiBytesResponse contentType bodyBytes =
+  ApiResponseBody
+    { apiResponseContentType = contentType,
+      apiResponseBodyBytes = bodyBytes
+    }
