@@ -6,6 +6,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api
+import Network.Wai qualified as Wai
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -121,6 +122,29 @@ spec =
                        sum [length (show r) + length (showList [r] "") | r <- responses] `shouldSatisfy` (> 0)
                      ]
               )
+
+    describe "apiRequestDataFromWaiRequest" $ do
+      it "extracts query parameters and headers from a WAI request" $
+        let request =
+              Wai.defaultRequest
+                { Wai.queryString = [("q", Just "hello")],
+                  Wai.requestHeaders = [("X-Custom", "value")]
+                }
+         in apiRequestDataFromWaiRequest request
+              `shouldBe` ApiRequestData
+                { apiRequestQueryParameters = [("q", "hello")],
+                  apiRequestHeaders = [("x-custom", "value")]
+                }
+
+      it "decodes a flag-style query parameter with no value as empty rather than dropping it" $
+        let request = Wai.defaultRequest {Wai.queryString = [("flag", Nothing)]}
+         in apiRequestDataFromWaiRequest request
+              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("flag", "")], apiRequestHeaders = []}
+
+      it "decodes invalid UTF-8 in a query value leniently rather than failing" $
+        let request = Wai.defaultRequest {Wai.queryString = [("q", Just "bad\xFF")]}
+         in apiRequestDataFromWaiRequest request
+              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = []}
 
     describe "RequestCodec" $ do
       let sampleRequestData =

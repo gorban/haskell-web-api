@@ -27,6 +27,7 @@ module HarchWeb.Api
     ApiHttpResponse (..),
     respondApiMatch,
     ApiRequestData (..),
+    apiRequestDataFromWaiRequest,
     ApiRequestSource (..),
     ApiRequestParseError (..),
     ApiFieldValue,
@@ -63,6 +64,7 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Functor.Compose (Compose (..), getCompose)
 import Data.List (foldl1', nub)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -71,7 +73,9 @@ import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Text.Read qualified as TextRead
+import Network.Wai qualified as Wai
 
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is never declared directly:
 -- a matched @GET@ endpoint answers a @HEAD@ request with the same target,
@@ -209,6 +213,29 @@ data ApiRequestData = ApiRequestData
     apiRequestHeaders :: [(Text, Text)]
   }
   deriving (Eq, Show)
+
+-- | Extract a 'RequestCodec'-ready 'ApiRequestData' from a WAI request. A
+-- query parameter present without a value (@?flag@) decodes as an empty
+-- value rather than being dropped; header and query bytes are decoded
+-- leniently rather than failing the whole request on invalid UTF-8.
+apiRequestDataFromWaiRequest :: Wai.Request -> ApiRequestData
+apiRequestDataFromWaiRequest request =
+  ApiRequestData
+    { apiRequestQueryParameters =
+        [ (decodeUtf8Leniently name, maybe "" decodeUtf8Leniently value)
+        | (name, value) <- Wai.queryString request
+        ],
+      apiRequestHeaders =
+        [ (decodeUtf8Leniently (CaseInsensitive.foldedCase name), decodeUtf8Leniently value)
+        | (name, value) <- Wai.requestHeaders request
+        ]
+    }
+
+-- Kept eta-expanded (not point-free) so HPC ticks the decode call on every
+-- invocation rather than treating it as a once-shared CAF reference.
+{-# ANN decodeUtf8Leniently ("HLint: ignore Eta reduce" :: String) #-}
+decodeUtf8Leniently :: ByteString -> Text
+decodeUtf8Leniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
 
 -- | The declared source of an individual request field.
 data ApiRequestSource
