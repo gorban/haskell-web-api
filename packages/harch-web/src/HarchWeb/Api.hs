@@ -41,6 +41,10 @@ module HarchWeb.Api
     apiJsonResponse,
     apiTextResponse,
     apiBytesResponse,
+    AcceptedRange (..),
+    ApiNegotiationResult (..),
+    parseAcceptHeader,
+    selectRepresentation,
   )
 where
 
@@ -49,12 +53,14 @@ import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Functor.Compose (Compose (..), getCompose)
-import Data.List (nub)
+import Data.List (foldl1', nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
+import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Read qualified as TextRead
 
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is never declared directly:
 -- a matched @GET@ endpoint answers a @HEAD@ request with the same target,
@@ -271,3 +277,126 @@ apiBytesResponse contentType bodyBytes =
     { apiResponseContentType = contentType,
       apiResponseBodyBytes = bodyBytes
     }
+
+-- | One parsed entry from an @Accept@ header: a media range plus its quality
+-- weight. Media-type parameters beyond @q@ are retained but not currently
+-- required to match a declared representation's own parameters, since every
+-- declared representation handled here is a bare @type\/subtype@ value.
+data AcceptedRange = AcceptedRange
+  { acceptedRangeType :: Text,
+    acceptedRangeSubtype :: Text,
+    acceptedRangeParameters :: [(Text, Text)],
+    acceptedRangeQuality :: Double
+  }
+  deriving (Eq, Show)
+
+-- | Parse an @Accept@ header value into its declared media ranges. A
+-- malformed entry is dropped rather than failing the whole header.
+parseAcceptHeader :: Text -> [AcceptedRange]
+parseAcceptHeader headerValue =
+  Maybe.mapMaybe parseAcceptEntry (Text.splitOn "," headerValue)
+
+parseAcceptEntry :: Text -> Maybe AcceptedRange
+parseAcceptEntry entry =
+  let (mediaRangeText, parameterSection) = Text.breakOn ";" (Text.strip entry)
+      parameterTexts =
+        if Text.null parameterSection
+          then []
+          else Text.splitOn ";" (Text.drop 1 parameterSection)
+   in do
+        (typeText, subtypeText) <- parseMediaRange (Text.strip mediaRangeText)
+        let parameters = Maybe.mapMaybe parseAcceptParameter parameterTexts
+        pure
+          AcceptedRange
+            { acceptedRangeType = Text.toLower typeText,
+              acceptedRangeSubtype = Text.toLower subtypeText,
+              acceptedRangeParameters = filter ((/= "q") . fst) parameters,
+              acceptedRangeQuality = qualityFromParameters parameters
+            }
+
+parseMediaRange :: Text -> Maybe (Text, Text)
+parseMediaRange mediaRangeText =
+  case Text.splitOn "/" mediaRangeText of
+    [typeText, subtypeText] | not (Text.null typeText), not (Text.null subtypeText) -> Just (typeText, subtypeText)
+    _ -> Nothing
+
+parseAcceptParameter :: Text -> Maybe (Text, Text)
+parseAcceptParameter parameterText =
+  case Text.breakOn "=" (Text.strip parameterText) of
+    (name, value)
+      | not (Text.null name),
+        Text.isPrefixOf "=" value ->
+          Just (Text.toLower name, Text.strip (Text.drop 1 value))
+    _ -> Nothing
+
+qualityFromParameters :: [(Text, Text)] -> Double
+qualityFromParameters parameters =
+  case lookup "q" parameters of
+    Nothing -> 1.0
+    Just qualityText ->
+      case TextRead.double qualityText of
+        Right (qualityValue, _) -> qualityValue
+        Left _ -> 1.0
+
+mediaRangeSpecificity :: AcceptedRange -> Int
+mediaRangeSpecificity range
+  | acceptedRangeType range == "*" = 0
+  | acceptedRangeSubtype range == "*" = 1
+  | otherwise = 2
+
+mediaTypeParts :: Text -> (Text, Text)
+mediaTypeParts mediaType =
+  case Text.splitOn "/" mediaType of
+    [typeText, subtypeText] -> (Text.toLower typeText, Text.toLower subtypeText)
+    _ -> (Text.toLower mediaType, "")
+
+rangeMatchesRepresentation :: (Text, Text) -> AcceptedRange -> Bool
+rangeMatchesRepresentation (declaredType, declaredSubtype) range =
+  (acceptedRangeType range == "*" || acceptedRangeType range == declaredType)
+    && (acceptedRangeSubtype range == "*" || acceptedRangeSubtype range == declaredSubtype)
+
+-- | The single most specific range that applies to a declared representation.
+-- Per RFC 9110 section 12.5.1, when more than one range in the header
+-- applies to a representation, the most specific one governs its quality
+-- regardless of a less specific range's own quality.
+bestMatchingRange :: Text -> [AcceptedRange] -> Maybe AcceptedRange
+bestMatchingRange declaredMediaType ranges =
+  case filter (rangeMatchesRepresentation (mediaTypeParts declaredMediaType)) ranges of
+    [] -> Nothing
+    matches -> Just (foldl1' preferMoreSpecific matches)
+  where
+    preferMoreSpecific left right =
+      if mediaRangeSpecificity right > mediaRangeSpecificity left then right else left
+
+data ApiNegotiationResult
+  = -- | The @Accept@ header explicitly excludes every declared representation:
+    -- respond @406 Not Acceptable@.
+    NoAcceptableRepresentation
+  | -- | The selected declared representation. A caller that declares more
+    -- than one representation must add @Vary: Accept@ to the response.
+    SelectedRepresentation Text
+  deriving (Eq, Show)
+
+-- | Negotiate a response representation from a declared,
+-- server-preference-ordered list and an optional @Accept@ header. A missing
+-- header selects the first declared representation. An explicit header that
+-- excludes every declared representation is @406@; otherwise each
+-- representation's most specific matching range determines its quality, the
+-- highest quality is selected, and ties keep server declaration order.
+selectRepresentation :: NonEmpty Text -> Maybe Text -> ApiNegotiationResult
+selectRepresentation declaredRepresentations maybeAcceptHeader =
+  case maybeAcceptHeader of
+    Nothing -> SelectedRepresentation (NonEmpty.head declaredRepresentations)
+    Just headerValue ->
+      case acceptableCandidates (parseAcceptHeader headerValue) of
+        [] -> NoAcceptableRepresentation
+        candidates -> SelectedRepresentation (fst (foldl1' preferHigherQuality candidates))
+  where
+    acceptableCandidates ranges =
+      [ (representation, acceptedRangeQuality bestRange)
+      | representation <- NonEmpty.toList declaredRepresentations,
+        Just bestRange <- [bestMatchingRange representation ranges],
+        acceptedRangeQuality bestRange > 0
+      ]
+    preferHigherQuality left right =
+      if snd right > snd left then right else left
