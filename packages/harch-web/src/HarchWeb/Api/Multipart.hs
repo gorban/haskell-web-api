@@ -1,11 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A bounded, incremental @multipart\/form-data@ boundary scanner (RFC 7578,
--- RFC 2046 section 5.1). This module only segments an arbitrarily-chunked
--- byte stream into per-part header blocks and body byte ranges; it does not
--- decode field names, filenames, or apply size limits itself, and it does
--- not yet integrate with a WAI request body. Those are documented future
--- extensions (see @TASKS.md@ item AB).
+-- | A bounded, incremental @multipart\/form-data@ consumer (RFC 7578, RFC
+-- 2046 section 5.1): a boundary scanner that segments an arbitrarily-chunked
+-- byte stream into per-part header blocks and body byte ranges, plus a
+-- driver that turns those events into complete parts against a WAI request
+-- body, keeping small field values in memory and spooling file uploads to a
+-- temporary file. RFC 5987\/6266 extended @filename*=@ parameters are not
+-- supported, only the common quoted-string form.
 --
 -- The scanner never buffers more of a part's body than the length of the
 -- boundary delimiter: once a prefix of the buffered bytes is confirmed not to
@@ -21,9 +22,18 @@ module HarchWeb.Api.Multipart
     finishMultipartScanner,
     MultipartFieldDisposition (..),
     parseMultipartFieldDisposition,
+    MultipartLimits (..),
+    defaultMultipartLimits,
+    MultipartPart (..),
+    MultipartConsumeError (..),
+    consumeMultipartBody,
+    consumeMultipartRequestBody,
   )
 where
 
+import Control.Monad (when)
+import Control.Monad.Except (runExceptT, throwError)
+import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.Maybe qualified as Maybe
@@ -31,6 +41,9 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import Network.Wai qualified as Wai
+import System.IO (Handle, hClose)
+import System.IO.Temp qualified as Temp
 
 data MultipartEvent
   = -- | A new part began. The payload is its raw header block (each header
@@ -232,8 +245,8 @@ parseHeaderLine line =
     (_, valueWithColon) | ByteString.null valueWithColon -> Nothing
     (nameBytes, valueWithColon) ->
       Just
-        ( Text.toLower (Text.strip (decodeHeaderBytes nameBytes)),
-          Text.strip (decodeHeaderBytes (ByteString.drop 1 valueWithColon))
+        ( Text.toLower (Text.strip (decodeLeniently nameBytes)),
+          Text.strip (decodeLeniently (ByteString.drop 1 valueWithColon))
         )
 
 splitOnCrlf :: ByteString -> [ByteString]
@@ -243,11 +256,12 @@ splitOnCrlf bytes =
       | ByteString.null rest -> [line]
       | otherwise -> line : splitOnCrlf (ByteString.drop 2 rest)
 
--- Kept eta-expanded (not point-free) so HPC ticks the decode call on every
--- invocation rather than treating it as a once-shared CAF reference.
-{-# ANN decodeHeaderBytes ("HLint: ignore Eta reduce" :: String) #-}
-decodeHeaderBytes :: ByteString -> Text
-decodeHeaderBytes bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
+-- Kept eta-expanded (not point-free), and reused for both header and field
+-- body bytes, so HPC ticks the decode call on every invocation rather than
+-- treating it as a once-shared CAF reference.
+{-# ANN decodeLeniently ("HLint: ignore Eta reduce" :: String) #-}
+decodeLeniently :: ByteString -> Text
+decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
 
 -- | Split a @Content-Disposition@ value's @;@-separated parameters,
 -- respecting quoted-string boundaries so a semicolon inside a quoted
@@ -291,3 +305,158 @@ unescapeQuotedPairs = Text.pack . go . Text.unpack
     go ('\\' : escaped : rest) = escaped : go rest
     go (character : rest) = character : go rest
     go [] = []
+
+-- | Bounds applied while consuming a multipart body: how large a field
+-- value may grow before it is rejected, how large a spooled file upload may
+-- grow before it is rejected, and how many parts a single body may declare.
+data MultipartLimits = MultipartLimits
+  { multipartLimitsMaxFieldBytes :: Int,
+    multipartLimitsMaxFileBytes :: Int,
+    multipartLimitsMaxParts :: Int
+  }
+  deriving (Eq, Show)
+
+-- | 1 MiB field values, 25 MiB file uploads, 100 parts.
+defaultMultipartLimits :: MultipartLimits
+defaultMultipartLimits =
+  MultipartLimits
+    { multipartLimitsMaxFieldBytes = 1024 * 1024,
+      multipartLimitsMaxFileBytes = 25 * 1024 * 1024,
+      multipartLimitsMaxParts = 100
+    }
+
+-- | One fully-consumed part: either a plain field's decoded value, kept in
+-- memory, or a file upload spooled to a temporary file (path and byte
+-- count) that the caller owns and must remove once finished with it.
+data MultipartPart
+  = MultipartFieldPart Text Text
+  | MultipartFilePart Text Text FilePath Int
+  deriving (Eq, Show)
+
+data MultipartConsumeError
+  = -- | The body declared more parts than 'multipartLimitsMaxParts' allows.
+    MultipartTooManyParts
+  | -- | A part had no @Content-Disposition@ header, or one without a @name@
+    -- parameter.
+    MultipartMissingDisposition
+  | -- | A field value exceeded 'multipartLimitsMaxFieldBytes'.
+    MultipartFieldTooLarge Text
+  | -- | A file upload exceeded 'multipartLimitsMaxFileBytes'.
+    MultipartFileTooLarge Text
+  | -- | The scanner reported a malformed delimiter, or a body event arrived
+    -- without a part currently open.
+    MultipartMalformedBody
+  | -- | The body ended before the scanner reported 'MultipartFinished'.
+    MultipartTruncatedBody
+  deriving (Eq, Show)
+
+data PartAccumulator
+  = FieldAccumulator Text ByteString
+  | FileAccumulator Text Text FilePath Handle Int
+
+-- | Incrementally consume a @multipart\/form-data@ body: drive
+-- 'MultipartScanner' from repeated calls to @readChunk@ (an empty
+-- 'ByteString' signals end of body, matching 'Network.Wai.getRequestBodyChunk'),
+-- decode plain field values, and spool file uploads (parts with a
+-- @filename@ parameter) through @openUploadFile@ rather than buffering them.
+-- Bounded by @limits@; see 'MultipartConsumeError' for the ways this can
+-- fail. Any file already spooled before a failure is left on disk for the
+-- caller to clean up.
+consumeMultipartBody ::
+  MultipartLimits ->
+  -- | The boundary token, without its leading @--@.
+  ByteString ->
+  -- | Reads the next body chunk; an empty result signals end of body.
+  IO ByteString ->
+  -- | Opens a fresh temporary file for a file part; the 'Text' is the
+  -- part's client-declared filename, offered as a naming hint only.
+  (Text -> IO (FilePath, Handle)) ->
+  IO (Either MultipartConsumeError [MultipartPart])
+consumeMultipartBody limits boundary readChunk openUploadFile =
+  runExceptT (drive (newMultipartScanner boundary) Nothing [] 0)
+  where
+    drive !scanner !currentPart !completedParts !partCount = do
+      chunk <- liftIO readChunk
+      if ByteString.null chunk
+        then consumeEvents (finishMultipartScanner scanner) scanner currentPart completedParts partCount True
+        else
+          let (events, scanner') = feedMultipartChunk scanner chunk
+           in consumeEvents events scanner' currentPart completedParts partCount False
+
+    consumeEvents [] !scanner !currentPart !completedParts !partCount atEof
+      | atEof = throwError MultipartTruncatedBody
+      | otherwise = drive scanner currentPart completedParts partCount
+    -- Matched against the current accumulator, not just the event: the
+    -- scanner never emits a body event without an unmatched 'MultipartPartStarted'
+    -- open, so a body event with no open part (like an explicit
+    -- 'MultipartMalformed') can only mean the body doesn't follow the
+    -- boundary grammar.
+    consumeEvents (event : rest) !scanner !currentPart !completedParts !partCount atEof =
+      case (event, currentPart) of
+        (MultipartPartStarted headerBlock, _) -> do
+          when (partCount >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
+          accumulator <- startPart headerBlock
+          consumeEvents rest scanner (Just accumulator) completedParts (partCount + 1) atEof
+        (MultipartPartBodyChunk bodyBytes, Just accumulator) -> do
+          accumulator' <- appendPartBytes accumulator bodyBytes
+          consumeEvents rest scanner (Just accumulator') completedParts partCount atEof
+        (MultipartPartEnded, Just accumulator) -> do
+          part <- liftIO (finalizeAccumulator accumulator)
+          consumeEvents rest scanner Nothing (part : completedParts) partCount atEof
+        (MultipartFinished, _) -> pure (reverse completedParts)
+        _ -> throwError MultipartMalformedBody
+
+    startPart headerBlock =
+      case parseMultipartFieldDisposition headerBlock of
+        Nothing -> throwError MultipartMissingDisposition
+        Just disposition ->
+          case multipartFieldName disposition of
+            Nothing -> throwError MultipartMissingDisposition
+            Just fieldName ->
+              case multipartFieldFilename disposition of
+                Nothing -> pure (FieldAccumulator fieldName ByteString.empty)
+                Just filename -> do
+                  (path, handle) <- liftIO (openUploadFile $! filename)
+                  pure (FileAccumulator fieldName filename path handle 0)
+
+    appendPartBytes accumulator bodyBytes =
+      case accumulator of
+        FieldAccumulator fieldName buffered ->
+          let grown = buffered <> bodyBytes
+           in if ByteString.length grown > multipartLimitsMaxFieldBytes limits
+                then throwError (MultipartFieldTooLarge fieldName)
+                else pure (FieldAccumulator fieldName grown)
+        FileAccumulator fieldName filename path handle bytesWritten ->
+          let bytesWritten' = bytesWritten + ByteString.length bodyBytes
+           in if bytesWritten' > multipartLimitsMaxFileBytes limits
+                then do
+                  liftIO (hClose handle)
+                  throwError (MultipartFileTooLarge fieldName)
+                else do
+                  liftIO (ByteString.hPut handle bodyBytes)
+                  pure (FileAccumulator fieldName filename path handle bytesWritten')
+
+    finalizeAccumulator accumulator =
+      case accumulator of
+        FieldAccumulator fieldName buffered -> pure (MultipartFieldPart fieldName (decodeLeniently buffered))
+        FileAccumulator fieldName filename path handle bytesWritten -> do
+          hClose handle
+          pure (MultipartFilePart fieldName filename path bytesWritten)
+
+-- | Consume a WAI request's body as @multipart\/form-data@, given the
+-- boundary parameter extracted from its @Content-Type@ header. Field values
+-- are decoded and kept in memory; file uploads are spooled to a fresh file
+-- in the system temporary directory, which the caller owns and must remove
+-- once it has finished with the upload.
+consumeMultipartRequestBody ::
+  MultipartLimits ->
+  ByteString ->
+  Wai.Request ->
+  IO (Either MultipartConsumeError [MultipartPart])
+consumeMultipartRequestBody limits boundary request =
+  consumeMultipartBody limits boundary (Wai.getRequestBodyChunk request) openUploadTempFile
+
+openUploadTempFile :: Text -> IO (FilePath, Handle)
+openUploadTempFile _filenameHint = do
+  temporaryDirectory <- Temp.getCanonicalTemporaryDirectory
+  Temp.openBinaryTempFile temporaryDirectory "harch-web-multipart-upload.tmp"
