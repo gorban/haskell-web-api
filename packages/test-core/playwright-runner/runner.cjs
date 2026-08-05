@@ -65,7 +65,7 @@ async function execute(request) {
     case 'setCookie': return setCookie(request.url, request.name, request.value);
     case 'reload': return requirePage().reload({ waitUntil: 'commit', timeout: timeout() });
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
-    case 'runPageScript': return requirePage().evaluate(requireString(request.source, 'page script'));
+    case 'runPageScript': return runPageScript(requireString(request.source, 'page script'));
     case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
     case 'submit': return resolveLocator(request.locator).evaluate((form) => {
       if (!(form instanceof HTMLFormElement)) throw new Error('submit locator must resolve to a form');
@@ -116,6 +116,23 @@ async function createContext(scriptsEnabled) {
       state.metrics.hardNavigationCount += 1;
     }
   });
+}
+
+// `visit` uses Playwright's earliest navigation signal (`commit`) rather than
+// `domcontentloaded` so a scenario can block a deferred module's request
+// (see `blockRequestsMatching`) without deadlocking navigation itself: a
+// blocked request is left permanently pending, and `domcontentloaded` would
+// never fire while a deferred script is still waiting on one. That leaves a
+// window, on a slow or contended runner, where a page script can run before
+// the document has finished parsing and its synchronous inline scripts
+// (such as the capture kernel) have executed. Wait for `readyState` to leave
+// `loading` first: that is set once parsing and synchronous inline scripts
+// are done, but before deferred/blocked scripts are awaited, so it cannot
+// hit the same deadlock.
+async function runPageScript(source) {
+  const page = requirePage();
+  await page.waitForFunction(() => document.readyState !== 'loading', null, { timeout: timeout() });
+  return page.evaluate(source);
 }
 
 async function visit(url, scriptsEnabled) {
