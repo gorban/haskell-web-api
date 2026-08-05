@@ -165,9 +165,15 @@ matches a request against a table of them with `matchApiEndpoints`: an unmatched
 it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`. `RequestCodec` decodes query and
 header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
 independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
-matching `HarchWeb.Action`'s decoder shape. `selectRepresentation` negotiates a response media type from
-a server-preference-ordered list and an optional `Accept` header per RFC 9110 §12.5.1 (quality weights,
-wildcards, specificity precedence, `q=0` exclusion, `406` when nothing is acceptable).
+matching `HarchWeb.Action`'s decoder shape. `selectApiBodyDecoder` selects a declared, fully-buffered
+request-body decoder (`jsonBodyDecoder`, `textBodyDecoder`, `bytesBodyDecoder`, or an application-defined
+`ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively),
+enforces a byte limit before decoding, and distinguishes an unsupported media type (`415`), an oversized
+body (`413`), and a malformed body (`400`) from a successful decode; `MissingContentTypePolicy` lets each
+endpoint decide whether a missing header is rejected or resolved to a declared default.
+`selectRepresentation` negotiates a response media type from a server-preference-ordered list and an
+optional `Accept` header per RFC 9110 §12.5.1 (quality weights, wildcards, specificity precedence, `q=0`
+exclusion, `406` when nothing is acceptable).
 
 `HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
