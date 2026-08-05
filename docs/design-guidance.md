@@ -165,7 +165,8 @@ matches a request against a table of them with `matchApiEndpoints`: an unmatched
 it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`. `RequestCodec` decodes query and
 header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
 independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
-matching `HarchWeb.Action`'s decoder shape. `selectApiBodyDecoder` selects a declared, fully-buffered
+matching `HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`
+a `RequestCodec` runs against from a real WAI request. `selectApiBodyDecoder` selects a declared, fully-buffered
 request-body decoder (`jsonBodyDecoder`, `textBodyDecoder`, `bytesBodyDecoder`, or an application-defined
 `ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively),
 enforces a byte limit before decoding, and distinguishes an unsupported media type (`415`), an oversized

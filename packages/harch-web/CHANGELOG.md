@@ -4,7 +4,8 @@
 
 * Added `HarchWeb.Api`: a declarative, method-aware `ApiEndpoint` declaration with path/method matching
   (`404`/`405`+`Allow`/`HEAD`/`OPTIONS` handling), an accumulating-error `RequestCodec` for query and
-  header fields, `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
+  header fields (with `apiRequestDataFromWaiRequest` to extract them from a real WAI request),
+  `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
   `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`413`/`400` outcomes),
   `ResponseCodec` helpers for JSON/text/bytes bodies, RFC 9110 `Accept` header negotiation (quality
   weights, wildcards, specificity, `q=0`, and `406`), and `respondApiMatch` to render an `ApiMatchResult`
