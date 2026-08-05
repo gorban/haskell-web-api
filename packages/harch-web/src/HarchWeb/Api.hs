@@ -24,6 +24,8 @@ module HarchWeb.Api
     at,
     matchApiEndpoints,
     apiAllowHeaderValue,
+    ApiHttpResponse (..),
+    respondApiMatch,
     ApiRequestData (..),
     ApiRequestSource (..),
     ApiRequestParseError (..),
@@ -167,6 +169,37 @@ apiAllowHeaderValue declaredMethodsValue =
         <> ["HEAD" | ApiGet `elem` declaredMethodsValue]
         <> ["OPTIONS"]
     )
+
+-- | The protocol-level shape of a rendered response: status, headers, and an
+-- optional body (omitted for @HEAD@). Framework/transport-agnostic; adapt it
+-- to a concrete server's response type at the integration boundary.
+data ApiHttpResponse = ApiHttpResponse
+  { apiHttpResponseStatus :: Int,
+    apiHttpResponseHeaders :: [(Text, Text)],
+    apiHttpResponseBody :: Maybe ApiResponseBody
+  }
+  deriving (Eq, Show)
+
+-- | Render a match into its protocol-level response: @404@/@405@+@Allow@ for
+-- the two non-matching outcomes, and the rendered target's status/headers
+-- otherwise, with the body omitted for a @HEAD@ match. @renderTarget@ is run
+-- at most once, only when the match owns the request.
+respondApiMatch :: (target -> ApiResponseBody) -> ApiMatchResult target -> ApiHttpResponse
+respondApiMatch renderTarget matchResult =
+  case matchResult of
+    NoApiRouteMatch -> ApiHttpResponse 404 [] Nothing
+    ApiMethodNotAllowed declaredMethodsValue ->
+      ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
+    ApiRouteMatched target -> renderedApiResponse (renderTarget $! target)
+    ApiRouteMatchedHead target -> (renderedApiResponse (renderTarget $! target)) {apiHttpResponseBody = Nothing}
+
+renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
+renderedApiResponse body =
+  ApiHttpResponse
+    { apiHttpResponseStatus = 200,
+      apiHttpResponseHeaders = [("Content-Type", apiResponseContentType body)],
+      apiHttpResponseBody = Just body
+    }
 
 -- | The pre-parsed request data a 'RequestCodec' decodes from. Path capture
 -- and body sources are documented future extensions; only query parameters

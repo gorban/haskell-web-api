@@ -90,6 +90,38 @@ spec =
                    ]
             )
 
+    describe "respondApiMatch" $ do
+      it "renders a matched target's status and Content-Type, with its body" $
+        respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatched ReadStatus)
+          `shouldBe` ApiHttpResponse 200 [("Content-Type", "text/plain; charset=utf-8")] (Just (apiTextResponse "hello"))
+
+      it "renders a HEAD match with the same status and headers but no body" $
+        respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatchedHead ReadStatus)
+          `shouldBe` ApiHttpResponse 200 [("Content-Type", "text/plain; charset=utf-8")] Nothing
+
+      it "renders 404 with no headers or body for no route match" $
+        respondApiMatch (const (apiTextResponse "unused")) NoApiRouteMatch
+          `shouldBe` ApiHttpResponse 404 [] Nothing
+
+      it "renders 405 with an Allow header derived from the declared methods" $
+        respondApiMatch (const (apiTextResponse "unused")) (ApiMethodNotAllowed (ApiGet :| [ApiPost]))
+          `shouldBe` ApiHttpResponse 405 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
+
+      it "derives comparable, printable representations for ApiHttpResponse" $
+        let responses =
+              [ respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatched ReadStatus),
+                respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatchedHead ReadStatus),
+                respondApiMatch (const (apiTextResponse "unused")) NoApiRouteMatch,
+                respondApiMatch (const (apiTextResponse "unused")) (ApiMethodNotAllowed (ApiGet :| []))
+              ]
+         in expectAll
+              ( (sum [fromEnum (left == right) | left <- responses, right <- responses] `shouldBe` length responses)
+                  :| [ sum [fromEnum (left /= right) | left <- responses, right <- responses]
+                         `shouldBe` length responses * (length responses - 1),
+                       sum [length (show r) + length (showList [r] "") | r <- responses] `shouldSatisfy` (> 0)
+                     ]
+              )
+
     describe "RequestCodec" $ do
       let sampleRequestData =
             ApiRequestData
