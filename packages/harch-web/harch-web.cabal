@@ -61,6 +61,7 @@ library
     HarchWeb.Account
     HarchWeb.Acme
     HarchWeb.Action
+    HarchWeb.Api
     HarchWeb.Controls
     HarchWeb.Database
     HarchWeb.DevSmtp
