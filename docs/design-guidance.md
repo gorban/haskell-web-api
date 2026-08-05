@@ -173,7 +173,11 @@ body (`413`), and a malformed body (`400`) from a successful decode; `MissingCon
 endpoint decide whether a missing header is rejected or resolved to a declared default.
 `selectRepresentation` negotiates a response media type from a server-preference-ordered list and an
 optional `Accept` header per RFC 9110 §12.5.1 (quality weights, wildcards, specificity precedence, `q=0`
-exclusion, `406` when nothing is acceptable).
+exclusion, `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
+transport-agnostic `ApiHttpResponse` (status, headers, optional body): `404`/`405`+`Allow` for the two
+non-matching outcomes, and the matched target's rendered status/`Content-Type` otherwise, with the body
+omitted for a `HEAD` match — adapting `ApiHttpResponse` to a concrete server's response type (e.g. WAI)
+is left to the caller.
 
 `HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
