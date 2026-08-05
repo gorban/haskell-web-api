@@ -1,9 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions.Common
-  ( accountRoutePath,
-    accountRoutePathForContext,
-    accountWorkflow,
+  ( accountWorkflow,
     pendingProfileForm,
     resendLabel,
     profileLoadErrorType,
@@ -57,21 +55,10 @@ import WebApi.Login (AccountCredentialStoreError (..))
 import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Profile (ProfileLoadError (..))
-import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), renderRoutePath)
+import WebApi.Route (AppLocale (..), AppRequestContext (..))
 import WebApi.Session (AccountSessionStoreError (..))
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
-
-accountRoutePath :: AccountActionRequest -> AppRoute -> Text
-accountRoutePath = accountRoutePathForContext . HarchWeb.clientActionContext
-
-accountRoutePathForContext :: AppRequestContext -> AppRoute -> Text
-accountRoutePathForContext requestContext route =
-  renderRoutePath
-    HarchWeb.RouteRequest
-      { HarchWeb.requestRoute = route,
-        HarchWeb.requestContext = requestContext
-      }
 
 accountWorkflow :: AppM publicFailure AccountWorkflow
 accountWorkflow = appAccountWorkflow <$> askAppServices

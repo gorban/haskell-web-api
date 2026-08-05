@@ -3446,6 +3446,30 @@ spec = do
       case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "first@example.test"), ("email", "second@example.test")]) of
         HarchWeb.MalformedClientAction _ -> pure ()
         _ -> expectationFailure "expected duplicate action fields to be malformed"
+      case Action.decodeAction accountActions (rawAction "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")]) of
+        HarchWeb.DecodedClientAction _ -> pure ()
+        _ -> expectationFailure "expected a fully populated registration submission to decode"
+      case Action.decodeAction accountActions (rawAction "POST" "/mfa" [("account", "account_01"), ("intent", "confirm"), ("code", "123456")]) of
+        HarchWeb.DecodedClientAction _ -> pure ()
+        _ -> expectationFailure "expected a fully populated MFA enrollment submission to decode"
+      case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "person@example.test"), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "123456"), ("code", "recovery-code")]) of
+        HarchWeb.DecodedClientAction _ -> pure ()
+        _ -> expectationFailure "expected a fully populated login submission to decode"
+      let assertSingleFieldDecodes path fieldName fieldValue =
+            case Action.decodeAction accountActions (rawAction "POST" path [(fieldName, fieldValue)]) of
+              HarchWeb.DecodedClientAction _ -> pure ()
+              _ -> expectationFailure ("expected a single " <> Text.unpack fieldName <> " value to decode")
+      expectAll
+        ( assertSingleFieldDecodes "/register" "username" "person_01"
+            :| [ assertSingleFieldDecodes "/register" "email" "person@example.test",
+                 assertSingleFieldDecodes "/register" "password" "correct horse battery staple",
+                 assertSingleFieldDecodes "/mfa" "intent" "confirm",
+                 assertSingleFieldDecodes "/login" "email" "person@example.test",
+                 assertSingleFieldDecodes "/login" "password" "correct horse battery staple",
+                 assertSingleFieldDecodes "/login" "proof" "123456",
+                 assertSingleFieldDecodes "/login" "code" "recovery-code"
+               ]
+        )
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
