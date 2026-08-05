@@ -4,6 +4,7 @@ module Unit.HarchWeb.ApiSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb.Api
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -170,6 +171,80 @@ spec =
                        (sampleRequestData == sampleRequestData) `shouldBe` True,
                        (sampleRequestData /= sampleRequestData {apiRequestQueryParameters = []}) `shouldBe` True,
                        length (show sampleRequestData) + length (showList [sampleRequestData] "") `shouldSatisfy` (> 0)
+                     ]
+              )
+
+    describe "request body decoding" $ do
+      let jsonDecoder = jsonBodyDecoder :: ApiBodyDecoder Int
+
+      it "decodes a JSON body when Content-Type matches" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "application/json") "42"
+          `shouldBe` ApiDecodedBody 42
+
+      it "decodes a JSON body when Content-Type includes parameters" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "application/json; charset=utf-8") "7"
+          `shouldBe` ApiDecodedBody 7
+
+      it "matches Content-Type case-insensitively" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "APPLICATION/JSON") "1"
+          `shouldBe` ApiDecodedBody 1
+
+      it "reports unsupported media type for an undeclared Content-Type" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "text/plain") "3"
+          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+
+      it "reports unsupported media type for a malformed Content-Type header" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "garbage") "3"
+          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+
+      it "rejects a missing Content-Type when the policy requires one" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] Nothing "42"
+          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+
+      it "assumes a declared media type when Content-Type is missing and the policy allows it" $
+        selectApiBodyDecoder (AssumeMediaType "application/json") 1024 [jsonDecoder] Nothing "42"
+          `shouldBe` ApiDecodedBody 42
+
+      it "reports a malformed body when the selected decoder rejects the syntax" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "application/json") "not json"
+          `shouldBe` ApiMalformedBody
+
+      it "carries a non-empty error message when the JSON decoder itself rejects a body" $
+        apiBodyDecoderParse jsonDecoder "not json" `shouldSatisfy` \case
+          Left errorMessage -> not (Text.null errorMessage)
+          Right (_ :: Int) -> False
+
+      it "reports a body exceeding the declared byte limit as too large, without decoding it" $
+        selectApiBodyDecoder RejectMissingContentType 2 [jsonDecoder] (Just "application/json") "12345"
+          `shouldBe` ApiBodyTooLarge
+
+      it "decodes a strict-UTF-8 text/plain body" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [textBodyDecoder] (Just "text/plain") "hello"
+          `shouldBe` ApiDecodedBody "hello"
+
+      it "reports a malformed body for invalid UTF-8 in a text/plain body" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [textBodyDecoder] (Just "text/plain") "bad\xFF"
+          `shouldBe` ApiMalformedBody
+
+      it "carries a fixed error message when the text decoder itself rejects invalid UTF-8" $
+        apiBodyDecoderParse textBodyDecoder "bad\xFF" `shouldBe` Left "invalid UTF-8 body"
+
+      it "passes a body through unparsed for a declared bytes media type" $
+        selectApiBodyDecoder RejectMissingContentType 1024 [bytesBodyDecoder "application/octet-stream"] (Just "application/octet-stream") "\1\2\3"
+          `shouldBe` ApiDecodedBody "\1\2\3"
+
+      it "derives comparable, printable representations for MissingContentTypePolicy and ApiBodyOutcome" $
+        let policies = [RejectMissingContentType, AssumeMediaType "application/json"]
+            outcomes = [ApiUnsupportedMediaType ["application/json"], ApiBodyTooLarge, ApiMalformedBody, ApiDecodedBody (1 :: Int)]
+         in expectAll
+              ( (sum [fromEnum (left == right) | left <- policies, right <- policies] `shouldBe` length policies)
+                  :| [ sum [fromEnum (left /= right) | left <- policies, right <- policies]
+                         `shouldBe` length policies * (length policies - 1),
+                       sum [length (show p) + length (showList [p] "") | p <- policies] `shouldSatisfy` (> 0),
+                       sum [fromEnum (left == right) | left <- outcomes, right <- outcomes] `shouldBe` length outcomes,
+                       sum [fromEnum (left /= right) | left <- outcomes, right <- outcomes]
+                         `shouldBe` length outcomes * (length outcomes - 1),
+                       sum [length (show o) + length (showList [o] "") | o <- outcomes] `shouldSatisfy` (> 0)
                      ]
               )
 

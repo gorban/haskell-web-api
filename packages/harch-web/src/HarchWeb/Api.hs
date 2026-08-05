@@ -1,14 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Declarative, method-aware HTTP API endpoint matching.
+-- | Declarative, method-aware HTTP API endpoints (see @TASKS.md@ item AB):
+-- path/method matching and 'ApiMatchResult'/@Allow@ derivation, an
+-- accumulating-error 'RequestCodec' for query and header fields, buffered
+-- request-body decoding selected by @Content-Type@ ('ApiBodyDecoder'), a
+-- fully-buffered 'ApiResponseBody', and RFC 9110 @Accept@ representation
+-- negotiation. A streaming request-body decoder, such as multipart, is a
+-- separate concern; see 'HarchWeb.Api.Multipart'.
 --
--- This is the path/method dispatch foundation for a typed 'ApiEndpoint'
--- declaration (see @TASKS.md@ item AB): matching the request path first and
--- deriving the supported-method set from every endpoint declared at that
--- path, before deciding on the method. Request/response codecs, content
--- negotiation, and streaming bodies are separate, later concerns; this
--- module only decides which declared target (if any) owns a request.
---
+-- This is a standalone library capability: it is not yet wired into an
+-- application's default request dispatcher (see @docs/design-guidance.md@).
 -- Every declared endpoint today matches one fixed, context-independent
 -- path. Typed path captures are a documented future extension and are not
 -- yet supported.
@@ -37,6 +38,13 @@ module HarchWeb.Api
     optionalField,
     fieldWithDefault,
     runRequestCodec,
+    ApiBodyDecoder (..),
+    MissingContentTypePolicy (..),
+    ApiBodyOutcome (..),
+    selectApiBodyDecoder,
+    jsonBodyDecoder,
+    textBodyDecoder,
+    bytesBodyDecoder,
     ApiResponseBody (..),
     apiJsonResponse,
     apiTextResponse,
@@ -48,9 +56,10 @@ module HarchWeb.Api
   )
 where
 
-import Data.Aeson (ToJSON)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
+import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Functor.Compose (Compose (..), getCompose)
 import Data.List (foldl1', nub)
@@ -248,6 +257,104 @@ fieldWithDefault defaultValue (RequestField decode) =
       ([], Just value) -> ([], Just value)
       ([MissingApiField _ _], Nothing) -> ([], Just defaultValue)
       parseErrors -> parseErrors
+
+-- | Decodes a fully-buffered request body declared for one @Content-Type@
+-- media type (ignoring its parameters, e.g. @charset@). A streaming body
+-- decoder, such as multipart, is a separate, non-buffered concern; see
+-- 'HarchWeb.Api.Multipart'.
+data ApiBodyDecoder request = ApiBodyDecoder
+  { apiBodyDecoderMediaType :: Text,
+    apiBodyDecoderParse :: ByteString -> Either Text request
+  }
+
+-- | What a missing @Content-Type@ header means for a declared endpoint.
+data MissingContentTypePolicy
+  = -- | Treat a missing header the same as an unsupported one.
+    RejectMissingContentType
+  | -- | Decode as if this media type were declared, e.g. an application or
+    -- framework JSON default.
+    AssumeMediaType Text
+  deriving (Eq, Show)
+
+data ApiBodyOutcome request
+  = -- | No declared decoder accepts the request's media type (or none was
+    -- given and the policy rejects that): respond @415 Unsupported Media Type@,
+    -- advertising these declared media types.
+    ApiUnsupportedMediaType [Text]
+  | -- | The body exceeded the caller's declared byte limit: respond @413@.
+    ApiBodyTooLarge
+  | -- | The selected decoder rejected the body's syntax: respond @400@.
+    ApiMalformedBody
+  | -- | Successfully decoded; semantic validation (@422@) is a separate,
+    -- application-owned concern from here on.
+    ApiDecodedBody request
+  deriving (Eq, Show)
+
+-- | Select a declared decoder by the request's @Content-Type@ (ignoring its
+-- parameters) and run it against an already-bounded body. Never reads more
+-- of the body itself; the caller supplies @maxBodyBytes@ enforcement
+-- against however it obtained @bodyBytes@.
+selectApiBodyDecoder ::
+  MissingContentTypePolicy ->
+  Int ->
+  [ApiBodyDecoder request] ->
+  Maybe Text ->
+  ByteString ->
+  ApiBodyOutcome request
+selectApiBodyDecoder missingPolicy maxBodyBytes decoders maybeContentType bodyBytes
+  | ByteString.length bodyBytes > maxBodyBytes = ApiBodyTooLarge
+  | otherwise =
+      case resolvedMediaType of
+        Nothing -> ApiUnsupportedMediaType declaredMediaTypes
+        Just mediaType ->
+          case [decoder | decoder <- decoders, Text.toLower (apiBodyDecoderMediaType decoder) == mediaType] of
+            [] -> ApiUnsupportedMediaType declaredMediaTypes
+            decoder : _ ->
+              either (const ApiMalformedBody) ApiDecodedBody (apiBodyDecoderParse decoder bodyBytes)
+  where
+    declaredMediaTypes = map apiBodyDecoderMediaType decoders
+    resolvedMediaType =
+      case maybeContentType of
+        Just contentTypeValue -> contentTypeMediaType contentTypeValue
+        Nothing ->
+          case missingPolicy of
+            RejectMissingContentType -> Nothing
+            AssumeMediaType mediaType -> Just (Text.toLower mediaType)
+
+contentTypeMediaType :: Text -> Maybe Text
+contentTypeMediaType contentTypeValue = do
+  (typeText, subtypeText) <- parseMediaRange (Text.strip (fst (Text.breakOn ";" contentTypeValue)))
+  pure (Text.toLower typeText <> "/" <> Text.toLower subtypeText)
+
+jsonBodyDecoder :: (FromJSON request) => ApiBodyDecoder request
+jsonBodyDecoder =
+  ApiBodyDecoder
+    { apiBodyDecoderMediaType = "application/json",
+      apiBodyDecoderParse = \bodyBytes ->
+        case Aeson.eitherDecodeStrict' bodyBytes of
+          Left errorMessage -> Left (Text.pack errorMessage)
+          Right decodedValue -> Right decodedValue
+    }
+
+-- | Decodes a strict-UTF-8 @text/plain@ body; invalid UTF-8 is a malformed
+-- body rather than a lenient best-effort decode.
+textBodyDecoder :: ApiBodyDecoder Text
+textBodyDecoder =
+  ApiBodyDecoder
+    { apiBodyDecoderMediaType = "text/plain",
+      apiBodyDecoderParse = \bodyBytes ->
+        case TextEncoding.decodeUtf8' bodyBytes of
+          Left _decodeError -> Left "invalid UTF-8 body"
+          Right decodedText -> Right decodedText
+    }
+
+-- | Passes the body through unparsed for the given media type.
+bytesBodyDecoder :: Text -> ApiBodyDecoder ByteString
+bytesBodyDecoder mediaType =
+  ApiBodyDecoder
+    { apiBodyDecoderMediaType = mediaType,
+      apiBodyDecoderParse = Right
+    }
 
 -- | A rendered API response body. Content negotiation and streaming bodies
 -- are documented future extensions; every response today is fully buffered.
