@@ -83,8 +83,16 @@ import Network.Wai qualified as Wai
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is never declared directly:
 -- a matched @GET@ endpoint answers a @HEAD@ request with the same target,
 -- and a caller renders the response without a body. @OPTIONS@ is likewise
--- never declared; synthesize it from 'apiAllowHeaderValue' for the matched
--- path rather than maintaining a second method table.
+-- never declared; 'matchApiEndpoints' synthesizes it from the declared
+-- method table for any path that has at least one endpoint, answering with
+-- @204 No Content@ and an 'apiAllowHeaderValue' rather than maintaining a
+-- second method table. This module does not implement CORS: it never reads
+-- @Origin@ or @Access-Control-Request-Method@ and never emits an
+-- @Access-Control-*@ header. An application that needs CORS preflight
+-- support composes its own middleware in front of 'apiEndpointMiddleware'
+-- (typically intercepting @OPTIONS@ itself before it reaches this table) so
+-- that policy stays application-owned rather than baked into every endpoint
+-- declaration.
 data ApiMethod
   = ApiGet
   | ApiPost
@@ -130,6 +138,10 @@ data ApiMatchResult target
   | -- | The path matches a declared @GET@ endpoint and the request method is
     -- @HEAD@: render that target's response without a body.
     ApiRouteMatchedHead target
+  | -- | The path matches but the request method is @OPTIONS@: respond
+    -- @204 No Content@ with these methods in 'apiAllowHeaderValue' and no
+    -- body, without running any endpoint's handler.
+    ApiRouteOptions (NonEmpty ApiMethod)
   deriving (Eq, Show)
 
 -- | Match a request method and path against a declared endpoint table.
@@ -149,7 +161,10 @@ matchMethod requestMethod pathMatches =
         then case NonEmpty.filter (endpointHasMethod "GET") pathMatches of
           matchedGet : _ -> ApiRouteMatchedHead (apiEndpointTarget matchedGet)
           [] -> ApiMethodNotAllowed (declaredMethods pathMatches)
-        else ApiMethodNotAllowed (declaredMethods pathMatches)
+        else
+          if requestMethod == "OPTIONS"
+            then ApiRouteOptions (declaredMethods pathMatches)
+            else ApiMethodNotAllowed (declaredMethods pathMatches)
 
 endpointAtPath :: Text -> ApiEndpoint target -> Bool
 endpointAtPath requestPath endpointValue =
@@ -199,6 +214,8 @@ respondApiMatch renderTarget matchResult =
       ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
     ApiRouteMatched target -> renderedApiResponse (renderTarget $! target)
     ApiRouteMatchedHead target -> (renderedApiResponse (renderTarget $! target)) {apiHttpResponseBody = Nothing}
+    ApiRouteOptions declaredMethodsValue ->
+      ApiHttpResponse 204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
 
 renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
 renderedApiResponse body =
@@ -209,9 +226,9 @@ renderedApiResponse body =
     }
 
 -- | Render an 'ApiHttpResponse' as a WAI response. Every status this module
--- produces (only @200@, @404@, and @405@ today) has a standard reason
--- phrase; any other declared status falls back to an empty one, since
--- HTTP/2 and later never transmit it and most HTTP/1.1 clients do not
+-- produces (only @200@, @204@, @404@, and @405@ today) has a standard
+-- reason phrase; any other declared status falls back to an empty one,
+-- since HTTP/2 and later never transmit it and most HTTP/1.1 clients do not
 -- inspect it.
 apiHttpResponseToWaiResponse :: ApiHttpResponse -> Wai.Response
 apiHttpResponseToWaiResponse httpResponse =
@@ -224,6 +241,7 @@ apiHttpStatus :: Int -> HttpTypes.Status
 apiHttpStatus code =
   case code of
     200 -> HttpTypes.status200
+    204 -> HttpTypes.status204
     404 -> HttpTypes.status404
     405 -> HttpTypes.status405
     _ -> (HttpTypes.mkStatus $! code) ByteString.empty
@@ -259,6 +277,8 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
     ApiRouteMatchedHead target -> do
       body <- (runTarget $! request) $! target
       respond (apiHttpResponseToWaiResponse (renderedApiResponse $! body) {apiHttpResponseBody = Nothing})
+    ApiRouteOptions declaredMethodsValue ->
+      respond (apiHttpResponseToWaiResponse (ApiHttpResponse 204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
   where
     requestMethodText = decodeUtf8Leniently (Wai.requestMethod request)
     requestPathText = decodeUtf8Leniently (Wai.rawPathInfo request)

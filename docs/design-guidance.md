@@ -162,7 +162,15 @@ controls, conditional leave warning, and safe/idempotent retry—in
 matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
 `NoApiRouteMatch` (`404`), a matched path with no accepting method is `ApiMethodNotAllowed` (`405`, with
 `apiAllowHeaderValue` rendering `Allow` from every declared method at that path plus the `HEAD`/`OPTIONS`
-it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`. `RequestCodec` decodes query and
+it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`/`ApiRouteOptions`. `HEAD` is never
+declared directly — a matched `GET` endpoint answers it with the same target and no body — and neither is
+`OPTIONS`: any request method `OPTIONS` against a path with at least one declared endpoint synthesizes
+`ApiRouteOptions`, which `respondApiMatch`/`apiEndpointMiddleware` render as `204 No Content` with the same
+`Allow` header and no body, without running any endpoint's handler. `HarchWeb.Api` does not implement CORS:
+it never reads `Origin`/`Access-Control-Request-Method` and never emits an `Access-Control-*` header. An
+application that needs CORS preflight support composes its own middleware in front of
+`apiEndpointMiddleware` (typically intercepting `OPTIONS` itself before it reaches this table), keeping
+that policy application-owned rather than baked into every endpoint declaration. `RequestCodec` decodes query and
 header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
 independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
 matching `HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`

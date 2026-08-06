@@ -3,7 +3,10 @@
 ## 0.1.2.0
 
 * Added `HarchWeb.Api`: a declarative, method-aware `ApiEndpoint` declaration with path/method matching
-  (`404`/`405`+`Allow`/`HEAD`/`OPTIONS` handling), an accumulating-error `RequestCodec` for query and
+  (`404`/`405`+`Allow`/`HEAD`/`OPTIONS` handling — `OPTIONS` is synthesized as `204 No Content` with an
+  `Allow` header for any path with a declared endpoint, without running a handler or implementing CORS;
+  an application composes its own CORS middleware in front if it needs preflight support), an
+  accumulating-error `RequestCodec` for query and
   header fields (with `apiRequestDataFromWaiRequest` to extract them from a real WAI request),
   `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
   `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`413`/`400` outcomes),

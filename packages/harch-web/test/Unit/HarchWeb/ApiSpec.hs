@@ -35,7 +35,8 @@ allSampleMatchResults =
   [ NoApiRouteMatch,
     ApiMethodNotAllowed (ApiGet :| [ApiPost]),
     ApiRouteMatched ReadStatus,
-    ApiRouteMatchedHead ReadStatus
+    ApiRouteMatchedHead ReadStatus,
+    ApiRouteOptions (ApiGet :| [ApiPost])
   ]
 
 -- | Invoke a WAI 'Wai.Application' and capture the 'Wai.Response' it
@@ -83,6 +84,13 @@ spec =
     it "reports method-not-allowed for HEAD when no GET is declared at that path" $
       matchApiEndpoints "HEAD" "/api/write-only" [apiEndpoint WriteStatus ApiPost (at "/api/write-only")]
         `shouldBe` ApiMethodNotAllowed (ApiPost :| [])
+
+    it "synthesizes OPTIONS from the declared method table without matching any declared endpoint" $
+      matchApiEndpoints "OPTIONS" "/api/status" testEndpoints
+        `shouldBe` ApiRouteOptions (ApiGet :| [ApiPost])
+
+    it "reports no route match for OPTIONS on an undeclared path rather than synthesizing one" $
+      matchApiEndpoints "OPTIONS" "/api/unknown" testEndpoints `shouldBe` NoApiRouteMatch
 
     it "renders the Allow header, synthesizing HEAD only alongside a declared GET, and always OPTIONS" $
       expectAll
@@ -135,6 +143,10 @@ spec =
         respondApiMatch (const (apiTextResponse "unused")) (ApiMethodNotAllowed (ApiGet :| [ApiPost]))
           `shouldBe` ApiHttpResponse 405 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
 
+      it "renders 204 with an Allow header and no body for a synthesized OPTIONS match" $
+        respondApiMatch (const (apiTextResponse "unused")) (ApiRouteOptions (ApiGet :| [ApiPost]))
+          `shouldBe` ApiHttpResponse 204 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
+
       it "derives comparable, printable representations for ApiHttpResponse" $
         let responses =
               [ respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatched ReadStatus),
@@ -184,10 +196,12 @@ spec =
                  ]
           )
 
-      it "renders 404 and 405 with their standard reason phrases" $
+      it "renders 204, 404, and 405 with their standard reason phrases" $
         expectAll
-          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing)) `shouldBe` HttpTypes.status404)
-              :| [Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [] Nothing)) `shouldBe` HttpTypes.status405]
+          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 204 [] Nothing)) `shouldBe` HttpTypes.status204)
+              :| [ Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing)) `shouldBe` HttpTypes.status404,
+                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [] Nothing)) `shouldBe` HttpTypes.status405
+                 ]
           )
 
       it "renders an empty body when no body is present" $ do
@@ -235,6 +249,16 @@ spec =
         expectAll
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
               :| [body `shouldBe` ""]
+          )
+
+      it "answers OPTIONS with 204, an Allow header, and no body without running any handler" $ do
+        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "OPTIONS" "/api/status")
+        body <- readResponseBody response
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status204)
+              :| [ Wai.responseHeaders response `shouldBe` [("Allow", "GET, POST, HEAD, OPTIONS")],
+                   body `shouldBe` ""
+                 ]
           )
 
       it "falls through to the inner application for a path no endpoint declares" $ do
