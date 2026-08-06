@@ -27,7 +27,9 @@ module HarchWeb.Api.Multipart
     MultipartPart (..),
     MultipartConsumeError (..),
     consumeMultipartBody,
+    consumeMultipartBodyWith,
     consumeMultipartRequestBody,
+    consumeMultipartRequestBodyWith,
   )
 where
 
@@ -36,6 +38,7 @@ import Control.Monad.Except (runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
+import Data.IORef qualified as IORef
 import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -372,38 +375,67 @@ consumeMultipartBody ::
   -- part's client-declared filename, offered as a naming hint only.
   (Text -> IO (FilePath, Handle)) ->
   IO (Either MultipartConsumeError [MultipartPart])
-consumeMultipartBody limits boundary readChunk openUploadFile =
-  runExceptT (drive (newMultipartScanner boundary) Nothing [] 0)
+consumeMultipartBody limits boundary readChunk openUploadFile = do
+  completedPartsReference <- IORef.newIORef []
+  result <-
+    consumeMultipartBodyWith limits boundary readChunk openUploadFile $ \part -> do
+      IORef.modifyIORef' completedPartsReference (part :)
+      pure (Right ())
+  case result of
+    Left consumeError -> pure (Left consumeError)
+    Right () -> Right . reverse <$> IORef.readIORef completedPartsReference
+
+-- | Like 'consumeMultipartBody', but @onPart@ runs as soon as each part
+-- finishes, before any later part (including a later file part) is read.
+-- Returning @Left@ from @onPart@ aborts the body with that error
+-- immediately -- e.g. a caller can reject the whole body on an invalid CSRF
+-- field without ever spooling a later file part to disk, satisfying RFC
+-- 7578 consumers that must not let a token arriving after a file part
+-- authorize an already-committed write. Any file already spooled before an
+-- abort is left on disk for the caller to clean up, exactly as with
+-- 'consumeMultipartBody'.
+consumeMultipartBodyWith ::
+  MultipartLimits ->
+  ByteString ->
+  IO ByteString ->
+  (Text -> IO (FilePath, Handle)) ->
+  (MultipartPart -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+consumeMultipartBodyWith limits boundary readChunk openUploadFile onPart =
+  runExceptT (drive (newMultipartScanner boundary) Nothing 0)
   where
-    drive !scanner !currentPart !completedParts !partCount = do
+    drive !scanner !currentPart !partCount = do
       chunk <- liftIO readChunk
       if ByteString.null chunk
-        then consumeEvents (finishMultipartScanner scanner) scanner currentPart completedParts partCount True
+        then consumeEvents (finishMultipartScanner scanner) scanner currentPart partCount True
         else
           let (events, scanner') = feedMultipartChunk scanner chunk
-           in consumeEvents events scanner' currentPart completedParts partCount False
+           in consumeEvents events scanner' currentPart partCount False
 
-    consumeEvents [] !scanner !currentPart !completedParts !partCount atEof
+    consumeEvents [] !scanner !currentPart !partCount atEof
       | atEof = throwError MultipartTruncatedBody
-      | otherwise = drive scanner currentPart completedParts partCount
+      | otherwise = drive scanner currentPart partCount
     -- Matched against the current accumulator, not just the event: the
     -- scanner never emits a body event without an unmatched 'MultipartPartStarted'
     -- open, so a body event with no open part (like an explicit
     -- 'MultipartMalformed') can only mean the body doesn't follow the
     -- boundary grammar.
-    consumeEvents (event : rest) !scanner !currentPart !completedParts !partCount atEof =
+    consumeEvents (event : rest) !scanner !currentPart !partCount atEof =
       case (event, currentPart) of
         (MultipartPartStarted headerBlock, _) -> do
           when (partCount >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
           accumulator <- startPart headerBlock
-          consumeEvents rest scanner (Just accumulator) completedParts (partCount + 1) atEof
+          consumeEvents rest scanner (Just accumulator) (partCount + 1) atEof
         (MultipartPartBodyChunk bodyBytes, Just accumulator) -> do
           accumulator' <- appendPartBytes accumulator bodyBytes
-          consumeEvents rest scanner (Just accumulator') completedParts partCount atEof
+          consumeEvents rest scanner (Just accumulator') partCount atEof
         (MultipartPartEnded, Just accumulator) -> do
           part <- liftIO (finalizeAccumulator accumulator)
-          consumeEvents rest scanner Nothing (part : completedParts) partCount atEof
-        (MultipartFinished, _) -> pure (reverse completedParts)
+          acceptance <- liftIO (onPart part)
+          case acceptance of
+            Left rejectionError -> throwError rejectionError
+            Right () -> consumeEvents rest scanner Nothing partCount atEof
+        (MultipartFinished, _) -> pure ()
         _ -> throwError MultipartMalformedBody
 
     startPart headerBlock =
@@ -455,6 +487,18 @@ consumeMultipartRequestBody ::
   IO (Either MultipartConsumeError [MultipartPart])
 consumeMultipartRequestBody limits boundary request =
   consumeMultipartBody limits boundary (Wai.getRequestBodyChunk request) openUploadTempFile
+
+-- | Like 'consumeMultipartRequestBody', but see 'consumeMultipartBodyWith':
+-- @onPart@ runs as soon as each part finishes, before any later part
+-- (including a later file part) is read.
+consumeMultipartRequestBodyWith ::
+  MultipartLimits ->
+  ByteString ->
+  Wai.Request ->
+  (MultipartPart -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+consumeMultipartRequestBodyWith limits boundary request =
+  consumeMultipartBodyWith limits boundary (Wai.getRequestBodyChunk request) openUploadTempFile
 
 openUploadTempFile :: Text -> IO (FilePath, Handle)
 openUploadTempFile _filenameHint = do

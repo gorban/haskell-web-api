@@ -43,6 +43,27 @@ twoPartBody =
     <> boundaryToken
     <> "--\r\n"
 
+-- | A file part first, then a field part -- the reverse of 'twoPartBody' --
+-- so a rejection on the second (field) part exercises leaving an
+-- already-accepted, already-spooled file part's bytes on disk.
+fileTheRejectsSecondFieldBody :: ByteString
+fileTheRejectsSecondFieldBody =
+  "--"
+    <> boundaryToken
+    <> "\r\n"
+    <> filePartHeaders
+    <> "\r\n\r\n"
+    <> "file content here"
+    <> "\r\n--"
+    <> boundaryToken
+    <> "\r\n"
+    <> fieldPartHeaders
+    <> "\r\n\r\n"
+    <> "value1"
+    <> "\r\n--"
+    <> boundaryToken
+    <> "--\r\n"
+
 expectedTwoPartEvents :: [MultipartEvent]
 expectedTwoPartEvents =
   [ MultipartPartStarted fieldPartHeaders,
@@ -400,3 +421,76 @@ spec =
                     :| [byteCount `shouldBe` ByteString.length "file content here"]
                 )
             other -> expectationFailure ("unexpected result: " <> show other)
+
+    describe "consumeMultipartBodyWith" $ do
+      it "calls onPart for each completed part, in order, before the body finishes" $
+        withTestUploadOpener $ \openUploadFile -> do
+          seenPartsRef <- IORef.newIORef []
+          readChunk <- chunkReader [twoPartBody]
+          result <-
+            consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk openUploadFile $ \part -> do
+              IORef.modifyIORef' seenPartsRef (part :)
+              pure (Right ())
+          seenParts <- reverse <$> IORef.readIORef seenPartsRef
+          expectAll
+            ( (result `shouldSatisfy` \case Right () -> True; Left _ -> False)
+                :| [ case seenParts of
+                       [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" _ _] -> pure ()
+                       other -> expectationFailure ("unexpected parts: " <> show other)
+                   ]
+            )
+
+      it "aborts with a rejecting callback's error before a later file part is ever opened" $ do
+        uploadOpenedRef <- IORef.newIORef False
+        let recordAndFailIfOpened _filenameHint = do
+              IORef.writeIORef uploadOpenedRef True
+              error "should not open an upload file after an earlier part was rejected"
+        readChunk <- chunkReader [twoPartBody]
+        result <-
+          consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk recordAndFailIfOpened $ \case
+            MultipartFieldPart "field1" _ -> pure (Left MultipartMalformedBody)
+            part -> expectationFailure ("did not expect to see " <> show part) >> pure (Right ())
+        uploadOpened <- IORef.readIORef uploadOpenedRef
+        expectAll
+          ( (result `shouldBe` Left MultipartMalformedBody)
+              :| [uploadOpened `shouldBe` False]
+          )
+
+      it "leaves an already-spooled file's bytes on disk when a later part is rejected" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathRef <- IORef.newIORef Nothing
+          readChunk <- chunkReader [fileTheRejectsSecondFieldBody]
+          result <-
+            consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk openUploadFile $ \case
+              MultipartFilePart _ _ spooledPath _ -> do
+                IORef.writeIORef spooledPathRef (Just spooledPath)
+                pure (Right ())
+              MultipartFieldPart {} -> pure (Left MultipartMalformedBody)
+          maybeSpooledPath <- IORef.readIORef spooledPathRef
+          case maybeSpooledPath of
+            Nothing -> expectationFailure "expected the file part to have been spooled before rejection"
+            Just spooledPath -> do
+              spooledContent <- ByteString.readFile spooledPath
+              expectAll
+                ( (result `shouldBe` Left MultipartMalformedBody)
+                    :| [spooledContent `shouldBe` "file content here"]
+                )
+
+    describe "consumeMultipartRequestBodyWith" $
+      it "consumes a WAI request's body incrementally, calling onPart for each part" $
+        withTestUploadOpener $ \_unusedOpener -> do
+          seenPartsRef <- IORef.newIORef []
+          readChunk <- chunkReader [twoPartBody]
+          let request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
+          result <-
+            consumeMultipartRequestBodyWith defaultMultipartLimits boundaryToken request $ \part -> do
+              IORef.modifyIORef' seenPartsRef (part :)
+              pure (Right ())
+          seenParts <- reverse <$> IORef.readIORef seenPartsRef
+          expectAll
+            ( (result `shouldSatisfy` \case Right () -> True; Left _ -> False)
+                :| [ case seenParts of
+                       [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" _ _] -> pure ()
+                       other -> expectationFailure ("unexpected parts: " <> show other)
+                   ]
+            )
