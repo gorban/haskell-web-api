@@ -21,7 +21,10 @@
   `filename*=` parameters are not supported). `consumeMultipartBody` drives the scanner against any
   chunked `IO ByteString` source, enforcing per-field, per-file, and part-count limits, keeping field
   values in memory and spooling file uploads to a caller-owned temporary file; `consumeMultipartRequestBody`
-  is the thin WAI `Request` adapter.
+  is the thin WAI `Request` adapter. `consumeMultipartBodyWith`/`consumeMultipartRequestBodyWith` are
+  incremental siblings whose callback runs as soon as each part finishes, before any later part
+  (including a file part) is read, so a caller can reject the body before ever spooling a
+  not-yet-reached file part to disk.
 * Added `HarchWeb.Action`: a declarative, applicative `ActionCodec` whose endpoint declarations print
   typed form targets and decode matched requests. It provides deterministic accumulated field errors and
   explicit unknown-path, method-negotiation, and malformed-input outcomes.

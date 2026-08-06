@@ -190,7 +190,11 @@ body than the boundary delimiter's length, `parseMultipartFieldDisposition` for 
 and `consumeMultipartBody`/`consumeMultipartRequestBody` to drive the scanner against a chunked body
 (any `IO ByteString` source, or a WAI `Request` directly), enforcing `MultipartLimits` (max field bytes,
 max file bytes, max part count) and spooling file parts to a caller-owned temporary file rather than
-buffering them.
+buffering them. `consumeMultipartBodyWith`/`consumeMultipartRequestBodyWith` are the incremental
+siblings: a caller-supplied callback runs as soon as each part finishes, before any later part
+(including a later file part) is read, so a caller can reject the whole body — on an invalid CSRF
+field, say — before ever spooling a not-yet-reached file part to disk. `consumeMultipartBody` is a
+thin wrapper that always accepts and accumulates.
 
 Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
 usable against a real WAI application today, opt-in and additive. Neither is yet the application's
