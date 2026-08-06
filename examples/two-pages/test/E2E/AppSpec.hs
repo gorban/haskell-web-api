@@ -3,9 +3,9 @@
 
 {-# E2E_SPEC #-}
 
-import App.App (buildApplication)
+import App.App (buildApplication, buildNativeUploadMiddleware)
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb (LocalTestServer (..), withLocalTestServer)
+import HarchWeb (LocalTestServer (..), toWaiApplication, withLocalTestServer, withLocalTestServerForApplication)
 
 spec =
   describe "two-page real-browser behavior" $ do
@@ -383,6 +383,37 @@ spec =
           )
           `shouldReturn` Right ()
 
+    it "submits a native multipart upload as a hard navigation, never through the capture kernel" $
+      withBrowserAndNativeUploadServer $ \browser server ->
+        withTempFile "native-upload-e2e" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
+          writeFile filePath "e2e file contents"
+          let uploadUrl = localServerBaseUrl server <> "/native-upload"
+          ( runBrowserScenario browser $ do
+              visit uploadUrl
+              setInputFiles (css "#native-upload-file") filePath
+              submit (byRole Form `named` "Upload a file")
+              assertAll
+                ((,) <$> textContent (byRole Heading `named` "Upload received") <*> browserMetrics)
+                ( \(heading, metrics) ->
+                    (heading `shouldBe` "Upload received")
+                      :| [$([|metrics|] `shouldMatch` [p|BrowserMetrics {enhancedNavigationFetchCount = 0, hardNavigationCount = 1, mutationRequestCount = 0}|])]
+                )
+            )
+            `shouldReturn` Right ()
+
+    it "completes the same native upload flow with scripts disabled" $
+      withBrowserAndNativeUploadServer $ \browser server ->
+        withTempFile "native-upload-e2e-no-js" [] "attachment.txt" $ \(_tempRoot, filePath) -> do
+          writeFile filePath "e2e file contents, no scripts"
+          let uploadUrl = localServerBaseUrl server <> "/native-upload"
+          ( runBrowserScenario browser $ do
+              visitWithoutScripts uploadUrl
+              setInputFiles (css "#native-upload-file") filePath
+              submit (byRole Form `named` "Upload a file")
+              assertText (byRole Heading `named` "Upload received") (`shouldBe` "Upload received")
+            )
+            `shouldReturn` Right ()
+
 withBrowserAndServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
 withBrowserAndServer action = do
   loadedConfig <- loadPlaywrightBrowserConfig
@@ -391,3 +422,13 @@ withBrowserAndServer action = do
       Left loadError -> expectationFailure loadError >> fail "unreachable"
       Right config -> pure config
   withLocalTestServer buildApplication (action browser)
+
+withBrowserAndNativeUploadServer :: (BrowserConfig -> LocalTestServer -> IO a) -> IO a
+withBrowserAndNativeUploadServer action = do
+  loadedConfig <- loadPlaywrightBrowserConfig
+  browser <-
+    case loadedConfig of
+      Left loadError -> expectationFailure loadError >> fail "unreachable"
+      Right config -> pure config
+  nativeUploadMiddleware <- buildNativeUploadMiddleware
+  withLocalTestServerForApplication (nativeUploadMiddleware (toWaiApplication buildApplication)) (action browser)

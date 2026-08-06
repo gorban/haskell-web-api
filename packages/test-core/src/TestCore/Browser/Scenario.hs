@@ -25,6 +25,7 @@ module TestCore.Browser.Scenario
     reload,
     runBrowserScenario,
     setCookie,
+    setInputFiles,
     submit,
     visit,
     visitWithoutScripts,
@@ -117,6 +118,14 @@ runPageScript source = command "runPageScript" ["source" .= source]
 
 fill :: Locator -> Text -> BrowserScenario ()
 fill locator value = simpleCommand "fill" ["locator" .= locator, "value" .= value]
+
+-- | Attach a real file already on disk to a file input, e.g. via a scenario
+-- fixture written with 'System.IO.Temp.withSystemTempFile'. There is no
+-- in-memory-buffer variant: sharing a real path keeps this test-only
+-- protocol from needing to move file bytes through the JSON command
+-- channel.
+setInputFiles :: Locator -> FilePath -> BrowserScenario ()
+setInputFiles locator filePath = simpleCommand "setInputFiles" ["locator" .= locator, "filePath" .= filePath]
 
 submit :: Locator -> BrowserScenario ()
 submit locator = simpleCommand "submit" ["locator" .= locator]

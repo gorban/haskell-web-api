@@ -67,6 +67,7 @@ async function execute(request) {
     case 'click': return resolveLocator(request.locator).click({ timeout: timeout() });
     case 'runPageScript': return runPageScript(requireString(request.source, 'page script'));
     case 'fill': return resolveLocator(request.locator).fill(requireString(request.value, 'fill value'), { timeout: timeout() });
+    case 'setInputFiles': return resolveLocator(request.locator).setInputFiles(requireString(request.filePath, 'file path'), { timeout: timeout() });
     case 'submit': return resolveLocator(request.locator).evaluate((form) => {
       if (!(form instanceof HTMLFormElement)) throw new Error('submit locator must resolve to a form');
       form.requestSubmit();

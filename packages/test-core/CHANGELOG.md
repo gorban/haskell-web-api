@@ -2,6 +2,10 @@
 
 ## 0.1.2.0
 
+* Added `setInputFiles` to `TestCore.Browser.Scenario`: attaches a real file already on disk (e.g. via
+  `System.IO.Temp.withSystemTempFile`) to a file input, so an E2E scenario can drive a native
+  multipart-upload form without moving file bytes through the JSON command channel.
+
 ## 0.1.1.0
 
 * Aligned changelog headings with the repository-wide version-first format used for the upcoming `0.1.1.0` work.

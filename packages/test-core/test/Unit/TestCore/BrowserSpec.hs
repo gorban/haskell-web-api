@@ -112,6 +112,7 @@ spec = do
               click (byRole Link `named` "Continue")
               scriptResult <- runPageScript "true"
               fill emailField "person@example.com"
+              setInputFiles (byLabel "Attachment") "test-fixtures/attachment.txt"
               submit (byRole Form `named` "Registration")
               blockRequestsMatching "**/enhancements.js"
               releaseRequestsMatching "**/enhancements.js"

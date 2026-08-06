@@ -209,11 +209,26 @@ field, say — before ever spooling a not-yet-reached file part to disk. `consum
 thin wrapper that always accepts and accumulates.
 
 Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
-usable against a real WAI application today, opt-in and additive. Neither is yet the application's
-*default* dispatcher, and native multipart form upload with CSRF/AA capture coordination is not built:
-continue routing real applications through the existing `RouteCodec`/`ApiRoute` pattern shown in the
-[custom API guide](../examples/custom-api/README.md) unless they explicitly opt into
-`apiEndpointMiddleware` for a declared set of paths.
+usable against a real WAI application today, opt-in and additive. Neither is the application's
+*default* dispatcher: continue routing real applications through the existing `RouteCodec`/`ApiRoute`
+pattern shown in the [custom API guide](../examples/custom-api/README.md) unless they explicitly opt
+into `apiEndpointMiddleware` for a declared set of paths.
+
+`runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
+`apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a
+bare `Wai.Application` in a unit test: `runServer` and `withLocalTestServer` are now defined as the `id`
+middleware case of each. [two-pages](../examples/two-pages/README.md)'s `/native-upload` page
+(`App.NativeUpload`) is the compiled, tested demonstration of the whole native-upload slice: a plain
+`<form enctype="multipart/form-data">` with no `data-harch-action` attribute (so the inline capture
+kernel's `form[data-harch-action="true"]` selector never matches it and the browser submits it
+natively, with or without JavaScript), a single-use server-held CSRF token embedded as a hidden field
+(chosen over a double-submit cookie because nothing in this framework version lets a plain page response
+set a `Set-Cookie` header), and `consumeMultipartRequestBodyWith` validating that field via its
+per-part callback — before any later part, including the file part, is read — so a request whose file
+part precedes an invalid or absent CSRF field is rejected before that file is ever spooled to disk. See
+the module haddock in `examples/two-pages/src/App/NativeUpload.hs` for the full policy, and
+`test/E2E/AppSpec.hs`'s two native-upload scenarios (scripts enabled and disabled) for the real-browser
+proof that the submission is a hard navigation with zero capture-kernel mutation requests either way.
 
 ## Current capability and remaining design direction
 
@@ -229,7 +244,7 @@ continue routing real applications through the existing `RouteCodec`/`ApiRoute` 
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
 | `HarchWeb.Api` endpoint matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented, opt-in via WAI middleware | Wrap a `Wai.Application` with `apiEndpointMiddleware` to dispatch declared paths; it is not the default dispatcher, so keep routing everything else through `RouteCodec`/`ApiRoute`. |
-| `HarchWeb.Api.Multipart` bounded streaming consumer | Implemented, not yet wired into native forms | Drive it directly from a WAI request today; native upload-form/CSRF/AA capture coordination is not built yet. |
+| `HarchWeb.Api.Multipart` bounded streaming consumer, native upload form, CSRF, and AA capture coordination | Implemented | See [two-pages](../examples/two-pages/README.md)'s `/native-upload` page (`App.NativeUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
 | Automatic database-to-live-view subscriptions | Design direction | Use explicit SSE today; do not imply automatic subscriptions exist. |

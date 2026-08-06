@@ -1,8 +1,10 @@
 module Main (main) where
 
-import App.App (buildApplication, twoPageServerConfig)
-import qualified HarchWeb
+import App.App (buildApplication, buildNativeUploadMiddleware, twoPageServerConfig)
+import HarchWeb qualified
 import System.IO (stdout)
 
 main :: IO ()
-main = HarchWeb.runServer stdout twoPageServerConfig buildApplication
+main = do
+  nativeUploadMiddleware <- buildNativeUploadMiddleware
+  HarchWeb.runServerWithWaiMiddleware nativeUploadMiddleware stdout twoPageServerConfig buildApplication

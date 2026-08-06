@@ -18,6 +18,17 @@
    dispatcher rather than replacing it. The `examples/custom-api` guide now includes a compiled,
    tested demonstration of the full path: negotiated JSON/custom-media-type responses, a decoded JSON
    request body, and a multipart upload.
+6. `HarchWeb.Api`'s `OPTIONS` now answers `204 No Content` with an `Allow` header instead of falling
+   through to `405`, and `ApiResponseBody` gained `apiResponseStatus` so a target can render an ordinary
+   non-`200` outcome (e.g. `422`). Added `runServerWithWaiMiddleware`/`withLocalTestServerForApplication`
+   so an application can compose `apiEndpointMiddleware` in front of a real running (or locally
+   test-served) server, not just a bare `Wai.Application` in a unit test. `examples/two-pages` now
+   includes a compiled, real-browser-tested `/native-upload` page: a CSRF-protected native multipart
+   file-upload form dispatched through `apiEndpointMiddleware`, using a single-use server-held CSRF
+   token and `consumeMultipartRequestBodyWith`'s early per-part rejection so an invalid or absent CSRF
+   field is rejected before a later file part is ever spooled to disk, and carrying no
+   `data-harch-action` attribute so the inline capture kernel never intercepts it. `TestCore.Browser`
+   gained `setInputFiles` to drive that form's file input from an E2E scenario.
 
 ## 0.1.1.0
 

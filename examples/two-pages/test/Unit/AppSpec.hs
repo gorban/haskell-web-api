@@ -2,7 +2,7 @@
 
 module Unit.AppSpec (spec) where
 
-import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
+import App.App (TwoPageAction (..), buildApplication, buildNativeUploadMiddleware, twoPageServerConfig, twoPageSite)
 import App.Components.Controls qualified as ExampleControls
 import App.Pages.Home (nativeSubscriptionFallbackPage)
 import App.Pages.Route.Generated
@@ -235,6 +235,21 @@ spec =
               :| [ unknownActionRejected `shouldBe` True,
                    duplicateEmailRejected `shouldBe` True,
                    wrongMethodRejected `shouldBe` True
+                 ]
+          )
+
+      it "composes buildNativeUploadMiddleware in front of the site, additively" $ do
+        nativeUploadMiddleware <- buildNativeUploadMiddleware
+        let composedApplication = nativeUploadMiddleware (toWaiApplication buildApplication)
+        uploadFormResponse <- performWaiRequest composedApplication (waiRequest ["native-upload"])
+        uploadFormBody <- readResponseBody uploadFormResponse
+        secondPageResponse <- performWaiRequest composedApplication (waiRequest ["second"])
+        secondPageBody <- readResponseBody secondPageResponse
+        expectAll
+          ( (Wai.responseStatus uploadFormResponse `shouldBe` Http.status200)
+              :| [ Text.isInfixOf "aria-label=\"Upload a file\"" uploadFormBody `shouldBe` True,
+                   Wai.responseStatus secondPageResponse `shouldBe` Http.status200,
+                   Text.isInfixOf "<title>Second</title>" secondPageBody `shouldBe` True
                  ]
           )
 

@@ -44,6 +44,7 @@ library
     App.Components.Layout
     App.Components.SubscriptionEmailField
     App.CustomPages.Preview
+    App.NativeUpload
     App.Pages.Generated
     App.Pages.Home
     App.Pages.LiveData
@@ -60,6 +61,7 @@ library
   build-depends:
     base ^>=4.22.0.0,
     bytestring,
+    directory,
     harch-web,
     http-types,
     text,
