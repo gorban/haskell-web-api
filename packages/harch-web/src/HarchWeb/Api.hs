@@ -220,16 +220,17 @@ respondApiMatch renderTarget matchResult =
 renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
 renderedApiResponse body =
   ApiHttpResponse
-    { apiHttpResponseStatus = 200,
+    { apiHttpResponseStatus = apiResponseStatus body,
       apiHttpResponseHeaders = [("Content-Type", apiResponseContentType body)],
       apiHttpResponseBody = Just body
     }
 
 -- | Render an 'ApiHttpResponse' as a WAI response. Every status this module
--- produces (only @200@, @204@, @404@, and @405@ today) has a standard
--- reason phrase; any other declared status falls back to an empty one,
--- since HTTP/2 and later never transmit it and most HTTP/1.1 clients do not
--- inspect it.
+-- knows a standard reason phrase for (@200@, @204@, @400@, @403@, @404@,
+-- @405@, and @422@) gets one; any other declared status -- including any
+-- status an 'ApiResponseBody' target renders via 'apiResponseStatus' that
+-- isn't in that set -- falls back to an empty reason phrase, since HTTP/2
+-- and later never transmit it and most HTTP/1.1 clients do not inspect it.
 apiHttpResponseToWaiResponse :: ApiHttpResponse -> Wai.Response
 apiHttpResponseToWaiResponse httpResponse =
   Wai.responseLBS
@@ -242,8 +243,11 @@ apiHttpStatus code =
   case code of
     200 -> HttpTypes.status200
     204 -> HttpTypes.status204
+    400 -> HttpTypes.status400
+    403 -> HttpTypes.status403
     404 -> HttpTypes.status404
     405 -> HttpTypes.status405
+    422 -> HttpTypes.status422
     _ -> (HttpTypes.mkStatus $! code) ByteString.empty
 
 -- | A WAI middleware an application opts into by wrapping its own
@@ -496,8 +500,13 @@ bytesBodyDecoder mediaType =
 
 -- | A rendered API response body. Content negotiation and streaming bodies
 -- are documented future extensions; every response today is fully buffered.
+-- Every built-in constructor below defaults 'apiResponseStatus' to @200@;
+-- override it with a record update (e.g. for @422@ on a semantically
+-- invalid but syntactically well-formed request) since the status a target
+-- renders is otherwise indistinguishable from any other successful match.
 data ApiResponseBody = ApiResponseBody
-  { apiResponseContentType :: Text,
+  { apiResponseStatus :: Int,
+    apiResponseContentType :: Text,
     apiResponseBodyBytes :: ByteString
   }
   deriving (Eq, Show)
@@ -505,21 +514,24 @@ data ApiResponseBody = ApiResponseBody
 apiJsonResponse :: (ToJSON value) => value -> ApiResponseBody
 apiJsonResponse value =
   ApiResponseBody
-    { apiResponseContentType = "application/json; charset=utf-8",
+    { apiResponseStatus = 200,
+      apiResponseContentType = "application/json; charset=utf-8",
       apiResponseBodyBytes = LazyByteString.toStrict (Aeson.encode value)
     }
 
 apiTextResponse :: Text -> ApiResponseBody
 apiTextResponse bodyText =
   ApiResponseBody
-    { apiResponseContentType = "text/plain; charset=utf-8",
+    { apiResponseStatus = 200,
+      apiResponseContentType = "text/plain; charset=utf-8",
       apiResponseBodyBytes = TextEncoding.encodeUtf8 bodyText
     }
 
 apiBytesResponse :: Text -> ByteString -> ApiResponseBody
 apiBytesResponse contentType bodyBytes =
   ApiResponseBody
-    { apiResponseContentType = contentType,
+    { apiResponseStatus = 200,
+      apiResponseContentType = contentType,
       apiResponseBodyBytes = bodyBytes
     }
 

@@ -28,6 +28,10 @@
   incremental siblings whose callback runs as soon as each part finishes, before any later part
   (including a file part) is read, so a caller can reject the body before ever spooling a
   not-yet-reached file part to disk.
+* Added `apiResponseStatus` to `ApiResponseBody` (defaulted to `200` by `apiJsonResponse`,
+  `apiTextResponse`, and `apiBytesResponse`; override it with a record update, e.g. `422` for
+  semantically invalid input), and `apiHttpStatus` now has standard reason phrases for `400`, `403`,
+  and `422` alongside the existing `200`/`204`/`404`/`405`.
 * Added `runServerWithWaiMiddleware` (composes a caller-supplied `Wai.Middleware`, such as
   `apiEndpointMiddleware`, in front of the rendered application before any runtime listener, bypassed
   only for ACME HTTP-01 challenge responses; `runServer` is now `runServerWithWaiMiddleware id`) and

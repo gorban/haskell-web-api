@@ -185,7 +185,11 @@ optional `Accept` header per RFC 9110 §12.5.1 (quality weights, wildcards, spec
 exclusion, `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
 transport-agnostic `ApiHttpResponse` (status, headers, optional body): `404`/`405`+`Allow` for the two
 non-matching outcomes, and the matched target's rendered status/`Content-Type` otherwise, with the body
-omitted for a `HEAD` match. `apiHttpResponseToWaiResponse` renders that into a real WAI `Response`, and
+omitted for a `HEAD` match. A target's `ApiResponseBody` carries its own `apiResponseStatus`, defaulted
+to `200` by `apiJsonResponse`/`apiTextResponse`/`apiBytesResponse` and overridden with a record update
+for an ordinary typed non-200 outcome, e.g. `422` for input that decodes but fails semantic validation;
+`apiHttpStatus` has standard reason phrases for `200`, `204`, `400`, `403`, `404`, `405`, and `422`.
+`apiHttpResponseToWaiResponse` renders that into a real WAI `Response`, and
 `apiEndpointMiddleware` is the integration point: a `Wai.Middleware` an application opts into by wrapping
 its own `Wai.Application`, dispatching a request whose path matches a declared endpoint and falling
 through to the wrapped application for everything else. Adopting it is purely additive — it composes
