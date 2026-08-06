@@ -2,11 +2,18 @@
 
 module Unit.HarchWeb.ApiSpec (spec) where
 
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
+import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
+import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -30,6 +37,26 @@ allSampleMatchResults =
     ApiRouteMatched ReadStatus,
     ApiRouteMatchedHead ReadStatus
   ]
+
+-- | Invoke a WAI 'Wai.Application' and capture the 'Wai.Response' it
+-- produces via the CPS-style 'Wai.Application' contract.
+performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest webApplication request = do
+  responseReference <- newIORef Nothing
+  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
+  maybeResponse <- readIORef responseReference
+  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
+
+readResponseBody :: Wai.Response -> IO Text
+readResponseBody response = do
+  let (_, _, withStreamingBody) = Wai.responseToStream response
+  chunksReference <- newIORef []
+  withStreamingBody $ \streamingBody ->
+    streamingBody
+      (\builder -> atomicModifyIORef' chunksReference (\chunks -> (chunks <> [Builder.toLazyByteString builder], ())))
+      (pure ())
+  chunks <- readIORef chunksReference
+  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (LazyByteString.concat chunks)))
 
 spec :: Spec
 spec =
@@ -145,6 +172,65 @@ spec =
         let request = Wai.defaultRequest {Wai.queryString = [("q", Just "bad\xFF")]}
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = []}
+
+    describe "apiHttpResponseToWaiResponse" $ do
+      it "renders a matched response's status, headers, and body" $ do
+        let waiResponse = apiHttpResponseToWaiResponse (ApiHttpResponse 200 [("Content-Type", "text/plain")] (Just (apiTextResponse "hello")))
+        body <- readResponseBody waiResponse
+        expectAll
+          ( (Wai.responseStatus waiResponse `shouldBe` HttpTypes.status200)
+              :| [ Wai.responseHeaders waiResponse `shouldBe` [("Content-Type", "text/plain")],
+                   body `shouldBe` "hello"
+                 ]
+          )
+
+      it "renders 404 and 405 with their standard reason phrases" $
+        expectAll
+          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing)) `shouldBe` HttpTypes.status404)
+              :| [Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [] Nothing)) `shouldBe` HttpTypes.status405]
+          )
+
+      it "renders an empty body when no body is present" $ do
+        body <- readResponseBody (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing))
+        body `shouldBe` ""
+
+      it "falls back to an empty reason phrase for a status this module never produces" $
+        HttpTypes.statusMessage (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 500 [] Nothing))) `shouldBe` ""
+
+    describe "apiEndpointMiddleware" $ do
+      let innerApplication :: Wai.Application
+          innerApplication _ respond = respond (Wai.responseLBS HttpTypes.status200 [] "inner application")
+          middleware = apiEndpointMiddleware testEndpoints (const (pure (apiTextResponse "handled")))
+          waiRequestFor requestMethod requestPath =
+            Wai.defaultRequest {Wai.requestMethod = requestMethod, Wai.rawPathInfo = requestPath}
+
+      it "dispatches a matched request through the endpoint table rather than the inner application" $ do
+        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/api/status")
+        body <- readResponseBody response
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
+              :| [body `shouldBe` "handled"]
+          )
+
+      it "renders 405 with Allow for a declared path with the wrong method" $ do
+        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "DELETE" "/api/status")
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status405)
+              :| [Wai.responseHeaders response `shouldBe` [("Allow", "GET, POST, HEAD, OPTIONS")]]
+          )
+
+      it "omits the body for a HEAD match while keeping its status and headers" $ do
+        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "HEAD" "/api/status")
+        body <- readResponseBody response
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
+              :| [body `shouldBe` ""]
+          )
+
+      it "falls through to the inner application for a path no endpoint declares" $ do
+        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/unrelated")
+        body <- readResponseBody response
+        body `shouldBe` "inner application"
 
     describe "RequestCodec" $ do
       let sampleRequestData =

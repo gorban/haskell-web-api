@@ -26,6 +26,8 @@ module HarchWeb.Api
     apiAllowHeaderValue,
     ApiHttpResponse (..),
     respondApiMatch,
+    apiHttpResponseToWaiResponse,
+    apiEndpointMiddleware,
     ApiRequestData (..),
     apiRequestDataFromWaiRequest,
     ApiRequestSource (..),
@@ -75,6 +77,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Text.Read qualified as TextRead
+import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is never declared directly:
@@ -204,6 +207,54 @@ renderedApiResponse body =
       apiHttpResponseHeaders = [("Content-Type", apiResponseContentType body)],
       apiHttpResponseBody = Just body
     }
+
+-- | Render an 'ApiHttpResponse' as a WAI response. Every status this module
+-- produces (only @200@, @404@, and @405@ today) has a standard reason
+-- phrase; any other declared status falls back to an empty one, since
+-- HTTP/2 and later never transmit it and most HTTP/1.1 clients do not
+-- inspect it.
+apiHttpResponseToWaiResponse :: ApiHttpResponse -> Wai.Response
+apiHttpResponseToWaiResponse httpResponse =
+  Wai.responseLBS
+    (apiHttpStatus (apiHttpResponseStatus httpResponse))
+    [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value) | (name, value) <- apiHttpResponseHeaders httpResponse]
+    (maybe LazyByteString.empty (LazyByteString.fromStrict . apiResponseBodyBytes) (apiHttpResponseBody httpResponse))
+
+apiHttpStatus :: Int -> HttpTypes.Status
+apiHttpStatus code =
+  case code of
+    200 -> HttpTypes.status200
+    404 -> HttpTypes.status404
+    405 -> HttpTypes.status405
+    _ -> (HttpTypes.mkStatus $! code) ByteString.empty
+
+-- | A WAI middleware an application opts into by wrapping its own
+-- 'Wai.Application': a request whose path matches a declared endpoint is
+-- dispatched through @endpoints@ and never reaches the wrapped application;
+-- every other request passes through unchanged. This composes
+-- independently of any other dispatcher (page routes, client actions, or
+-- anything else already wired into the wrapped application) rather than
+-- replacing it, so adopting it is a purely additive, per-path opt-in.
+--
+-- The @$!@ applications below (on already-WHNF values like 'Nothing') exist
+-- so HPC ticks each argument on every invocation instead of treating it as
+-- a once-shared reference; they have no runtime effect.
+{-# ANN apiEndpointMiddleware ("HLint: ignore Redundant $!" :: String) #-}
+apiEndpointMiddleware :: [ApiEndpoint target] -> (target -> IO ApiResponseBody) -> Wai.Middleware
+apiEndpointMiddleware endpoints runTarget innerApplication request respond =
+  case matchApiEndpoints requestMethodText requestPathText endpoints of
+    NoApiRouteMatch -> (innerApplication $! request) respond
+    ApiMethodNotAllowed declaredMethodsValue ->
+      respond (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
+    ApiRouteMatched target -> do
+      body <- runTarget $! target
+      respond (apiHttpResponseToWaiResponse (renderedApiResponse body))
+    ApiRouteMatchedHead target -> do
+      body <- runTarget $! target
+      respond (apiHttpResponseToWaiResponse (renderedApiResponse $! body) {apiHttpResponseBody = Nothing})
+  where
+    requestMethodText = decodeUtf8Leniently (Wai.requestMethod request)
+    requestPathText = decodeUtf8Leniently (Wai.rawPathInfo request)
 
 -- | The pre-parsed request data a 'RequestCodec' decodes from. Path capture
 -- and body sources are documented future extensions; only query parameters
