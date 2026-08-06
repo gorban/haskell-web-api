@@ -8,10 +8,12 @@
   `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
   `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`413`/`400` outcomes),
   `ResponseCodec` helpers for JSON/text/bytes bodies, RFC 9110 `Accept` header negotiation (quality
-  weights, wildcards, specificity, `q=0`, and `406`), and `respondApiMatch` to render an `ApiMatchResult`
+  weights, wildcards, specificity, `q=0`, and `406`), `respondApiMatch` to render an `ApiMatchResult`
   into a transport-agnostic `ApiHttpResponse` (status, headers, and an optional body, omitted for a
-  `HEAD` match). This is a standalone, fully-tested library capability; it is not yet the application's
-  default request dispatcher, which remains the existing `RouteCodec`/`ApiRoute` pattern.
+  `HEAD` match), and `apiEndpointMiddleware`, an opt-in `Wai.Middleware` (via `apiHttpResponseToWaiResponse`)
+  that dispatches a request whose path matches a declared endpoint and falls through to the wrapped
+  application for everything else. This is a fully-tested library capability; it is not yet the
+  application's *default* request dispatcher, which remains the existing `RouteCodec`/`ApiRoute` pattern.
 * Added `HarchWeb.Api.Multipart`: a bounded, incremental RFC 7578 `multipart/form-data` consumer. A pure
   boundary scanner never buffers more of a part's body than the boundary delimiter's length, so large
   file parts stream without full buffering; `Content-Disposition` field-name/filename extraction handles

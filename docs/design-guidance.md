@@ -156,7 +156,7 @@ proofs—delayed registration, cancellation, handler failure and non-settlement,
 controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
-### A declarative API endpoint library exists ahead of dispatch wiring
+### A declarative API endpoint library exists as an opt-in WAI middleware
 
 `HarchWeb.Api` declares a method-aware HTTP endpoint (`apiEndpoint target method (at "/path")`) and
 matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
@@ -177,8 +177,12 @@ optional `Accept` header per RFC 9110 §12.5.1 (quality weights, wildcards, spec
 exclusion, `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
 transport-agnostic `ApiHttpResponse` (status, headers, optional body): `404`/`405`+`Allow` for the two
 non-matching outcomes, and the matched target's rendered status/`Content-Type` otherwise, with the body
-omitted for a `HEAD` match — adapting `ApiHttpResponse` to a concrete server's response type (e.g. WAI)
-is left to the caller.
+omitted for a `HEAD` match. `apiHttpResponseToWaiResponse` renders that into a real WAI `Response`, and
+`apiEndpointMiddleware` is the integration point: a `Wai.Middleware` an application opts into by wrapping
+its own `Wai.Application`, dispatching a request whose path matches a declared endpoint and falling
+through to the wrapped application for everything else. Adopting it is purely additive — it composes
+independently of whatever dispatcher (page routes, client actions, or anything else) the wrapped
+application already has, changing behavior only for paths explicitly declared as `ApiEndpoint`s.
 
 `HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
@@ -188,11 +192,12 @@ and `consumeMultipartBody`/`consumeMultipartRequestBody` to drive the scanner ag
 max file bytes, max part count) and spooling file parts to a caller-owned temporary file rather than
 buffering them.
 
-Both modules are implemented and fully unit-tested as standalone library capabilities, but neither is yet
-the application's default dispatcher: continue routing real applications through the existing
-`RouteCodec`/`ApiRoute` pattern shown in the [custom API guide](../examples/custom-api/README.md) until
-method-aware `ApiEndpoint` dispatch, native multipart form upload, and CSRF/AA capture coordination for
-file uploads are wired in.
+Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
+usable against a real WAI application today, opt-in and additive. Neither is yet the application's
+*default* dispatcher, and native multipart form upload with CSRF/AA capture coordination is not built:
+continue routing real applications through the existing `RouteCodec`/`ApiRoute` pattern shown in the
+[custom API guide](../examples/custom-api/README.md) unless they explicitly opt into
+`apiEndpointMiddleware` for a declared set of paths.
 
 ## Current capability and remaining design direction
 
@@ -207,7 +212,7 @@ file uploads are wired in.
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api` endpoint matching, codecs, and `Accept` negotiation | Implemented, not yet wired into dispatch | Usable as a standalone library today; keep routing real applications through `RouteCodec`/`ApiRoute` until it becomes the default dispatcher. |
+| `HarchWeb.Api` endpoint matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented, opt-in via WAI middleware | Wrap a `Wai.Application` with `apiEndpointMiddleware` to dispatch declared paths; it is not the default dispatcher, so keep routing everything else through `RouteCodec`/`ApiRoute`. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer | Implemented, not yet wired into native forms | Drive it directly from a WAI request today; native upload-form/CSRF/AA capture coordination is not built yet. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
