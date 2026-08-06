@@ -217,6 +217,7 @@ spec = do
                           [ Markup.elementId formElementId,
                             Markup.formAction "/register",
                             Markup.method "post",
+                            Markup.enctype "multipart/form-data",
                             Markup.dataAttribute "harch-action" "true",
                             Markup.dataFlag "busy",
                             Markup.ariaLabel "Registration",
@@ -258,5 +259,5 @@ spec = do
           Markup.regionPatchHtml patch `shouldBe` "<div id=\"form\" data-harch-region=\"true\"></div>"
           Markup.renderHtml (Markup.element Markup.divTag [Markup.elementId (Markup.literalElementId "literal")] []) `shouldBe` "<div id=\"literal\"></div>"
           renderedHtml
-            `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
+            `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" enctype=\"multipart/form-data\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
         _ -> expectationFailure "expected literal element IDs to be valid"

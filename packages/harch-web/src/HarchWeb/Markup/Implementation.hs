@@ -23,6 +23,7 @@ module HarchWeb.Markup.Implementation
     divTag,
     element,
     elementId,
+    enctype,
     fragment,
     headingOneTag,
     headingTwoTag,
@@ -143,6 +144,11 @@ labelFor elementIdentifier =
 
 method :: Text -> Attribute
 method = attribute (AttributeName "method")
+
+-- | A form's @enctype@, e.g. @multipart\/form-data@ for a native file
+-- upload. Only meaningful on a @method="post"@ form.
+enctype :: Text -> Attribute
+enctype = attribute (AttributeName "enctype")
 
 minLength :: Text -> Attribute
 minLength = attribute (AttributeName "minlength")
