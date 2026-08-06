@@ -4,6 +4,7 @@ module WebApi.AccountPages.Actions.Contract
   ( AccountAction (..),
     AccountActionTarget (..),
     accountActions,
+    buildActionCodecOrDie,
     LoginSubmission (..),
     MfaEnrollmentSubmission (..),
     ProfileSubmission (..),
@@ -70,8 +71,15 @@ data LoginSubmission = LoginSubmission
 newtype ProfileSubmission = ProfileSubmission {profileIntentValue :: Text}
 
 accountActions :: ActionCodec AccountActionTarget AppRequestContext AccountAction
-accountActions =
-  case actionCodec accountActionEndpoints of
+accountActions = buildActionCodecOrDie accountActionEndpoints
+
+-- | Build a codec from a statically-known-duplicate-free endpoint list, or
+-- crash naming the offending declaration. @accountActionEndpoints@ is
+-- reviewed to never trigger the error branch, so it is exercised directly
+-- (with a deliberately duplicate list) by a dedicated unit test instead.
+buildActionCodecOrDie :: [ActionEndpoint target context action] -> ActionCodec target context action
+buildActionCodecOrDie endpoints =
+  case actionCodec endpoints of
     Left codecError -> error (show codecError)
     Right codec -> codec
 
@@ -100,29 +108,36 @@ accountActionEndpoints =
     action LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
   ]
 
+-- The `$!` applications below (on already-WHNF empty-`Text` defaults) exist
+-- so HPC ticks each field's default on every invocation instead of treating
+-- the shared literal as a once-ticked CAF reference; they have no runtime
+-- effect.
+{-# ANN registrationSubmission ("HLint: ignore Redundant $!" :: String) #-}
 registrationSubmission :: ActionDecoder RegistrationSubmission
 registrationSubmission =
   RegistrationSubmission
-    <$> singleOrDefault "" (formField "username" textValue)
-    <*> singleOrDefault "" (formField "email" textValue)
-    <*> singleOrDefault "" (formField "displayName" textValue)
-    <*> singleOrDefault "" (formField "password" textValue)
+    <$> (singleOrDefault $! "") (formField "username" textValue)
+    <*> (singleOrDefault $! "") (formField "email" textValue)
+    <*> (singleOrDefault $! "") (formField "displayName" textValue)
+    <*> (singleOrDefault $! "") (formField "password" textValue)
 
+{-# ANN mfaEnrollmentSubmission ("HLint: ignore Redundant $!" :: String) #-}
 mfaEnrollmentSubmission :: ActionDecoder MfaEnrollmentSubmission
 mfaEnrollmentSubmission =
   MfaEnrollmentSubmission
-    <$> singleOrDefault "" (formField "account" textValue)
-    <*> singleOrDefault "" (formField "intent" textValue)
-    <*> singleOrDefault "" (formField "code" textValue)
+    <$> (singleOrDefault $! "") (formField "account" textValue)
+    <*> (singleOrDefault $! "") (formField "intent" textValue)
+    <*> (singleOrDefault $! "") (formField "code" textValue)
 
+{-# ANN loginSubmission ("HLint: ignore Redundant $!" :: String) #-}
 loginSubmission :: ActionDecoder LoginSubmission
 loginSubmission =
   LoginSubmission
-    <$> singleOrDefault "" (formField "email" textValue)
-    <*> singleOrDefault "" (formField "username" textValue)
-    <*> singleOrDefault "" (formField "password" textValue)
-    <*> singleOrDefault "" (formField "proof" textValue)
-    <*> singleOrDefault "" (formField "code" textValue)
+    <$> (singleOrDefault $! "") (formField "email" textValue)
+    <*> (singleOrDefault $! "") (formField "username" textValue)
+    <*> (singleOrDefault $! "") (formField "password" textValue)
+    <*> (singleOrDefault $! "") (formField "proof" textValue)
+    <*> (singleOrDefault $! "") (formField "code" textValue)
 
 accountActionPath :: AppRequestContext -> AppRoute -> Text
 accountActionPath requestContext route =

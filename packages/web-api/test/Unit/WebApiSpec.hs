@@ -5,7 +5,7 @@
 {-# SPEC #-}
 
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, readMVar, threadDelay)
-import Control.Exception (IOException, SomeException, bracket, displayException, finally, try)
+import Control.Exception (ErrorCall (..), IOException, SomeException, bracket, displayException, evaluate, finally, try)
 import Control.Monad (forM_)
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
 import Data.ByteString qualified as ByteString
@@ -53,6 +53,7 @@ import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -3554,6 +3555,32 @@ spec = do
         try (Email.deliverEmail (accountWorkflowEmailDelivery unavailableAccountWorkflow) (error "the unavailable delivery must ignore messages")) :: IO (Either IOException ())
       unavailableDelivery `shouldSatisfy` \case Left errorMessage -> "email delivery is not configured" `isInfixOf` displayException errorMessage; Right _ -> False
       accountWorkflowVerificationUrl unavailableAccountWorkflow defaultRequestContext token `shouldBe` "https://invalid.example.test/verify"
+
+    it "raises the codec-construction error for a duplicate endpoint declaration" $ do
+      let duplicateEndpoints :: [Action.ActionEndpoint AccountActionTarget () AccountAction]
+          duplicateEndpoints =
+            [ Action.action RegisterAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount),
+              Action.action LoginAccountTarget (Action.postAt "/dup" (const "/dup")) (pure LogoutAccount)
+            ]
+      evaluate (buildActionCodecOrDie duplicateEndpoints `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "DuplicateActionEndpoint" `isInfixOf` message
+
+    it "derives comparable, printable representations for every account action target" $ do
+      let targets =
+            [ RegisterAccountTarget,
+              VerifyEmailTarget,
+              EnrollMfaTarget,
+              LoginAccountTarget,
+              UpdateProfileTarget,
+              LogoutAccountTarget
+            ]
+      expectAll
+        ( (sum [fromEnum (left == right) | left <- targets, right <- targets] `shouldBe` length targets)
+            :| [ sum [fromEnum (left /= right) | left <- targets, right <- targets] `shouldBe` length targets * (length targets - 1),
+                 sum [length (show targetValue) + length (showList [targetValue] "") | targetValue <- targets] `shouldSatisfy` (> 0)
+               ]
+        )
 
     it "returns opaque registration failures and accepts, rejects, or expires verification actions" $ do
       let accountId = requiredAccountId "account_01"

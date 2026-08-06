@@ -4,6 +4,7 @@
 
 * Account forms and action dispatch now share `accountActions :: ActionCodec AccountActionTarget AppRequestContext AccountAction`, eliminating duplicated action paths, methods, and field lookup helpers while preserving localized `422` patches for expected domain rejection.
 * `web-api` now builds its `HarchWeb.Application` through the new `HarchWeb.Site` wrapper, keeping app-owned routes and shell details in the composition root while avoiding direct construction of the lower-level framework record.
+* Fixed a long-standing HPC coverage gap in `WebApi.AccountPages.Actions.Contract`: multi-field `ActionDecoder` `<*>` chains (`registrationSubmission`/`mfaEnrollmentSubmission`/`loginSubmission`) share their `""` default-value literal as one GHC-deduplicated CAF across the module, so most call sites never ticked; forced each with `$!`. Also extracted `buildActionCodecOrDie` (a testable "construct a codec or crash naming the offending duplicate" helper) out of `accountActions` and added the missing `AccountActionTarget` `Eq`/`Show`/`showList` exercise, closing every remaining uncovered line. This was the package's only outstanding coverage-gate failure.
 
 ## 0.1.1.0
 
