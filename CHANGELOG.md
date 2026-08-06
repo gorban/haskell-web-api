@@ -9,6 +9,15 @@
 3. Switched the first-party `web-api` composition root onto that `HarchWeb.Site` path while preserving current page/API behavior and keeping the route-aware shell output stable under the existing test suite.
 4. Replaced destructive client-action queue draining with retained, control-local capture ownership and
    visible pending/recoverable/cancelled states; native action submission is now an explicit capability.
+5. Added `HarchWeb.Api`: a declarative, method-aware `ApiEndpoint` declaration with path/method matching,
+   request/response codecs, `Content-Type`-selected request-body decoding, RFC 9110 `Accept` negotiation,
+   and `apiEndpointMiddleware`, an opt-in `Wai.Middleware` an application wraps around its own
+   `Wai.Application` to dispatch declared paths. Added `HarchWeb.Api.Multipart`, a bounded, incremental
+   RFC 7578 `multipart/form-data` consumer with size limits and temporary-file spooling for uploads. Both
+   are standalone, fully-tested library capabilities layered onto the existing `RouteCodec`/`ApiRoute`
+   dispatcher rather than replacing it. The `examples/custom-api` guide now includes a compiled,
+   tested demonstration of the full path: negotiated JSON/custom-media-type responses, a decoded JSON
+   request body, and a multipart upload.
 
 ## 0.1.1.0
 
