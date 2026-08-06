@@ -200,7 +200,7 @@ spec =
     describe "apiEndpointMiddleware" $ do
       let innerApplication :: Wai.Application
           innerApplication _ respond = respond (Wai.responseLBS HttpTypes.status200 [] "inner application")
-          middleware = apiEndpointMiddleware testEndpoints (const (pure (apiTextResponse "handled")))
+          middleware = apiEndpointMiddleware testEndpoints (\_request _target -> pure (apiTextResponse "handled"))
           waiRequestFor requestMethod requestPath =
             Wai.defaultRequest {Wai.requestMethod = requestMethod, Wai.rawPathInfo = requestPath}
 
@@ -211,6 +211,16 @@ spec =
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
               :| [body `shouldBe` "handled"]
           )
+
+      it "gives the matched target's handler the original request, not just the matched target" $ do
+        let echoHeaderMiddleware =
+              apiEndpointMiddleware
+                testEndpoints
+                (\request _target -> pure (apiTextResponse (TextEncoding.decodeUtf8 (fromMaybe "missing" (lookup "X-Probe" (Wai.requestHeaders request))))))
+            probeRequest = (waiRequestFor "GET" "/api/status") {Wai.requestHeaders = [("X-Probe", "seen")]}
+        response <- performWaiRequest (echoHeaderMiddleware innerApplication) probeRequest
+        body <- readResponseBody response
+        body `shouldBe` "seen"
 
       it "renders 405 with Allow for a declared path with the wrong method" $ do
         response <- performWaiRequest (middleware innerApplication) (waiRequestFor "DELETE" "/api/status")

@@ -236,21 +236,28 @@ apiHttpStatus code =
 -- anything else already wired into the wrapped application) rather than
 -- replacing it, so adopting it is a purely additive, per-path opt-in.
 --
+-- The matched target's handler receives the original 'Wai.Request' so it
+-- can run its own 'RequestCodec' (via 'apiRequestDataFromWaiRequest'),
+-- select a request-body decoder from @Content-Type@, negotiate a response
+-- representation from @Accept@, or consume a streaming body such as
+-- multipart -- @apiEndpointMiddleware@ only owns matching and rendering the
+-- protocol-level outcome, never the request itself.
+--
 -- The @$!@ applications below (on already-WHNF values like 'Nothing') exist
 -- so HPC ticks each argument on every invocation instead of treating it as
 -- a once-shared reference; they have no runtime effect.
 {-# ANN apiEndpointMiddleware ("HLint: ignore Redundant $!" :: String) #-}
-apiEndpointMiddleware :: [ApiEndpoint target] -> (target -> IO ApiResponseBody) -> Wai.Middleware
+apiEndpointMiddleware :: [ApiEndpoint target] -> (Wai.Request -> target -> IO ApiResponseBody) -> Wai.Middleware
 apiEndpointMiddleware endpoints runTarget innerApplication request respond =
   case matchApiEndpoints requestMethodText requestPathText endpoints of
     NoApiRouteMatch -> (innerApplication $! request) respond
     ApiMethodNotAllowed declaredMethodsValue ->
       respond (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
     ApiRouteMatched target -> do
-      body <- runTarget $! target
+      body <- (runTarget $! request) $! target
       respond (apiHttpResponseToWaiResponse (renderedApiResponse body))
     ApiRouteMatchedHead target -> do
-      body <- runTarget $! target
+      body <- (runTarget $! request) $! target
       respond (apiHttpResponseToWaiResponse (renderedApiResponse $! body) {apiHttpResponseBody = Nothing})
   where
     requestMethodText = decodeUtf8Leniently (Wai.requestMethod request)
