@@ -1,0 +1,147 @@
+{-# LANGUAGE OverloadedStrings #-}
+
+module Main (main) where
+
+import App.Api.Declarative
+import Data.Aeson qualified as Aeson
+import Data.ByteString qualified as ByteString
+import Data.ByteString.Builder qualified as Builder
+import Data.ByteString.Lazy qualified as LazyByteString
+import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.Maybe (fromMaybe)
+import Data.Text (Text)
+import Network.HTTP.Types qualified as HttpTypes
+import Network.Wai qualified as Wai
+import Network.Wai.Internal qualified as WaiInternal
+import Test.Hspec
+
+fallbackApplication :: Wai.Application
+fallbackApplication _ respond = respond (Wai.responseLBS HttpTypes.status404 [] "not found")
+
+application :: Wai.Application
+application = declarativeApiApplication fallbackApplication
+
+performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest webApplication request = do
+  responseReference <- newIORef Nothing
+  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
+  maybeResponse <- readIORef responseReference
+  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
+
+readResponseBody :: Wai.Response -> IO ByteString.ByteString
+readResponseBody response = do
+  let (_, _, withStreamingBody) = Wai.responseToStream response
+  chunksReference <- newIORef []
+  withStreamingBody $ \streamingBody ->
+    streamingBody
+      (\builder -> atomicModifyIORef' chunksReference (\chunks -> (chunks <> [Builder.toLazyByteString builder], ())))
+      (pure ())
+  chunks <- readIORef chunksReference
+  pure (LazyByteString.toStrict (LazyByteString.concat chunks))
+
+jsonRequest :: HttpTypes.Method -> ByteString.ByteString -> ByteString.ByteString -> IO Wai.Request
+jsonRequest requestMethod requestPath bodyBytes = do
+  bodyRef <- newIORef [bodyBytes]
+  let readChunk = atomicModifyIORef' bodyRef (\case [] -> ([], ByteString.empty); chunk : rest -> (rest, chunk))
+  pure
+    ( Wai.setRequestBodyChunks
+        readChunk
+        Wai.defaultRequest
+          { Wai.requestMethod = requestMethod,
+            Wai.rawPathInfo = requestPath,
+            Wai.requestHeaders = [(HttpTypes.hContentType, "application/json")]
+          }
+    )
+
+main :: IO ()
+main = hspec $ describe "Unit.App.Api.Declarative" $ do
+  describe "GET /api/greeting" $ do
+    it "renders JSON by default" $ do
+      response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/greeting"}
+      body <- readResponseBody response
+      (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, World!" :: Text)])
+
+    it "renders the application-defined text/x-greeting media type when preferred by Accept" $ do
+      response <-
+        performWaiRequest
+          application
+          Wai.defaultRequest
+            { Wai.requestMethod = "GET",
+              Wai.rawPathInfo = "/api/greeting",
+              Wai.requestHeaders = [(HttpTypes.hAccept, "text/x-greeting")]
+            }
+      body <- readResponseBody response
+      body `shouldBe` "GREETING Hello, World!"
+
+  describe "POST /api/greeting" $ do
+    it "decodes a JSON body and greets the requested name" $ do
+      request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
+      response <- performWaiRequest application request
+      body <- readResponseBody response
+      (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, Ada!" :: Text)])
+
+    it "reports an unsupported media type without a Content-Type header" $ do
+      response <-
+        performWaiRequest
+          application
+          Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/greeting"}
+      body <- readResponseBody response
+      body `shouldBe` "unsupported media type; send application/json"
+
+    it "reports a malformed body for invalid JSON" $ do
+      request <- jsonRequest "POST" "/api/greeting" "not json"
+      response <- performWaiRequest application request
+      body <- readResponseBody response
+      body `shouldBe` "malformed JSON body"
+
+    it "reports an oversized body without decoding it" $ do
+      request <- jsonRequest "POST" "/api/greeting" (ByteString.replicate 20000 65)
+      response <- performWaiRequest application request
+      body <- readResponseBody response
+      body `shouldBe` "request body too large"
+
+  describe "POST /api/avatar" $ do
+    let boundaryToken = "EXAMPLE-BOUNDARY" :: ByteString.ByteString
+        multipartBody =
+          "--"
+            <> boundaryToken
+            <> "\r\nContent-Disposition: form-data; name=\"avatar\"; filename=\"a.png\"\r\n\r\nfile bytes\r\n--"
+            <> boundaryToken
+            <> "--\r\n"
+
+    it "reports how many parts a valid multipart upload contains" $ do
+      request <- jsonRequest "POST" "/api/avatar" multipartBody
+      let requestWithBoundary = request {Wai.requestHeaders = [(HttpTypes.hContentType, "multipart/form-data; boundary=" <> boundaryToken)]}
+      response <- performWaiRequest application requestWithBoundary
+      body <- readResponseBody response
+      body `shouldBe` "1 part(s) received"
+
+    it "accepts a quoted boundary parameter" $ do
+      request <- jsonRequest "POST" "/api/avatar" multipartBody
+      let requestWithBoundary =
+            request
+              { Wai.requestHeaders = [(HttpTypes.hContentType, "multipart/form-data; boundary=\"" <> boundaryToken <> "\"")]
+              }
+      response <- performWaiRequest application requestWithBoundary
+      body <- readResponseBody response
+      body `shouldBe` "1 part(s) received"
+
+    it "reports a missing boundary" $ do
+      request <- jsonRequest "POST" "/api/avatar" multipartBody
+      let requestWithoutBoundary = request {Wai.requestHeaders = [(HttpTypes.hContentType, "multipart/form-data")]}
+      response <- performWaiRequest application requestWithoutBoundary
+      body <- readResponseBody response
+      body `shouldBe` "missing multipart boundary"
+
+    it "reports an invalid multipart body" $ do
+      request <- jsonRequest "POST" "/api/avatar" "not multipart"
+      let requestWithBoundary = request {Wai.requestHeaders = [(HttpTypes.hContentType, "multipart/form-data; boundary=" <> boundaryToken)]}
+      response <- performWaiRequest application requestWithBoundary
+      body <- readResponseBody response
+      body `shouldBe` "invalid multipart body"
+
+  describe "a path no declared endpoint owns" $
+    it "falls through to the wrapped application" $ do
+      response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/unrelated"}
+      body <- readResponseBody response
+      body `shouldBe` "not found"

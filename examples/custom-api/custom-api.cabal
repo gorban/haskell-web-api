@@ -1,0 +1,45 @@
+cabal-version: 3.14
+name: custom-api
+version: 0.1.0.0
+synopsis: A declarative HarchWeb.Api endpoint table dispatched via apiEndpointMiddleware
+license: BSD-2-Clause-Patent
+build-type: Simple
+extra-doc-files: README.md
+
+common common
+  ghc-options: -Wall
+  default-language: GHC2024
+
+library
+  import: common
+  exposed-modules: App.Api.Declarative
+  hs-source-dirs: src
+  build-depends:
+    aeson,
+    base ^>=4.22.0.0,
+    bytestring,
+    harch-web,
+    http-types,
+    text,
+    wai,
+
+test-suite custom-api-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options:
+    -rtsopts
+    -threaded
+
+  build-depends:
+    aeson,
+    base ^>=4.22.0.0,
+    bytestring,
+    custom-api,
+    harch-web,
+    hspec,
+    http-types,
+    temporary,
+    text,
+    wai,

@@ -1,4 +1,5 @@
 packages:
+  examples/custom-api/
   examples/custom-db-adapter/
   examples/two-pages/
   packages/core/

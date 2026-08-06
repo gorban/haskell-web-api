@@ -12,6 +12,7 @@ These are Cabal packages with executable source and tests.
 | --- | --- | --- |
 | [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, an `ActionCodec` shared by typed forms and dispatch, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
 | [custom-db-adapter](custom-db-adapter/README.md) | A typed, non-PostgreSQL effect interpreter with focused tests. | `cabal test custom-db-adapter-tests` |
+| [custom-api](custom-api/README.md) | A method-aware `HarchWeb.Api` endpoint table (negotiated JSON/custom-media-type response, a JSON request body, a multipart upload) dispatched via `apiEndpointMiddleware`. | `cabal test custom-api-tests` |
 
 ## Implemented guides
 
@@ -22,7 +23,6 @@ or tracked runtime configuration.
 | --- | --- |
 | [PostgreSQL effects](postgres-effects/README.md) | Typed database operations, migrations, and runtime/migration identities. |
 | [Custom JavaScript](custom-js/README.md) | Deferred, page-scoped enhancement on top of complete SSR. |
-| [Custom API](custom-api/README.md) | An explicit typed API route and `RouteDefinition`. |
 | [Logging and telemetry](logging-and-telemetry/README.md) | Structured logs plus OTLP traces and metrics. |
 | [Testing](testing/README.md) | Unit, integration, real-browser, and 100% package coverage workflows. |
 | [Provided certificates](https-provided-certificate/README.md) | HTTPS with a certificate and private-key pair. |
