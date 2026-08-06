@@ -2,11 +2,13 @@
 
 -- | Private loopback-server lifecycle for framework tests and examples.
 --
--- The public facade exposes 'LocalTestServer' and 'withLocalTestServer'; raw
--- sockets and server threads stay behind this module boundary.
+-- The public facade exposes 'LocalTestServer', 'withLocalTestServer', and
+-- 'withLocalTestServerForApplication'; raw sockets and server threads stay
+-- behind this module boundary.
 module HarchWeb.Server.LocalTest
   ( LocalTestServer (..),
     withLocalTestServer,
+    withLocalTestServerForApplication,
   )
 where
 
@@ -19,6 +21,7 @@ import HarchWeb.Server.Config (ListenerEndpoint (..), ListenerScheme (..))
 import HarchWeb.Server.RequestExecution (toWaiApplication)
 import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocket)
 import Network.Socket qualified as Socket
+import Network.Wai qualified as Wai
 
 data LocalTestServer = LocalTestServer
   { localServerHost :: Text,
@@ -34,19 +37,26 @@ data RunningLocalTestServer = RunningLocalTestServer
   }
 
 withLocalTestServer :: (Eq route) => Application route action context -> (LocalTestServer -> IO a) -> IO a
-withLocalTestServer webApplication useLocalServer =
-  bracket (startLocalTestServer webApplication) stopLocalTestServer $
+withLocalTestServer webApplication = withLocalTestServerForApplication (toWaiApplication webApplication)
+
+-- | Serve an already-built 'Wai.Application' over a real loopback HTTP
+-- listener for the lifetime of the callback, e.g. one composed from
+-- 'HarchWeb.Api.apiEndpointMiddleware' wrapping 'toWaiApplication'. Prefer
+-- 'withLocalTestServer' when no such composition is needed.
+withLocalTestServerForApplication :: Wai.Application -> (LocalTestServer -> IO a) -> IO a
+withLocalTestServerForApplication waiApplication useLocalServer =
+  bracket (startLocalTestServer waiApplication) stopLocalTestServer $
     useLocalServer . runningLocalServerInfo
 
-startLocalTestServer :: (Eq route) => Application route action context -> IO RunningLocalTestServer
-startLocalTestServer webApplication = do
+startLocalTestServer :: Wai.Application -> IO RunningLocalTestServer
+startLocalTestServer waiApplication = do
   listeningSocket <- openLoopbackSocket
   localPort <- socketPort listeningSocket
   let listenerScheme = Http
       endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
   serverThreadId <-
     endpointHost endpoint `seq`
-      startWarpServerOnSocket endpoint listeningSocket (toWaiApplication webApplication)
+      startWarpServerOnSocket endpoint listeningSocket waiApplication
   localPort `seq`
     pure
       RunningLocalTestServer

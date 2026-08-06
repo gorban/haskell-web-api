@@ -4,6 +4,7 @@
 -- | Private runtime listener orchestration behind the public 'runServer' facade.
 module HarchWeb.Server.Runtime
   ( runServer,
+    runServerWithWaiMiddleware,
   )
 where
 
@@ -40,10 +41,24 @@ runServer ::
   config ->
   Application route action context ->
   IO ()
-runServer outputHandle config webApplication =
+runServer = runServerWithWaiMiddleware id
+
+-- | Like 'runServer', but composes a caller-supplied 'Wai.Middleware' in
+-- front of the rendered application before it reaches any runtime listener,
+-- e.g. 'HarchWeb.Api.apiEndpointMiddleware' handling declared paths ahead of
+-- the typed 'Application'. ACME HTTP-01 challenge responses bypass the
+-- middleware; every other request passes through it first.
+runServerWithWaiMiddleware ::
+  (Eq route, HasServerConfig config) =>
+  Wai.Middleware ->
+  Handle ->
+  config ->
+  Application route action context ->
+  IO ()
+runServerWithWaiMiddleware waiMiddleware outputHandle config webApplication =
   either
     (ioError . userError)
-    (runServerWithStartupPlan outputHandle config webApplication)
+    (runServerWithStartupPlan waiMiddleware outputHandle config webApplication)
     (validatedServerStartupPlan config)
 
 validatedServerStartupPlan :: (HasServerConfig config) => config -> Either String ServerStartupPlan
@@ -53,15 +68,16 @@ validatedServerStartupPlan config = do
 
 runServerWithStartupPlan ::
   (Eq route, HasServerConfig config) =>
+  Wai.Middleware ->
   Handle ->
   config ->
   Application route action context ->
   ServerStartupPlan ->
   IO ()
-runServerWithStartupPlan outputHandle config webApplication startupPlan = do
+runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
   let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
   challengeStore <- AcmeChallengeStore <$> newMVar []
-  let runtimeApplication = toRuntimeWaiApplication challengeStore webApplication
+  let runtimeApplication = toRuntimeWaiApplication waiMiddleware challengeStore webApplication
       connectionReporter = reportConnectionObservability webApplication
   connectionReporter `seq`
     observabilityPlan `seq`
@@ -88,15 +104,16 @@ runServerWithStartupPlan outputHandle config webApplication startupPlan = do
 
 toRuntimeWaiApplication ::
   (Eq route) =>
+  Wai.Middleware ->
   AcmeChallengeStore ->
   Application route action context ->
   Wai.Application
-toRuntimeWaiApplication challengeStore webApplication request respond = do
+toRuntimeWaiApplication waiMiddleware challengeStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
   maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore request
   maybe
-    (toWaiApplication webApplication request respond)
+    (waiMiddleware (toWaiApplication webApplication) request respond)
     (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)
     maybeChallengeResponse
 

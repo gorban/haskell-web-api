@@ -6544,6 +6544,39 @@ spec = do
                 `shouldThrow` isAlreadyInUseError
               expectLoopbackPortReusable firstTlsPort
 
+  describe "runServerWithWaiMiddleware" $ do
+    it "composes the given Wai.Middleware in front of the rendered application" $
+      withUnusedLoopbackPort $ \unusedPort ->
+        withSystemTempFile "harch-web-middleware-output.txt" $ \_ outputHandle -> do
+          completionReference <- newIORef Nothing
+          let runtimeConfig =
+                serverConfigWithListeners
+                  [ ListenerConfig
+                      { listenerHost = "127.0.0.1",
+                        listenerPort = unusedPort,
+                        listenerScheme = Http,
+                        listenerTls = Nothing,
+                        listenerAcme = Nothing
+                      }
+                  ]
+              markerMiddleware innerApplication request respond =
+                if Wai.rawPathInfo request == "/middleware-marker"
+                  then respond (Wai.responseLBS Http.status200 [] "handled by middleware")
+                  else innerApplication request respond
+          serverThreadId <- forkIO $ do
+            result <- try (runServerWithWaiMiddleware markerMiddleware outputHandle runtimeConfig sampleApplication) :: IO (Either SomeException ())
+            writeIORef completionReference (Just result)
+          firstResponseText <- waitForServerResponse completionReference unusedPort "/known"
+          markerResponseText <- readLoopbackHttpResponse unusedPort "/middleware-marker"
+          expectAll
+            ( (Text.isInfixOf "<h1>Known</h1>" firstResponseText `shouldBe` True)
+                :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
+            )
+          completionResult <- readIORef completionReference
+          completionResult `shouldSatisfy` isNothing
+          killThread serverThreadId
+          waitForServerExit completionReference
+
   describe "withLocalTestServer" $ do
     it "serves the rendered application over a real loopback HTTP listener" $
       withLocalTestServer sampleApplication $ \localTestServer -> do
@@ -6575,6 +6608,21 @@ spec = do
         withLocalTestServer staticApplication $ \localTestServer -> do
           responseText <- readLocalTestServerResponse localTestServer "/assets/styles/site.css"
           Text.isInfixOf "body { color: red; }" responseText `shouldBe` True
+
+  describe "withLocalTestServerForApplication" $ do
+    it "serves an already-built Wai.Application over a real loopback HTTP listener" $
+      let markedWaiApplication request respond =
+            if Wai.rawPathInfo request == "/middleware-marker"
+              then respond (Wai.responseLBS Http.status200 [] "handled by middleware")
+              else toWaiApplication sampleApplication request respond
+       in withLocalTestServerForApplication markedWaiApplication $ \localTestServer -> do
+            localServerHost localTestServer `shouldBe` "127.0.0.1"
+            knownResponseText <- readLocalTestServerResponse localTestServer "/known"
+            markerResponseText <- readLocalTestServerResponse localTestServer "/middleware-marker"
+            expectAll
+              ( (Text.isInfixOf "<h1>Known</h1>" knownResponseText `shouldBe` True)
+                  :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
+              )
 
 readLocalTestServerResponse :: LocalTestServer -> Text -> IO Text
 readLocalTestServerResponse localTestServer path = do

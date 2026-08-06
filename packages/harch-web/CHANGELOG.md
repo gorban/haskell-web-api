@@ -28,6 +28,11 @@
   incremental siblings whose callback runs as soon as each part finishes, before any later part
   (including a file part) is read, so a caller can reject the body before ever spooling a
   not-yet-reached file part to disk.
+* Added `runServerWithWaiMiddleware` (composes a caller-supplied `Wai.Middleware`, such as
+  `apiEndpointMiddleware`, in front of the rendered application before any runtime listener, bypassed
+  only for ACME HTTP-01 challenge responses; `runServer` is now `runServerWithWaiMiddleware id`) and
+  `withLocalTestServerForApplication` (serves an already-built `Wai.Application` over a real loopback
+  listener, for testing such a composition; `withLocalTestServer` is now defined in terms of it).
 * Added `HarchWeb.Action`: a declarative, applicative `ActionCodec` whose endpoint declarations print
   typed form targets and decode matched requests. It provides deterministic accumulated field errors and
   explicit unknown-path, method-negotiation, and malformed-input outcomes.

@@ -44,12 +44,14 @@ module HarchWeb.Server
     loadTlsCredentialSnapshotOrThrowWithLoader,
     reloadTlsCredentialsIfChanged,
     runServer,
+    runServerWithWaiMiddleware,
     startManualTlsRuntimeServerWithStarter,
     startWarpRuntimeServerOnSocket,
     toWaiApplication,
     toWaiBodyResponse,
     toWaiResponse,
     withLocalTestServer,
+    withLocalTestServerForApplication,
   )
 where
 
