@@ -60,6 +60,10 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `REQUEST_HEADER_MAX_BYTES` | Optional total request-header budget. Warp applies it while parsing the wire request; the framework also checks it before middleware. | unset (unbounded) |
 | `REQUEST_HEADER_MAX_COUNT` | Optional maximum number of request header fields. | unset (unbounded) |
 | `REQUEST_HEADER_VALUE_MAX_BYTES` | Optional maximum for one header value, including cookies, forwarded headers, and trace context. | unset (unbounded) |
+| `REQUEST_PATH_SEGMENT_MAX_COUNT` | Optional maximum number of raw non-empty path segments before route parsing. | unset (unbounded) |
+| `REQUEST_PATH_SEGMENT_MAX_BYTES` | Optional maximum bytes in a raw path segment before route parsing. | unset (unbounded) |
+| `REQUEST_QUERY_FIELD_MAX_COUNT` | Optional maximum number of raw query-field slots, including empty slots separated by `&`. | unset (unbounded) |
+| `REQUEST_QUERY_FIELD_MAX_BYTES` | Optional maximum bytes in one raw query-field slot before query parsing. | unset (unbounded) |
 | `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
 | `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
 | `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |

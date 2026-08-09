@@ -1749,7 +1749,11 @@ spec = do
             [ ("REQUEST_TARGET_MAX_BYTES", "2048"),
               ("REQUEST_HEADER_MAX_BYTES", "8192"),
               ("REQUEST_HEADER_MAX_COUNT", "32"),
-              ("REQUEST_HEADER_VALUE_MAX_BYTES", "1024")
+              ("REQUEST_HEADER_VALUE_MAX_BYTES", "1024"),
+              ("REQUEST_PATH_SEGMENT_MAX_COUNT", "8"),
+              ("REQUEST_PATH_SEGMENT_MAX_BYTES", "128"),
+              ("REQUEST_QUERY_FIELD_MAX_COUNT", "16"),
+              ("REQUEST_QUERY_FIELD_MAX_BYTES", "256")
             ]
         )
         `shouldBe` Right
@@ -1759,7 +1763,11 @@ spec = do
                   { HarchWeb.requestTargetByteLimit = HarchWeb.requestByteLimit 2048,
                     HarchWeb.requestHeaderByteLimit = HarchWeb.requestByteLimit 8192,
                     HarchWeb.requestHeaderCountLimit = HarchWeb.mkRequestHeaderCountLimit 32,
-                    HarchWeb.requestHeaderValueByteLimit = HarchWeb.requestByteLimit 1024
+                    HarchWeb.requestHeaderValueByteLimit = HarchWeb.requestByteLimit 1024,
+                    HarchWeb.requestPathSegmentCountLimit = HarchWeb.requestItemCountLimit 8,
+                    HarchWeb.requestPathSegmentByteLimit = HarchWeb.requestByteLimit 128,
+                    HarchWeb.requestQueryFieldCountLimit = HarchWeb.requestItemCountLimit 16,
+                    HarchWeb.requestQueryFieldByteLimit = HarchWeb.requestByteLimit 256
                   }
             }
 

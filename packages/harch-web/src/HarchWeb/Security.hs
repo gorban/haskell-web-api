@@ -7,6 +7,7 @@ module HarchWeb.Security
     RequestHeadLimitFailure (..),
     RequestHeadLimits (..),
     RequestHeaderCountLimit,
+    RequestItemCountLimit,
     RequestContextField (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
@@ -23,6 +24,7 @@ module HarchWeb.Security
     requestByteLimit,
     requestByteLimitValue,
     mkRequestHeaderCountLimit,
+    requestItemCountLimit,
     requestContextFields,
     requestHostWithoutPort,
     requestLogContextFields,
@@ -52,6 +54,7 @@ import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word8)
 import HarchWeb.Document (RuntimeNonce (..))
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.PathPrefix qualified as PathPrefix
@@ -163,6 +166,19 @@ mkRequestHeaderCountLimit headerCount
   | headerCount >= 0 = Just (RequestHeaderCountLimit headerCount)
   | otherwise = Nothing
 
+-- | A non-negative bound on repeated untrusted request components such as
+-- path segments or query fields.
+newtype RequestItemCountLimit = RequestItemCountLimit Int
+  deriving (Show)
+
+instance Eq RequestItemCountLimit where
+  RequestItemCountLimit left == RequestItemCountLimit right = left == right
+
+requestItemCountLimit :: Int -> Maybe RequestItemCountLimit
+requestItemCountLimit itemCount
+  | itemCount >= 0 = Just (RequestItemCountLimit itemCount)
+  | otherwise = Nothing
+
 -- | Limits checked before request-derived text is parsed, logged, routed, or
 -- handed to application middleware.  Every field is optional deliberately:
 -- the framework currently preserves its established unbounded behaviour
@@ -171,7 +187,11 @@ data RequestHeadLimits = RequestHeadLimits
   { requestTargetByteLimit :: Maybe RequestByteLimit,
     requestHeaderByteLimit :: Maybe RequestByteLimit,
     requestHeaderCountLimit :: Maybe RequestHeaderCountLimit,
-    requestHeaderValueByteLimit :: Maybe RequestByteLimit
+    requestHeaderValueByteLimit :: Maybe RequestByteLimit,
+    requestPathSegmentCountLimit :: Maybe RequestItemCountLimit,
+    requestPathSegmentByteLimit :: Maybe RequestByteLimit,
+    requestQueryFieldCountLimit :: Maybe RequestItemCountLimit,
+    requestQueryFieldByteLimit :: Maybe RequestByteLimit
   }
   deriving (Eq, Show)
 
@@ -181,7 +201,11 @@ unboundedRequestHeadLimits =
     { requestTargetByteLimit = Nothing,
       requestHeaderByteLimit = Nothing,
       requestHeaderCountLimit = Nothing,
-      requestHeaderValueByteLimit = Nothing
+      requestHeaderValueByteLimit = Nothing,
+      requestPathSegmentCountLimit = Nothing,
+      requestPathSegmentByteLimit = Nothing,
+      requestQueryFieldCountLimit = Nothing,
+      requestQueryFieldByteLimit = Nothing
     }
 
 -- | A stable, low-cardinality explanation for rejecting an inbound request
@@ -193,6 +217,10 @@ data RequestHeadLimitFailure
   | TooManyRequestHeaders
   | RequestHeadersTooLarge
   | RequestHeaderValueTooLarge
+  | TooManyPathSegments
+  | RequestPathSegmentTooLarge
+  | TooManyQueryFields
+  | RequestQueryFieldTooLarge
   deriving (Eq, Show)
 
 -- | Validate the raw request target and headers without consuming a body.
@@ -206,10 +234,16 @@ validateRequestHead limits request
   | exceedsHeaderCountLimit (requestHeaderCountLimit limits) (length requestHeaders) = Left TooManyRequestHeaders
   | exceedsByteLimit (requestHeaderByteLimit limits) requestHeadersBytes = Left RequestHeadersTooLarge
   | any (exceedsByteLimit (requestHeaderValueByteLimit limits) . ByteString.length . snd) requestHeaders = Left RequestHeaderValueTooLarge
+  | exceedsItemCountLimit (requestPathSegmentCountLimit limits) (pathSegmentCount rawPath) = Left TooManyPathSegments
+  | exceedsDelimitedFieldByteLimit (requestPathSegmentByteLimit limits) 47 rawPath = Left RequestPathSegmentTooLarge
+  | exceedsItemCountLimit (requestQueryFieldCountLimit limits) (queryFieldCount rawQuery) = Left TooManyQueryFields
+  | exceedsDelimitedFieldByteLimit (requestQueryFieldByteLimit limits) 38 (ByteString.drop 1 rawQuery) = Left RequestQueryFieldTooLarge
   | otherwise = Right ()
   where
     requestHeaders = Wai.requestHeaders request
-    requestTargetBytes = ByteString.length (Wai.rawPathInfo request) + ByteString.length (Wai.rawQueryString request)
+    rawPath = Wai.rawPathInfo request
+    rawQuery = Wai.rawQueryString request
+    requestTargetBytes = ByteString.length rawPath + ByteString.length rawQuery
     requestHeadersBytes = sum [ByteString.length (CaseInsensitive.original name) + ByteString.length value | (name, value) <- requestHeaders]
 
 isUtf8 :: ByteString.ByteString -> Bool
@@ -226,6 +260,42 @@ exceedsHeaderCountLimit maybeLimit headerCount =
   case maybeLimit of
     Nothing -> False
     Just (RequestHeaderCountLimit maximumHeaders) -> headerCount > maximumHeaders
+
+exceedsItemCountLimit :: Maybe RequestItemCountLimit -> Int -> Bool
+exceedsItemCountLimit maybeLimit itemCount =
+  case maybeLimit of
+    Nothing -> False
+    Just (RequestItemCountLimit maximumItems) -> itemCount > maximumItems
+
+pathSegmentCount :: ByteString.ByteString -> Int
+pathSegmentCount = snd . ByteString.foldl' countSegment (True, 0)
+  where
+    countSegment (previousWasSeparator, segmentCount) byte
+      | byte == 47 = (True, segmentCount)
+      | previousWasSeparator = (False, segmentCount + 1)
+      | otherwise = (False, segmentCount)
+
+queryFieldCount :: ByteString.ByteString -> Int
+queryFieldCount rawQuery =
+  case ByteString.uncons rawQuery of
+    Just (63, queryBytes)
+      | not (ByteString.null queryBytes) -> ByteString.foldl' countSeparator 1 queryBytes
+    _ -> 0
+  where
+    countSeparator fieldCount byte
+      | byte == 38 = fieldCount + 1
+      | otherwise = fieldCount
+
+exceedsDelimitedFieldByteLimit :: Maybe RequestByteLimit -> Word8 -> ByteString.ByteString -> Bool
+exceedsDelimitedFieldByteLimit maybeLimit delimiter =
+  maybe (const False) (go 0 . requestByteLimitValue) maybeLimit
+  where
+    go fieldBytes maximumBytes bytes =
+      case ByteString.uncons bytes of
+        Nothing -> fieldBytes > maximumBytes
+        Just (byte, remaining)
+          | byte == delimiter -> fieldBytes > maximumBytes || go 0 maximumBytes remaining
+          | otherwise -> go (fieldBytes + 1) maximumBytes remaining
 
 httpsRedirectResponse :: ByteString.ByteString -> Wai.Response
 httpsRedirectResponse redirectLocation =

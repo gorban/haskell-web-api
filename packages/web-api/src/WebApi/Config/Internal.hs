@@ -83,6 +83,7 @@ import HarchWeb
     RequestByteLimit,
     RequestHeadLimits (..),
     RequestHeaderCountLimit,
+    RequestItemCountLimit,
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
     ServerConfig (..),
@@ -100,6 +101,7 @@ import HarchWeb
     firstCertbotDomain,
     mkRequestHeaderCountLimit,
     requestByteLimit,
+    requestItemCountLimit,
     unboundedRequestHeadLimits,
   )
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
@@ -715,6 +717,10 @@ parseRequestHeadLimitsP =
     <*> parseOptionalRequestByteLimitP "REQUEST_HEADER_MAX_BYTES"
     <*> parseOptionalRequestHeaderCountLimitP "REQUEST_HEADER_MAX_COUNT"
     <*> parseOptionalRequestByteLimitP "REQUEST_HEADER_VALUE_MAX_BYTES"
+    <*> parseOptionalRequestItemCountLimitP "REQUEST_PATH_SEGMENT_MAX_COUNT"
+    <*> parseOptionalRequestByteLimitP "REQUEST_PATH_SEGMENT_MAX_BYTES"
+    <*> parseOptionalRequestItemCountLimitP "REQUEST_QUERY_FIELD_MAX_COUNT"
+    <*> parseOptionalRequestByteLimitP "REQUEST_QUERY_FIELD_MAX_BYTES"
 
 parseOptionalRequestByteLimitP :: Text -> ConfigParser (Maybe RequestByteLimit)
 parseOptionalRequestByteLimitP key = do
@@ -727,6 +733,12 @@ parseOptionalRequestHeaderCountLimitP key = do
   maybeValue <- optionalConfigValueP key
   parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
   pure (parsedValue >>= mkRequestHeaderCountLimit)
+
+parseOptionalRequestItemCountLimitP :: Text -> ConfigParser (Maybe RequestItemCountLimit)
+parseOptionalRequestItemCountLimitP key = do
+  maybeValue <- optionalConfigValueP key
+  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
+  pure (parsedValue >>= requestItemCountLimit)
 
 parseRedirectHttpToHttpsP :: [ListenerConfig] -> ConfigParser Bool
 parseRedirectHttpToHttpsP parsedListeners = do

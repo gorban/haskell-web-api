@@ -614,6 +614,17 @@ spec = do
               { Wai.rawPathInfo = requestPath,
                 Wai.requestHeaders = headers
               }
+          pathLimits =
+            unboundedRequestHeadLimits
+              { requestPathSegmentCountLimit = requestItemCountLimit 1,
+                requestPathSegmentByteLimit = requestByteLimit 2
+              }
+          queryLimits =
+            unboundedRequestHeadLimits
+              { requestQueryFieldCountLimit = requestItemCountLimit 1,
+                requestQueryFieldByteLimit = requestByteLimit 3
+              }
+          emptyQueryLimits = unboundedRequestHeadLimits {requestQueryFieldCountLimit = requestItemCountLimit 0}
       expectAll
         ( (validateRequestHead limits (requestFor "/long" []) `shouldBe` Left RequestTargetTooLarge)
             :| [ validateRequestHead limits (requestFor "\255" []) `shouldBe` Left InvalidRequestTargetEncoding,
@@ -622,7 +633,13 @@ spec = do
                  validateRequestHead
                    (limits {requestHeaderValueByteLimit = Nothing, requestHeaderCountLimit = Nothing})
                    (requestFor "/ok" [("Header", "1234567")])
-                   `shouldBe` Left RequestHeadersTooLarge
+                   `shouldBe` Left RequestHeadersTooLarge,
+                 validateRequestHead pathLimits (requestFor "/one/two" []) `shouldBe` Left TooManyPathSegments,
+                 validateRequestHead pathLimits (requestFor "/long" []) `shouldBe` Left RequestPathSegmentTooLarge,
+                 validateRequestHead (pathLimits {requestPathSegmentByteLimit = Nothing, requestPathSegmentCountLimit = requestItemCountLimit 0}) (requestFor "one" []) `shouldBe` Left TooManyPathSegments,
+                 validateRequestHead queryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?one&two"}) `shouldBe` Left TooManyQueryFields,
+                 validateRequestHead queryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?long"}) `shouldBe` Left RequestQueryFieldTooLarge,
+                 validateRequestHead emptyQueryLimits ((requestFor "/ok" []) {Wai.rawQueryString = "?"}) `shouldBe` Right ()
                ]
         )
 
@@ -631,16 +648,22 @@ spec = do
       differentByteLimitInput <- newIORef 9
       headerCountLimitInput <- newIORef 2
       differentHeaderCountLimitInput <- newIORef 3
+      itemCountLimitInput <- newIORef 4
+      differentItemCountLimitInput <- newIORef 5
       failureInput <- newIORef RequestHeadersTooLarge
       byteLimit <- requestByteLimit <$> readIORef byteLimitInput
       differentByteLimit <- requestByteLimit <$> readIORef differentByteLimitInput
       headerCountLimit <- mkRequestHeaderCountLimit <$> readIORef headerCountLimitInput
       differentHeaderCountLimit <- mkRequestHeaderCountLimit <$> readIORef differentHeaderCountLimitInput
+      itemCountLimit <- requestItemCountLimit <$> readIORef itemCountLimitInput
+      differentItemCountLimit <- requestItemCountLimit <$> readIORef differentItemCountLimitInput
       failure <- readIORef failureInput
       let byteLimitValue = fromMaybe (error "expected request byte limit") byteLimit
           differentByteLimitValue = fromMaybe (error "expected distinct request byte limit") differentByteLimit
           headerCountLimitValue = fromMaybe (error "expected request header count limit") headerCountLimit
           differentHeaderCountLimitValue = fromMaybe (error "expected distinct request header count limit") differentHeaderCountLimit
+          itemCountLimitValue = fromMaybe (error "expected request item count limit") itemCountLimit
+          differentItemCountLimitValue = fromMaybe (error "expected distinct request item count limit") differentItemCountLimit
           boundedHeadLimits =
             unboundedRequestHeadLimits
               { requestTargetByteLimit = byteLimit,
@@ -654,13 +677,14 @@ spec = do
       expectAll
         ( (requestByteLimit (-1) `shouldBe` Nothing)
             :| [ mkRequestHeaderCountLimit (-1) `shouldBe` Nothing,
+                 requestItemCountLimit (-1) `shouldBe` Nothing,
                  byteLimit `shouldNotBe` differentByteLimit,
                  headerCountLimit `shouldNotBe` differentHeaderCountLimit,
                  show byteLimit `shouldBe` "Just (RequestByteLimit 8)",
                  show headerCountLimit `shouldBe` "Just (RequestHeaderCountLimit 2)",
                  boundedHeadLimits `shouldBe` boundedHeadLimits,
                  show boundedHeadLimits
-                   `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing}",
+                   `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing, requestPathSegmentCountLimit = Nothing, requestPathSegmentByteLimit = Nothing, requestQueryFieldCountLimit = Nothing, requestQueryFieldByteLimit = Nothing}",
                  boundedHeadLimits `shouldNotBe` differentBoundedHeadLimits,
                  failure `shouldNotBe` RequestTargetTooLarge,
                  show failure `shouldBe` "RequestHeadersTooLarge",
@@ -670,6 +694,9 @@ spec = do
                  headerCountLimitValue /= differentHeaderCountLimitValue `shouldBe` True,
                  show headerCountLimitValue `shouldBe` "RequestHeaderCountLimit 2",
                  show [headerCountLimitValue] `shouldBe` "[RequestHeaderCountLimit 2]",
+                 itemCountLimitValue /= differentItemCountLimitValue `shouldBe` True,
+                 show itemCountLimitValue `shouldBe` "RequestItemCountLimit 4",
+                 show [itemCountLimitValue] `shouldBe` "[RequestItemCountLimit 4]",
                  length (show boundedHeadLimits) + length (showList [boundedHeadLimits] "")
                    `shouldSatisfy` (> 0),
                  length (show failure) + length (showList [failure] "")
