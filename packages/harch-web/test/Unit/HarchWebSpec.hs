@@ -626,6 +626,69 @@ spec = do
                ]
         )
 
+    it "keeps request-budget constructors total and their failure values inspectable" $ do
+      byteLimitInput <- newIORef 8
+      differentByteLimitInput <- newIORef 9
+      headerCountLimitInput <- newIORef 2
+      differentHeaderCountLimitInput <- newIORef 3
+      failureInput <- newIORef RequestHeadersTooLarge
+      byteLimit <- requestByteLimit <$> readIORef byteLimitInput
+      differentByteLimit <- requestByteLimit <$> readIORef differentByteLimitInput
+      headerCountLimit <- mkRequestHeaderCountLimit <$> readIORef headerCountLimitInput
+      differentHeaderCountLimit <- mkRequestHeaderCountLimit <$> readIORef differentHeaderCountLimitInput
+      failure <- readIORef failureInput
+      let byteLimitValue = fromMaybe (error "expected request byte limit") byteLimit
+          differentByteLimitValue = fromMaybe (error "expected distinct request byte limit") differentByteLimit
+          headerCountLimitValue = fromMaybe (error "expected request header count limit") headerCountLimit
+          differentHeaderCountLimitValue = fromMaybe (error "expected distinct request header count limit") differentHeaderCountLimit
+          boundedHeadLimits =
+            unboundedRequestHeadLimits
+              { requestTargetByteLimit = byteLimit,
+                requestHeaderCountLimit = headerCountLimit
+              }
+          differentBoundedHeadLimits =
+            unboundedRequestHeadLimits
+              { requestTargetByteLimit = differentByteLimit,
+                requestHeaderCountLimit = differentHeaderCountLimit
+              }
+      expectAll
+        ( (requestByteLimit (-1) `shouldBe` Nothing)
+            :| [ mkRequestHeaderCountLimit (-1) `shouldBe` Nothing,
+                 byteLimit `shouldNotBe` differentByteLimit,
+                 headerCountLimit `shouldNotBe` differentHeaderCountLimit,
+                 show byteLimit `shouldBe` "Just (RequestByteLimit 8)",
+                 show headerCountLimit `shouldBe` "Just (RequestHeaderCountLimit 2)",
+                 boundedHeadLimits `shouldBe` boundedHeadLimits,
+                 show boundedHeadLimits
+                   `shouldBe` "RequestHeadLimits {requestTargetByteLimit = Just (RequestByteLimit 8), requestHeaderByteLimit = Nothing, requestHeaderCountLimit = Just (RequestHeaderCountLimit 2), requestHeaderValueByteLimit = Nothing}",
+                 boundedHeadLimits `shouldNotBe` differentBoundedHeadLimits,
+                 failure `shouldNotBe` RequestTargetTooLarge,
+                 show failure `shouldBe` "RequestHeadersTooLarge",
+                 byteLimitValue /= differentByteLimitValue `shouldBe` True,
+                 show byteLimitValue `shouldBe` "RequestByteLimit 8",
+                 show [byteLimitValue] `shouldBe` "[RequestByteLimit 8]",
+                 headerCountLimitValue /= differentHeaderCountLimitValue `shouldBe` True,
+                 show headerCountLimitValue `shouldBe` "RequestHeaderCountLimit 2",
+                 show [headerCountLimitValue] `shouldBe` "[RequestHeaderCountLimit 2]",
+                 length (show boundedHeadLimits) + length (showList [boundedHeadLimits] "")
+                   `shouldSatisfy` (> 0),
+                 length (show failure) + length (showList [failure] "")
+                   `shouldSatisfy` (> 0)
+               ]
+        )
+
+    it "bounds request bodies while chunks arrive" $ do
+      successfulChunks <- newIORef ["ab", "c"]
+      oversizedChunks <- newIORef ["ab", "cd"]
+      let requestFrom chunksReference =
+            Wai.setRequestBodyChunks (nextRequestBodyChunk chunksReference) Wai.defaultRequest
+      successfulResult <- readRequestBodyUpTo 3 (requestFrom successfulChunks)
+      oversizedResult <- readRequestBodyUpTo 3 (requestFrom oversizedChunks)
+      expectAll
+        ( (successfulResult `shouldBe` Right "abc")
+            :| [oversizedResult `shouldBe` Left RequestBodyLimitExceeded]
+        )
+
     it "rejects a configured request head before application routing or middleware" $ do
       let limits = unboundedRequestHeadLimits {requestTargetByteLimit = requestByteLimit 4}
           limitedApplication =
