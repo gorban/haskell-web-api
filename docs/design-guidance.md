@@ -1,8 +1,105 @@
 # Design guidance
 
-This document separates Harch Web's landed authoring model from intentionally future-facing design.
-For the architecture overview, begin with the [root README](../README.md). For executable source, begin
-with [two-pages](../examples/two-pages/README.md).
+This document does two things. "Design decisions before you build" (below) is the decision
+framework a Large, foundational, or security-critical task must apply *before* implementation
+begins, with its chosen decisions recorded, not picked silently. Everything after "Landed
+conventions" separates Harch Web's landed authoring model from intentionally future-facing
+design, describing what has already shipped. For the architecture overview, begin with the
+[root README](../README.md). For executable source, begin with the
+[two-pages](../examples/two-pages/README.md) guide.
+
+## Design decisions before you build
+
+Apply this section before starting a task scoped Large, foundational, or security-critical, and
+again at any point during implementation where one of its questions becomes live. Record which
+choice was made and why — in the touched module's Haddock and, when it changes what an area of
+the framework can do, in this document's status table below — before the change lands. A decision
+made but not written down is indistinguishable, to the next reader, from a decision never made.
+
+### Extend an existing boundary before adding a parallel one
+
+Before adding a new dispatch, routing, codec, or protocol abstraction, check whether an existing
+one already owns that responsibility — `RouteDefinition`/`RouteCodec` for path/method dispatch,
+`ActionCodec` for typed submissions, `Response`/`ResponseBody` for what the server can return.
+Default to extending that existing type or its interpreter. Add a second, additive abstraction
+that coexists with the first only when at least one of the following holds, and record which one:
+
+- the existing abstraction's tests, name, or documented contract would have to change meaning for
+  existing callers to accommodate the new behavior, and an additive layer avoids that breaking
+  change to a stable public contract;
+- the new abstraction covers a genuinely disjoint concern the existing type deliberately does not
+  model (a byte-stream body consumer is not a route dispatcher); or
+- the task's own text explicitly authorizes a new, separate surface instead of extension.
+
+A task description that merely *offers* extension as one possible shape ("replace or extend the
+surrounding `X`") defaults to extension unless one of the three conditions above is met and
+written down — it is not itself authorization for a parallel surface.
+
+**Worked example.** A declarative API endpoint layer was built as a fully separate, additive WAI
+middleware, coexisting with the framework's existing page/action dispatch contract, even though
+the task that requested it explicitly offered extending that existing dispatch contract as an
+option. That phrasing alone does not satisfy the third condition above (explicit authorization for
+a *new* surface) — the default was to extend the existing dispatch contract into a method-aware
+one, which a follow-up task then had to require anyway. Two dispatchers now have to be kept in
+sync by hand instead of one contract owning path/method ownership outright.
+
+### When implementation hits a missing framework capability
+
+If finishing a task requires a capability the framework does not yet expose — for example, a
+response type that cannot set a header the task needs — stop and choose one of the following, in
+this order of preference, and write the choice and a one-paragraph rationale into the commit
+message and this document before continuing:
+
+1. **Add the primitive to the framework** when the gap is small, general, and squarely within an
+   area the framework already owns (see "Framework and application ownership" below). This is
+   almost always the right choice when every application of that kind will eventually need it.
+2. **Work around it in the application layer** only when the gap is application-specific, the
+   framework change would be speculative or oversized for this task's scope, and the workaround
+   does not silently substitute for a security property the requested feature depends on. Do not
+   replace a mechanism the task assumed (e.g., a cookie-based scheme) with a workaround that
+   changes its guarantees without naming that change explicitly.
+3. **Flag and stop** when neither of the above is safe to decide unilaterally mid-task — in
+   particular when the workaround would ship a materially different security or correctness
+   property than the task assumed. Leave the gap and the blocked decision in the handoff instead
+   of picking silently and moving on.
+
+Never make this choice invisibly inside an unrelated commit. A reviewer must be able to find the
+decision without reconstructing it from an implementation diff.
+
+**Worked example.** A native file-upload form needed to set a `Set-Cookie` header from a plain page
+response for a double-submit CSRF cookie, and the response type had no header field at all. The gap
+was worked around silently: a single-use, server-held token replaced the cookie-based scheme the
+task assumed, with a materially different security property (no cross-tab support, no expiry) and
+no rationale recorded anywhere a reviewer would see it before it shipped. This was option 3
+territory (flag and stop), or at minimum option 1 with a small, general response-header field — not
+a silent option-2 substitution of the mechanism the task assumed.
+
+### Untrusted input gets an explicit ownership and storage boundary
+
+Any feature that ingests untrusted request data into a durable or bounded resource — a file, a
+buffer, a database row, a queue entry, a session slot — must define, before implementation, who
+owns that resource across its lifecycle: which caller-supplied or framework-chosen backend
+receives it, how it is bounded, and what discards it on rejection, exception, disconnect, or
+cancellation. Do not default to a hardcoded backend (a local temp file, an unbounded in-process
+buffer, an implicit table) as the framework's only or implicit policy. Model the resource behind
+an explicit, application-suppliable adapter with a staged-then-promoted-or-discarded lifecycle,
+and never hand the caller a raw handle into a framework-internal storage decision (a temp-file
+path) as if it were that adapter. This applies beyond file uploads to any future feature accepting
+untrusted payloads — streamed request bodies, WebSocket frames, deferred job payloads, and similar.
+
+**Worked example.** A multipart request-body consumer spools every file part straight to a local
+temporary file and hands the caller that raw path — a hardcoded backend with no storage-adapter
+abstraction, no bounded in-memory option, and no explicit promote-or-discard step a caller
+controls. This is exactly the shape this rule exists to prevent.
+
+### Naming a partial slice in the status table
+
+A row in "Current capability and remaining design direction" may say `Implemented` only when the
+shipped surface matches its full designed scope. When a Large task's MVP slice ships ahead of that
+scope, use `Implemented (partial — see <task id>)` and name the concrete gap and the tracked
+follow-up in the Guidance column. Never let a status-table row imply a wider capability than what
+shipped; a missing follow-up reference next to a partial `Implemented` is itself a defect in this
+table, fixed the same way any other stale documentation is fixed.
 
 ## Landed conventions
 
@@ -231,6 +328,9 @@ the module haddock in `examples/two-pages/src/App/NativeUpload.hs` for the full 
 proof that the submission is a hard navigation with zero capture-kernel mutation requests either way.
 
 ## Current capability and remaining design direction
+
+Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
+the full designed scope shipped; a partial slice must say so and name its follow-up.
 
 | Area | State | Guidance |
 | --- | --- | --- |

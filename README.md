@@ -319,7 +319,8 @@ renderer and map it over a collection without framework-specific template regist
 - [Runtime configuration](docs/runtime-configuration.md): environment variables, listener modes,
   security policy, assets, and OTLP settings.
 - [Setup](SETUP.md): compiler, services, browser tooling, local runtime, and container workflows.
-- [Design guidance](docs/design-guidance.md): current conventions and intentionally future-facing work.
+- [Design guidance](docs/design-guidance.md): read before starting Large/foundational/security-critical
+  work — the pre-build decision framework, current conventions, and intentionally future-facing design.
 - [Changelog](CHANGELOG.md): release history.
 
 The main packages are:
