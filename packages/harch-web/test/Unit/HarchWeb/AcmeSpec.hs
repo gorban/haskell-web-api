@@ -47,6 +47,7 @@ defaultRequestPolicy =
       httpsRedirectPort = Nothing,
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
+      requestHeadLimits = unboundedRequestHeadLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }

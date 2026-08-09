@@ -56,6 +56,10 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `STATIC_ASSET_CONTENT_TYPE_<n>_MIME_TYPE` | MIME type paired with the indexed extension. | types for the default extensions |
 | `STATIC_CACHE_CONTROL_SECONDS` | Static response `Cache-Control` max-age. | unset |
 | `TRUST_FORWARDED_HEADERS` | Trust forwarded host/proto/prefix headers from a configured reverse proxy. Keep `false` unless the direct peer is trusted. | `false` |
+| `REQUEST_TARGET_MAX_BYTES` | Optional maximum for raw path plus query bytes. A request above it receives `414` before routing, logging, or tracing. | unset (unbounded) |
+| `REQUEST_HEADER_MAX_BYTES` | Optional total request-header budget. Warp applies it while parsing the wire request; the framework also checks it before middleware. | unset (unbounded) |
+| `REQUEST_HEADER_MAX_COUNT` | Optional maximum number of request header fields. | unset (unbounded) |
+| `REQUEST_HEADER_VALUE_MAX_BYTES` | Optional maximum for one header value, including cookies, forwarded headers, and trace context. | unset (unbounded) |
 | `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
 | `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
 | `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |
@@ -89,6 +93,27 @@ The compiled SMTP credentials and `TOTP_ENCRYPTION_KEY` are localhost developmen
 production secrets. `APP_MODE=production` rejects the committed TOTP key at startup; set a fresh,
 independent 32-byte key in `.env.local` or the process environment. For deployment, prefer process
 environment injection or a secret manager over a committed file.
+
+## Request resource limits
+
+The request-head settings are deliberately opt-in: no framework-wide production default is imposed
+by this release. Select a budget from the whole deployment path rather than copying an arbitrary
+number: reverse proxy, load balancer, Warp listener, application middleware, endpoint codec, and
+container must agree on which layer rejects first. Set the proxy boundary no larger than the
+application boundary where possible; a proxy is defense in depth, not a replacement for the
+application limit.
+
+Warp rejects an over-limit header block before it builds a WAI request (its parser response is `400`).
+Once WAI has constructed a request, Harch rejects an over-limit target with `414` and count or
+individual header-value limits with `431`, without reflecting request data. Endpoint body budgets are
+separate because JSON, form, streaming, and multipart endpoints have different valid sizes. The
+framework's client-action reader remains capped at 64 KiB, and the native subscription example uses an
+explicit 8 KiB incremental body reader; multipart limits and storage ownership are being completed
+under the tracked multipart task.
+
+Container memory limits are last-resort containment only: a cgroup OOM kills every in-flight request
+in that container. They should be observed in deployment drills, but are not a substitute for request
+limits and are intentionally not run by the test suite.
 
 ## Minimal local overrides
 

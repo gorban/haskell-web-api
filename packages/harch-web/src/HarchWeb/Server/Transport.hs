@@ -19,11 +19,15 @@ module HarchWeb.Server.Transport
     reloadTlsCredentialsIfChanged,
     socketPort,
     startHttpRuntimeServers,
+    startHttpRuntimeServersWithRequestHeadLimits,
     startManualTlsRuntimeServer,
+    startManualTlsRuntimeServerWithRequestHeadLimits,
     startManualTlsRuntimeServerWithStarter,
     startManualTlsRuntimeServers,
+    startManualTlsRuntimeServersWithRequestHeadLimits,
     startWarpRuntimeServerOnSocket,
     startWarpServerOnSocket,
+    startWarpServerOnSocketWithRequestHeadLimits,
     stopRuntimeServer,
     stopRuntimeServers,
   )
@@ -40,7 +44,7 @@ import Data.Maybe (catMaybes)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Security (socketAddressText)
+import HarchWeb.Security (RequestHeadLimits (..), requestByteLimitValue, socketAddressText, unboundedRequestHeadLimits)
 import HarchWeb.Server.Config
 import HarchWeb.Server.Transport.Tls
   ( ReloadingTlsCredentials,
@@ -68,7 +72,13 @@ data ActiveConnectionAddresses = ActiveConnectionAddresses
   }
 
 startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
-startHttpRuntimeServers endpoints waiApplication =
+startHttpRuntimeServers = startHttpRuntimeServersWithRequestHeadLimits unboundedRequestHeadLimits
+
+-- | Start HTTP listeners with an application-selected request-head budget.
+-- The legacy entry point remains unbounded so callers do not acquire a new
+-- deployment policy accidentally.
+startHttpRuntimeServersWithRequestHeadLimits :: RequestHeadLimits -> [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
+startHttpRuntimeServersWithRequestHeadLimits requestLimits endpoints waiApplication =
   go [] endpoints
   where
     go runningServers remainingEndpoints =
@@ -76,14 +86,18 @@ startHttpRuntimeServers endpoints waiApplication =
         [] -> pure (reverse runningServers)
         endpoint : remaining ->
           ( do
-              runningServer <- startHttpRuntimeServer endpoint waiApplication
+              runningServer <- startHttpRuntimeServer requestLimits endpoint waiApplication
               go (runningServer : runningServers) remaining
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
 
 startManualTlsRuntimeServers :: [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
-startManualTlsRuntimeServers manualTlsPlans waiApplication connectionReporter =
+startManualTlsRuntimeServers = startManualTlsRuntimeServersWithRequestHeadLimits unboundedRequestHeadLimits
+
+-- | Start manual-TLS listeners with the same head budget as HTTP listeners.
+startManualTlsRuntimeServersWithRequestHeadLimits :: RequestHeadLimits -> [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
+startManualTlsRuntimeServersWithRequestHeadLimits requestLimits manualTlsPlans waiApplication connectionReporter =
   connectionReporter `seq` go [] manualTlsPlans
   where
     go runningServers remainingPlans =
@@ -91,17 +105,17 @@ startManualTlsRuntimeServers manualTlsPlans waiApplication connectionReporter =
         [] -> pure (reverse runningServers)
         manualTlsPlan : remaining ->
           ( do
-              runningServer <- startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter
+              runningServer <- startManualTlsRuntimeServerWithRequestHeadLimits requestLimits manualTlsPlan waiApplication connectionReporter
               go (runningServer : runningServers) remaining
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
 
-startHttpRuntimeServer :: ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
-startHttpRuntimeServer endpoint waiApplication = do
+startHttpRuntimeServer :: RequestHeadLimits -> ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
+startHttpRuntimeServer requestLimits endpoint waiApplication = do
   listeningSocket <- openListenerSocket endpoint
   serverThreadId <-
-    startWarpServerOnSocket endpoint listeningSocket waiApplication
+    startWarpServerOnSocketWithRequestHeadLimits requestLimits endpoint listeningSocket waiApplication
   endpoint `seq`
     pure
       RunningRuntimeServer
@@ -110,8 +124,11 @@ startHttpRuntimeServer endpoint waiApplication = do
         }
 
 startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServer =
-  startManualTlsRuntimeServerWithStarter startWarpTlsServerOnSocket
+startManualTlsRuntimeServer = startManualTlsRuntimeServerWithRequestHeadLimits unboundedRequestHeadLimits
+
+startManualTlsRuntimeServerWithRequestHeadLimits :: RequestHeadLimits -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
+startManualTlsRuntimeServerWithRequestHeadLimits requestLimits =
+  startManualTlsRuntimeServerWithStarter (startWarpTlsServerOnSocketWithRequestHeadLimits requestLimits)
 
 startManualTlsRuntimeServerWithStarter :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
 startManualTlsRuntimeServerWithStarter startTlsServer manualTlsPlan waiApplication connectionReporter = do
@@ -193,20 +210,23 @@ openListenerSocket endpoint = do
 data RuntimeServerReady = RuntimeServerReady
 
 startWarpServerOnSocket :: ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocket endpoint listeningSocket waiApplication =
+startWarpServerOnSocket = startWarpServerOnSocketWithRequestHeadLimits unboundedRequestHeadLimits
+
+startWarpServerOnSocketWithRequestHeadLimits :: RequestHeadLimits -> ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
+startWarpServerOnSocketWithRequestHeadLimits requestLimits endpoint listeningSocket waiApplication =
   startWarpRuntimeServerOnSocket $ \startupSignal ->
-    let settings = runtimeHttpServerSettings endpoint startupSignal
+    let settings = runtimeHttpServerSettings requestLimits endpoint startupSignal
      in settings `seq` Warp.runSettingsSocket settings listeningSocket waiApplication
 
-startWarpTlsServerOnSocket :: ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId
-startWarpTlsServerOnSocket endpoint tlsSettings listeningSocket connectionReporter waiApplication = do
+startWarpTlsServerOnSocketWithRequestHeadLimits :: RequestHeadLimits -> ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId
+startWarpTlsServerOnSocketWithRequestHeadLimits requestLimits endpoint tlsSettings listeningSocket connectionReporter waiApplication = do
   activeConnectionAddresses <- newActiveConnectionAddresses
   let listenerScheme = Https
   listenerScheme `seq`
     connectionReporter `seq`
       startWarpRuntimeServerOnSocket $ \startupSignal ->
         let settings =
-              runtimeServerSettings listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter
+              runtimeServerSettings requestLimits listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter
          in settings `seq` WarpTLS.runTLSSocket tlsSettings settings listeningSocket waiApplication
 
 startWarpRuntimeServerOnSocket :: (MVar (Either SomeException RuntimeServerReady) -> IO ()) -> IO ThreadId
@@ -219,19 +239,26 @@ startWarpRuntimeServerOnSocket runServerOnSocket = do
   _ <- waitForRuntimeServerStartup startupSignal
   pure threadId
 
-runtimeServerSettings :: ListenerScheme -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> ActiveConnectionAddresses -> (Observability.ConnectionObservability -> IO ()) -> Warp.Settings
-runtimeServerSettings listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter =
+runtimeServerSettings :: RequestHeadLimits -> ListenerScheme -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> ActiveConnectionAddresses -> (Observability.ConnectionObservability -> IO ()) -> Warp.Settings
+runtimeServerSettings requestLimits listenerScheme endpoint startupSignal activeConnectionAddresses connectionReporter =
   Warp.setPort (endpointPort endpoint)
     . Warp.setOnException (runtimeConnectionExceptionReporter listenerScheme endpoint activeConnectionAddresses connectionReporter (Warp.getOnException Warp.defaultSettings))
     . Warp.setFork (forkTrackedConnection activeConnectionAddresses)
     . Warp.setOnOpen (registerActiveConnection activeConnectionAddresses)
     . Warp.setOnClose (\_ -> unregisterActiveConnection activeConnectionAddresses)
-    $ Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings
+    $ applyRequestHeadLimits requestLimits (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
 
-runtimeHttpServerSettings :: ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
-runtimeHttpServerSettings endpoint startupSignal =
+runtimeHttpServerSettings :: RequestHeadLimits -> ListenerEndpoint -> MVar (Either SomeException RuntimeServerReady) -> Warp.Settings
+runtimeHttpServerSettings requestLimits endpoint startupSignal =
   Warp.setPort (endpointPort endpoint) $
-    Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings
+    applyRequestHeadLimits requestLimits (Warp.setBeforeMainLoop (putMVar startupSignal (Right RuntimeServerReady)) Warp.defaultSettings)
+
+-- | Warp rejects an oversized header block before it allocates a WAI
+-- request.  The WAI request-head gate still checks count and individual
+-- values, and is the portable backstop for locally supplied applications.
+applyRequestHeadLimits :: RequestHeadLimits -> Warp.Settings -> Warp.Settings
+applyRequestHeadLimits requestLimits =
+  maybe id (Warp.setMaxTotalHeaderLength . requestByteLimitValue) (requestHeaderByteLimit requestLimits)
 
 newActiveConnectionAddresses :: IO ActiveConnectionAddresses
 newActiveConnectionAddresses =

@@ -968,6 +968,7 @@ spec = do
                   httpsRedirectPort = Nothing,
                   strictTransportSecurity = Nothing,
                   trustForwardedHeaders = False,
+                  requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 },
@@ -1098,6 +1099,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1441,6 +1443,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1664,6 +1667,7 @@ spec = do
                             strictTransportSecurityPreload = True
                           },
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1692,6 +1696,7 @@ spec = do
                             strictTransportSecurityPreload = False
                           },
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1716,6 +1721,7 @@ spec = do
                             strictTransportSecurityPreload = False
                           },
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1731,6 +1737,29 @@ spec = do
             { requestPolicy =
                 (requestPolicy defaultAppConfig)
                   { trustForwardedHeaders = True
+                  }
+            }
+
+    it "parses opt-in request-head resource limits without changing defaults" $
+      fmap
+        requestPolicy
+        ( parseRuntimeAppConfig
+            committedRuntimeDefaults
+            []
+            [ ("REQUEST_TARGET_MAX_BYTES", "2048"),
+              ("REQUEST_HEADER_MAX_BYTES", "8192"),
+              ("REQUEST_HEADER_MAX_COUNT", "32"),
+              ("REQUEST_HEADER_VALUE_MAX_BYTES", "1024")
+            ]
+        )
+        `shouldBe` Right
+          (requestPolicy defaultAppConfig)
+            { requestHeadLimits =
+                HarchWeb.RequestHeadLimits
+                  { HarchWeb.requestTargetByteLimit = HarchWeb.requestByteLimit 2048,
+                    HarchWeb.requestHeaderByteLimit = HarchWeb.requestByteLimit 8192,
+                    HarchWeb.requestHeaderCountLimit = HarchWeb.mkRequestHeaderCountLimit 32,
+                    HarchWeb.requestHeaderValueByteLimit = HarchWeb.requestByteLimit 1024
                   }
             }
 
@@ -1821,6 +1850,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1895,6 +1925,7 @@ spec = do
                     httpsRedirectPort = Nothing,
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
+                    requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }

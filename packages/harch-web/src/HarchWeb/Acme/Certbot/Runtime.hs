@@ -13,6 +13,7 @@ module HarchWeb.Acme.Certbot.Runtime
     runtimeAcmeBindPlans,
     runtimeCertbotArguments,
     startAcmeRuntimeServers,
+    startAcmeRuntimeServersWithRequestHeadLimits,
     stopAcmeRuntimeServers,
   )
 where
@@ -37,6 +38,7 @@ import HarchWeb.Acme.Challenge
     unregisterCertbotAcmeChallengeWebroot,
   )
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Security (RequestHeadLimits, unboundedRequestHeadLimits)
 import HarchWeb.Server.Config
   ( AcmeBindPlan (..),
     AcmeConfig (..),
@@ -51,7 +53,7 @@ import HarchWeb.Server.Config
 import HarchWeb.Server.Transport
   ( RunningRuntimeServer,
     ensureRuntimeFileExists,
-    startManualTlsRuntimeServer,
+    startManualTlsRuntimeServerWithRequestHeadLimits,
     stopRuntimeServer,
   )
 import Network.Wai qualified as Wai
@@ -83,7 +85,12 @@ runtimeAcmeBindPlans startupPlan =
   ]
 
 startAcmeRuntimeServers :: [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO [RunningAcmeRuntimeServer]
-startAcmeRuntimeServers acmePlans waiApplication connectionReporter applicationLogger =
+startAcmeRuntimeServers = startAcmeRuntimeServersWithRequestHeadLimits unboundedRequestHeadLimits
+
+-- | Start ACME-managed TLS listeners with the application's selected
+-- request-head budget.  The compatibility entry point remains unbounded.
+startAcmeRuntimeServersWithRequestHeadLimits :: RequestHeadLimits -> [RuntimeAcmeBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO [RunningAcmeRuntimeServer]
+startAcmeRuntimeServersWithRequestHeadLimits requestLimits acmePlans waiApplication connectionReporter applicationLogger =
   connectionReporter `seq` applicationLogger `seq` go [] acmePlans
   where
     go runningServers remainingPlans =
@@ -91,20 +98,20 @@ startAcmeRuntimeServers acmePlans waiApplication connectionReporter applicationL
         [] -> pure (reverse runningServers)
         acmePlan : remaining ->
           ( do
-              runningServer <- startAcmeRuntimeServer acmePlan waiApplication connectionReporter applicationLogger
+              runningServer <- startAcmeRuntimeServer requestLimits acmePlan waiApplication connectionReporter applicationLogger
               go (runningServer : runningServers) remaining
                 `onException` stopAcmeRuntimeServers (runningServer : runningServers)
           )
             `onException` stopAcmeRuntimeServers runningServers
 
-startAcmeRuntimeServer :: RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO RunningAcmeRuntimeServer
-startAcmeRuntimeServer runtimeAcmePlan waiApplication connectionReporter applicationLogger = do
+startAcmeRuntimeServer :: RequestHeadLimits -> RuntimeAcmeBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> (Text -> IO ()) -> IO RunningAcmeRuntimeServer
+startAcmeRuntimeServer requestLimits runtimeAcmePlan waiApplication connectionReporter applicationLogger = do
   let certbotConfig = acmeCertbotConfig (runtimeAcmeListenerConfig runtimeAcmePlan)
   (maybeManualTlsPlan, cleanupDirectory) <-
     prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan certbotConfig
   maybeRunningServer <-
     connectionReporter `seq`
-      traverse (\manualTlsPlan -> startManualTlsRuntimeServer manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
+      traverse (\manualTlsPlan -> startManualTlsRuntimeServerWithRequestHeadLimits requestLimits manualTlsPlan waiApplication connectionReporter) maybeManualTlsPlan
         `onException` removePathForcibly cleanupDirectory
   pure
     RunningAcmeRuntimeServer

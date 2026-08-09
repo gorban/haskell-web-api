@@ -47,8 +47,11 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     eventStreamResponse,
+    readRequestBodyUpTo,
+    RequestBodyReadFailure (..),
     replaceRegion,
     serverSentEventSourceFromList,
+    unboundedRequestHeadLimits,
   )
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Api qualified as Api
@@ -145,23 +148,44 @@ nativeFallbackCsrfMiddleware :: Wai.Request -> () -> IO (MiddlewareResult ())
 nativeFallbackCsrfMiddleware request requestContext
   | Wai.requestMethod request == "POST",
     Wai.rawPathInfo request == "/native-subscribe" = do
-      requestBody <- Wai.strictRequestBody request
+      requestBodyResult <- readRequestBodyUpTo nativeFallbackBodyBytes request
       pure
-        ( case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
-            (Just cookieToken, Just submittedToken)
-              | cookieToken == submittedToken -> ContinueMiddleware requestContext
-            _ ->
-              HaltMiddleware
-                requestContext
-                ResponseBody
-                  { responseStatus = 403,
-                    responseContentType = "text/plain; charset=utf-8",
-                    responseBody = "Native fallback CSRF validation failed.",
-                    responseObservabilityAttributes = [],
-                    responseLogEntries = []
-                  }
+        ( case requestBodyResult of
+            Left RequestBodyLimitExceeded -> nativeFallbackBodyTooLarge requestContext
+            Right requestBody ->
+              case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
+                (Just cookieToken, Just submittedToken)
+                  | cookieToken == submittedToken -> ContinueMiddleware requestContext
+                _ -> nativeFallbackCsrfRejected requestContext
         )
   | otherwise = pure (ContinueMiddleware requestContext)
+
+nativeFallbackBodyBytes :: Int
+nativeFallbackBodyBytes = 8192
+
+nativeFallbackBodyTooLarge :: () -> MiddlewareResult ()
+nativeFallbackBodyTooLarge requestContext =
+  HaltMiddleware
+    requestContext
+    ResponseBody
+      { responseStatus = 413,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "Native fallback request body is too large.",
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
+
+nativeFallbackCsrfRejected :: () -> MiddlewareResult ()
+nativeFallbackCsrfRejected requestContext =
+  HaltMiddleware
+    requestContext
+    ResponseBody
+      { responseStatus = 403,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "Native fallback CSRF validation failed.",
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
 
 nativeFallbackCsrfToken :: Wai.Request -> Maybe ByteString.ByteString
 nativeFallbackCsrfToken request =
@@ -219,6 +243,7 @@ twoPageRequestPolicy =
       httpsRedirectPort = Nothing,
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
+      requestHeadLimits = unboundedRequestHeadLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }

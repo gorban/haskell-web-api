@@ -3,6 +3,10 @@
 
 module HarchWeb.Security
   ( CorsPolicyConfig (..),
+    RequestByteLimit,
+    RequestHeadLimitFailure (..),
+    RequestHeadLimits (..),
+    RequestHeaderCountLimit,
     RequestContextField (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
@@ -16,6 +20,9 @@ module HarchWeb.Security
     externalRequestPath,
     httpsRedirectResponse,
     requestContextObservabilityAttributes,
+    requestByteLimit,
+    requestByteLimitValue,
+    mkRequestHeaderCountLimit,
     requestContextFields,
     requestHostWithoutPort,
     requestLogContextFields,
@@ -29,6 +36,8 @@ module HarchWeb.Security
     responseSecurityHeaderValuesWithNonce,
     socketAddressText,
     stripRequestPathPrefix,
+    unboundedRequestHeadLimits,
+    validateRequestHead,
     waiRequestPath,
     waiRequestRouteTarget,
   )
@@ -37,6 +46,7 @@ where
 import Control.Applicative ((<|>))
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Char (isHexDigit)
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
@@ -124,10 +134,98 @@ data RequestPolicyConfig = RequestPolicyConfig
     httpsRedirectPort :: Maybe Int,
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
     trustForwardedHeaders :: Bool,
+    requestHeadLimits :: RequestHeadLimits,
     corsPolicy :: CorsPolicyConfig,
     responseSecurityHeaders :: ResponseSecurityHeadersConfig
   }
   deriving (Eq, Show)
+
+-- | A non-negative byte bound used for untrusted request metadata.  Construct it
+-- with 'requestByteLimit' so a negative configuration cannot enter the
+-- request boundary.
+newtype RequestByteLimit = RequestByteLimit Int
+  deriving (Eq, Show)
+
+requestByteLimit :: Int -> Maybe RequestByteLimit
+requestByteLimit byteCount
+  | byteCount >= 0 = Just (RequestByteLimit byteCount)
+  | otherwise = Nothing
+
+requestByteLimitValue :: RequestByteLimit -> Int
+requestByteLimitValue (RequestByteLimit byteCount) = byteCount
+
+-- | A non-negative bound on the number of request header fields.
+newtype RequestHeaderCountLimit = RequestHeaderCountLimit Int
+  deriving (Eq, Show)
+
+mkRequestHeaderCountLimit :: Int -> Maybe RequestHeaderCountLimit
+mkRequestHeaderCountLimit headerCount
+  | headerCount >= 0 = Just (RequestHeaderCountLimit headerCount)
+  | otherwise = Nothing
+
+-- | Limits checked before request-derived text is parsed, logged, routed, or
+-- handed to application middleware.  Every field is optional deliberately:
+-- the framework currently preserves its established unbounded behaviour
+-- until an application chooses a deployment-appropriate budget.
+data RequestHeadLimits = RequestHeadLimits
+  { requestTargetByteLimit :: Maybe RequestByteLimit,
+    requestHeaderByteLimit :: Maybe RequestByteLimit,
+    requestHeaderCountLimit :: Maybe RequestHeaderCountLimit,
+    requestHeaderValueByteLimit :: Maybe RequestByteLimit
+  }
+  deriving (Eq, Show)
+
+unboundedRequestHeadLimits :: RequestHeadLimits
+unboundedRequestHeadLimits =
+  RequestHeadLimits
+    { requestTargetByteLimit = Nothing,
+      requestHeaderByteLimit = Nothing,
+      requestHeaderCountLimit = Nothing,
+      requestHeaderValueByteLimit = Nothing
+    }
+
+-- | A stable, low-cardinality explanation for rejecting an inbound request
+-- before application code owns it.  No constructor carries untrusted input,
+-- keeping it safe to map to metrics or public protocol responses.
+data RequestHeadLimitFailure
+  = InvalidRequestTargetEncoding
+  | RequestTargetTooLarge
+  | TooManyRequestHeaders
+  | RequestHeadersTooLarge
+  | RequestHeaderValueTooLarge
+  deriving (Eq, Show)
+
+-- | Validate the raw request target and headers without consuming a body.
+-- This runs before route parsing, middleware, and request observability so an
+-- invalid UTF-8 target or configured head limit cannot become an exception or
+-- an allocation amplifier in a downstream parser.
+validateRequestHead :: RequestHeadLimits -> Wai.Request -> Either RequestHeadLimitFailure ()
+validateRequestHead limits request
+  | not (isUtf8 (Wai.rawPathInfo request) && isUtf8 (Wai.rawQueryString request)) = Left InvalidRequestTargetEncoding
+  | exceedsByteLimit (requestTargetByteLimit limits) requestTargetBytes = Left RequestTargetTooLarge
+  | exceedsHeaderCountLimit (requestHeaderCountLimit limits) (length requestHeaders) = Left TooManyRequestHeaders
+  | exceedsByteLimit (requestHeaderByteLimit limits) requestHeadersBytes = Left RequestHeadersTooLarge
+  | any (exceedsByteLimit (requestHeaderValueByteLimit limits) . ByteString.length . snd) requestHeaders = Left RequestHeaderValueTooLarge
+  | otherwise = Right ()
+  where
+    requestHeaders = Wai.requestHeaders request
+    requestTargetBytes = ByteString.length (Wai.rawPathInfo request) + ByteString.length (Wai.rawQueryString request)
+    requestHeadersBytes = sum [ByteString.length (CaseInsensitive.original name) + ByteString.length value | (name, value) <- requestHeaders]
+
+isUtf8 :: ByteString.ByteString -> Bool
+isUtf8 = either (const False) (const True) . TextEncoding.decodeUtf8'
+
+exceedsByteLimit :: Maybe RequestByteLimit -> Int -> Bool
+exceedsByteLimit maybeLimit byteCount =
+  case maybeLimit of
+    Nothing -> False
+    Just (RequestByteLimit maximumBytes) -> byteCount > maximumBytes
+
+exceedsHeaderCountLimit :: Maybe RequestHeaderCountLimit -> Int -> Bool
+exceedsHeaderCountLimit maybeLimit headerCount =
+  case maybeLimit of
+    Nothing -> False
+    Just (RequestHeaderCountLimit maximumHeaders) -> headerCount > maximumHeaders
 
 httpsRedirectResponse :: ByteString.ByteString -> Wai.Response
 httpsRedirectResponse redirectLocation =

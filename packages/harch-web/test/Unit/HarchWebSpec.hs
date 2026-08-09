@@ -243,6 +243,7 @@ defaultRequestPolicy =
       httpsRedirectPort = Nothing,
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
+      requestHeadLimits = unboundedRequestHeadLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
@@ -590,6 +591,51 @@ waiRequestWithRemoteHostAndHeaders segments remoteHost headers =
 
 spec :: Spec
 spec = do
+  describe "request-head limits" $ do
+    it "keeps the default policy deliberately unbounded" $
+      validateRequestHead
+        unboundedRequestHeadLimits
+        Wai.defaultRequest
+          { Wai.rawPathInfo = ByteString.replicate 8192 97,
+            Wai.requestHeaders = [("X-Large", ByteString.replicate 8192 98)]
+          }
+        `shouldBe` Right ()
+
+    it "classifies configured request-target, header, and encoding failures without retaining input" $ do
+      let limits =
+            unboundedRequestHeadLimits
+              { requestTargetByteLimit = requestByteLimit 4,
+                requestHeaderByteLimit = requestByteLimit 12,
+                requestHeaderCountLimit = mkRequestHeaderCountLimit 1,
+                requestHeaderValueByteLimit = requestByteLimit 3
+              }
+          requestFor requestPath headers =
+            Wai.defaultRequest
+              { Wai.rawPathInfo = requestPath,
+                Wai.requestHeaders = headers
+              }
+      expectAll
+        ( (validateRequestHead limits (requestFor "/long" []) `shouldBe` Left RequestTargetTooLarge)
+            :| [ validateRequestHead limits (requestFor "\255" []) `shouldBe` Left InvalidRequestTargetEncoding,
+                 validateRequestHead limits (requestFor "/ok" [("A", "1"), ("B", "2")]) `shouldBe` Left TooManyRequestHeaders,
+                 validateRequestHead limits (requestFor "/ok" [("A", "1234")]) `shouldBe` Left RequestHeaderValueTooLarge,
+                 validateRequestHead
+                   (limits {requestHeaderValueByteLimit = Nothing, requestHeaderCountLimit = Nothing})
+                   (requestFor "/ok" [("Header", "1234567")])
+                   `shouldBe` Left RequestHeadersTooLarge
+               ]
+        )
+
+    it "rejects a configured request head before application routing or middleware" $ do
+      let limits = unboundedRequestHeadLimits {requestTargetByteLimit = requestByteLimit 4}
+          limitedApplication =
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestHeadLimits = limits}))
+              { applicationRequestMiddleware = [RequestMiddleware (\_ _ -> expectationFailure "request-head gate should run first" >> pure (ContinueMiddleware defaultContext))],
+                renderResponse = \_ -> expectationFailure "request-head gate should run first" >> pure (renderSampleResponse (RouteRequest DataRoute defaultContext))
+              }
+      response <- performWaiRequest (toWaiApplication limitedApplication) (Wai.defaultRequest {Wai.rawPathInfo = "/long"})
+      Wai.responseStatus response `shouldBe` Http.status414
+
   describe "HarchWeb.Action" $ do
     it "prints codec paths and methods from the same declarations used for parsing and form markup" $ do
       let prefixedContext = defaultContext {testContextPathPrefix = "/app"}
@@ -959,6 +1005,7 @@ spec = do
                 httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
+                requestHeadLimits = unboundedRequestHeadLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -1073,6 +1120,7 @@ spec = do
                 httpsRedirectPort = Just 5443,
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
+                requestHeadLimits = unboundedRequestHeadLimits,
                 corsPolicy = corsPolicyConfig,
                 responseSecurityHeaders = responseSecurityHeadersConfig
               }
@@ -1082,6 +1130,7 @@ spec = do
                 httpsRedirectPort = Nothing,
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig,
                 trustForwardedHeaders = False,
+                requestHeadLimits = unboundedRequestHeadLimits,
                 corsPolicy =
                   defaultCorsPolicyConfig
                     { corsAllowedOrigins = ["https://app.example.com"]
@@ -2418,6 +2467,7 @@ spec = do
                         strictTransportSecurityPreload = True
                       },
                 trustForwardedHeaders = True,
+                requestHeadLimits = unboundedRequestHeadLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -2448,6 +2498,7 @@ spec = do
                         strictTransportSecurityPreload = False
                       },
                 trustForwardedHeaders = False,
+                requestHeadLimits = unboundedRequestHeadLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -3733,6 +3784,7 @@ spec = do
                           strictTransportSecurityPreload = False
                         },
                   trustForwardedHeaders = True,
+                  requestHeadLimits = unboundedRequestHeadLimits,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 }
@@ -6609,6 +6661,21 @@ spec = do
           responseText <- readLocalTestServerResponse localTestServer "/assets/styles/site.css"
           Text.isInfixOf "body { color: red; }" responseText `shouldBe` True
 
+    it "rejects an oversized header block at the real Warp listener" $ do
+      let limitedApplication =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              (defaultRequestPolicy {requestHeadLimits = unboundedRequestHeadLimits {requestHeaderByteLimit = requestByteLimit 64}})
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        responseBytes <-
+          readRawLoopbackHttpResponse
+            (localServerPort localTestServer)
+            "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Oversized: 012345678901234567890123456789012345678901234567890123456789\r\n\r\n"
+        -- Warp rejects an over-limit wire head before WAI request construction
+        -- with its stable parser-level 400. The WAI gate supplies 431 for the
+        -- count and individual-value limits it can inspect.
+        responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "400 Bad Request"
+
   describe "withLocalTestServerForApplication" $ do
     it "serves an already-built Wai.Application over a real loopback HTTP listener" $
       let markedWaiApplication request respond =
@@ -6674,6 +6741,17 @@ readLoopbackHttpResponseBytesWithHostResult port hostHeader path =
         (Left . displayException)
         Right
         (responseResult :: Either IOError ByteString.ByteString)
+
+readRawLoopbackHttpResponse :: Int -> ByteString.ByteString -> IO ByteString.ByteString
+readRawLoopbackHttpResponse port requestBytes =
+  Socket.withSocketsDo $ do
+    clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+    responseResult <- try $ do
+      Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral port) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+      SocketByteString.sendAll clientSocket requestBytes
+      readAllSocketChunks clientSocket
+    Socket.close clientSocket
+    either (ioError . userError . displayException) pure (responseResult :: Either IOError ByteString.ByteString)
 
 readLoopbackHttpResponseBytesWithHostAndHeadersResult :: Int -> Text -> Text -> [(Text, Text)] -> IO (Either String ByteString.ByteString)
 readLoopbackHttpResponseBytesWithHostAndHeadersResult port hostHeader path headers =

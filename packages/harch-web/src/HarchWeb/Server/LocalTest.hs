@@ -16,10 +16,11 @@ import Control.Concurrent (ThreadId, killThread)
 import Control.Exception (bracket)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.Server.Application (Application)
+import HarchWeb.Security (RequestHeadLimits, requestHeadLimits, unboundedRequestHeadLimits)
+import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config (ListenerEndpoint (..), ListenerScheme (..))
 import HarchWeb.Server.RequestExecution (toWaiApplication)
-import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocket)
+import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocketWithRequestHeadLimits)
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 
@@ -37,26 +38,33 @@ data RunningLocalTestServer = RunningLocalTestServer
   }
 
 withLocalTestServer :: (Eq route) => Application route action context -> (LocalTestServer -> IO a) -> IO a
-withLocalTestServer webApplication = withLocalTestServerForApplication (toWaiApplication webApplication)
+withLocalTestServer webApplication =
+  withLocalTestServerWithRequestHeadLimits
+    (requestHeadLimits (applicationRequestPolicy webApplication))
+    (toWaiApplication webApplication)
 
 -- | Serve an already-built 'Wai.Application' over a real loopback HTTP
 -- listener for the lifetime of the callback, e.g. one composed from
 -- 'HarchWeb.Api.apiEndpointMiddleware' wrapping 'toWaiApplication'. Prefer
 -- 'withLocalTestServer' when no such composition is needed.
 withLocalTestServerForApplication :: Wai.Application -> (LocalTestServer -> IO a) -> IO a
-withLocalTestServerForApplication waiApplication useLocalServer =
-  bracket (startLocalTestServer waiApplication) stopLocalTestServer $
+withLocalTestServerForApplication =
+  withLocalTestServerWithRequestHeadLimits unboundedRequestHeadLimits
+
+withLocalTestServerWithRequestHeadLimits :: RequestHeadLimits -> Wai.Application -> (LocalTestServer -> IO a) -> IO a
+withLocalTestServerWithRequestHeadLimits requestLimits waiApplication useLocalServer =
+  bracket (startLocalTestServer requestLimits waiApplication) stopLocalTestServer $
     useLocalServer . runningLocalServerInfo
 
-startLocalTestServer :: Wai.Application -> IO RunningLocalTestServer
-startLocalTestServer waiApplication = do
+startLocalTestServer :: RequestHeadLimits -> Wai.Application -> IO RunningLocalTestServer
+startLocalTestServer requestLimits waiApplication = do
   listeningSocket <- openLoopbackSocket
   localPort <- socketPort listeningSocket
   let listenerScheme = Http
       endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = localPort}
   serverThreadId <-
     endpointHost endpoint `seq`
-      startWarpServerOnSocket endpoint listeningSocket waiApplication
+      startWarpServerOnSocketWithRequestHeadLimits requestLimits endpoint listeningSocket waiApplication
   localPort `seq`
     pure
       RunningLocalTestServer

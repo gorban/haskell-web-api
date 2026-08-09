@@ -80,6 +80,9 @@ import HarchWeb
     ListenerScheme (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
+    RequestByteLimit,
+    RequestHeadLimits (..),
+    RequestHeaderCountLimit,
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
     ServerConfig (..),
@@ -95,6 +98,9 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     firstCertbotDomain,
+    mkRequestHeaderCountLimit,
+    requestByteLimit,
+    unboundedRequestHeadLimits,
   )
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
@@ -304,6 +310,7 @@ defaultAppConfig =
             httpsRedirectPort = Nothing,
             strictTransportSecurity = Nothing,
             trustForwardedHeaders = False,
+            requestHeadLimits = unboundedRequestHeadLimits,
             corsPolicy = defaultCorsPolicyConfig,
             responseSecurityHeaders = defaultResponseSecurityHeadersConfig
           },
@@ -693,8 +700,33 @@ parseRequestPolicyConfigP parsedListeners =
     <*> pure (defaultHttpsRedirectPort parsedListeners)
     <*> parseOptionalStrictTransportSecurityP
     <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
+    <*> parseRequestHeadLimitsP
     <*> parseCorsPolicyConfigP
     <*> parseResponseSecurityHeadersConfigP
+
+-- | These deployment limits are opt-in.  An absent setting remains unbounded
+-- so upgrading does not silently change an established application's traffic
+-- contract; deployments select values appropriate to their proxy and memory
+-- budget.
+parseRequestHeadLimitsP :: ConfigParser RequestHeadLimits
+parseRequestHeadLimitsP =
+  RequestHeadLimits
+    <$> parseOptionalRequestByteLimitP "REQUEST_TARGET_MAX_BYTES"
+    <*> parseOptionalRequestByteLimitP "REQUEST_HEADER_MAX_BYTES"
+    <*> parseOptionalRequestHeaderCountLimitP "REQUEST_HEADER_MAX_COUNT"
+    <*> parseOptionalRequestByteLimitP "REQUEST_HEADER_VALUE_MAX_BYTES"
+
+parseOptionalRequestByteLimitP :: Text -> ConfigParser (Maybe RequestByteLimit)
+parseOptionalRequestByteLimitP key = do
+  maybeValue <- optionalConfigValueP key
+  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
+  pure (parsedValue >>= requestByteLimit)
+
+parseOptionalRequestHeaderCountLimitP :: Text -> ConfigParser (Maybe RequestHeaderCountLimit)
+parseOptionalRequestHeaderCountLimitP key = do
+  maybeValue <- optionalConfigValueP key
+  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
+  pure (parsedValue >>= mkRequestHeaderCountLimit)
 
 parseRedirectHttpToHttpsP :: [ListenerConfig] -> ConfigParser Bool
 parseRedirectHttpToHttpsP parsedListeners = do

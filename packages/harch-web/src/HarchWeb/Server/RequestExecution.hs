@@ -11,7 +11,6 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Maybe (fromMaybe)
@@ -24,7 +23,8 @@ import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, renderRoute)
 import HarchWeb.Security
-  ( RequestPolicyConfig,
+  ( RequestHeadLimitFailure (..),
+    RequestPolicyConfig (..),
     applyRequestPathPrefix,
     corsPreflightResponse,
     externalRequestPath,
@@ -37,11 +37,13 @@ import HarchWeb.Security
     requestRedirectLocation,
     requestScheme,
     requestTraceContext,
+    validateRequestHead,
     waiRequestPath,
     waiRequestRouteTarget,
   )
 import HarchWeb.Server.Application
 import HarchWeb.Server.ClientAction
+import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBodyUpTo)
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
@@ -110,7 +112,16 @@ data RoutedRequestExecution route action context = RoutedRequestExecution
 -- | Adapt a typed application to WAI. Framework-owned early responses,
 -- middleware, route dispatch, and finalization all converge here.
 toWaiApplication :: (Eq route) => Application route action context -> Wai.Application
-toWaiApplication webApplication request respond = do
+toWaiApplication webApplication request respond =
+  case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
+    Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
+    Right () -> toValidatedWaiApplication webApplication request respond
+
+-- | Only valid, budgeted request heads reach the ordinary request pipeline.
+-- This keeps malformed target bytes and oversized metadata out of route
+-- parsing, application middleware, logs, and observability extraction.
+toValidatedWaiApplication :: (Eq route) => Application route action context -> Wai.Application
+toValidatedWaiApplication webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
       policyResponseHeaders = requestPolicyResponseHeaders requestPolicyConfig request
@@ -134,6 +145,21 @@ toWaiApplication webApplication request respond = do
           requestStartedAt
           policyEvaluatedAt
   either respondEarlyRequest (const handleRoutedRequestAfterEarlyStages) earlyResult
+
+requestHeadLimitResponse :: RequestHeadLimitFailure -> Wai.Response
+requestHeadLimitResponse limitFailure =
+  Wai.responseLBS
+    status
+    [(Http.hContentType, "text/plain; charset=utf-8")]
+    "Request metadata was rejected."
+  where
+    status =
+      case limitFailure of
+        InvalidRequestTargetEncoding -> Http.status400
+        RequestTargetTooLarge -> Http.status414
+        TooManyRequestHeaders -> Http.status431
+        RequestHeadersTooLarge -> Http.status431
+        RequestHeaderValueTooLarge -> Http.status431
 
 handleRoutedRequest ::
   (Eq route) =>
@@ -246,17 +272,12 @@ requestIdempotencyKey request =
     >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
 
 readClientActionBody :: Wai.Request -> IO (Either ClientActionProtocolError LazyByteString.ByteString)
-readClientActionBody request = go 0 []
-  where
-    go byteCount chunks = do
-      chunk <- Wai.getRequestBodyChunk request
-      let nextByteCount = byteCount + ByteString.length chunk
-      if nextByteCount > maxClientActionBodyBytes
-        then pure (Left ClientActionBodyTooLarge)
-        else
-          if ByteString.null chunk
-            then pure (Right (LazyByteString.fromChunks (reverse chunks)))
-            else go nextByteCount (chunk : chunks)
+readClientActionBody request = do
+  result <- readRequestBodyUpTo maxClientActionBodyBytes request
+  pure $
+    case result of
+      Left RequestBodyLimitExceeded -> Left ClientActionBodyTooLarge
+      Right requestBody -> Right requestBody
 
 finalizeRoutedResponse ::
   (Eq route) =>

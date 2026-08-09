@@ -504,6 +504,20 @@ spec =
                  ]
           )
 
+      it "rejects an oversized native fallback body while it is read" $ do
+        oversizedRequest <-
+          nativeFallbackRequestChunks
+            [ByteString.replicate 4096 97, ByteString.replicate 4097 97]
+            "harch-native-fallback-csrf=two-pages-native-fallback"
+        oversizedResponse <- performWaiRequest (toWaiApplication buildApplication) oversizedRequest
+        oversizedBody <- readResponseBody oversizedResponse
+        expectAll
+          ( (Wai.responseStatus oversizedResponse `shouldBe` Http.status413)
+              :| [lookup Http.hContentType (Wai.responseHeaders oversizedResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   Text.isInfixOf "Native fallback request body is too large." oversizedBody `shouldBe` True
+                 ]
+          )
+
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
           HarchWeb.handleClientAction
@@ -523,11 +537,14 @@ isCompletePageResponse response =
     _ -> False
 
 nativeFallbackRequest :: ByteString.ByteString -> ByteString.ByteString -> IO Wai.Request
-nativeFallbackRequest requestBody csrfCookie = do
-  requestBodyChunks <- newIORef [requestBody]
+nativeFallbackRequest requestBody = nativeFallbackRequestChunks [requestBody]
+
+nativeFallbackRequestChunks :: [ByteString.ByteString] -> ByteString.ByteString -> IO Wai.Request
+nativeFallbackRequestChunks requestBodyChunks csrfCookie = do
+  bodyChunksReference <- newIORef requestBodyChunks
   pure
     ( Wai.setRequestBodyChunks
-        (nextRequestBodyChunk requestBodyChunks)
+        (nextRequestBodyChunk bodyChunksReference)
         ( (waiRequest ["native-subscribe"])
             { Wai.requestMethod = "POST",
               Wai.requestHeaders = [(Http.hContentType, "application/x-www-form-urlencoded")] <> maybe [] (pure . ("Cookie",)) (nonEmptyCookie csrfCookie)

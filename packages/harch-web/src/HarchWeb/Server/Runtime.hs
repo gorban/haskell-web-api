@@ -18,16 +18,16 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
-import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServers, stopAcmeRuntimeServers)
+import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestHeadLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Security (RequestPolicyConfig)
+import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
 import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.Transport
-  ( startHttpRuntimeServers,
-    startManualTlsRuntimeServers,
+  ( startHttpRuntimeServersWithRequestHeadLimits,
+    startManualTlsRuntimeServersWithRequestHeadLimits,
     stopRuntimeServers,
   )
 import Network.Wai qualified as Wai
@@ -82,15 +82,15 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
   connectionReporter `seq`
     observabilityPlan `seq`
       bracket
-        (startHttpRuntimeServers (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
+        (startHttpRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
         stopRuntimeServers
         ( \httpServers ->
             bracket
-              (startAcmeRuntimeServers (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
+              (startAcmeRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
               stopAcmeRuntimeServers
               ( \acmeServers ->
                   bracket
-                    (startManualTlsRuntimeServers (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
+                    (startManualTlsRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
                     stopRuntimeServers
                     ( \manualTlsServers ->
                         httpServers `seq`
