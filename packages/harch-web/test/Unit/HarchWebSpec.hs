@@ -684,9 +684,15 @@ spec = do
             Wai.setRequestBodyChunks (nextRequestBodyChunk chunksReference) Wai.defaultRequest
       successfulResult <- readRequestBodyUpTo 3 (requestFrom successfulChunks)
       oversizedResult <- readRequestBodyUpTo 3 (requestFrom oversizedChunks)
+      declaredOversizedResult <-
+        readRequestBodyUpTo
+          3
+          (Wai.defaultRequest {Wai.requestHeaders = [(Http.hContentLength, "4")]})
       expectAll
         ( (successfulResult `shouldBe` Right "abc")
-            :| [oversizedResult `shouldBe` Left RequestBodyLimitExceeded]
+            :| [ oversizedResult `shouldBe` Left RequestBodyLimitExceeded,
+                 declaredOversizedResult `shouldBe` Left RequestBodyLimitExceeded
+               ]
         )
 
     it "rejects a configured request head before application routing or middleware" $ do

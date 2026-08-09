@@ -13,7 +13,9 @@ module HarchWeb.Server.RequestBody
 where
 
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
+import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
 -- | The only expected failure of a bounded body reader.  It carries no
@@ -27,8 +29,13 @@ data RequestBodyReadFailure = RequestBodyLimitExceeded
 -- public configuration is represented by non-negative newtypes, while this
 -- small trusted helper remains convenient for fixed endpoint budgets.
 readRequestBodyUpTo :: Int -> Wai.Request -> IO (Either RequestBodyReadFailure LazyByteString.ByteString)
-readRequestBodyUpTo maximumBytes request = go 0 []
+readRequestBodyUpTo maximumBytes request
+  | declaredBodyExceedsLimit = pure (Left RequestBodyLimitExceeded)
+  | otherwise = go 0 []
   where
+    declaredBodyExceedsLimit =
+      maybe False (> maximumBytes) (lookup Http.hContentLength (Wai.requestHeaders request) >>= parseContentLength)
+
     go byteCount chunks = do
       chunk <- Wai.getRequestBodyChunk request
       let nextByteCount = byteCount + ByteString.length chunk
@@ -38,3 +45,8 @@ readRequestBodyUpTo maximumBytes request = go 0 []
           if ByteString.null chunk
             then pure (Right (LazyByteString.fromChunks (reverse chunks)))
             else go nextByteCount (chunk : chunks)
+
+parseContentLength :: ByteString.ByteString -> Maybe Int
+parseContentLength contentLength = do
+  (bodyBytes, remaining) <- ByteStringChar8.readInt contentLength
+  if bodyBytes >= 0 && ByteString.null remaining then Just bodyBytes else Nothing
