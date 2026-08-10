@@ -8,6 +8,7 @@ module HarchWeb.Server.ClientAction
     clientActionResponseBody,
     isClientActionRequest,
     maxClientActionBodyBytes,
+    maxClientActionFieldCount,
     parseClientActionFields,
     validateClientActionCsrf,
     validateClientActionRequest,
@@ -33,6 +34,7 @@ import Network.Wai qualified as Wai
 data ClientActionProtocolError
   = InvalidClientActionEncoding
   | ClientActionBodyTooLarge
+  | ClientActionFieldCountExceeded
   | ClientActionUnsupportedMediaType
   | ClientActionOriginRejected
   | ClientActionCsrfRejected
@@ -42,6 +44,12 @@ data ClientActionProtocolError
 
 maxClientActionBodyBytes :: Int
 maxClientActionBodyBytes = 65536
+
+-- | Bound the number of decoded URL-encoded fields independently from the
+-- raw-body budget.  The count is checked before parsing so a small body made
+-- of tiny fields cannot amplify into an unbounded list of decoded values.
+maxClientActionFieldCount :: Int
+maxClientActionFieldCount = 128
 
 isClientActionRequest :: Wai.Request -> Bool
 isClientActionRequest request = lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
@@ -91,10 +99,17 @@ parseClientActionFields :: LazyByteString.ByteString -> Either ClientActionProto
 parseClientActionFields requestBody =
   case LazyByteString.length requestBody > fromIntegral maxClientActionBodyBytes of
     True -> Left ClientActionBodyTooLarge
-    False -> traverse decodeField (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
+    False
+      | urlEncodedFieldCount requestBody > maxClientActionFieldCount -> Left ClientActionFieldCountExceeded
+      | otherwise -> traverse decodeField (HttpUri.parseQuery (LazyByteString.toStrict requestBody))
   where
     decodeField (fieldName, maybeFieldValue) =
       (,) <$> decodeActionField fieldName <*> (fromMaybe Text.empty <$> traverse decodeActionField maybeFieldValue)
+
+urlEncodedFieldCount :: LazyByteString.ByteString -> Int
+urlEncodedFieldCount requestBody
+  | LazyByteString.null requestBody = 0
+  | otherwise = 1 + sum (map (ByteString.count 38) (LazyByteString.toChunks requestBody))
 
 decodeActionField :: ByteString.ByteString -> Either ClientActionProtocolError Text
 decodeActionField = either (const (Left InvalidClientActionEncoding)) Right . TextEncoding.decodeUtf8'
@@ -106,6 +121,7 @@ clientActionProtocolErrorResponse protocolError =
         case protocolError of
           InvalidClientActionEncoding -> 400
           ClientActionBodyTooLarge -> 413
+          ClientActionFieldCountExceeded -> 413
           ClientActionUnsupportedMediaType -> 415
           ClientActionOriginRejected -> 403
           ClientActionCsrfRejected -> 403

@@ -2212,8 +2212,14 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
       readResponseBody response `shouldReturn` "{\"patches\":[],\"focusId\":null}"
 
+    it "bounds client-action form fields before decoding" $ do
+      let fields fieldCount = LazyByteString.fromStrict (ByteString.intercalate "&" (replicate fieldCount "field=value"))
+      fmap length (parseClientActionFields (fields 128)) `shouldBe` Right 128
+      either (const (-1)) length (parseClientActionFields (fields 129)) `shouldBe` -1
+
     it "rejects oversized or cross-origin client actions before application dispatch" $ do
       oversizedChunks <- newIORef [ByteString.replicate 65537 97]
+      tooManyFieldsChunks <- newIORef [ByteString.intercalate "&" (replicate 129 "field")]
       crossOriginChunks <- newIORef ["email=ada%40example.test"]
       invalidContentTypeChunks <- newIORef ["email=ada%40example.test"]
       missingCsrfChunks <- newIORef ["email=ada%40example.test"]
@@ -2229,12 +2235,14 @@ spec = do
               )
           validHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test")]
       oversizedResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith oversizedChunks validHeaders)
+      tooManyFieldsResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith tooManyFieldsChunks validHeaders)
       crossOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith crossOriginChunks (init validHeaders <> [("Origin", "https://evil.example")]))
       invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
       invalidHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "\255"), ("Origin", "http://example.test")])
       missingOriginAndHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingOriginAndHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")])
       Wai.responseStatus oversizedResponse `shouldBe` Http.status413
+      Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status413
       Wai.responseStatus crossOriginResponse `shouldBe` Http.status403
       Wai.responseStatus invalidContentTypeResponse `shouldBe` Http.status415
       Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403
