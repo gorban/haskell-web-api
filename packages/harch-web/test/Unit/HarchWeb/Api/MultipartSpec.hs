@@ -176,7 +176,8 @@ shouldReject action expectedError = do
 testLimits :: MultipartLimits
 testLimits =
   defaultMultipartLimits
-    { multipartLimitsMaxFieldBytes = 1024,
+    { multipartLimitsMaxBodyBytes = 4096,
+      multipartLimitsMaxFieldBytes = 1024,
       multipartLimitsMaxFileBytes = 1024,
       multipartLimitsMaxParts = 3
     }
@@ -447,6 +448,27 @@ spec =
           Right [MultipartFieldPart "field1" "value1"] -> pure ()
           other -> expectationFailure ("unexpected result: " <> show other)
 
+      it "rejects a streamed body whose aggregate bytes exceed the configured limit" $
+        shouldReject
+          (runConsume (testLimits {multipartLimitsMaxBodyBytes = ByteString.length twoPartBody - 1}) [twoPartBody])
+          MultipartBodyTooLarge
+
+      it "discards an active file when a later chunk exceeds the aggregate limit" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          let trackedOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                pure (path, handle)
+              firstChunk = "--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\npartial file contents"
+              limits = testLimits {multipartLimitsMaxBodyBytes = ByteString.length firstChunk}
+          readChunk <- chunkReader [firstChunk, " more bytes"]
+          result <- consumeMultipartBody (storageFromOpener trackedOpener) limits boundaryToken readChunk
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (result, maybeSpooledPath) of
+            (Left MultipartBodyTooLarge, Just spooledPath) -> doesFileExist spooledPath `shouldReturn` False
+            other -> expectationFailure ("unexpected result: " <> show other)
+
       it "rejects a body that declares more parts than the configured limit" $
         let fourFieldParts =
               ByteString.concat
@@ -505,6 +527,11 @@ spec =
       it "reports truncation when the body ends mid-part, after some body bytes arrived" $
         shouldReject
           (runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\npartial"])
+          MultipartTruncatedBody
+
+      it "flushes a delimiter-sized body suffix before reporting truncation" $
+        shouldReject
+          (runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n\r"])
           MultipartTruncatedBody
 
       it "derives comparable, printable representations for MultipartPart and MultipartConsumeError" $
