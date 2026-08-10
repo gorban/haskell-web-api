@@ -40,8 +40,11 @@ readResponseBody response = do
   pure (LazyByteString.toStrict (LazyByteString.concat chunks))
 
 jsonRequest :: HttpTypes.Method -> ByteString.ByteString -> ByteString.ByteString -> IO Wai.Request
-jsonRequest requestMethod requestPath bodyBytes = do
-  bodyRef <- newIORef [bodyBytes]
+jsonRequest requestMethod requestPath bodyBytes = jsonRequestChunks requestMethod requestPath [bodyBytes]
+
+jsonRequestChunks :: HttpTypes.Method -> ByteString.ByteString -> [ByteString.ByteString] -> IO Wai.Request
+jsonRequestChunks requestMethod requestPath bodyChunks = do
+  bodyRef <- newIORef bodyChunks
   let readChunk = atomicModifyIORef' bodyRef (\case [] -> ([], ByteString.empty); chunk : rest -> (rest, chunk))
   pure
     ( Wai.setRequestBodyChunks
@@ -73,6 +76,18 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "GREETING Hello, World!"
 
+    it "ignores an invalid UTF-8 Accept header" $ do
+      response <-
+        performWaiRequest
+          application
+          Wai.defaultRequest
+            { Wai.requestMethod = "GET",
+              Wai.rawPathInfo = "/api/greeting",
+              Wai.requestHeaders = [(HttpTypes.hAccept, "\255")]
+            }
+      body <- readResponseBody response
+      (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, World!" :: Text)])
+
   describe "POST /api/greeting" $ do
     it "decodes a JSON body and greets the requested name" $ do
       request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
@@ -88,6 +103,12 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "unsupported media type; send application/json"
 
+    it "reports an unsupported media type for invalid UTF-8 Content-Type" $ do
+      request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
+      response <- performWaiRequest application (request {Wai.requestHeaders = [(HttpTypes.hContentType, "\255")]})
+      body <- readResponseBody response
+      body `shouldBe` "unsupported media type; send application/json"
+
     it "reports a malformed body for invalid JSON" $ do
       request <- jsonRequest "POST" "/api/greeting" "not json"
       response <- performWaiRequest application request
@@ -96,6 +117,12 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
 
     it "reports an oversized body without decoding it" $ do
       request <- jsonRequest "POST" "/api/greeting" (ByteString.replicate 20000 65)
+      response <- performWaiRequest application request
+      body <- readResponseBody response
+      body `shouldBe` "request body too large"
+
+    it "rejects a chunked body when the next chunk exceeds its byte budget" $ do
+      request <- jsonRequestChunks "POST" "/api/greeting" [ByteString.replicate (16 * 1024) 65, "B"]
       response <- performWaiRequest application request
       body <- readResponseBody response
       body `shouldBe` "request body too large"

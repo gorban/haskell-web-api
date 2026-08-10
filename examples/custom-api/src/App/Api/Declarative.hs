@@ -24,6 +24,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
 import HarchWeb.Api.Multipart
+import HarchWeb.Server (RequestBodyReadFailure (..), readRequestBodyUpTo)
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
@@ -82,20 +83,24 @@ renderGreeting request greeting =
       (apiBytesResponse $! "text/x-greeting") (TextEncoding.encodeUtf8 ("GREETING " <> greetingText greeting))
     _ -> (apiBytesResponse $! "application/json; charset=utf-8") (LazyByteString.toStrict (Aeson.encode (encodeGreetingResponse greeting)))
   where
-    acceptHeaderText = TextEncoding.decodeUtf8 <$> lookup HttpTypes.hAccept (Wai.requestHeaders request)
+    acceptHeaderText = requestHeaderText HttpTypes.hAccept request
 
 handleGreetingTarget :: Wai.Request -> GreetingTarget -> IO ApiResponseBody
 handleGreetingTarget request ReadGreeting =
   pure (renderGreeting request (greetingFor "World"))
 handleGreetingTarget request SubmitGreeting = do
-  bodyBytes <- readBoundedBody maxGreetingBodyBytes request
-  pure $ case selectApiBodyDecoder RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder] contentTypeHeaderText bodyBytes of
-    ApiDecodedBody greetingRequest -> renderGreeting request (greetingFor (requestedName greetingRequest))
-    ApiUnsupportedMediaType _ -> apiTextResponse "unsupported media type; send application/json"
-    ApiBodyTooLarge -> apiTextResponse "request body too large"
-    ApiMalformedBody -> apiTextResponse "malformed JSON body"
+  bodyResult <- readRequestBodyUpTo maxGreetingBodyBytes request
+  pure $
+    case bodyResult of
+      Left RequestBodyLimitExceeded -> apiTextResponse "request body too large"
+      Right bodyBytes ->
+        case selectApiBodyDecoder RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder] contentTypeHeaderText (LazyByteString.toStrict bodyBytes) of
+          ApiDecodedBody greetingRequest -> renderGreeting request (greetingFor (requestedName greetingRequest))
+          ApiUnsupportedMediaType _ -> apiTextResponse "unsupported media type; send application/json"
+          ApiBodyTooLarge -> apiTextResponse "request body too large"
+          ApiMalformedBody -> apiTextResponse "malformed JSON body"
   where
-    contentTypeHeaderText = TextEncoding.decodeUtf8 <$> lookup HttpTypes.hContentType (Wai.requestHeaders request)
+    contentTypeHeaderText = requestHeaderText HttpTypes.hContentType request
 handleGreetingTarget request UploadAvatar =
   case lookup HttpTypes.hContentType (Wai.requestHeaders request) >>= multipartBoundary of
     Nothing -> pure (apiTextResponse "missing multipart boundary")
@@ -105,22 +110,12 @@ handleGreetingTarget request UploadAvatar =
         Right parts -> apiTextResponse (Text.pack (show (length parts)) <> " part(s) received")
         Left _consumeError -> apiTextResponse "invalid multipart body"
 
+requestHeaderText :: HttpTypes.HeaderName -> Wai.Request -> Maybe Text
+requestHeaderText headerName request =
+  lookup headerName (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
+
 maxGreetingBodyBytes :: Int
 maxGreetingBodyBytes = 16 * 1024
-
--- | Reads at most @maxBytes + 1@ bytes so an oversized body is still
--- detectable by 'selectApiBodyDecoder' without buffering an unbounded body
--- first.
-readBoundedBody :: Int -> Wai.Request -> IO ByteString
-readBoundedBody maxBytes request = go ByteString.empty
-  where
-    go accumulated
-      | ByteString.length accumulated > maxBytes = pure accumulated
-      | otherwise = do
-          chunk <- Wai.getRequestBodyChunk request
-          if ByteString.null chunk
-            then pure accumulated
-            else go (accumulated <> chunk)
 
 -- | Extracts the @boundary@ parameter from a @Content-Type@ header value,
 -- unquoting it if quoted. A minimal parser for this example; a real
