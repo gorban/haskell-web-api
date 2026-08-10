@@ -29,6 +29,7 @@ module App.NativeUpload
   ( NativeUploadState,
     NativeUploadTarget (..),
     handleNativeUpload,
+    nativeUploadDiscardCount,
     nativeUploadEndpoints,
     nativeUploadPath,
     newNativeUploadState,
@@ -40,7 +41,7 @@ import App.Pages.Route.Generated (PageRoute (HomePage, LiveDataPage, SecondPage)
 import App.Routes (CustomRoute (NativeSubscriptionFallback), TwoPageRoute (Custom), routeCodec)
 import App.Routes qualified as Routes
 import Control.Monad (void)
-import Data.IORef (IORef, atomicModifyIORef', newIORef)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -80,15 +81,26 @@ data NativeUploadTarget
 
 -- | Holds at most one outstanding, server-issued CSRF token. See the module
 -- header for why this is the CSRF transport instead of a double-submit
--- cookie.
-newtype NativeUploadState = NativeUploadState (IORef (Maybe CsrfToken))
+-- cookie. It also records deliberate disposal of accepted in-memory uploads,
+-- so the native example's ownership boundary remains observable in its
+-- real-browser tests.
+data NativeUploadState = NativeUploadState
+  { nativeUploadTokenReference :: IORef (Maybe CsrfToken),
+    nativeUploadDiscardCountReference :: IORef Int
+  }
 
 -- The `$!` on an already-WHNF `Nothing` has no runtime effect; it exists so
 -- HPC ticks this call on every invocation instead of treating the closed
 -- literal as a once-shared CAF reference.
 {-# ANN newNativeUploadState ("HLint: ignore Redundant $!" :: String) #-}
 newNativeUploadState :: IO NativeUploadState
-newNativeUploadState = NativeUploadState <$> (newIORef $! Nothing)
+newNativeUploadState = NativeUploadState <$> (newIORef $! Nothing) <*> (newIORef $! 0)
+
+-- | Returns how many accepted uploads this example deliberately discarded.
+-- Production applications can instead promote an upload through their chosen
+-- durable adapter; this example has no durable ownership requirement.
+nativeUploadDiscardCount :: NativeUploadState -> IO Int
+nativeUploadDiscardCount = readIORef . nativeUploadDiscardCountReference
 
 nativeUploadPath :: Text
 nativeUploadPath = "/native-upload"
@@ -106,17 +118,17 @@ handleNativeUpload state request SubmitUpload =
   handleUploadSubmission state request
 
 issueUploadToken :: NativeUploadState -> IO CsrfToken
-issueUploadToken (NativeUploadState tokenReference) = do
+issueUploadToken state = do
   freshToken <- generateCsrfToken
-  freshToken <$ atomicModifyIORef' tokenReference (const (Just freshToken, ()))
+  freshToken <$ atomicModifyIORef' (nativeUploadTokenReference state) (const (Just freshToken, ()))
 
 -- | Consumes and invalidates the outstanding token if @suppliedTokenText@
 -- matches it; a mismatched or absent supplied token leaves any outstanding
 -- token in place so a legitimate retry after a transient failure (e.g. no
 -- file selected) can still succeed against the same still-open form.
 claimUploadToken :: NativeUploadState -> Text -> IO Bool
-claimUploadToken (NativeUploadState tokenReference) suppliedTokenText =
-  atomicModifyIORef' tokenReference $ \maybeOutstandingToken ->
+claimUploadToken state suppliedTokenText =
+  atomicModifyIORef' (nativeUploadTokenReference state) $ \maybeOutstandingToken ->
     case (maybeOutstandingToken, mkCsrfToken suppliedTokenText) of
       (Just outstandingToken, Just suppliedToken)
         | validateCsrfToken outstandingToken suppliedToken ->
@@ -146,8 +158,9 @@ data UploadOutcome
 -- read -- unless a valid, unexpired CSRF field already arrived. A file
 -- part's bytes are only ever considered "accepted" once this callback
 -- returns 'Right' for it. The built-in adapter retains such bytes in memory
--- for this request only; AD tracks explicit durable adoption and cleanup
--- when an application selects persistent storage.
+-- only for this request; this example explicitly discards accepted uploads.
+-- An application that needs durable ownership must promote an upload through
+-- its selected storage adapter instead.
 --
 -- The `$!` applications below (on already-WHNF constructor arguments like
 -- 'MultipartMalformedBody') exist so HPC ticks each on every invocation
@@ -171,6 +184,7 @@ consumeUpload state limits request = do
         if csrfValidated
           then do
             discardMultipartUpload upload
+            void (atomicModifyIORef' (nativeUploadDiscardCountReference state) (\count -> (count + 1, ())))
             Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
           else do
             void (atomicModifyIORef' csrfRejectedReference (const (True, ())))

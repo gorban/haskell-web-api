@@ -3,7 +3,7 @@
 
 module Unit.NativeUploadSpec (spec) where
 
-import App.NativeUpload (handleNativeUpload, nativeUploadEndpoints, nativeUploadPath, newNativeUploadState)
+import App.NativeUpload (NativeUploadState, handleNativeUpload, nativeUploadDiscardCount, nativeUploadEndpoints, nativeUploadPath, newNativeUploadState)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -39,13 +39,16 @@ spec =
 
     describe "POST /native-upload" $ do
       it "accepts a valid CSRF token and file, spooling it and reporting its name and size" $ do
-        application <- newUploadApplication
+        (application, state) <- newUploadApplicationWithState
         csrfToken <- currentCsrfToken application
         response <- performRequest application (multipartRequest (csrfPart csrfToken <> filePart "hello.txt" "file bytes" <> closingBoundary))
         body <- readResponseBody response
+        discardCount <- nativeUploadDiscardCount state
         expectAll
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
-              :| [Text.isInfixOf "hello.txt (10 bytes) was received." body `shouldBe` True]
+              :| [ Text.isInfixOf "hello.txt (10 bytes) was received." body `shouldBe` True,
+                   discardCount `shouldBe` 1
+                 ]
           )
 
       it "ignores an unrecognized field between the CSRF field and the file" $ do
@@ -144,10 +147,13 @@ closingBoundary :: ByteString
 closingBoundary = "--" <> boundaryToken <> "--\r\n"
 
 newUploadApplication :: IO Wai.Application
-newUploadApplication = do
+newUploadApplication = fst <$> newUploadApplicationWithState
+
+newUploadApplicationWithState :: IO (Wai.Application, NativeUploadState)
+newUploadApplicationWithState = do
   state <- newNativeUploadState
   let fallback _request respond = respond (Wai.responseLBS HttpTypes.status404 [] "not found")
-  pure (Api.apiEndpointMiddleware nativeUploadEndpoints (handleNativeUpload state) fallback)
+  pure (Api.apiEndpointMiddleware nativeUploadEndpoints (handleNativeUpload state) fallback, state)
 
 currentCsrfToken :: Wai.Application -> IO Text
 currentCsrfToken application = do

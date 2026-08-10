@@ -191,11 +191,12 @@ CSRF policy: the form carries a single-use, server-held token (embedded as a hid
 every `GET`) rather than a double-submit cookie, since no framework change is needed to let a plain page
 response set a cookie header this way. `withMultipartRequestBodyWith`'s per-part callback validates
 that field as soon as it finishes — before any later part, including the file part, is read — so a
-request whose file part precedes an invalid or absent CSRF field is rejected before that file is ever
-spooled to disk; the CSRF field must precede the file field in the form markup for the common,
-well-formed case to get this benefit, not merely a rejected response after the fact. See the module
-haddock for the full policy and its explicitly accepted limitations (single outstanding token, no
-expiry).
+request whose file part precedes an invalid or absent CSRF field is rejected before that file is retained
+in the bounded in-memory adapter; the CSRF field must precede the file field in the form markup for the common,
+well-formed case to get this benefit, not merely a rejected response after the fact. Accepted uploads are
+explicitly discarded because this example has no durable ownership requirement; production handlers must
+instead deliberately promote uploads through their selected storage adapter. See the module haddock for
+the full policy and its explicitly accepted limitations (single outstanding token, no expiry).
 
 ## Verification
 

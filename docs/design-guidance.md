@@ -96,7 +96,7 @@ case-insensitive @multipart/form-data@ media type with exactly one valid boundar
 oversized declared @Content-Length@ before they call the body reader. The scoped streaming API
 exposes completed file parts as opaque claims: application code either promotes a claim once or
 discards it, and the framework discards every unclaimed upload when the callback scope exits.
-The earlier raw collector remains a compatibility path to retire under AD.
+There is no public raw collector: all multipart consumers use scoped ownership.
 
 ### Naming a partial slice in the status table
 
@@ -331,7 +331,8 @@ per-part callback — before any later part, including the file part, is read �
 part follows an invalid or absent CSRF field is rejected before that file reaches storage. See
 the module haddock in `examples/two-pages/src/App/NativeUpload.hs` for the full policy, and
 `test/E2E/AppSpec.hs`'s two native-upload scenarios (scripts enabled and disabled) for the real-browser
-proof that the submission is a hard navigation with zero capture-kernel mutation requests either way.
+proof that the submission is a hard navigation with zero capture-kernel mutation requests and exactly
+one deliberate in-memory upload discard either way.
 
 ## Current capability and remaining design direction
 
@@ -350,7 +351,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
 | `HarchWeb.Api` endpoint matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented, opt-in via WAI middleware | Wrap a `Wai.Application` with `apiEndpointMiddleware` to dispatch declared paths; it is not the default dispatcher, so keep routing everything else through `RouteCodec`/`ApiRoute`. |
-| `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection is explicit; complete staged-upload cleanup, promotion, and parser-wide bounds remain under AD. See [two-pages](../examples/two-pages/README.md)'s `/native-upload` page (`App.NativeUpload`) for the compiled, real-browser-tested demonstration. |
+| `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection, scoped cleanup, and promotion are explicit; parser-wide bounds and native-upload cleanup across every failure mode remain under AD. See [two-pages](../examples/two-pages/README.md)'s `/native-upload` page (`App.NativeUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
 | Automatic database-to-live-view subscriptions | Design direction | Use explicit SSE today; do not imply automatic subscriptions exist. |
