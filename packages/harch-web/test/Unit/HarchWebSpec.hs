@@ -704,11 +704,30 @@ spec = do
                ]
         )
 
-    it "keeps request-path helpers total for invalid raw path bytes" $
-      Security.waiRequestPath
-        defaultRequestPolicy
-        (Wai.defaultRequest {Wai.rawPathInfo = "\255"})
-        `shouldBe` ""
+    it "keeps request-text helpers total for invalid UTF-8" $
+      expectAll
+        ( ( Security.waiRequestPath
+              defaultRequestPolicy
+              (Wai.defaultRequest {Wai.rawPathInfo = "\255"})
+              `shouldBe` ""
+          )
+            :| [ Security.waiRequestRouteTarget
+                   defaultRequestPolicy
+                   (Wai.defaultRequest {Wai.rawPathInfo = "/known", Wai.rawQueryString = "?\255"})
+                   `shouldBe` "/known",
+                 map
+                   Security.requestContextFieldName
+                   ( Security.requestContextFields
+                       defaultRequestPolicy
+                       (Wai.defaultRequest {Wai.requestHeaders = [("User-Agent", "\255")]})
+                   )
+                   `shouldNotContain` ["user_agent.original"],
+                 Security.waiRequestPath
+                   defaultRequestPolicy
+                   (Wai.defaultRequest {Wai.rawPathInfo = "/known"})
+                   `shouldBe` "/known"
+               ]
+        )
 
     it "bounds request bodies while chunks arrive" $ do
       successfulChunks <- newIORef ["ab", "c"]

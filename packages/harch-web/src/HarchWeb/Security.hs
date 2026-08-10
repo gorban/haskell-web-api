@@ -50,7 +50,6 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Char (isHexDigit)
-import Data.Either (fromRight)
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -657,9 +656,15 @@ requestPathPrefix requestPolicyConfig request =
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request
   | ByteString.null rawPath = "/"
-  | otherwise = fromRight Text.empty (TextEncoding.decodeUtf8' rawPath)
+  | otherwise = decodeUtf8OrEmpty rawPath
   where
     rawPath = Wai.rawPathInfo request
+
+decodeUtf8OrEmpty :: ByteString.ByteString -> Text
+decodeUtf8OrEmpty bytes =
+  case TextEncoding.decodeUtf8' bytes of
+    Left _ -> Text.empty
+    Right decodedText -> decodedText
 
 waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> Text
 waiRequestRouteTarget requestPolicyConfig request = appendRawQueryString (waiRequestPath requestPolicyConfig request) (Wai.rawQueryString request)
