@@ -561,7 +561,8 @@ requestHeaderToken headerName request = requestHeaderText headerName request >>=
 
 requestHeaderText :: Http.HeaderName -> Wai.Request -> Maybe Text
 requestHeaderText headerName request =
-  fmap (limitObservabilityHeaderValue . Text.strip . TextEncoding.decodeUtf8) (lookup headerName (Wai.requestHeaders request))
+  lookup headerName (Wai.requestHeaders request)
+    >>= either (const Nothing) (Just . limitObservabilityHeaderValue . Text.strip) . TextEncoding.decodeUtf8'
 
 trustedRequestHeaderText :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
 trustedRequestHeaderText requestPolicyConfig headerName request =
@@ -653,14 +654,20 @@ requestPathPrefix requestPolicyConfig request =
   maybe Text.empty PathPrefix.normalizePathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
 
 rawRequestPath :: Wai.Request -> Text
-rawRequestPath request = if ByteString.null (Wai.rawPathInfo request) then "/" else TextEncoding.decodeUtf8 (Wai.rawPathInfo request)
+rawRequestPath request
+  | ByteString.null rawPath = "/"
+  | otherwise = either (const Text.empty) id (TextEncoding.decodeUtf8' rawPath)
+  where
+    rawPath = Wai.rawPathInfo request
 
 waiRequestRouteTarget :: RequestPolicyConfig -> Wai.Request -> Text
 waiRequestRouteTarget requestPolicyConfig request = appendRawQueryString (waiRequestPath requestPolicyConfig request) (Wai.rawQueryString request)
 
 appendRawQueryString :: Text -> ByteString.ByteString -> Text
 appendRawQueryString path rawQueryString =
-  if ByteString.null rawQueryString then path else path <> TextEncoding.decodeUtf8 rawQueryString
+  if ByteString.null rawQueryString
+    then path
+    else either (const path) (path <>) (TextEncoding.decodeUtf8' rawQueryString)
 
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request = applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (waiRequestPath requestPolicyConfig request)

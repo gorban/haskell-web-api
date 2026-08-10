@@ -8401,9 +8401,15 @@ spec = do
             (waiRequest ["second"])
               { Wai.requestHeaders = [("X-Forwarded-Prefix", ", ")]
               }
+          invalidForwardedPrefixRequest =
+            (waiRequest ["second"])
+              { Wai.requestHeaders = [("X-Forwarded-Prefix", "\255")]
+              }
       HarchWeb.requestContextFromRequest trustedForwardedApplication forwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext {requestPathPrefix = "/app"}
       HarchWeb.requestContextFromRequest trustedForwardedApplication emptyForwardedPrefixRequest defaultRequestContext
+        `shouldBe` defaultRequestContext
+      HarchWeb.requestContextFromRequest trustedForwardedApplication invalidForwardedPrefixRequest defaultRequestContext
         `shouldBe` defaultRequestContext
 
     it "stores the configured static assets used by the WAI adapter" $

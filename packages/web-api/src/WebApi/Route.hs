@@ -282,7 +282,7 @@ requestContextFromWaiRequest trustProxyHeaders request requestContext =
               Text.empty
               normalizeRequestPathPrefix
               ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
-                  >>= firstCommaSeparatedValue . Text.strip . TextEncoding.decodeUtf8
+                  >>= either (const Nothing) (firstCommaSeparatedValue . Text.strip) . TextEncoding.decodeUtf8'
               )
           else Text.empty,
       requestSessionId = requestSessionIdFromHeaders (Wai.requestHeaders request)

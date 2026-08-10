@@ -13,7 +13,6 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
@@ -223,7 +222,9 @@ dispatchRoutedRequest
         requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
      in if isClientActionRequest request
           then do
-            let expectedOrigin = requestScheme requestPolicyConfig request <> "://" <> TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Host" (Wai.requestHeaders request)))
+            let expectedOrigin =
+                  (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
+                    <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
             case validateClientActionRequest expectedOrigin request of
               Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
               Right () -> do

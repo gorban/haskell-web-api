@@ -2192,6 +2192,8 @@ spec = do
       crossOriginChunks <- newIORef ["email=ada%40example.test"]
       invalidContentTypeChunks <- newIORef ["email=ada%40example.test"]
       missingCsrfChunks <- newIORef ["email=ada%40example.test"]
+      invalidHostChunks <- newIORef ["email=ada%40example.test"]
+      missingOriginAndHostChunks <- newIORef ["email=ada%40example.test"]
       let requestWith bodyChunks headers =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk bodyChunks)
@@ -2205,10 +2207,14 @@ spec = do
       crossOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith crossOriginChunks (init validHeaders <> [("Origin", "https://evil.example")]))
       invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
+      invalidHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "\255"), ("Origin", "http://example.test")])
+      missingOriginAndHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingOriginAndHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")])
       Wai.responseStatus oversizedResponse `shouldBe` Http.status413
       Wai.responseStatus crossOriginResponse `shouldBe` Http.status403
       Wai.responseStatus invalidContentTypeResponse `shouldBe` Http.status415
       Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403
+      Wai.responseStatus invalidHostResponse `shouldBe` Http.status403
+      Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
 
     it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
       let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t unicode ☃"

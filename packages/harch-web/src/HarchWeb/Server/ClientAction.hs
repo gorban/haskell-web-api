@@ -46,11 +46,13 @@ maxClientActionBodyBytes = 65536
 isClientActionRequest :: Wai.Request -> Bool
 isClientActionRequest request = lookup "X-Harch-Action" (Wai.requestHeaders request) == Just "1"
 
-validateClientActionRequest :: Text -> Wai.Request -> Either ClientActionProtocolError ()
+validateClientActionRequest :: Maybe Text -> Wai.Request -> Either ClientActionProtocolError ()
 validateClientActionRequest expectedOrigin request
   | not (formUrlEncodedRequest request) = Left ClientActionUnsupportedMediaType
-  | requestOrigin request /= Just expectedOrigin = Left ClientActionOriginRejected
-  | otherwise = Right ()
+  | Just decodedOrigin <- expectedOrigin,
+    requestOrigin request == Just decodedOrigin =
+      Right ()
+  | otherwise = Left ClientActionOriginRejected
 
 validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError ()
 validateClientActionCsrf request actionFields
