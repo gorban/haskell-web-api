@@ -410,10 +410,11 @@ if [ "${#per_project_findings[@]}" -gt 0 ]; then
   done
 elif [ "${#aggregate_findings[@]}" -gt 0 ]; then
   echo
-  printf '\033[33mAggregate coverage report mixes components from separate package builds and is diagnostic only.\033[0m\n'
+  printf '\033[31mAggregate coverage report found <100%% coverage, exiting with error:\033[0m\n'
   for line in ${aggregate_findings[@]+"${aggregate_findings[@]}"}; do
-    printf '\033[33m- %s\033[0m\n' "$line"
+    printf '\033[31m- %s\033[0m\n' "$line"
   done
+  missing_coverage=true
 fi
 
 if $missing_coverage; then
