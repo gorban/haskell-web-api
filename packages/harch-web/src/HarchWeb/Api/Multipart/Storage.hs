@@ -33,7 +33,7 @@ multipartStagedUpload :: (ByteString -> IO ()) -> IO stored -> IO () -> Multipar
 multipartStagedUpload = Internal.MultipartStagedUpload
 
 newtype InMemoryUpload = InMemoryUpload ByteString
-  deriving (Eq, Show)
+  deriving (Show)
 
 -- | The small-upload backend supplied by the framework. The multipart
 -- consumer checks its file byte budget before each append, so this backend
@@ -46,7 +46,7 @@ inMemoryMultipartStorage =
       multipartStagedUpload
         (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
         (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
-        (IORef.writeIORef chunksReference [])
+        (IORef.writeIORef chunksReference $! [])
 
 inMemoryUploadBytes :: InMemoryUpload -> ByteString
 inMemoryUploadBytes (InMemoryUpload uploadBytes) = uploadBytes

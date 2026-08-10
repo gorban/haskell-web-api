@@ -132,6 +132,13 @@ runConsume limits chunks =
     readChunk <- chunkReader chunks
     consumeMultipartBody inMemoryMultipartStorage limits boundaryToken readChunk
 
+shouldReject :: IO (Either MultipartConsumeError [MultipartPart]) -> MultipartConsumeError -> Expectation
+shouldReject action expectedError = do
+  result <- action
+  case result of
+    Left actualError -> actualError `shouldBe` expectedError
+    Right parts -> expectationFailure ("expected rejection, received: " <> show parts)
+
 testLimits :: MultipartLimits
 testLimits =
   defaultMultipartLimits
@@ -308,21 +315,26 @@ spec =
     describe "consumeMultipartBody" $ do
       it "keeps the built-in storage adapter in memory within the file budget" $ do
         result <- runConsume testLimits [twoPartBody]
-        case result of
-          Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount] ->
+        equivalentResult <- runConsume testLimits [twoPartBody]
+        case (result, equivalentResult) of
+          ( Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount],
+            Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" equivalentUpload _]
+            ) ->
             expectAll
               ( (inMemoryUploadBytes upload `shouldBe` "file content here")
                   :| [ byteCount `shouldBe` ByteString.length "file content here",
-                       (upload == upload) `shouldBe` True,
+                       inMemoryUploadBytes upload `shouldBe` inMemoryUploadBytes equivalentUpload,
                        show upload `shouldSatisfy` (not . null),
                        showList [upload] "" `shouldSatisfy` (not . null)
                      ]
               )
-          other -> expectationFailure ("unexpected result: " <> show other)
+          results -> expectationFailure ("unexpected results: " <> show results)
 
-      it "consumes a single field part into a MultipartFieldPart" $
-        runConsume testLimits [singleFieldBody]
-          `shouldReturn` Right [MultipartFieldPart "field1" "value1"]
+      it "consumes a single field part into a MultipartFieldPart" $ do
+        result <- runConsume testLimits [singleFieldBody]
+        case result of
+          Right [MultipartFieldPart "field1" "value1"] -> pure ()
+          other -> expectationFailure ("unexpected result: " <> show other)
 
       it "uses an application-supplied storage adapter for a file part" $
         withTestUploadOpener $ \openUploadFile -> do
@@ -337,9 +349,11 @@ spec =
                 )
             other -> expectationFailure ("unexpected result: " <> show other)
 
-      it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $
-        runConsume testLimits (allByteChunks singleFieldBody)
-          `shouldReturn` Right [MultipartFieldPart "field1" "value1"]
+      it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $ do
+        result <- runConsume testLimits (allByteChunks singleFieldBody)
+        case result of
+          Right [MultipartFieldPart "field1" "value1"] -> pure ()
+          other -> expectationFailure ("unexpected result: " <> show other)
 
       it "rejects a body that declares more parts than the configured limit" $
         let fourFieldParts =
@@ -350,7 +364,7 @@ spec =
                 <> "--"
                 <> boundaryToken
                 <> "--\r\n"
-         in runConsume testLimits [fourFieldParts] `shouldReturn` Left MultipartTooManyParts
+         in shouldReject (runConsume testLimits [fourFieldParts]) MultipartTooManyParts
 
       it "rejects a field value that grows past the configured limit" $
         let largeFieldBody =
@@ -363,7 +377,7 @@ spec =
                 <> "\r\n--"
                 <> boundaryToken
                 <> "--\r\n"
-         in runConsume testLimits [largeFieldBody] `shouldReturn` Left (MultipartFieldTooLarge "field1")
+         in shouldReject (runConsume testLimits [largeFieldBody]) (MultipartFieldTooLarge "field1")
 
       it "rejects a file upload that grows past the configured limit" $
         let largeFileBody =
@@ -376,28 +390,30 @@ spec =
                 <> "\r\n--"
                 <> boundaryToken
                 <> "--\r\n"
-         in runConsume testLimits [largeFileBody] `shouldReturn` Left (MultipartFileTooLarge "file1")
+         in shouldReject (runConsume testLimits [largeFileBody]) (MultipartFileTooLarge "file1")
 
       it "rejects a part with no Content-Disposition header" $
         let noDispositionBody =
               "--" <> boundaryToken <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n--" <> boundaryToken <> "--\r\n"
-         in runConsume testLimits [noDispositionBody] `shouldReturn` Left MultipartMissingDisposition
+         in shouldReject (runConsume testLimits [noDispositionBody]) MultipartMissingDisposition
 
       it "rejects a part whose Content-Disposition has no name parameter" $
         let noNameBody =
               "--" <> boundaryToken <> "\r\nContent-Disposition: form-data\r\n\r\nvalue\r\n--" <> boundaryToken <> "--\r\n"
-         in runConsume testLimits [noNameBody] `shouldReturn` Left MultipartMissingDisposition
+         in shouldReject (runConsume testLimits [noNameBody]) MultipartMissingDisposition
 
       it "rejects a malformed body" $
-        runConsume testLimits ["--" <> boundaryToken <> "XYZ"] `shouldReturn` Left MultipartMalformedBody
+        shouldReject (runConsume testLimits ["--" <> boundaryToken <> "XYZ"]) MultipartMalformedBody
 
       it "reports truncation when the body ends before any bytes of an open part's body arrive" $
-        runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n"]
-          `shouldReturn` Left MultipartTruncatedBody
+        shouldReject
+          (runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n"])
+          MultipartTruncatedBody
 
       it "reports truncation when the body ends mid-part, after some body bytes arrived" $
-        runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\npartial"]
-          `shouldReturn` Left MultipartTruncatedBody
+        shouldReject
+          (runConsume testLimits ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\npartial"])
+          MultipartTruncatedBody
 
       it "derives comparable, printable representations for MultipartPart and MultipartConsumeError" $
         let parts :: [MultipartPartWith FilePath]
