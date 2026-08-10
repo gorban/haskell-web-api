@@ -248,17 +248,16 @@ stepAwaitingHeaders scanner =
   let (headerBlock, atBlankLine) = ByteString.breakSubstring "\r\n\r\n" (scannerBuffer scanner)
    in if ByteString.null atBlankLine
         then rejectOversizedHeader scanner (ByteString.length (scannerBuffer scanner))
-        else
-          case rejectOversizedHeader scanner (ByteString.length headerBlock) of
-            Just result -> Just result
-            Nothing ->
-              Just
-                ( MultipartPartStarted headerBlock,
-                  scanner
-                    { scannerBuffer = ByteString.drop 4 atBlankLine,
-                      scannerPhase = StreamingBody
-                    }
-                )
+        else case rejectOversizedHeader scanner (ByteString.length headerBlock) of
+          Just result -> Just result
+          Nothing ->
+            Just
+              ( MultipartPartStarted headerBlock,
+                scanner
+                  { scannerBuffer = ByteString.drop 4 atBlankLine,
+                    scannerPhase = StreamingBody
+                  }
+              )
 
 rejectOversizedHeader :: MultipartScanner -> Int -> Maybe (MultipartEvent, MultipartScanner)
 rejectOversizedHeader scanner headerBytes
