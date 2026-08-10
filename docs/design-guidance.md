@@ -91,8 +91,10 @@ untrusted payloads — streamed request bodies, WebSocket frames, deferred job p
 local temporary file and hands the caller that raw path has a hardcoded backend, no bounded
 in-memory option, and no explicit promote-or-discard step the caller controls. This is exactly
 the shape this rule exists to prevent. `HarchWeb.Api.Multipart` now uses an explicit storage
-adapter and a bounded in-memory default; its remaining cleanup and explicit-promotion work stays
-tracked under AD.
+adapter and a bounded in-memory default. Its WAI request wrappers now parse a strict,
+case-insensitive @multipart/form-data@ media type with exactly one valid boundary and reject an
+oversized declared @Content-Length@ before they call the body reader; cleanup and
+explicit-promotion work stays tracked under AD.
 
 ### Naming a partial slice in the status table
 

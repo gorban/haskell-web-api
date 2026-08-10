@@ -87,13 +87,13 @@ spec =
               :| [Text.isInfixOf "Choose a file before submitting." body `shouldBe` True]
           )
 
-      it "reports a missing multipart boundary before attempting to consume the body" $ do
+      it "reports a missing multipart boundary as an invalid upload" $ do
         application <- newUploadApplication
         response <- performRequest application (requestWithContentType "multipart/form-data" "some body")
         body <- readResponseBody response
         expectAll
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status400)
-              :| [Text.isInfixOf "no multipart boundary" body `shouldBe` True]
+              :| [Text.isInfixOf "This upload was invalid." body `shouldBe` True]
           )
 
       it "accepts a quoted boundary parameter" $ do

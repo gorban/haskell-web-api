@@ -15,8 +15,6 @@ where
 
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types qualified as Aeson.Types
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
@@ -101,14 +99,11 @@ handleGreetingTarget request SubmitGreeting = do
           ApiMalformedBody -> apiTextResponse "malformed JSON body"
   where
     contentTypeHeaderText = requestHeaderText HttpTypes.hContentType request
-handleGreetingTarget request UploadAvatar =
-  case lookup HttpTypes.hContentType (Wai.requestHeaders request) >>= multipartBoundary of
-    Nothing -> pure (apiTextResponse "missing multipart boundary")
-    Just boundary -> do
-      result <- consumeMultipartRequestBody defaultMultipartLimits boundary request
-      pure $ case result of
-        Right parts -> apiTextResponse (Text.pack (show (length parts)) <> " part(s) received")
-        Left _consumeError -> apiTextResponse "invalid multipart body"
+handleGreetingTarget request UploadAvatar = do
+  result <- consumeMultipartRequestBody defaultMultipartLimits request
+  pure $ case result of
+    Right parts -> apiTextResponse (Text.pack (show (length parts)) <> " part(s) received")
+    Left _consumeError -> apiTextResponse "invalid multipart body"
 
 requestHeaderText :: HttpTypes.HeaderName -> Wai.Request -> Maybe Text
 requestHeaderText headerName request =
@@ -122,20 +117,3 @@ maxGreetingBodyBytes = 16 * 1024
 -- streamed body is still rejected by 'readRequestBodyUpTo' as it arrives.
 maxGreetingBodyReadBytes :: Int
 maxGreetingBodyReadBytes = maxGreetingBodyBytes + 1
-
--- | Extracts the @boundary@ parameter from a @Content-Type@ header value,
--- unquoting it if quoted. A minimal parser for this example; a real
--- application should use a full media-type parameter parser.
-multipartBoundary :: ByteString -> Maybe ByteString
-multipartBoundary contentTypeValue =
-  case ByteString.breakSubstring "boundary=" contentTypeValue of
-    (_, suffix)
-      | ByteString.null suffix -> Nothing
-      | otherwise -> Just (unquote (ByteString.takeWhile (/= 59) (ByteString.drop 9 suffix)))
-  where
-    unquote value
-      | ByteString.length value >= 2,
-        ByteString.head value == 34,
-        ByteString.last value == 34 =
-          ByteString.init (ByteString.tail value)
-      | otherwise = value

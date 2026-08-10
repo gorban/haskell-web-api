@@ -11,6 +11,7 @@ import Data.List (mapAccumL)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Api.Multipart
+import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.Directory (doesFileExist, removeFile)
 import System.IO (Handle, hClose)
@@ -588,7 +589,9 @@ spec =
                 MultipartFieldTooLarge "f",
                 MultipartFileTooLarge "f",
                 MultipartMalformedBody,
-                MultipartTruncatedBody
+                MultipartTruncatedBody,
+                MultipartInvalidContentType,
+                MultipartDeclaredBodyTooLarge
               ]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- parts, right <- parts] `shouldBe` length parts)
@@ -612,11 +615,31 @@ spec =
                      ]
               )
 
-    describe "consumeMultipartRequestBody" $
+    describe "consumeMultipartRequestBody" $ do
+      it "parses only a strict multipart media type with one valid boundary" $
+        expectAll
+          ( (multipartBoundaryFromContentType "MULTIPART/FORM-DATA ; charset=utf-8 ; BOUNDARY=\"Aa0'()+_,-./:=?Zz\"" `shouldBe` Right "Aa0'()+_,-./:=?Zz")
+              :| [ multipartBoundaryFromContentType "" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "text/plain; boundary=valid" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; =valid" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=valid; boundary=other" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=\"valid" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=va\"lid" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=va\\lid" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=\"va\"lid\"" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=\"va\\lid\"" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType "multipart/form-data; boundary=contains space" `shouldBe` Left MultipartInvalidContentType,
+                   multipartBoundaryFromContentType ("multipart/form-data; boundary=" <> ByteString.replicate 71 97) `shouldBe` Left MultipartInvalidContentType
+                 ]
+          )
+
       it "consumes a WAI request's body with the bounded in-memory storage adapter" $ do
         readChunk <- chunkReader [twoPartBody]
-        let request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
-        result <- consumeMultipartRequestBody defaultMultipartLimits boundaryToken request
+        let request = multipartRequest readChunk []
+        result <- consumeMultipartRequestBody defaultMultipartLimits request
         case result of
           Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount] ->
             expectAll
@@ -624,6 +647,56 @@ spec =
                   :| [byteCount `shouldBe` ByteString.length "file content here"]
               )
           other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "rejects an invalid request media type before reading its body" $ do
+        bodyReadReference <- IORef.newIORef False
+        let readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
+            request = multipartRequest readChunk [(Http.hContentType, "text/plain")]
+        result <- consumeMultipartRequestBody defaultMultipartLimits request
+        bodyRead <- IORef.readIORef bodyReadReference
+        expectAll
+          ( (result `shouldSatisfy` \case Left MultipartInvalidContentType -> True; _ -> False)
+              :| [bodyRead `shouldBe` False]
+          )
+
+      it "rejects a missing media type before reading and treats a malformed declared length as unavailable" $ do
+        missingTypeReadReference <- IORef.newIORef False
+        malformedLengthReadReference <- IORef.newIORef False
+        let missingTypeReader = IORef.writeIORef missingTypeReadReference True >> pure twoPartBody
+            malformedLengthReader = IORef.writeIORef malformedLengthReadReference True >> pure twoPartBody
+            missingTypeRequest = Wai.setRequestBodyChunks missingTypeReader Wai.defaultRequest
+            malformedLengthRequest = multipartRequest malformedLengthReader [(Http.hContentLength, "11x")]
+        missingTypeResult <- consumeMultipartRequestBody defaultMultipartLimits missingTypeRequest
+        malformedLengthResult <- consumeMultipartRequestBody defaultMultipartLimits malformedLengthRequest
+        missingTypeRead <- IORef.readIORef missingTypeReadReference
+        malformedLengthRead <- IORef.readIORef malformedLengthReadReference
+        expectAll
+          ( (missingTypeResult `shouldSatisfy` \case Left MultipartInvalidContentType -> True; _ -> False)
+              :| [ malformedLengthResult `shouldSatisfy` \case Right _ -> True; Left _ -> False,
+                   missingTypeRead `shouldBe` False,
+                   malformedLengthRead `shouldBe` True
+                 ]
+          )
+
+      it "rejects declared oversized bodies, including values beyond machine integer range, before reading" $ do
+        bodyReadReference <- IORef.newIORef False
+        hugeBodyReadReference <- IORef.newIORef False
+        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = 10}
+            readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
+            hugeReadChunk = IORef.writeIORef hugeBodyReadReference True >> pure twoPartBody
+            request = multipartRequest readChunk [(Http.hContentLength, "11")]
+            hugeRequest = multipartRequest hugeReadChunk [(Http.hContentLength, "999999999999999999999999999999999999999999999999999999999999")]
+        result <- consumeMultipartRequestBody limits request
+        hugeResult <- consumeMultipartRequestBody limits hugeRequest
+        bodyRead <- IORef.readIORef bodyReadReference
+        hugeBodyRead <- IORef.readIORef hugeBodyReadReference
+        expectAll
+          ( (result `shouldSatisfy` \case Left MultipartDeclaredBodyTooLarge -> True; _ -> False)
+              :| [ hugeResult `shouldSatisfy` \case Left MultipartDeclaredBodyTooLarge -> True; _ -> False,
+                   bodyRead `shouldBe` False,
+                   hugeBodyRead `shouldBe` False
+                 ]
+          )
 
     describe "consumeMultipartBodyWith" $ do
       it "calls onPart for each completed part, in order, before the body finishes" $
@@ -676,14 +749,14 @@ spec =
                     :| [spooledContent `shouldBe` "file content here"]
                 )
 
-    describe "consumeMultipartRequestBodyWith" $
+    describe "consumeMultipartRequestBodyWith" $ do
       it "consumes a WAI request's body incrementally, calling onPart for each part" $
         withTestUploadOpener $ \_unusedOpener -> do
           seenPartsRef <- IORef.newIORef []
           readChunk <- chunkReader [twoPartBody]
-          let request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
+          let request = multipartRequest readChunk []
           result <-
-            consumeMultipartRequestBodyWith defaultMultipartLimits boundaryToken request $ \part -> do
+            consumeMultipartRequestBodyWith defaultMultipartLimits request $ \part -> do
               IORef.modifyIORef' seenPartsRef (part :)
               pure (Right ())
           seenParts <- reverse <$> IORef.readIORef seenPartsRef
@@ -694,3 +767,39 @@ spec =
                        other -> expectationFailure ("unexpected parts: " <> show other)
                    ]
             )
+
+      it "rejects request metadata before calling a streaming callback or reading the body" $ do
+        bodyReadReference <- IORef.newIORef False
+        callbackCalledReference <- IORef.newIORef False
+        let readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
+            request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
+        result <-
+          consumeMultipartRequestBodyWith defaultMultipartLimits request $ \_part -> do
+            IORef.writeIORef callbackCalledReference True
+            pure (Right ())
+        bodyRead <- IORef.readIORef bodyReadReference
+        callbackCalled <- IORef.readIORef callbackCalledReference
+        expectAll
+          ( (result `shouldBe` Left MultipartInvalidContentType)
+              :| [bodyRead `shouldBe` False, callbackCalled `shouldBe` False]
+          )
+
+      it "applies the declared-size limit before calling a streaming callback" $ do
+        bodyReadReference <- IORef.newIORef False
+        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = 10}
+            readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
+            request = multipartRequest readChunk [(Http.hContentLength, "11")]
+        result <- consumeMultipartRequestBodyWith limits request (const (pure (Right ())))
+        bodyRead <- IORef.readIORef bodyReadReference
+        expectAll
+          ( (result `shouldBe` Left MultipartDeclaredBodyTooLarge)
+              :| [bodyRead `shouldBe` False]
+          )
+
+multipartRequest :: IO ByteString -> [(Http.HeaderName, ByteString)] -> Wai.Request
+multipartRequest readChunk additionalHeaders =
+  Wai.setRequestBodyChunks
+    readChunk
+    Wai.defaultRequest
+      { Wai.requestHeaders = additionalHeaders <> [(Http.hContentType, "multipart/form-data; boundary=" <> boundaryToken)]
+      }

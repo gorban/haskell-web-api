@@ -153,12 +153,12 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "1 part(s) received"
 
-    it "reports a missing boundary" $ do
+    it "reports a missing boundary as an invalid multipart body" $ do
       request <- jsonRequest "POST" "/api/avatar" multipartBody
       let requestWithoutBoundary = request {Wai.requestHeaders = [(HttpTypes.hContentType, "multipart/form-data")]}
       response <- performWaiRequest application requestWithoutBoundary
       body <- readResponseBody response
-      body `shouldBe` "missing multipart boundary"
+      body `shouldBe` "invalid multipart body"
 
     it "reports an invalid multipart body" $ do
       request <- jsonRequest "POST" "/api/avatar" "not multipart"

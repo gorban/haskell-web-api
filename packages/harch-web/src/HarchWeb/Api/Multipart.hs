@@ -35,6 +35,7 @@ module HarchWeb.Api.Multipart
     inMemoryMultipartStorage,
     inMemoryUploadBytes,
     MultipartConsumeError (..),
+    multipartBoundaryFromContentType,
     consumeMultipartBody,
     consumeMultipartBodyWith,
     consumeMultipartRequestBody,
@@ -48,6 +49,8 @@ import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
+import Data.Char (toLower)
 import Data.Foldable (for_, traverse_)
 import Data.IORef qualified as IORef
 import Data.Maybe qualified as Maybe
@@ -55,8 +58,10 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import Data.Word (Word8)
 import HarchWeb.Api.Multipart.Storage
 import HarchWeb.Api.Multipart.Storage.Internal qualified as MultipartStorage
+import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
 data MultipartEvent
@@ -451,6 +456,12 @@ data MultipartConsumeError
     MultipartMalformedBody
   | -- | The body ended before the scanner reported 'MultipartFinished'.
     MultipartTruncatedBody
+  | -- | The request did not declare @multipart/form-data@ with one valid
+    -- @boundary@ parameter.
+    MultipartInvalidContentType
+  | -- | A declared @Content-Length@ exceeded
+    -- 'multipartLimitsMaxBodyBytes' before any body chunk was read.
+    MultipartDeclaredBodyTooLarge
   deriving (Eq, Show)
 
 data PartAccumulator stored
@@ -684,26 +695,103 @@ finalizeMultipartPart consumer accumulator =
       IORef.writeIORef (multipartConsumerActiveUploadReference consumer) Nothing
       pure (MultipartFilePart fieldName filename storedUpload bytesWritten)
 
--- | Consume a WAI request's body as @multipart\/form-data@, given the
--- boundary parameter extracted from its @Content-Type@ header. Field values
--- and files use the bounded in-memory adapter; applications that need durable
+-- | Parse a strict @multipart\/form-data@ media type and its single boundary
+-- parameter. Parameter names and the media type are ASCII case-insensitive;
+-- malformed, repeated, empty, quoted-incorrectly, or RFC 2046-invalid
+-- boundaries are rejected before a body reader is called.
+multipartBoundaryFromContentType :: ByteString -> Either MultipartConsumeError ByteString
+multipartBoundaryFromContentType contentType =
+  do
+    (mediaType, parameters) <- splitMultipartContentType contentType
+    if asciiLower mediaType == "multipart/form-data"
+      then do
+        parsedParameters <- traverse parseContentTypeParameter parameters
+        boundary <- requireSingleBoundary parsedParameters
+        requireValidBoundary boundary
+      else Left MultipartInvalidContentType
+
+splitMultipartContentType :: ByteString -> Either MultipartConsumeError (ByteString, [ByteString])
+splitMultipartContentType contentType =
+  case map stripOptionalWhitespace (ByteString.split 59 contentType) of
+    mediaType : parameters -> Right (mediaType, parameters)
+    [] -> Left MultipartInvalidContentType
+
+parseContentTypeParameter :: ByteString -> Either MultipartConsumeError (ByteString, ByteString)
+parseContentTypeParameter parameter =
+  case ByteString.break (== 61) parameter of
+    (name, valueWithEquals)
+      | ByteString.null name || ByteString.null valueWithEquals -> Left MultipartInvalidContentType
+      | otherwise -> do
+          value <- unquoteBoundaryValue (stripOptionalWhitespace (ByteString.drop 1 valueWithEquals))
+          if ByteString.null value then Left MultipartInvalidContentType else Right (stripOptionalWhitespace name, value)
+
+unquoteBoundaryValue :: ByteString -> Either MultipartConsumeError ByteString
+unquoteBoundaryValue value
+  | ByteString.length value >= 2 && ByteString.head value == 34 && ByteString.last value == 34 =
+      let unquoted = ByteString.init (ByteString.tail value)
+       in if ByteString.elem 34 unquoted || ByteString.elem 92 unquoted then Left MultipartInvalidContentType else Right unquoted
+  | ByteString.elem 34 value || ByteString.elem 92 value = Left MultipartInvalidContentType
+  | otherwise = Right value
+
+requireSingleBoundary :: [(ByteString, ByteString)] -> Either MultipartConsumeError ByteString
+requireSingleBoundary parameters =
+  case [value | (name, value) <- parameters, asciiLower name == "boundary"] of
+    [boundary] -> Right boundary
+    _ -> Left MultipartInvalidContentType
+
+requireValidBoundary :: ByteString -> Either MultipartConsumeError ByteString
+requireValidBoundary boundary
+  | ByteString.length boundary <= 70 && ByteString.all isBoundaryCharacter boundary = Right boundary
+  | otherwise = Left MultipartInvalidContentType
+
+isBoundaryCharacter :: Word8 -> Bool
+isBoundaryCharacter byte =
+  ByteString.elem byte "'()+_,-./:=?" || (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122)
+
+stripOptionalWhitespace :: ByteString -> ByteString
+stripOptionalWhitespace = ByteString.dropWhileEnd isOptionalWhitespace . ByteString.dropWhile isOptionalWhitespace
+
+isOptionalWhitespace :: Word8 -> Bool
+isOptionalWhitespace byte = byte == 32 || byte == 9
+
+asciiLower :: ByteString -> ByteString
+asciiLower = ByteStringChar8.map toLower
+
+multipartRequestBoundary :: MultipartLimits -> Wai.Request -> Either MultipartConsumeError ByteString
+multipartRequestBoundary limits request = do
+  contentType <- maybe (Left MultipartInvalidContentType) Right (lookup Http.hContentType (Wai.requestHeaders request))
+  boundary <- multipartBoundaryFromContentType contentType
+  case lookup Http.hContentLength (Wai.requestHeaders request) >>= parseContentLength of
+    Just declaredBytes | declaredBytes > fromIntegral (multipartLimitsMaxBodyBytes limits) -> Left MultipartDeclaredBodyTooLarge
+    _ -> Right boundary
+
+parseContentLength :: ByteString -> Maybe Integer
+parseContentLength value = do
+  (bytes, remaining) <- ByteStringChar8.readInteger value
+  if bytes >= 0 && ByteString.null remaining then Just bytes else Nothing
+
+-- | Consume a WAI request's body as @multipart\/form-data@, validating its
+-- @Content-Type@ boundary and declared size before reading. Field values and
+-- files use the bounded in-memory adapter; applications that need durable
 -- storage call 'consumeMultipartBody' with an explicit adapter.
 consumeMultipartRequestBody ::
   MultipartLimits ->
-  ByteString ->
   Wai.Request ->
   IO (Either MultipartConsumeError [MultipartPart])
-consumeMultipartRequestBody limits boundary request =
-  consumeMultipartBody inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)
+consumeMultipartRequestBody limits request =
+  case multipartRequestBoundary limits request of
+    Left requestError -> pure (Left requestError)
+    Right boundary -> consumeMultipartBody inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)
 
 -- | Like 'consumeMultipartRequestBody', but see 'consumeMultipartBodyWith':
 -- @onPart@ runs as soon as each part finishes, before any later part
 -- (including a later file part) is read.
 consumeMultipartRequestBodyWith ::
   MultipartLimits ->
-  ByteString ->
   Wai.Request ->
   (MultipartPart -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
-consumeMultipartRequestBodyWith limits boundary request =
-  consumeMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)
+consumeMultipartRequestBodyWith limits request onPart =
+  case multipartRequestBoundary limits request of
+    Left requestError -> pure (Left requestError)
+    Right boundary -> consumeMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request) onPart

@@ -40,8 +40,6 @@ import App.Pages.Route.Generated (PageRoute (HomePage, LiveDataPage, SecondPage)
 import App.Routes (CustomRoute (NativeSubscriptionFallback), TwoPageRoute (Custom), routeCodec)
 import App.Routes qualified as Routes
 import Control.Monad (void)
-import Data.ByteString (ByteString)
-import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -73,7 +71,6 @@ import HarchWeb.Api.Multipart
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
-import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
 data NativeUploadTarget
@@ -126,20 +123,16 @@ claimUploadToken (NativeUploadState tokenReference) suppliedTokenText =
       _ -> (maybeOutstandingToken, False)
 
 handleUploadSubmission :: NativeUploadState -> Wai.Request -> IO ApiResponseBody
-handleUploadSubmission state request =
-  case lookup HttpTypes.hContentType (Wai.requestHeaders request) >>= multipartBoundary of
-    Nothing -> errorPage 400 "This upload request had no multipart boundary."
-    Just boundary -> do
-      outcome <- consumeUpload state defaultMultipartLimits boundary request
-      case outcome of
-        UploadAccepted filename byteCount -> successPage filename byteCount
-        UploadCsrfRejected -> errorPage 403 "Your upload form had expired. Go back and try again."
-        UploadMissingFile -> errorPage 422 "Choose a file before submitting."
-        -- Every 'MultipartConsumeError' (size limits, malformed structure,
-        -- truncation) renders the same way here: the distinction between
-        -- them is already exercised at the library level in
-        -- "HarchWeb.Api.Multipart"'s own test suite.
-        UploadRejected _consumeError -> errorPage 400 "This upload was invalid."
+handleUploadSubmission state request = do
+  outcome <- consumeUpload state defaultMultipartLimits request
+  case outcome of
+    UploadAccepted filename byteCount -> successPage filename byteCount
+    UploadCsrfRejected -> errorPage 403 "Your upload form had expired. Go back and try again."
+    UploadMissingFile -> errorPage 422 "Choose a file before submitting."
+    -- Every 'MultipartConsumeError' (media type, declared size limits,
+    -- malformed structure, truncation) renders the same way here: the
+    -- distinction is exercised by "HarchWeb.Api.Multipart"'s unit suite.
+    UploadRejected _consumeError -> errorPage 400 "This upload was invalid."
 
 data UploadOutcome
   = UploadAccepted Text Int
@@ -160,13 +153,13 @@ data UploadOutcome
 -- instead of treating it as a once-shared reference; they have no runtime
 -- effect.
 {-# ANN consumeUpload ("HLint: ignore Redundant $!" :: String) #-}
-consumeUpload :: NativeUploadState -> MultipartLimits -> ByteString -> Wai.Request -> IO UploadOutcome
-consumeUpload state limits boundary request = do
+consumeUpload :: NativeUploadState -> MultipartLimits -> Wai.Request -> IO UploadOutcome
+consumeUpload state limits request = do
   csrfValidatedReference <- newIORef False
   acceptedReference <- newIORef Nothing
   csrfRejectedReference <- newIORef False
   consumeResult <-
-    consumeMultipartRequestBodyWith limits boundary request $ \case
+    consumeMultipartRequestBodyWith limits request $ \case
       MultipartFieldPart "_harch_csrf" suppliedTokenText -> do
         claimed <- claimUploadToken state suppliedTokenText
         if claimed
@@ -284,17 +277,3 @@ siteNavigationItems =
     NavigationItem "Second" (Routes.Page SecondPage),
     NavigationItem "Live updates" (Routes.Page LiveDataPage)
   ]
-
-multipartBoundary :: ByteString -> Maybe ByteString
-multipartBoundary contentTypeValue =
-  case ByteString.breakSubstring "boundary=" contentTypeValue of
-    (_, suffix)
-      | ByteString.null suffix -> Nothing
-      | otherwise -> Just (unquote (ByteString.takeWhile (/= 59) (ByteString.drop 9 suffix)))
-  where
-    unquote quotedValue
-      | ByteString.length quotedValue >= 2,
-        ByteString.head quotedValue == 34,
-        ByteString.last quotedValue == 34 =
-          ByteString.init (ByteString.tail quotedValue)
-      | otherwise = quotedValue
