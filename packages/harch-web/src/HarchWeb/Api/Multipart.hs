@@ -26,8 +26,10 @@ module HarchWeb.Api.Multipart
     defaultMultipartLimits,
     MultipartPart,
     MultipartPartWith (..),
-    MultipartStorage (..),
-    MultipartStagedUpload (..),
+    MultipartStorage,
+    MultipartStagedUpload,
+    multipartStorage,
+    multipartStagedUpload,
     InMemoryUpload,
     inMemoryMultipartStorage,
     inMemoryUploadBytes,
@@ -51,6 +53,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb.Api.Multipart.Storage
+import HarchWeb.Api.Multipart.Storage.Internal qualified as MultipartStorage
 import Network.Wai qualified as Wai
 
 data MultipartEvent
@@ -454,7 +457,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
               case multipartFieldFilename disposition of
                 Nothing -> pure (FieldAccumulator fieldName ByteString.empty)
                 Just filename -> do
-                  stagedUpload <- liftIO (beginMultipartUpload storage $! filename)
+                  stagedUpload <- liftIO (MultipartStorage.beginMultipartUpload storage $! filename)
                   pure (FileAccumulator fieldName filename stagedUpload 0)
 
     appendPartBytes accumulator bodyBytes =
@@ -468,17 +471,17 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
           let bytesWritten' = bytesWritten + ByteString.length bodyBytes
            in if bytesWritten' > multipartLimitsMaxFileBytes limits
                 then do
-                  liftIO (discardMultipartUpload stagedUpload)
+                  liftIO (MultipartStorage.discardMultipartUpload stagedUpload)
                   throwError (MultipartFileTooLarge fieldName)
                 else do
-                  liftIO (appendMultipartUpload stagedUpload bodyBytes)
+                  liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
                   pure (FileAccumulator fieldName filename stagedUpload bytesWritten')
 
     finalizeAccumulator accumulator =
       case accumulator of
         FieldAccumulator fieldName buffered -> pure (MultipartFieldPart fieldName (decodeLeniently buffered))
         FileAccumulator fieldName filename stagedUpload bytesWritten -> do
-          storedUpload <- completeMultipartUpload stagedUpload
+          storedUpload <- MultipartStorage.completeMultipartUpload stagedUpload
           pure (MultipartFilePart fieldName filename storedUpload bytesWritten)
 
 -- | Consume a WAI request's body as @multipart\/form-data@, given the

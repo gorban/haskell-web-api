@@ -118,14 +118,13 @@ withTestUploadOpener action =
 
 storageFromOpener :: (Text -> IO (FilePath, Handle)) -> MultipartStorage FilePath
 storageFromOpener openUploadFile =
-  MultipartStorage $ \filename -> do
+  multipartStorage $ \filename -> do
     (path, handle) <- openUploadFile filename
-    pure
-      MultipartStagedUpload
-        { appendMultipartUpload = ByteString.hPut handle,
-          completeMultipartUpload = hClose handle >> pure path,
-          discardMultipartUpload = hClose handle
-        }
+    pure $
+      multipartStagedUpload
+        (ByteString.hPut handle)
+        (hClose handle >> pure path)
+        (hClose handle)
 
 runConsume :: MultipartLimits -> [ByteString] -> IO (Either MultipartConsumeError [MultipartPart])
 runConsume limits chunks =
@@ -307,28 +306,19 @@ spec =
               )
 
     describe "consumeMultipartBody" $ do
-      it "keeps the built-in storage adapter in memory and discards staged bytes on request" $ do
-        let MultipartStorage beginUpload = inMemoryMultipartStorage
-        retainedUpload <- beginUpload "avatar.txt"
-        appendMultipartUpload retainedUpload "first "
-        appendMultipartUpload retainedUpload "second"
-        retainedStoredUpload <- completeMultipartUpload retainedUpload
-        let retainedBytes = inMemoryUploadBytes retainedStoredUpload
-        discardedUpload <- beginUpload "discarded.txt"
-        appendMultipartUpload discardedUpload "discard me"
-        discardMultipartUpload discardedUpload
-        discardedStoredUpload <- completeMultipartUpload discardedUpload
-        let discardedBytes = inMemoryUploadBytes discardedStoredUpload
-        expectAll
-          ( (retainedBytes `shouldBe` "first second")
-              :| [ discardedBytes `shouldBe` ByteString.empty,
-                   ByteString.length retainedBytes `shouldBe` 12,
-                   (retainedStoredUpload == retainedStoredUpload) `shouldBe` True,
-                   retainedStoredUpload `shouldNotBe` discardedStoredUpload,
-                   show discardedStoredUpload `shouldSatisfy` (not . null),
-                   showList [retainedStoredUpload] "" `shouldSatisfy` (not . null)
-                 ]
-          )
+      it "keeps the built-in storage adapter in memory within the file budget" $ do
+        result <- runConsume testLimits [twoPartBody]
+        case result of
+          Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount] ->
+            expectAll
+              ( (inMemoryUploadBytes upload `shouldBe` "file content here")
+                  :| [ byteCount `shouldBe` ByteString.length "file content here",
+                       (upload == upload) `shouldBe` True,
+                       show upload `shouldSatisfy` (not . null),
+                       showList [upload] "" `shouldSatisfy` (not . null)
+                     ]
+              )
+          other -> expectationFailure ("unexpected result: " <> show other)
 
       it "consumes a single field part into a MultipartFieldPart" $
         runConsume testLimits [singleFieldBody]

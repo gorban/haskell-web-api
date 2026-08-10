@@ -3,8 +3,10 @@
 -- parser owns a staged upload until it emits a completed part; applications
 -- choose any durable promotion separately.
 module HarchWeb.Api.Multipart.Storage
-  ( MultipartStorage (..),
-    MultipartStagedUpload (..),
+  ( MultipartStorage,
+    MultipartStagedUpload,
+    multipartStorage,
+    multipartStagedUpload,
     InMemoryUpload,
     inMemoryMultipartStorage,
     inMemoryUploadBytes,
@@ -15,16 +17,20 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.IORef qualified as IORef
 import Data.Text (Text)
+import HarchWeb.Api.Multipart.Storage.Internal (MultipartStagedUpload, MultipartStorage)
+import HarchWeb.Api.Multipart.Storage.Internal qualified as Internal
 
-newtype MultipartStorage stored = MultipartStorage
-  { beginMultipartUpload :: Text -> IO (MultipartStagedUpload stored)
-  }
+-- | Construct an application-selected storage adapter. The callback receives
+-- untrusted filename metadata only as a naming hint; it must not use it as a
+-- filesystem path or object key without application validation.
+multipartStorage :: (Text -> IO (MultipartStagedUpload stored)) -> MultipartStorage stored
+multipartStorage = Internal.MultipartStorage
 
-data MultipartStagedUpload stored = MultipartStagedUpload
-  { appendMultipartUpload :: ByteString -> IO (),
-    completeMultipartUpload :: IO stored,
-    discardMultipartUpload :: IO ()
-  }
+-- | Construct a request-scoped staged upload for 'multipartStorage'. The
+-- multipart parser, rather than the application callback, owns its append,
+-- completion, and discard operations.
+multipartStagedUpload :: (ByteString -> IO ()) -> IO stored -> IO () -> MultipartStagedUpload stored
+multipartStagedUpload = Internal.MultipartStagedUpload
 
 newtype InMemoryUpload = InMemoryUpload ByteString
   deriving (Eq, Show)
@@ -34,14 +40,13 @@ newtype InMemoryUpload = InMemoryUpload ByteString
 -- cannot retain more than the selected 'MultipartLimits' file maximum.
 inMemoryMultipartStorage :: MultipartStorage InMemoryUpload
 inMemoryMultipartStorage =
-  MultipartStorage $ \_filenameHint -> do
+  multipartStorage $ \_filenameHint -> do
     chunksReference <- IORef.newIORef []
-    pure
-      MultipartStagedUpload
-        { appendMultipartUpload = \chunk -> IORef.modifyIORef' chunksReference (chunk :),
-          completeMultipartUpload = InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference,
-          discardMultipartUpload = IORef.writeIORef chunksReference []
-        }
+    pure $
+      multipartStagedUpload
+        (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
+        (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
+        (IORef.writeIORef chunksReference [])
 
 inMemoryUploadBytes :: InMemoryUpload -> ByteString
 inMemoryUploadBytes (InMemoryUpload uploadBytes) = uploadBytes

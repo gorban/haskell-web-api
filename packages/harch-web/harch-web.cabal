@@ -99,6 +99,7 @@ library
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
+    HarchWeb.Api.Multipart.Storage.Internal
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation
