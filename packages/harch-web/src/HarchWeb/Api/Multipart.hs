@@ -186,12 +186,11 @@ stepScanner scanner =
         ( MultipartPreambleLimitExceeded,
           scanner {scannerPreambleLimitExceeded = False, scannerPhase = ScannerFinished}
         )
-    else
-      case scannerPhase scanner of
-        ScannerFinished -> Nothing
-        AwaitingFirstBoundary -> stepAwaitingFirstBoundary scanner
-        StreamingBody -> stepStreamingBody scanner
-        AtDelimiterTail -> advancePastDelimiter scanner
+    else case scannerPhase scanner of
+      ScannerFinished -> Nothing
+      AwaitingFirstBoundary -> stepAwaitingFirstBoundary scanner
+      StreamingBody -> stepStreamingBody scanner
+      AtDelimiterTail -> advancePastDelimiter scanner
 
 stepAwaitingFirstBoundary :: MultipartScanner -> Maybe (MultipartEvent, MultipartScanner)
 stepAwaitingFirstBoundary scanner =
