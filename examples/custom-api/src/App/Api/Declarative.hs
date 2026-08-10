@@ -89,7 +89,7 @@ handleGreetingTarget :: Wai.Request -> GreetingTarget -> IO ApiResponseBody
 handleGreetingTarget request ReadGreeting =
   pure (renderGreeting request (greetingFor "World"))
 handleGreetingTarget request SubmitGreeting = do
-  bodyResult <- readRequestBodyUpTo maxGreetingBodyBytes request
+  bodyResult <- readRequestBodyUpTo maxGreetingBodyReadBytes request
   pure $
     case bodyResult of
       Left RequestBodyLimitExceeded -> apiTextResponse "request body too large"
@@ -116,6 +116,12 @@ requestHeaderText headerName request =
 
 maxGreetingBodyBytes :: Int
 maxGreetingBodyBytes = 16 * 1024
+
+-- | Keep one extra byte while reading so 'selectApiBodyDecoder' can return
+-- its typed 'ApiBodyTooLarge' outcome at the declared boundary. Any larger
+-- streamed body is still rejected by 'readRequestBodyUpTo' as it arrives.
+maxGreetingBodyReadBytes :: Int
+maxGreetingBodyReadBytes = maxGreetingBodyBytes + 1
 
 -- | Extracts the @boundary@ parameter from a @Content-Type@ header value,
 -- unquoting it if quoted. A minimal parser for this example; a real
