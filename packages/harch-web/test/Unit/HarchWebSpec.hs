@@ -704,6 +704,12 @@ spec = do
                ]
         )
 
+    it "keeps request-path helpers total for invalid raw path bytes" $
+      Security.waiRequestPath
+        defaultRequestPolicy
+        (Wai.defaultRequest {Wai.rawPathInfo = "\255"})
+        `shouldBe` ""
+
     it "bounds request bodies while chunks arrive" $ do
       successfulChunks <- newIORef ["ab", "c"]
       oversizedChunks <- newIORef ["ab", "cd"]
