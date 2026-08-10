@@ -41,6 +41,7 @@ module HarchWeb.Api.Multipart
   )
 where
 
+import Control.Exception qualified as Exception
 import Control.Monad (when)
 import Control.Monad.Except (runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
@@ -371,6 +372,11 @@ data PartAccumulator stored
   = FieldAccumulator Text ByteString
   | FileAccumulator Text Text (MultipartStagedUpload stored) Int
 
+discardActiveMultipartUpload :: IORef.IORef (Maybe (MultipartStagedUpload stored)) -> IO ()
+discardActiveMultipartUpload activeUploadReference = do
+  maybeActiveUpload <- IORef.atomicModifyIORef' activeUploadReference (\activeUpload -> (Nothing, activeUpload))
+  for_ maybeActiveUpload MultipartStorage.discardMultipartUpload
+
 -- | Incrementally consume a @multipart\/form-data@ body: drive
 -- 'MultipartScanner' from repeated calls to @readChunk@ (an empty
 -- 'ByteString' signals end of body, matching 'Network.Wai.getRequestBodyChunk'),
@@ -385,16 +391,21 @@ consumeMultipartBody ::
   -- | Reads the next body chunk; an empty result signals end of body.
   IO ByteString ->
   IO (Either MultipartConsumeError [MultipartPartWith stored])
-consumeMultipartBody storage limits boundary readChunk = do
+consumeMultipartBody storage limits boundary readChunk = Exception.mask $ \restore -> do
   completedPartsReference <- IORef.newIORef []
+  let discardCompletedUploads = do
+        completedParts <- IORef.readIORef completedPartsReference
+        traverse_ discardCompletedUpload (completedUploads completedParts)
   result <-
-    consumeMultipartBodyWith storage limits boundary readChunk $ \part -> do
-      IORef.modifyIORef' completedPartsReference (part :)
-      pure (Right ())
+    restore
+      ( consumeMultipartBodyWith storage limits boundary readChunk $ \part -> do
+          IORef.modifyIORef' completedPartsReference (part :)
+          pure (Right ())
+      )
+      `Exception.onException` discardCompletedUploads
   case result of
     Left consumeError -> do
-      completedParts <- IORef.readIORef completedPartsReference
-      traverse_ discardCompletedUpload (completedUploads completedParts)
+      discardCompletedUploads
       pure (Left consumeError)
     Right () -> Right . reverse <$> IORef.readIORef completedPartsReference
   where
@@ -420,6 +431,27 @@ consumeMultipartBodyWith ::
   (MultipartPartWith stored -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
 consumeMultipartBodyWith storage limits boundary readChunk onPart =
+  Exception.mask $ \restore -> do
+    activeUploadReference <- IORef.newIORef Nothing
+    let discardActiveUpload = discardActiveMultipartUpload activeUploadReference
+    result <-
+      restore (consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk onPart)
+        `Exception.onException` discardActiveUpload
+    case result of
+      Left consumeError -> do
+        discardActiveUpload
+        pure (Left consumeError)
+      Right () -> pure (Right ())
+
+consumeMultipartBodyWithActive ::
+  IORef.IORef (Maybe (MultipartStagedUpload stored)) ->
+  MultipartStorage stored ->
+  MultipartLimits ->
+  ByteString ->
+  IO ByteString ->
+  (MultipartPartWith stored -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk onPart =
   runExceptT (drive (newMultipartScanner boundary) Nothing 0)
   where
     drive !scanner !currentPart !partCount = do
@@ -440,7 +472,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
     -- boundary grammar.
     consumeEvents (event : rest) !scanner !currentPart !partCount atEof =
       case (event, currentPart) of
-        (MultipartPartStarted headerBlock, _) -> do
+        (MultipartPartStarted headerBlock, Nothing) -> do
           when (partCount >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
           accumulator <- startPart headerBlock
           consumeEvents rest scanner (Just accumulator) (partCount + 1) atEof
@@ -453,7 +485,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
           case acceptance of
             Left rejectionError -> throwError rejectionError
             Right () -> consumeEvents rest scanner Nothing partCount atEof
-        (MultipartFinished, _) -> pure ()
+        (MultipartFinished, Nothing) -> pure ()
         _ -> throwError MultipartMalformedBody
 
     startPart headerBlock =
@@ -467,6 +499,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
                 Nothing -> pure (FieldAccumulator fieldName ByteString.empty)
                 Just filename -> do
                   stagedUpload <- liftIO (MultipartStorage.beginMultipartUpload storage $! filename)
+                  liftIO (IORef.writeIORef activeUploadReference (Just stagedUpload))
                   pure (FileAccumulator fieldName filename stagedUpload 0)
 
     appendPartBytes accumulator bodyBytes =
@@ -480,7 +513,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
           let bytesWritten' = bytesWritten + ByteString.length bodyBytes
            in if bytesWritten' > multipartLimitsMaxFileBytes limits
                 then do
-                  liftIO (MultipartStorage.discardMultipartUpload stagedUpload)
+                  liftIO (discardActiveMultipartUpload activeUploadReference)
                   throwError (MultipartFileTooLarge fieldName)
                 else do
                   liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
@@ -491,6 +524,7 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
         FieldAccumulator fieldName buffered -> pure (MultipartFieldPart fieldName (decodeLeniently buffered))
         FileAccumulator fieldName filename stagedUpload bytesWritten -> do
           storedUpload <- MultipartStorage.completeMultipartUpload stagedUpload
+          IORef.writeIORef activeUploadReference Nothing
           pure (MultipartFilePart fieldName filename storedUpload bytesWritten)
 
 -- | Consume a WAI request's body as @multipart\/form-data@, given the

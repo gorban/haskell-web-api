@@ -2,6 +2,7 @@
 
 module Unit.HarchWeb.Api.MultipartSpec (spec) where
 
+import Control.Exception qualified as Exception
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.IORef qualified as IORef
@@ -154,7 +155,7 @@ storageFromOpener openUploadFile =
           multipartStagedUpload
             (ByteString.hPut handle)
             (hClose handle >> pure path)
-            (hClose handle)
+            (hClose handle >> removeFile path)
     )
     (Just removeFile)
 
@@ -401,6 +402,43 @@ spec =
 
       it "does not retain an earlier field when a later part is malformed" $
         shouldReject (runConsume testLimits [fieldThenMalformedFieldBody]) MultipartMissingDisposition
+
+      it "discards a file that is still staged when the body is truncated" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          let trackedOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                pure (path, handle)
+              truncatedFileBody =
+                "--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\npartial file contents"
+          readChunk <- chunkReader [truncatedFileBody]
+          result <- consumeMultipartBody (storageFromOpener trackedOpener) testLimits boundaryToken readChunk
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (result, maybeSpooledPath) of
+            (Left MultipartTruncatedBody, Just spooledPath) ->
+              doesFileExist spooledPath `shouldReturn` False
+            other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "discards a file that is still staged when reading the body throws" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          nextChunkReference <- IORef.newIORef (Just ("--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\npartial file contents"))
+          let trackedOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                pure (path, handle)
+              failingReadChunk = do
+                maybeChunk <- IORef.atomicModifyIORef' nextChunkReference (\nextChunk -> (Nothing, nextChunk))
+                case maybeChunk of
+                  Just chunk -> pure chunk
+                  Nothing -> Exception.throwIO (userError "request body read failed")
+          attempt :: Either Exception.SomeException (Either MultipartConsumeError [MultipartPartWith FilePath]) <-
+            Exception.try (consumeMultipartBody (storageFromOpener trackedOpener) testLimits boundaryToken failingReadChunk)
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (attempt, maybeSpooledPath) of
+            (Left _, Just spooledPath) -> doesFileExist spooledPath `shouldReturn` False
+            other -> expectationFailure ("unexpected result: " <> show other)
 
       it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $ do
         result <- runConsume testLimits (allByteChunks singleFieldBody)
