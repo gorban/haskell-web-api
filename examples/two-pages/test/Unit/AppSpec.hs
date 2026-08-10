@@ -487,12 +487,15 @@ spec =
         validRequest <- nativeFallbackRequest "_harch_csrf=two-pages-native-fallback" "harch-native-fallback-csrf=two-pages-native-fallback"
         mismatchedRequest <- nativeFallbackRequest "_harch_csrf=wrong-token" "harch-native-fallback-csrf=two-pages-native-fallback"
         missingRequest <- nativeFallbackRequest "email=native%40example.com" ""
+        emptyRequest <- nativeFallbackRequest "" "harch-native-fallback-csrf=two-pages-native-fallback"
         validResponse <- performWaiRequest (toWaiApplication buildApplication) validRequest
         mismatchedResponse <- performWaiRequest (toWaiApplication buildApplication) mismatchedRequest
         missingResponse <- performWaiRequest (toWaiApplication buildApplication) missingRequest
+        emptyResponse <- performWaiRequest (toWaiApplication buildApplication) emptyRequest
         validBody <- readResponseBody validResponse
         mismatchedBody <- readResponseBody mismatchedResponse
         missingBody <- readResponseBody missingResponse
+        emptyBody <- readResponseBody emptyResponse
         expectAll
           ( (Wai.responseStatus validResponse `shouldBe` Http.status200)
               :| [ Text.isInfixOf "<title>Subscription received</title>" validBody `shouldBe` True,
@@ -500,7 +503,9 @@ spec =
                    Wai.responseStatus mismatchedResponse `shouldBe` Http.status403,
                    Text.isInfixOf "Native fallback CSRF validation failed." mismatchedBody `shouldBe` True,
                    Wai.responseStatus missingResponse `shouldBe` Http.status403,
-                   Text.isInfixOf "Native fallback CSRF validation failed." missingBody `shouldBe` True
+                   Text.isInfixOf "Native fallback CSRF validation failed." missingBody `shouldBe` True,
+                   Wai.responseStatus emptyResponse `shouldBe` Http.status403,
+                   Text.isInfixOf "Native fallback CSRF validation failed." emptyBody `shouldBe` True
                  ]
           )
 
