@@ -518,6 +518,20 @@ spec =
                  ]
           )
 
+      it "rejects a native fallback form with too many fields before decoding it" $ do
+        tooManyFieldsRequest <-
+          nativeFallbackRequest
+            (ByteString.intercalate "&" (replicate 33 "x"))
+            "harch-native-fallback-csrf=two-pages-native-fallback"
+        tooManyFieldsResponse <- performWaiRequest (toWaiApplication buildApplication) tooManyFieldsRequest
+        tooManyFieldsBody <- readResponseBody tooManyFieldsResponse
+        expectAll
+          ( (Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status413)
+              :| [ lookup Http.hContentType (Wai.responseHeaders tooManyFieldsResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   Text.isInfixOf "Native fallback request has too many form fields." tooManyFieldsBody `shouldBe` True
+                 ]
+          )
+
       it "rejects an address that does not contain an at sign" $ do
         invalidAction <-
           HarchWeb.handleClientAction

@@ -152,16 +152,25 @@ nativeFallbackCsrfMiddleware request requestContext
       pure
         ( case requestBodyResult of
             Left RequestBodyLimitExceeded -> nativeFallbackBodyTooLarge requestContext
-            Right requestBody ->
-              case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
-                (Just cookieToken, Just submittedToken)
-                  | cookieToken == submittedToken -> ContinueMiddleware requestContext
-                _ -> nativeFallbackCsrfRejected requestContext
+            Right requestBody
+              | nativeFallbackFieldCountExceedsLimit requestBody -> nativeFallbackTooManyFields requestContext
+              | otherwise ->
+                  case (nativeFallbackCsrfToken request, nativeFallbackSubmittedToken requestBody) of
+                    (Just cookieToken, Just submittedToken)
+                      | cookieToken == submittedToken -> ContinueMiddleware requestContext
+                    _ -> nativeFallbackCsrfRejected requestContext
         )
   | otherwise = pure (ContinueMiddleware requestContext)
 
 nativeFallbackBodyBytes :: Int
 nativeFallbackBodyBytes = 8192
+
+-- | This native form only needs its CSRF field and ordinary form inputs.
+-- Keep its decoded query representation bounded independently of the body
+-- budget so a small body containing many empty fields cannot amplify into a
+-- large list before CSRF validation.
+nativeFallbackFieldCountLimit :: Int
+nativeFallbackFieldCountLimit = 32
 
 nativeFallbackBodyTooLarge :: () -> MiddlewareResult ()
 nativeFallbackBodyTooLarge requestContext =
@@ -171,6 +180,18 @@ nativeFallbackBodyTooLarge requestContext =
       { responseStatus = 413,
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback request body is too large.",
+        responseObservabilityAttributes = [],
+        responseLogEntries = []
+      }
+
+nativeFallbackTooManyFields :: () -> MiddlewareResult ()
+nativeFallbackTooManyFields requestContext =
+  HaltMiddleware
+    requestContext
+    ResponseBody
+      { responseStatus = 413,
+        responseContentType = "text/plain; charset=utf-8",
+        responseBody = "Native fallback request has too many form fields.",
         responseObservabilityAttributes = [],
         responseLogEntries = []
       }
@@ -194,6 +215,15 @@ nativeFallbackCsrfToken request =
 nativeFallbackSubmittedToken :: LazyByteString.ByteString -> Maybe ByteString.ByteString
 nativeFallbackSubmittedToken requestBody =
   join (lookup "_harch_csrf" (HttpUri.parseQuery (LazyByteString.toStrict requestBody)))
+
+nativeFallbackFieldCountExceedsLimit :: LazyByteString.ByteString -> Bool
+nativeFallbackFieldCountExceedsLimit requestBody =
+  nativeFallbackFieldCount requestBody > nativeFallbackFieldCountLimit
+
+nativeFallbackFieldCount :: LazyByteString.ByteString -> Int
+nativeFallbackFieldCount requestBody
+  | LazyByteString.null requestBody = 0
+  | otherwise = 1 + sum (map (ByteString.count 38) (LazyByteString.toChunks requestBody))
 
 requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
 requestCookies request =
