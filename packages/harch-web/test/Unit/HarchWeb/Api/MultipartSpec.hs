@@ -271,8 +271,8 @@ spec =
               MultipartPartEnded,
               MultipartFinished,
               MultipartMalformed,
-              MultipartScannerLimitExceeded MultipartPreambleLimitExceeded,
-              MultipartScannerLimitExceeded MultipartPartHeaderLimitExceeded
+              MultipartPreambleLimitExceeded,
+              MultipartPartHeaderLimitExceeded
             ]
        in expectAll
             ( (sum [fromEnum (left == right) | left <- events, right <- events] `shouldBe` length events)
