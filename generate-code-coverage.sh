@@ -17,16 +17,6 @@ coverage_percentage_is_incomplete() {
   awk -v percentage="$percentage" 'BEGIN { exit !(percentage + 0 < 100) }'
 }
 
-coverage_summary_line_is_incomplete() {
-  local line="$1"
-
-  if [[ "$line" =~ ([0-9]+([.][0-9]+)?)% ]]; then
-    coverage_percentage_is_incomplete "${BASH_REMATCH[1]}"
-  else
-    return 1
-  fi
-}
-
 coverage_gate_fixture() {
   local project_fraction="$1"
   local aggregate_percentage="$2"
@@ -99,18 +89,6 @@ cat > hpc_index.html <<'EOF'
 </script>
 EOF
 
-array_contains() {
-  local needle="$1"
-  shift
-  local element
-  for element in "$@"; do
-    if [ "$element" = "$needle" ]; then
-      return 0
-    fi
-  done
-  return 1
-}
-
 open_generated_report() {
   local report_path="$1"
 
@@ -172,9 +150,7 @@ if [ ! -d "$temp_root" ]; then
   mkdir -p "$temp_root"
 fi
 coverage_staging_dir="$temp_root/hpc"
-mix_cache_dir="$temp_root/mix"
-hpc_work_dir="$temp_root/hpc-work"
-mkdir -p "$coverage_staging_dir" "$mix_cache_dir" "$hpc_work_dir"
+mkdir -p "$coverage_staging_dir"
 
 project_local_path="cabal.project.local"
 project_local_backup=""
@@ -258,40 +234,15 @@ while IFS= read -r staged_pkg; do
 done < <(find "$coverage_staging_dir" -mindepth 1 -maxdepth 1 -type d -print)
 repoRoot="$(pwd)"
 missing_coverage=false
-copied_mix=false
-declare -a hpc_search_dirs=()
 declare -a per_project_findings=()
 declare -a aggregate_findings=()
-declare -a aggregate_tix_paths=()
-while IFS= read -r tixfile; do
-  [ -z "$tixfile" ] && continue
-  aggregate_tix_paths+=("$tixfile")
-done < <(find "$coverage_staging_dir" -path '*/tix/*.tix' -type f -print | sort)
-# Each staged MIX directory is from the same coverage build as the staged TIX
-# files. Do not search the live build tree: it contains incompatible mixes from
-# the individual package runs.
-while IFS= read -r mixdir; do
-  [ -z "$mixdir" ] && continue
-  \cp -Rf "$mixdir"/. "$mix_cache_dir"/
-  if ! array_contains "$mixdir" ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; then
-    hpc_search_dirs+=("$mixdir")
-  fi
-  copied_mix=true
-done < <(find "$coverage_staging_dir" -type d -name mix -print | sort)
-if [ -d "$hpc_work_dir" ] && find "$hpc_work_dir" -mindepth 1 -print -quit >/dev/null 2>&1; then
-  \cp -Rf "$hpc_work_dir"/. "$mix_cache_dir"/
-  while IFS= read -r extra_mix; do
-    [ -z "$extra_mix" ] && continue
-    if ! array_contains "$extra_mix" ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; then
-      hpc_search_dirs+=("$extra_mix")
-    fi
-    copied_mix=true
-  done < <(find "$hpc_work_dir" -type d -name mix -print)
-fi
-if $copied_mix; then
-  mix_dir_count=${#hpc_search_dirs[@]}
-  echo "Collected HPC mix files into $mix_cache_dir ($mix_dir_count directories)."
-fi
+categories=(
+  "Top-level declarations"
+  "Alternatives"
+  "Expressions"
+)
+aggregate_covered=(0 0 0)
+aggregate_total=(0 0 0)
 while IFS= read -r report; do
   [ -z "$report" ] && continue
   echo "<iframe src='${report#$repoRoot/}'></iframe><br/>" >> hpc_index.html
@@ -377,11 +328,6 @@ SCRIPT
     ' "$report"
   )
 
-  categories=(
-    "Top-level declarations"
-    "Alternatives"
-    "Expressions"
-  )
   for idx in "${!categories[@]}"; do
     fraction="${fractions[$idx]:-}"
     if [ -z "$fraction" ]; then
@@ -392,61 +338,30 @@ SCRIPT
     if [ -z "$covered" ] || [ -z "$total" ]; then
       continue
     fi
+    aggregate_covered[$idx]=$((aggregate_covered[$idx] + covered))
+    aggregate_total[$idx]=$((aggregate_total[$idx] + total))
     if coverage_fraction_is_incomplete "$cleaned_fraction"; then
       per_project_findings+=("${categories[$idx]} coverage for $package_name ($covered/$total).")
       missing_coverage=true
     fi
   done
 done < <(find dist-newstyle -name hpc_index.html -type f -print | sort)
-aggregate_report_output=""
-aggregate_tix_to_report=""
-if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
-  if [ "${#aggregate_tix_paths[@]}" -gt 1 ]; then
-    aggregate_tix_to_report="$temp_root/all-packages.tix"
-    rm -f "$aggregate_tix_to_report"
-    hpc sum --union --output="$aggregate_tix_to_report" ${aggregate_tix_paths[@]+"${aggregate_tix_paths[@]}"}
-  else
-    aggregate_tix_to_report="${aggregate_tix_paths[0]}"
+# Each package report is produced by its own coverage build. Aggregate those
+# authoritative production-report totals, rather than unioning raw TIX files
+# that also contain test-suite and build-only instrumentation from other runs.
+echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
+for idx in "${!categories[@]}"; do
+  covered="${aggregate_covered[$idx]}"
+  total="${aggregate_total[$idx]}"
+  if [ "$total" = "0" ]; then
+    continue
   fi
-
-  report_args=()
-  for search_dir in ${hpc_search_dirs[@]+"${hpc_search_dirs[@]}"}; do
-    report_args+=("--hpcdir" "$search_dir")
-  done
-  while IFS= read -r spec_path; do
-    [ -z "$spec_path" ] && continue
-    spec_module="${spec_path#*/test/}"
-    spec_module="${spec_module%.hs}"
-    spec_module="${spec_module//\//.}"
-    report_args+=("--exclude=$spec_module")
-  done < <(find packages examples -path "*/test/*Spec.hs" -type f -print | sort)
-  # Test source modules are excluded above. Each test suite also contributes a
-  # generated Main module, which has no application coverage contract.
-  while IFS= read -r test_main_mix; do
-    [ -z "$test_main_mix" ] && continue
-    test_component_package="$(basename "$(dirname "$test_main_mix")")"
-    report_args+=("--exclude=$test_component_package:Main")
-  done < <(find "$coverage_staging_dir" -path '*/components/*/mix/*-tests/Main.mix' -type f -print | sort)
-
-  echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
-  if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
-    printf '%s\n' "$aggregate_report_output"
-    while IFS= read -r line; do
-      if [[ "$line" == *"expressions used"* || "$line" == *"boolean coverage"* || "$line" == *"alternatives used"* ]] && coverage_summary_line_is_incomplete "$line"; then
-        trimmed_line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-        aggregate_findings+=("$trimmed_line")
-      fi
-    done < <(printf '%s\n' "$aggregate_report_output")
-  else
-    printf '\033[31mFailed to generate aggregate coverage report.\033[0m\n' >&2
-    printf '%s\n' "$aggregate_report_output" >&2
-    missing_coverage=true
+  percentage=$((covered * 100 / total))
+  printf ' %d%% %s used (%d/%d)\n' "$percentage" "${categories[$idx],,}" "$covered" "$total"
+  if coverage_fraction_is_incomplete "$covered/$total"; then
+    aggregate_findings+=("${categories[$idx]} coverage ($covered/$total).")
   fi
-
-  if [ "${#aggregate_tix_paths[@]}" -gt 1 ] && [ -n "$aggregate_tix_to_report" ]; then
-    rm -f "$aggregate_tix_to_report"
-  fi
-fi
+done
 rm -rf "$temp_root"
 echo "</body></html>" >> hpc_index.html
 printf '\n\e[32mMulti-package coverage report generated at %s/hpc_index.html\e[0m\n' "$(pwd)"
