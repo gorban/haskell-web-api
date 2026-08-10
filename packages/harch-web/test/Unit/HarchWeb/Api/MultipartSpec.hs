@@ -270,7 +270,9 @@ spec =
               MultipartPartBodyChunk "b",
               MultipartPartEnded,
               MultipartFinished,
-              MultipartMalformed
+              MultipartMalformed,
+              MultipartScannerLimitExceeded MultipartPreambleLimitExceeded,
+              MultipartScannerLimitExceeded MultipartPartHeaderLimitExceeded
             ]
        in expectAll
             ( (sum [fromEnum (left == right) | left <- events, right <- events] `shouldBe` length events)
@@ -453,6 +455,46 @@ spec =
           (runConsume (testLimits {multipartLimitsMaxBodyBytes = ByteString.length twoPartBody - 1}) [twoPartBody])
           MultipartBodyTooLarge
 
+      it "rejects an oversized preamble while retaining only a boundary suffix" $
+        shouldReject
+          (runConsume (testLimits {multipartLimitsMaxPreambleBytes = 4}) ["too much preamble"])
+          MultipartPreambleTooLarge
+
+      it "rejects a preamble that exceeds its limit in the chunk containing the first boundary" $
+        shouldReject
+          ( runConsume
+              (testLimits {multipartLimitsMaxPreambleBytes = 4})
+              ["too much preamble--" <> boundaryToken <> "--\r\n"]
+          )
+          MultipartPreambleTooLarge
+
+      it "rejects an incomplete part header block that exceeds its retained-byte limit" $
+        shouldReject
+          ( runConsume
+              (testLimits {multipartLimitsMaxPartHeaderBytes = 4})
+              ["--" <> boundaryToken <> "\r\n" <> ByteString.take 5 fieldPartHeaders]
+          )
+          MultipartPartHeadersTooLarge
+
+      it "continues a retained part header block when the next body chunk arrives" $ do
+        result <-
+          runConsume
+            testLimits
+            [ "--" <> boundaryToken <> "\r\n" <> ByteString.take 5 fieldPartHeaders,
+              ByteString.drop 5 fieldPartHeaders <> "\r\n\r\nvalue1\r\n--" <> boundaryToken <> "--\r\n"
+            ]
+        case result of
+          Right [MultipartFieldPart "field1" "value1"] -> pure ()
+          other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "rejects a complete part header block that exceeds its retained-byte limit" $
+        shouldReject
+          ( runConsume
+              (testLimits {multipartLimitsMaxPartHeaderBytes = ByteString.length fieldPartHeaders - 1})
+              ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n"]
+          )
+          MultipartPartHeadersTooLarge
+
       it "discards an active file when a later chunk exceeds the aggregate limit" $
         withTestUploadOpener $ \openUploadFile -> do
           spooledPathReference <- IORef.newIORef Nothing
@@ -538,7 +580,10 @@ spec =
         let parts :: [MultipartPartWith FilePath]
             parts = [MultipartFieldPart "f" "v", MultipartFilePart "f" "n" "/tmp/x" 3]
             errors =
-              [ MultipartTooManyParts,
+              [ MultipartBodyTooLarge,
+                MultipartPreambleTooLarge,
+                MultipartPartHeadersTooLarge,
+                MultipartTooManyParts,
                 MultipartMissingDisposition,
                 MultipartFieldTooLarge "f",
                 MultipartFileTooLarge "f",

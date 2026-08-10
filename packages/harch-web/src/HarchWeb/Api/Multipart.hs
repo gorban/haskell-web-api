@@ -17,6 +17,7 @@
 -- whole.
 module HarchWeb.Api.Multipart
   ( MultipartEvent (..),
+    MultipartScannerLimit (..),
     MultipartScanner,
     newMultipartScanner,
     feedMultipartChunk,
@@ -75,6 +76,14 @@ data MultipartEvent
   | -- | The stream did not follow the boundary grammar; scanning has
     -- stopped and no further events will be produced.
     MultipartMalformed
+  | -- | Parser state exceeded a configured retained-byte limit. Scanning
+    -- stops without retaining more request bytes.
+    MultipartScannerLimitExceeded MultipartScannerLimit
+  deriving (Eq, Show)
+
+data MultipartScannerLimit
+  = MultipartPreambleLimitExceeded
+  | MultipartPartHeaderLimitExceeded
   deriving (Eq, Show)
 
 data MultipartPhase
@@ -94,17 +103,34 @@ data MultipartScanner = MultipartScanner
   { scannerLeadingDelimiter :: !ByteString,
     scannerBodyDelimiter :: !ByteString,
     scannerBuffer :: !ByteString,
+    scannerPreambleBytes :: !Int,
+    scannerPreambleLimit :: !(Maybe Int),
+    scannerPartHeaderLimit :: !(Maybe Int),
+    scannerLimitFailure :: !(Maybe MultipartScannerLimit),
     scannerPhase :: !MultipartPhase
   }
 
 -- | Start a scanner for the given multipart boundary token (the value of the
 -- @Content-Type@ header's @boundary@ parameter, without the leading @--@).
 newMultipartScanner :: ByteString -> MultipartScanner
-newMultipartScanner boundary =
+newMultipartScanner = newMultipartScannerWithLimits Nothing Nothing
+
+newBoundedMultipartScanner :: MultipartLimits -> ByteString -> MultipartScanner
+newBoundedMultipartScanner limits =
+  newMultipartScannerWithLimits
+    (Just (multipartLimitsMaxPreambleBytes limits))
+    (Just (multipartLimitsMaxPartHeaderBytes limits))
+
+newMultipartScannerWithLimits :: Maybe Int -> Maybe Int -> ByteString -> MultipartScanner
+newMultipartScannerWithLimits maybeMaximumPreambleBytes maybeMaximumPartHeaderBytes boundary =
   MultipartScanner
     { scannerLeadingDelimiter = "--" <> boundary,
       scannerBodyDelimiter = "\r\n--" <> boundary,
       scannerBuffer = ByteString.empty,
+      scannerPreambleBytes = 0,
+      scannerPreambleLimit = maybeMaximumPreambleBytes,
+      scannerPartHeaderLimit = maybeMaximumPartHeaderBytes,
+      scannerLimitFailure = Nothing,
       scannerPhase = AwaitingFirstBoundary
     }
 
@@ -115,7 +141,28 @@ newMultipartScanner boundary =
 -- misidentifies a part.
 feedMultipartChunk :: MultipartScanner -> ByteString -> ([MultipartEvent], MultipartScanner)
 feedMultipartChunk scanner chunk =
-  drainScanner scanner {scannerBuffer = scannerBuffer scanner <> chunk}
+  drainScanner (discardSafePreamble scanner {scannerBuffer = scannerBuffer scanner <> chunk})
+
+discardSafePreamble :: MultipartScanner -> MultipartScanner
+discardSafePreamble scanner =
+  case scannerPhase scanner of
+    AwaitingFirstBoundary
+      | ByteString.null atMarker ->
+          scanner
+            { scannerBuffer = ByteString.drop discardedLength buffer,
+              scannerPreambleBytes = nextPreambleBytes,
+              scannerLimitFailure =
+                if exceedsScannerLimit (scannerPreambleLimit scanner) nextPreambleBytes
+                  then Just MultipartPreambleLimitExceeded
+                  else Nothing
+            }
+    _ -> scanner
+  where
+    buffer = scannerBuffer scanner
+    marker = scannerLeadingDelimiter scanner
+    (_preamble, atMarker) = ByteString.breakSubstring marker buffer
+    discardedLength = ByteString.length buffer - safeSuffixLength marker buffer
+    nextPreambleBytes = scannerPreambleBytes scanner + discardedLength
 
 -- | Signal that the request body has ended. Any part still open when this is
 -- called was truncated: the caller can detect that by checking whether the
@@ -138,21 +185,35 @@ drainScanner scanner =
 
 stepScanner :: MultipartScanner -> Maybe (MultipartEvent, MultipartScanner)
 stepScanner scanner =
-  case scannerPhase scanner of
-    ScannerFinished -> Nothing
-    AwaitingFirstBoundary -> stepAwaitingFirstBoundary scanner
-    StreamingBody -> stepStreamingBody scanner
-    AtDelimiterTail -> advancePastDelimiter scanner
+  case scannerLimitFailure scanner of
+    Just limitFailure ->
+      Just
+        ( MultipartScannerLimitExceeded limitFailure,
+          scanner {scannerLimitFailure = Nothing, scannerPhase = ScannerFinished}
+        )
+    Nothing ->
+      case scannerPhase scanner of
+        ScannerFinished -> Nothing
+        AwaitingFirstBoundary -> stepAwaitingFirstBoundary scanner
+        StreamingBody -> stepStreamingBody scanner
+        AtDelimiterTail -> advancePastDelimiter scanner
 
 stepAwaitingFirstBoundary :: MultipartScanner -> Maybe (MultipartEvent, MultipartScanner)
 stepAwaitingFirstBoundary scanner =
   let marker = scannerLeadingDelimiter scanner
-      (_preamble, atMarker) = ByteString.breakSubstring marker (scannerBuffer scanner)
+      (preamble, atMarker) = ByteString.breakSubstring marker (scannerBuffer scanner)
+      nextPreambleBytes = scannerPreambleBytes scanner + ByteString.length preamble
    in if ByteString.null atMarker
         then Nothing
         else
-          advancePastDelimiter
-            scanner {scannerBuffer = ByteString.drop (ByteString.length marker) atMarker}
+          if exceedsScannerLimit (scannerPreambleLimit scanner) nextPreambleBytes
+            then Just (MultipartScannerLimitExceeded MultipartPreambleLimitExceeded, scanner {scannerPhase = ScannerFinished})
+            else
+              advancePastDelimiter
+                scanner
+                  { scannerBuffer = ByteString.drop (ByteString.length marker) atMarker,
+                    scannerPreambleBytes = nextPreambleBytes
+                  }
 
 stepStreamingBody :: MultipartScanner -> Maybe (MultipartEvent, MultipartScanner)
 stepStreamingBody scanner =
@@ -186,15 +247,24 @@ stepAwaitingHeaders :: MultipartScanner -> Maybe (MultipartEvent, MultipartScann
 stepAwaitingHeaders scanner =
   let (headerBlock, atBlankLine) = ByteString.breakSubstring "\r\n\r\n" (scannerBuffer scanner)
    in if ByteString.null atBlankLine
-        then Nothing
+        then rejectOversizedHeader scanner (ByteString.length (scannerBuffer scanner))
         else
-          Just
-            ( MultipartPartStarted headerBlock,
-              scanner
-                { scannerBuffer = ByteString.drop 4 atBlankLine,
-                  scannerPhase = StreamingBody
-                }
-            )
+          case rejectOversizedHeader scanner (ByteString.length headerBlock) of
+            Just result -> Just result
+            Nothing ->
+              Just
+                ( MultipartPartStarted headerBlock,
+                  scanner
+                    { scannerBuffer = ByteString.drop 4 atBlankLine,
+                      scannerPhase = StreamingBody
+                    }
+                )
+
+rejectOversizedHeader :: MultipartScanner -> Int -> Maybe (MultipartEvent, MultipartScanner)
+rejectOversizedHeader scanner headerBytes
+  | exceedsScannerLimit (scannerPartHeaderLimit scanner) headerBytes =
+      Just (MultipartScannerLimitExceeded MultipartPartHeaderLimitExceeded, scanner {scannerPhase = ScannerFinished})
+  | otherwise = Nothing
 
 -- | The buffer starts immediately after a consumed delimiter marker (leading
 -- or mid-body). Classify what follows once enough bytes have arrived: @--@
@@ -211,6 +281,10 @@ advancePastDelimiter scanner
       Just (MultipartMalformed, scanner {scannerPhase = ScannerFinished})
   where
     afterMarker = scannerBuffer scanner
+
+exceedsScannerLimit :: Maybe Int -> Int -> Bool
+exceedsScannerLimit maybeMaximumBytes byteCount =
+  maybe False (< byteCount) maybeMaximumBytes
 
 -- | How many trailing bytes of @haystack@ must be retained because they
 -- could be the start of @needle@ if more bytes arrive. Assumes @needle@ does
@@ -321,22 +395,28 @@ unescapeQuotedPairs = Text.pack . go . Text.unpack
     go [] = []
 
 -- | Bounds applied while consuming a multipart body: its total streamed byte
--- count, how large a field value may grow before it is rejected, how large a
--- staged file upload may grow before it is rejected, and how many parts a
--- single body may declare.
+-- count, how much preamble and each part's headers the parser may retain, how
+-- large a field value may grow before it is rejected, how large a staged file
+-- upload may grow before it is rejected, and how many parts a single body may
+-- declare.
 data MultipartLimits = MultipartLimits
   { multipartLimitsMaxBodyBytes :: Int,
+    multipartLimitsMaxPreambleBytes :: Int,
+    multipartLimitsMaxPartHeaderBytes :: Int,
     multipartLimitsMaxFieldBytes :: Int,
     multipartLimitsMaxFileBytes :: Int,
     multipartLimitsMaxParts :: Int
   }
   deriving (Eq, Show)
 
--- | 32 MiB body, 1 MiB field values, 25 MiB file uploads, 100 parts.
+-- | 32 MiB body, 8 KiB preamble, 16 KiB per-part headers, 1 MiB field
+-- values, 25 MiB file uploads, 100 parts.
 defaultMultipartLimits :: MultipartLimits
 defaultMultipartLimits =
   MultipartLimits
     { multipartLimitsMaxBodyBytes = 32 * 1024 * 1024,
+      multipartLimitsMaxPreambleBytes = 8 * 1024,
+      multipartLimitsMaxPartHeaderBytes = 16 * 1024,
       multipartLimitsMaxFieldBytes = 1024 * 1024,
       multipartLimitsMaxFileBytes = 25 * 1024 * 1024,
       multipartLimitsMaxParts = 100
@@ -358,6 +438,12 @@ type MultipartPart = MultipartPartWith InMemoryUpload
 data MultipartConsumeError
   = -- | The streamed body exceeded 'multipartLimitsMaxBodyBytes'.
     MultipartBodyTooLarge
+  | -- | The bytes before the first boundary exceeded
+    -- 'multipartLimitsMaxPreambleBytes'.
+    MultipartPreambleTooLarge
+  | -- | A part's raw header block exceeded
+    -- 'multipartLimitsMaxPartHeaderBytes'.
+    MultipartPartHeadersTooLarge
   | -- | The body declared more parts than 'multipartLimitsMaxParts' allows.
     MultipartTooManyParts
   | -- | A part had no @Content-Disposition@ header, or one without a @name@
@@ -466,7 +552,14 @@ consumeMultipartBodyWithActive activeUploadReference storage limits boundary rea
             multipartConsumerReadChunk = readChunk,
             multipartConsumerOnPart = onPart
           }
-   in runExceptT (driveMultipartConsumer consumer (newMultipartScanner boundary) Nothing 0 0)
+   in runExceptT
+        ( driveMultipartConsumer
+            consumer
+            (newBoundedMultipartScanner limits boundary)
+            Nothing
+            0
+            0
+        )
 
 data MultipartConsumer stored = MultipartConsumer
   { multipartConsumerStorage :: MultipartStorage stored,
@@ -547,6 +640,8 @@ applyMultipartEvent consumer event currentPart partCount =
         Left rejectionError -> throwError rejectionError
         Right () -> pure (ContinueMultipartConsumption Nothing partCount)
     (MultipartFinished, Nothing) -> pure FinishMultipartConsumption
+    (MultipartScannerLimitExceeded MultipartPreambleLimitExceeded, _) -> throwError MultipartPreambleTooLarge
+    (MultipartScannerLimitExceeded MultipartPartHeaderLimitExceeded, _) -> throwError MultipartPartHeadersTooLarge
     _ -> throwError MultipartMalformedBody
 
 startMultipartPart :: MultipartConsumer stored -> ByteString -> ExceptT MultipartConsumeError IO (PartAccumulator stored)
