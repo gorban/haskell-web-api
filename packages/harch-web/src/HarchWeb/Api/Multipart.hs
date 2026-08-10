@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | A bounded, incremental @multipart\/form-data@ consumer (RFC 7578, RFC
 -- 2046 section 5.1): a boundary scanner that segments an arbitrarily-chunked
@@ -374,7 +375,7 @@ data PartAccumulator stored
 
 discardActiveMultipartUpload :: IORef.IORef (Maybe (MultipartStagedUpload stored)) -> IO ()
 discardActiveMultipartUpload activeUploadReference = do
-  maybeActiveUpload <- IORef.atomicModifyIORef' activeUploadReference (\activeUpload -> (Nothing, activeUpload))
+  maybeActiveUpload <- IORef.atomicModifyIORef' activeUploadReference (Nothing,)
   for_ maybeActiveUpload MultipartStorage.discardMultipartUpload
 
 -- | Incrementally consume a @multipart\/form-data@ body: drive

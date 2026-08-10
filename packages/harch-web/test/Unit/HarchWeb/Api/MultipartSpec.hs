@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module Unit.HarchWeb.Api.MultipartSpec (spec) where
 
@@ -429,7 +430,7 @@ spec =
                 IORef.writeIORef spooledPathReference (Just path)
                 pure (path, handle)
               failingReadChunk = do
-                maybeChunk <- IORef.atomicModifyIORef' nextChunkReference (\nextChunk -> (Nothing, nextChunk))
+                maybeChunk <- IORef.atomicModifyIORef' nextChunkReference (Nothing,)
                 case maybeChunk of
                   Just chunk -> pure chunk
                   Nothing -> Exception.throwIO (userError "request body read failed")
