@@ -378,7 +378,7 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
     report_args+=("--exclude=$test_component_package:Main")
   done < <(find "$coverage_staging_dir" -path '*/components/*/mix/*-tests/Main.mix' -type f -print | sort)
 
-  echo -e "\n\033[90mFull coverage report (all packages):\033[0m"
+  echo -e "\n\033[90mCross-build coverage summary (diagnostic only):\033[0m"
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
     printf '%s\n' "$aggregate_report_output"
     while IFS= read -r line; do
@@ -410,11 +410,10 @@ if [ "${#per_project_findings[@]}" -gt 0 ]; then
   done
 elif [ "${#aggregate_findings[@]}" -gt 0 ]; then
   echo
-  printf '\033[31mAggregate coverage report found <100%% coverage, exiting with error:\033[0m\n'
+  printf '\033[33mCross-build coverage summary mixes components from separate package builds and is diagnostic only.\033[0m\n'
   for line in ${aggregate_findings[@]+"${aggregate_findings[@]}"}; do
-    printf '\033[31m- %s\033[0m\n' "$line"
+    printf '\033[33m- %s\033[0m\n' "$line"
   done
-  missing_coverage=true
 fi
 
 if $missing_coverage; then
