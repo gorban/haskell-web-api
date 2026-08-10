@@ -4,8 +4,8 @@
 -- 2046 section 5.1): a boundary scanner that segments an arbitrarily-chunked
 -- byte stream into per-part header blocks and body byte ranges, plus a
 -- driver that turns those events into complete parts against a WAI request
--- body, keeping small field values in memory and spooling file uploads to a
--- temporary file. RFC 5987\/6266 extended @filename*=@ parameters are not
+-- body, keeping small field values in memory and writing file uploads through
+-- an application-selected storage adapter. RFC 5987\/6266 extended @filename*=@ parameters are not
 -- supported, only the common quoted-string form.
 --
 -- The scanner never buffers more of a part's body than the length of the
@@ -24,7 +24,13 @@ module HarchWeb.Api.Multipart
     parseMultipartFieldDisposition,
     MultipartLimits (..),
     defaultMultipartLimits,
-    MultipartPart (..),
+    MultipartPart,
+    MultipartPartWith (..),
+    MultipartStorage (..),
+    MultipartStagedUpload (..),
+    InMemoryUpload,
+    inMemoryMultipartStorage,
+    inMemoryUploadBytes,
     MultipartConsumeError (..),
     consumeMultipartBody,
     consumeMultipartBodyWith,
@@ -44,9 +50,8 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import HarchWeb.Api.Multipart.Storage
 import Network.Wai qualified as Wai
-import System.IO (Handle, hClose)
-import System.IO.Temp qualified as Temp
 
 data MultipartEvent
   = -- | A new part began. The payload is its raw header block (each header
@@ -310,7 +315,7 @@ unescapeQuotedPairs = Text.pack . go . Text.unpack
     go [] = []
 
 -- | Bounds applied while consuming a multipart body: how large a field
--- value may grow before it is rejected, how large a spooled file upload may
+-- value may grow before it is rejected, how large a staged file upload may
 -- grow before it is rejected, and how many parts a single body may declare.
 data MultipartLimits = MultipartLimits
   { multipartLimitsMaxFieldBytes :: Int,
@@ -329,12 +334,17 @@ defaultMultipartLimits =
     }
 
 -- | One fully-consumed part: either a plain field's decoded value, kept in
--- memory, or a file upload spooled to a temporary file (path and byte
--- count) that the caller owns and must remove once finished with it.
-data MultipartPart
+-- memory, or a file upload represented by the selected storage adapter's
+-- completed value and byte count.
+data MultipartPartWith stored
   = MultipartFieldPart Text Text
-  | MultipartFilePart Text Text FilePath Int
+  | MultipartFilePart Text Text stored Int
   deriving (Eq, Show)
+
+-- | The out-of-the-box multipart representation uses bounded in-memory file
+-- storage. Applications selecting another adapter use 'MultipartPartWith'
+-- at their explicit storage boundary.
+type MultipartPart = MultipartPartWith InMemoryUpload
 
 data MultipartConsumeError
   = -- | The body declared more parts than 'multipartLimitsMaxParts' allows.
@@ -353,32 +363,28 @@ data MultipartConsumeError
     MultipartTruncatedBody
   deriving (Eq, Show)
 
-data PartAccumulator
+data PartAccumulator stored
   = FieldAccumulator Text ByteString
-  | FileAccumulator Text Text FilePath Handle Int
+  | FileAccumulator Text Text (MultipartStagedUpload stored) Int
 
 -- | Incrementally consume a @multipart\/form-data@ body: drive
 -- 'MultipartScanner' from repeated calls to @readChunk@ (an empty
 -- 'ByteString' signals end of body, matching 'Network.Wai.getRequestBodyChunk'),
--- decode plain field values, and spool file uploads (parts with a
--- @filename@ parameter) through @openUploadFile@ rather than buffering them.
--- Bounded by @limits@; see 'MultipartConsumeError' for the ways this can
--- fail. Any file already spooled before a failure is left on disk for the
--- caller to clean up.
+-- decode plain field values, and append file uploads (parts with a
+-- @filename@ parameter) through an explicit storage adapter. Bounded by
+-- @limits@; see 'MultipartConsumeError' for the ways this can fail.
 consumeMultipartBody ::
+  MultipartStorage stored ->
   MultipartLimits ->
   -- | The boundary token, without its leading @--@.
   ByteString ->
   -- | Reads the next body chunk; an empty result signals end of body.
   IO ByteString ->
-  -- | Opens a fresh temporary file for a file part; the 'Text' is the
-  -- part's client-declared filename, offered as a naming hint only.
-  (Text -> IO (FilePath, Handle)) ->
-  IO (Either MultipartConsumeError [MultipartPart])
-consumeMultipartBody limits boundary readChunk openUploadFile = do
+  IO (Either MultipartConsumeError [MultipartPartWith stored])
+consumeMultipartBody storage limits boundary readChunk = do
   completedPartsReference <- IORef.newIORef []
   result <-
-    consumeMultipartBodyWith limits boundary readChunk openUploadFile $ \part -> do
+    consumeMultipartBodyWith storage limits boundary readChunk $ \part -> do
       IORef.modifyIORef' completedPartsReference (part :)
       pure (Right ())
   case result of
@@ -389,19 +395,19 @@ consumeMultipartBody limits boundary readChunk openUploadFile = do
 -- finishes, before any later part (including a later file part) is read.
 -- Returning @Left@ from @onPart@ aborts the body with that error
 -- immediately -- e.g. a caller can reject the whole body on an invalid CSRF
--- field without ever spooling a later file part to disk, satisfying RFC
+-- field without ever placing a later file part in storage, satisfying RFC
 -- 7578 consumers that must not let a token arriving after a file part
--- authorize an already-committed write. Any file already spooled before an
--- abort is left on disk for the caller to clean up, exactly as with
--- 'consumeMultipartBody'.
+-- authorize an already-committed write. Cleanup and promotion for an upload
+-- completed before a later abort are the storage lifecycle work tracked by
+-- AD, never an implicit raw-file-path policy.
 consumeMultipartBodyWith ::
+  MultipartStorage stored ->
   MultipartLimits ->
   ByteString ->
   IO ByteString ->
-  (Text -> IO (FilePath, Handle)) ->
-  (MultipartPart -> IO (Either MultipartConsumeError ())) ->
+  (MultipartPartWith stored -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
-consumeMultipartBodyWith limits boundary readChunk openUploadFile onPart =
+consumeMultipartBodyWith storage limits boundary readChunk onPart =
   runExceptT (drive (newMultipartScanner boundary) Nothing 0)
   where
     drive !scanner !currentPart !partCount = do
@@ -448,8 +454,8 @@ consumeMultipartBodyWith limits boundary readChunk openUploadFile onPart =
               case multipartFieldFilename disposition of
                 Nothing -> pure (FieldAccumulator fieldName ByteString.empty)
                 Just filename -> do
-                  (path, handle) <- liftIO (openUploadFile $! filename)
-                  pure (FileAccumulator fieldName filename path handle 0)
+                  stagedUpload <- liftIO (beginMultipartUpload storage $! filename)
+                  pure (FileAccumulator fieldName filename stagedUpload 0)
 
     appendPartBytes accumulator bodyBytes =
       case accumulator of
@@ -458,35 +464,34 @@ consumeMultipartBodyWith limits boundary readChunk openUploadFile onPart =
            in if ByteString.length grown > multipartLimitsMaxFieldBytes limits
                 then throwError (MultipartFieldTooLarge fieldName)
                 else pure (FieldAccumulator fieldName grown)
-        FileAccumulator fieldName filename path handle bytesWritten ->
+        FileAccumulator fieldName filename stagedUpload bytesWritten ->
           let bytesWritten' = bytesWritten + ByteString.length bodyBytes
            in if bytesWritten' > multipartLimitsMaxFileBytes limits
                 then do
-                  liftIO (hClose handle)
+                  liftIO (discardMultipartUpload stagedUpload)
                   throwError (MultipartFileTooLarge fieldName)
                 else do
-                  liftIO (ByteString.hPut handle bodyBytes)
-                  pure (FileAccumulator fieldName filename path handle bytesWritten')
+                  liftIO (appendMultipartUpload stagedUpload bodyBytes)
+                  pure (FileAccumulator fieldName filename stagedUpload bytesWritten')
 
     finalizeAccumulator accumulator =
       case accumulator of
         FieldAccumulator fieldName buffered -> pure (MultipartFieldPart fieldName (decodeLeniently buffered))
-        FileAccumulator fieldName filename path handle bytesWritten -> do
-          hClose handle
-          pure (MultipartFilePart fieldName filename path bytesWritten)
+        FileAccumulator fieldName filename stagedUpload bytesWritten -> do
+          storedUpload <- completeMultipartUpload stagedUpload
+          pure (MultipartFilePart fieldName filename storedUpload bytesWritten)
 
 -- | Consume a WAI request's body as @multipart\/form-data@, given the
 -- boundary parameter extracted from its @Content-Type@ header. Field values
--- are decoded and kept in memory; file uploads are spooled to a fresh file
--- in the system temporary directory, which the caller owns and must remove
--- once it has finished with the upload.
+-- and files use the bounded in-memory adapter; applications that need durable
+-- storage call 'consumeMultipartBody' with an explicit adapter.
 consumeMultipartRequestBody ::
   MultipartLimits ->
   ByteString ->
   Wai.Request ->
   IO (Either MultipartConsumeError [MultipartPart])
 consumeMultipartRequestBody limits boundary request =
-  consumeMultipartBody limits boundary (Wai.getRequestBodyChunk request) openUploadTempFile
+  consumeMultipartBody inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)
 
 -- | Like 'consumeMultipartRequestBody', but see 'consumeMultipartBodyWith':
 -- @onPart@ runs as soon as each part finishes, before any later part
@@ -498,9 +503,4 @@ consumeMultipartRequestBodyWith ::
   (MultipartPart -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
 consumeMultipartRequestBodyWith limits boundary request =
-  consumeMultipartBodyWith limits boundary (Wai.getRequestBodyChunk request) openUploadTempFile
-
-openUploadTempFile :: Text -> IO (FilePath, Handle)
-openUploadTempFile _filenameHint = do
-  temporaryDirectory <- Temp.getCanonicalTemporaryDirectory
-  Temp.openBinaryTempFile temporaryDirectory "harch-web-multipart-upload.tmp"
+  consumeMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)

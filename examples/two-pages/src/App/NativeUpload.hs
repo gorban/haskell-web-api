@@ -15,10 +15,10 @@
 -- earlier, unsubmitted one. 'consumeMultipartRequestBodyWith' validates the
 -- CSRF field via its per-part callback -- which runs as soon as that field's
 -- part finishes, before any later part is read -- so a request whose file
--- part precedes an invalid or absent CSRF field is rejected before that
--- file is ever spooled to disk. The CSRF field must still appear before the
+-- part follows an invalid or absent CSRF field is rejected before that
+-- file reaches the in-memory adapter. The CSRF field must still appear before the
 -- file field in the form markup below for the common, well-formed case to
--- reject before spooling at all, rather than merely before the response
+-- reject before retaining it at all, rather than merely before the response
 -- claims success; see 'uploadFormBody'.
 --
 -- This form carries no @data-harch-action@ attribute, so the inline capture
@@ -39,7 +39,6 @@ import App.Components.Layout (twoPageShell)
 import App.Pages.Route.Generated (PageRoute (HomePage, LiveDataPage, SecondPage))
 import App.Routes (CustomRoute (NativeSubscriptionFallback), TwoPageRoute (Custom), routeCodec)
 import App.Routes qualified as Routes
-import Control.Exception (SomeException, try)
 import Control.Monad (void)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
@@ -68,7 +67,7 @@ import HarchWeb.Api
 import HarchWeb.Api.Multipart
   ( MultipartConsumeError (..),
     MultipartLimits,
-    MultipartPart (..),
+    MultipartPartWith (..),
     consumeMultipartRequestBodyWith,
     defaultMultipartLimits,
   )
@@ -76,7 +75,6 @@ import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
-import System.Directory qualified as Directory
 
 data NativeUploadTarget
   = ShowUploadForm
@@ -134,7 +132,7 @@ handleUploadSubmission state request =
     Just boundary -> do
       outcome <- consumeUpload state defaultMultipartLimits boundary request
       case outcome of
-        UploadAccepted _path filename byteCount -> successPage filename byteCount
+        UploadAccepted filename byteCount -> successPage filename byteCount
         UploadCsrfRejected -> errorPage 403 "Your upload form had expired. Go back and try again."
         UploadMissingFile -> errorPage 422 "Choose a file before submitting."
         -- Every 'MultipartConsumeError' (size limits, malformed structure,
@@ -144,7 +142,7 @@ handleUploadSubmission state request =
         UploadRejected _consumeError -> errorPage 400 "This upload was invalid."
 
 data UploadOutcome
-  = UploadAccepted FilePath Text Int
+  = UploadAccepted Text Int
   | UploadCsrfRejected
   | UploadMissingFile
   | UploadRejected MultipartConsumeError
@@ -153,8 +151,9 @@ data UploadOutcome
 -- the whole body -- before any later part, including a later file part, is
 -- read -- unless a valid, unexpired CSRF field already arrived. A file
 -- part's bytes are only ever considered "accepted" once this callback
--- returns 'Right' for it; a rejected file that was already spooled (because
--- it arrived before the CSRF field) is removed rather than kept.
+-- returns 'Right' for it. The built-in adapter retains such bytes in memory
+-- for this request only; AD tracks explicit durable adoption and cleanup
+-- when an application selects persistent storage.
 --
 -- The `$!` applications below (on already-WHNF constructor arguments like
 -- 'MultipartMalformedBody') exist so HPC ticks each on every invocation
@@ -173,13 +172,12 @@ consumeUpload state limits boundary request = do
         if claimed
           then Right () <$ atomicModifyIORef' csrfValidatedReference (const (True, ()))
           else (Left $! MultipartMalformedBody) <$ atomicModifyIORef' csrfRejectedReference (const (True, ()))
-      MultipartFilePart _fieldName filename path byteCount -> do
+      MultipartFilePart _fieldName filename _storedUpload byteCount -> do
         csrfValidated <- atomicModifyIORef' csrfValidatedReference (\validated -> (validated, validated))
         if csrfValidated
-          then Right () <$ atomicModifyIORef' acceptedReference (const (Just ((UploadAccepted $! path) filename byteCount), ()))
+          then Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
           else do
             void (atomicModifyIORef' csrfRejectedReference (const (True, ())))
-            void (try (Directory.removeFile path) :: IO (Either SomeException ()))
             pure (Left $! MultipartMalformedBody)
       MultipartFieldPart _ _ -> pure (Right ())
   case consumeResult of
@@ -229,7 +227,7 @@ renderUploadFormPage csrfToken =
 
 -- | The CSRF field must precede the file field: 'consumeUpload' rejects
 -- before opening a later part, so this ordering is what lets an invalid or
--- absent token skip spooling the file to disk at all, not merely skip
+-- absent token skip retaining the file at all, not merely skip
 -- treating it as accepted afterward.
 uploadFormBody :: CsrfToken -> Markup.Html
 uploadFormBody csrfToken =

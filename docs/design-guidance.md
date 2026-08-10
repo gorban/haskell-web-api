@@ -87,10 +87,12 @@ and never hand the caller a raw handle into a framework-internal storage decisio
 path) as if it were that adapter. This applies beyond file uploads to any future feature accepting
 untrusted payloads — streamed request bodies, WebSocket frames, deferred job payloads, and similar.
 
-**Worked example.** A multipart request-body consumer spools every file part straight to a local
-temporary file and hands the caller that raw path — a hardcoded backend with no storage-adapter
-abstraction, no bounded in-memory option, and no explicit promote-or-discard step a caller
-controls. This is exactly the shape this rule exists to prevent.
+**Worked example.** A multipart request-body consumer that spools every file part straight to a
+local temporary file and hands the caller that raw path has a hardcoded backend, no bounded
+in-memory option, and no explicit promote-or-discard step the caller controls. This is exactly
+the shape this rule exists to prevent. `HarchWeb.Api.Multipart` now uses an explicit storage
+adapter and a bounded in-memory default; its remaining cleanup and explicit-promotion work stays
+tracked under AD.
 
 ### Naming a partial slice in the status table
 
@@ -297,13 +299,14 @@ application already has, changing behavior only for paths explicitly declared as
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
 body than the boundary delimiter's length, `parseMultipartFieldDisposition` for a part's `name`/`filename`,
 and `consumeMultipartBody`/`consumeMultipartRequestBody` to drive the scanner against a chunked body
-(any `IO ByteString` source, or a WAI `Request` directly), enforcing `MultipartLimits` (max field bytes,
-max file bytes, max part count) and spooling file parts to a caller-owned temporary file rather than
-buffering them. `consumeMultipartBodyWith`/`consumeMultipartRequestBodyWith` are the incremental
-siblings: a caller-supplied callback runs as soon as each part finishes, before any later part
-(including a later file part) is read, so a caller can reject the whole body — on an invalid CSRF
-field, say — before ever spooling a not-yet-reached file part to disk. `consumeMultipartBody` is a
-thin wrapper that always accepts and accumulates.
+(any `IO ByteString` source, or a WAI `Request` directly). `MultipartStorage` makes durable backends an
+explicit application choice; the WAI helpers use the supplied `InMemoryUpload` adapter, retaining no file
+bytes beyond `MultipartLimits`' max-file budget. `consumeMultipartBodyWith` and
+`consumeMultipartRequestBodyWith` are the incremental siblings: a caller-supplied callback runs as soon
+as each part finishes, before any later part (including a later file part) is read, so a caller can reject
+the whole body — on an invalid CSRF field, say — before a later file reaches storage. `consumeMultipartBody`
+is a thin wrapper that always accepts and accumulates. Cleanup after later rejection, exceptions, or aborts,
+and explicit durable promotion, remain partial work under AD.
 
 Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
 usable against a real WAI application today, opt-in and additive. Neither is the application's
@@ -322,7 +325,7 @@ natively, with or without JavaScript), a single-use server-held CSRF token embed
 (chosen over a double-submit cookie because nothing in this framework version lets a plain page response
 set a `Set-Cookie` header), and `consumeMultipartRequestBodyWith` validating that field via its
 per-part callback — before any later part, including the file part, is read — so a request whose file
-part precedes an invalid or absent CSRF field is rejected before that file is ever spooled to disk. See
+part follows an invalid or absent CSRF field is rejected before that file reaches storage. See
 the module haddock in `examples/two-pages/src/App/NativeUpload.hs` for the full policy, and
 `test/E2E/AppSpec.hs`'s two native-upload scenarios (scripts enabled and disabled) for the real-browser
 proof that the submission is a hard navigation with zero capture-kernel mutation requests either way.
@@ -344,7 +347,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
 | `HarchWeb.Api` endpoint matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented, opt-in via WAI middleware | Wrap a `Wai.Application` with `apiEndpointMiddleware` to dispatch declared paths; it is not the default dispatcher, so keep routing everything else through `RouteCodec`/`ApiRoute`. |
-| `HarchWeb.Api.Multipart` bounded streaming consumer, native upload form, CSRF, and AA capture coordination | Implemented | See [two-pages](../examples/two-pages/README.md)'s `/native-upload` page (`App.NativeUpload`) for the compiled, real-browser-tested demonstration. |
+| `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection is explicit; complete staged-upload cleanup, promotion, and parser-wide bounds remain under AD. See [two-pages](../examples/two-pages/README.md)'s `/native-upload` page (`App.NativeUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
 | Automatic database-to-live-view subscriptions | Design direction | Use explicit SSE today; do not imply automatic subscriptions exist. |

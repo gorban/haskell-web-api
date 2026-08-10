@@ -63,6 +63,7 @@ library
     HarchWeb.Action
     HarchWeb.Api
     HarchWeb.Api.Multipart
+    HarchWeb.Api.Multipart.Storage
     HarchWeb.Controls
     HarchWeb.Database
     HarchWeb.DevSmtp

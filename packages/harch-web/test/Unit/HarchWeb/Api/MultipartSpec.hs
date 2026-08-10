@@ -10,7 +10,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Api.Multipart
 import Network.Wai qualified as Wai
-import System.IO (Handle)
+import System.IO (Handle, hClose)
 import System.IO.Temp qualified as Temp
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -44,8 +44,8 @@ twoPartBody =
     <> "--\r\n"
 
 -- | A file part first, then a field part -- the reverse of 'twoPartBody' --
--- so a rejection on the second (field) part exercises leaving an
--- already-accepted, already-spooled file part's bytes on disk.
+-- so a rejection on the second (field) part exercises the current
+-- completed-upload lifecycle before AD adds final cleanup semantics.
 fileTheRejectsSecondFieldBody :: ByteString
 fileTheRejectsSecondFieldBody =
   "--"
@@ -116,11 +116,22 @@ withTestUploadOpener action =
   Temp.withSystemTempDirectory "harch-web-multipart-test" $ \tempDirectory ->
     action (\_filenameHint -> Temp.openBinaryTempFile tempDirectory "upload.tmp")
 
+storageFromOpener :: (Text -> IO (FilePath, Handle)) -> MultipartStorage FilePath
+storageFromOpener openUploadFile =
+  MultipartStorage $ \filename -> do
+    (path, handle) <- openUploadFile filename
+    pure
+      MultipartStagedUpload
+        { appendMultipartUpload = ByteString.hPut handle,
+          completeMultipartUpload = hClose handle >> pure path,
+          discardMultipartUpload = hClose handle
+        }
+
 runConsume :: MultipartLimits -> [ByteString] -> IO (Either MultipartConsumeError [MultipartPart])
 runConsume limits chunks =
-  withTestUploadOpener $ \openUploadFile -> do
+  do
     readChunk <- chunkReader chunks
-    consumeMultipartBody limits boundaryToken readChunk openUploadFile
+    consumeMultipartBody inMemoryMultipartStorage limits boundaryToken readChunk
 
 testLimits :: MultipartLimits
 testLimits =
@@ -296,14 +307,37 @@ spec =
               )
 
     describe "consumeMultipartBody" $ do
+      it "keeps the built-in storage adapter in memory and discards staged bytes on request" $ do
+        let MultipartStorage beginUpload = inMemoryMultipartStorage
+        retainedUpload <- beginUpload "avatar.txt"
+        appendMultipartUpload retainedUpload "first "
+        appendMultipartUpload retainedUpload "second"
+        retainedStoredUpload <- completeMultipartUpload retainedUpload
+        let retainedBytes = inMemoryUploadBytes retainedStoredUpload
+        discardedUpload <- beginUpload "discarded.txt"
+        appendMultipartUpload discardedUpload "discard me"
+        discardMultipartUpload discardedUpload
+        discardedStoredUpload <- completeMultipartUpload discardedUpload
+        let discardedBytes = inMemoryUploadBytes discardedStoredUpload
+        expectAll
+          ( (retainedBytes `shouldBe` "first second")
+              :| [ discardedBytes `shouldBe` ByteString.empty,
+                   ByteString.length retainedBytes `shouldBe` 12,
+                   (retainedStoredUpload == retainedStoredUpload) `shouldBe` True,
+                   retainedStoredUpload `shouldNotBe` discardedStoredUpload,
+                   show discardedStoredUpload `shouldSatisfy` (not . null),
+                   showList [retainedStoredUpload] "" `shouldSatisfy` (not . null)
+                 ]
+          )
+
       it "consumes a single field part into a MultipartFieldPart" $
         runConsume testLimits [singleFieldBody]
           `shouldReturn` Right [MultipartFieldPart "field1" "value1"]
 
-      it "consumes a file part into a MultipartFilePart, spooling its content to disk" $
+      it "uses an application-supplied storage adapter for a file part" $
         withTestUploadOpener $ \openUploadFile -> do
           readChunk <- chunkReader [twoPartBody]
-          result <- consumeMultipartBody testLimits boundaryToken readChunk openUploadFile
+          result <- consumeMultipartBody (storageFromOpener openUploadFile) testLimits boundaryToken readChunk
           case result of
             Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" tempPath byteCount] -> do
               spooledContent <- ByteString.readFile tempPath
@@ -376,7 +410,8 @@ spec =
           `shouldReturn` Left MultipartTruncatedBody
 
       it "derives comparable, printable representations for MultipartPart and MultipartConsumeError" $
-        let parts = [MultipartFieldPart "f" "v", MultipartFilePart "f" "n" "/tmp/x" 3]
+        let parts :: [MultipartPartWith FilePath]
+            parts = [MultipartFieldPart "f" "v", MultipartFilePart "f" "n" "/tmp/x" 3]
             errors =
               [ MultipartTooManyParts,
                 MultipartMissingDisposition,
@@ -408,19 +443,17 @@ spec =
               )
 
     describe "consumeMultipartRequestBody" $
-      it "consumes a WAI request's body, including a spooled file upload" $
-        withTestUploadOpener $ \_unusedOpener -> do
-          readChunk <- chunkReader [twoPartBody]
-          let request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
-          result <- consumeMultipartRequestBody defaultMultipartLimits boundaryToken request
-          case result of
-            Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" tempPath byteCount] -> do
-              spooledContent <- ByteString.readFile tempPath
-              expectAll
-                ( (spooledContent `shouldBe` "file content here")
-                    :| [byteCount `shouldBe` ByteString.length "file content here"]
-                )
-            other -> expectationFailure ("unexpected result: " <> show other)
+      it "consumes a WAI request's body with the bounded in-memory storage adapter" $ do
+        readChunk <- chunkReader [twoPartBody]
+        let request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
+        result <- consumeMultipartRequestBody defaultMultipartLimits boundaryToken request
+        case result of
+          Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount] ->
+            expectAll
+              ( (inMemoryUploadBytes upload `shouldBe` "file content here")
+                  :| [byteCount `shouldBe` ByteString.length "file content here"]
+              )
+          other -> expectationFailure ("unexpected result: " <> show other)
 
     describe "consumeMultipartBodyWith" $ do
       it "calls onPart for each completed part, in order, before the body finishes" $
@@ -428,7 +461,7 @@ spec =
           seenPartsRef <- IORef.newIORef []
           readChunk <- chunkReader [twoPartBody]
           result <-
-            consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk openUploadFile $ \part -> do
+            consumeMultipartBodyWith (storageFromOpener openUploadFile) defaultMultipartLimits boundaryToken readChunk $ \part -> do
               IORef.modifyIORef' seenPartsRef (part :)
               pure (Right ())
           seenParts <- reverse <$> IORef.readIORef seenPartsRef
@@ -442,12 +475,9 @@ spec =
 
       it "aborts with a rejecting callback's error before a later file part is ever opened" $ do
         uploadOpenedRef <- IORef.newIORef False
-        let recordAndFailIfOpened _filenameHint = do
-              IORef.writeIORef uploadOpenedRef True
-              error "should not open an upload file after an earlier part was rejected"
         readChunk <- chunkReader [twoPartBody]
         result <-
-          consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk recordAndFailIfOpened $ \case
+          consumeMultipartBodyWith inMemoryMultipartStorage defaultMultipartLimits boundaryToken readChunk $ \case
             MultipartFieldPart "field1" _ -> pure (Left MultipartMalformedBody)
             part -> expectationFailure ("did not expect to see " <> show part) >> pure (Right ())
         uploadOpened <- IORef.readIORef uploadOpenedRef
@@ -456,12 +486,12 @@ spec =
               :| [uploadOpened `shouldBe` False]
           )
 
-      it "leaves an already-spooled file's bytes on disk when a later part is rejected" $
+      it "retains an application-owned completed upload when a later part is rejected" $
         withTestUploadOpener $ \openUploadFile -> do
           spooledPathRef <- IORef.newIORef Nothing
           readChunk <- chunkReader [fileTheRejectsSecondFieldBody]
           result <-
-            consumeMultipartBodyWith defaultMultipartLimits boundaryToken readChunk openUploadFile $ \case
+            consumeMultipartBodyWith (storageFromOpener openUploadFile) defaultMultipartLimits boundaryToken readChunk $ \case
               MultipartFilePart _ _ spooledPath _ -> do
                 IORef.writeIORef spooledPathRef (Just spooledPath)
                 pure (Right ())
