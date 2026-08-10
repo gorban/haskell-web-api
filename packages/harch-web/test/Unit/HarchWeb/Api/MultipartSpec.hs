@@ -6,6 +6,7 @@ module Unit.HarchWeb.Api.MultipartSpec (spec) where
 import Control.Exception qualified as Exception
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.IORef qualified as IORef
 import Data.List (mapAccumL)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -698,7 +699,88 @@ spec =
                  ]
           )
 
-    describe "consumeMultipartBodyWith" $ do
+    describe "withMultipartBodyWith" $ do
+      it "discards an unpromoted scoped upload after a successful callback" $
+        withTestUploadOpener $ \openUploadFile -> do
+          discardedReference <- IORef.newIORef False
+          readChunk <- chunkReader [twoPartBody]
+          let storage =
+                multipartStorage
+                  ( \filename -> do
+                      (path, handle) <- openUploadFile filename
+                      pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
+                  )
+                  (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
+          result <-
+            withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+              MultipartScopedFieldPart _ _ -> pure (Right ())
+              MultipartScopedFilePart {} -> pure (Right ())
+          discarded <- IORef.readIORef discardedReference
+          expectAll ((result `shouldBe` Right ()) :| [discarded `shouldBe` True])
+
+      it "discards scoped uploads when a callback rejects" $
+        withTestUploadOpener $ \openUploadFile -> do
+          discardedReference <- IORef.newIORef False
+          readChunk <- chunkReader [twoPartBody]
+          let storage =
+                multipartStorage
+                  ( \filename -> do
+                      (path, handle) <- openUploadFile filename
+                      pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
+                  )
+                  (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
+          result <-
+            withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+              MultipartScopedFieldPart _ _ -> pure (Right ())
+              MultipartScopedFilePart {} -> pure (Left MultipartMalformedBody)
+          discarded <- IORef.readIORef discardedReference
+          expectAll ((result `shouldBe` Left MultipartMalformedBody) :| [discarded `shouldBe` True])
+
+      it "keeps a promoted scoped upload under the application's ownership" $
+        withTestUploadOpener $ \openUploadFile -> do
+          promotedReference <- IORef.newIORef Nothing
+          readChunk <- chunkReader [twoPartBody]
+          result <-
+            withMultipartBodyWith (storageFromOpener openUploadFile) defaultMultipartLimits boundaryToken readChunk $ \case
+              MultipartScopedFieldPart fieldName value -> do
+                fieldName `shouldBe` "field1"
+                value `shouldBe` "value1"
+                pure (Right ())
+              MultipartScopedFilePart fieldName filename upload byteCount -> do
+                fieldName `shouldBe` "file1"
+                filename `shouldBe` "a.txt"
+                promoted <- promoteMultipartUpload upload
+                IORef.writeIORef promotedReference promoted
+                byteCount `shouldBe` ByteString.length "file content here"
+                promoteMultipartUpload upload `shouldReturn` Nothing
+                pure (Right ())
+          maybePath <- IORef.readIORef promotedReference
+          case maybePath of
+            Nothing -> expectationFailure "expected the callback to promote its upload"
+            Just path -> do
+              contents <- ByteString.readFile path
+              removeFile path
+              expectAll ((result `shouldBe` Right ()) :| [contents `shouldBe` "file content here"])
+
+      it "discards scoped uploads when a callback throws" $
+        withTestUploadOpener $ \openUploadFile -> do
+          discardedReference <- IORef.newIORef False
+          readChunk <- chunkReader [twoPartBody]
+          let storage =
+                multipartStorage
+                  ( \filename -> do
+                      (path, handle) <- openUploadFile filename
+                      pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
+                  )
+                  (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
+          _ :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
+            Exception.try
+              ( withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+                  MultipartScopedFieldPart _ _ -> pure (Right ())
+                  MultipartScopedFilePart {} -> Exception.throwIO (userError "callback failure")
+              )
+          IORef.readIORef discardedReference `shouldReturn` True
+
       it "calls onPart for each completed part, in order, before the body finishes" $
         withTestUploadOpener $ \openUploadFile -> do
           seenPartsRef <- IORef.newIORef []
@@ -749,7 +831,35 @@ spec =
                     :| [spooledContent `shouldBe` "file content here"]
                 )
 
-    describe "consumeMultipartRequestBodyWith" $ do
+    describe "withMultipartRequestBodyWith" $ do
+      it "uses scoped request ownership and rejects invalid metadata before its callback" $ do
+        bodyReadReference <- IORef.newIORef False
+        let readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
+            request = Wai.setRequestBodyChunks readChunk Wai.defaultRequest
+        result <- withMultipartRequestBodyWith defaultMultipartLimits request (const (pure (Right ())))
+        bodyRead <- IORef.readIORef bodyReadReference
+        expectAll ((result `shouldBe` Left MultipartInvalidContentType) :| [bodyRead `shouldBe` False])
+
+      it "uses scoped request ownership for a valid in-memory upload" $ do
+        readChunk <- chunkReader [twoPartBody]
+        let request =
+              multipartRequest
+                readChunk
+                [(Http.hContentLength, ByteStringChar8.pack (show (ByteString.length twoPartBody)))]
+        result <-
+          withMultipartRequestBodyWith defaultMultipartLimits request $ \case
+            MultipartScopedFieldPart fieldName value -> do
+              fieldName `shouldBe` "field1"
+              value `shouldBe` "value1"
+              pure (Right ())
+            MultipartScopedFilePart fieldName filename upload byteCount -> do
+              fieldName `shouldBe` "file1"
+              filename `shouldBe` "a.txt"
+              byteCount `shouldBe` ByteString.length "file content here"
+              discardMultipartUpload upload
+              pure (Right ())
+        result `shouldBe` Right ()
+
       it "consumes a WAI request's body incrementally, calling onPart for each part" $
         withTestUploadOpener $ \_unusedOpener -> do
           seenPartsRef <- IORef.newIORef []

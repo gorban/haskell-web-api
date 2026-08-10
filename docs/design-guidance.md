@@ -93,8 +93,10 @@ in-memory option, and no explicit promote-or-discard step the caller controls. T
 the shape this rule exists to prevent. `HarchWeb.Api.Multipart` now uses an explicit storage
 adapter and a bounded in-memory default. Its WAI request wrappers now parse a strict,
 case-insensitive @multipart/form-data@ media type with exactly one valid boundary and reject an
-oversized declared @Content-Length@ before they call the body reader; cleanup and
-explicit-promotion work stays tracked under AD.
+oversized declared @Content-Length@ before they call the body reader. The scoped streaming API
+exposes completed file parts as opaque claims: application code either promotes a claim once or
+discards it, and the framework discards every unclaimed upload when the callback scope exits.
+The earlier raw collector remains a compatibility path to retire under AD.
 
 ### Naming a partial slice in the status table
 

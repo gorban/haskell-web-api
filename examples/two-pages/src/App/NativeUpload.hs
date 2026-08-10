@@ -65,9 +65,10 @@ import HarchWeb.Api
 import HarchWeb.Api.Multipart
   ( MultipartConsumeError (..),
     MultipartLimits,
-    MultipartPartWith (..),
-    consumeMultipartRequestBodyWith,
+    MultipartScopedPart (..),
+    discardMultipartUpload,
     defaultMultipartLimits,
+    withMultipartRequestBodyWith,
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
@@ -159,20 +160,22 @@ consumeUpload state limits request = do
   acceptedReference <- newIORef Nothing
   csrfRejectedReference <- newIORef False
   consumeResult <-
-    consumeMultipartRequestBodyWith limits request $ \case
-      MultipartFieldPart "_harch_csrf" suppliedTokenText -> do
+    withMultipartRequestBodyWith limits request $ \case
+      MultipartScopedFieldPart "_harch_csrf" suppliedTokenText -> do
         claimed <- claimUploadToken state suppliedTokenText
         if claimed
           then Right () <$ atomicModifyIORef' csrfValidatedReference (const (True, ()))
           else (Left $! MultipartMalformedBody) <$ atomicModifyIORef' csrfRejectedReference (const (True, ()))
-      MultipartFilePart _fieldName filename _storedUpload byteCount -> do
+      MultipartScopedFilePart _fieldName filename upload byteCount -> do
         csrfValidated <- atomicModifyIORef' csrfValidatedReference (\validated -> (validated, validated))
         if csrfValidated
-          then Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
+          then do
+            discardMultipartUpload upload
+            Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
           else do
             void (atomicModifyIORef' csrfRejectedReference (const (True, ())))
             pure (Left $! MultipartMalformedBody)
-      MultipartFieldPart _ _ -> pure (Right ())
+      MultipartScopedFieldPart _ _ -> pure (Right ())
   case consumeResult of
     Left multipartError -> do
       csrfRejected <- atomicModifyIORef' csrfRejectedReference (\rejected -> (rejected, rejected))

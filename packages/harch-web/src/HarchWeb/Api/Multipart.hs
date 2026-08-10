@@ -27,6 +27,10 @@ module HarchWeb.Api.Multipart
     defaultMultipartLimits,
     MultipartPart,
     MultipartPartWith (..),
+    MultipartScopedPart (..),
+    MultipartUpload,
+    promoteMultipartUpload,
+    discardMultipartUpload,
     MultipartStorage,
     MultipartStagedUpload,
     multipartStorage,
@@ -38,8 +42,10 @@ module HarchWeb.Api.Multipart
     multipartBoundaryFromContentType,
     consumeMultipartBody,
     consumeMultipartBodyWith,
+    withMultipartBodyWith,
     consumeMultipartRequestBody,
     consumeMultipartRequestBodyWith,
+    withMultipartRequestBodyWith,
   )
 where
 
@@ -428,6 +434,29 @@ data MultipartPartWith stored
   | MultipartFilePart Text Text stored Int
   deriving (Eq, Show)
 
+-- | A file part visible only while a multipart callback is running. Its
+-- upload must be deliberately promoted or is discarded when that callback
+-- scope finishes.
+data MultipartScopedPart stored
+  = MultipartScopedFieldPart Text Text
+  | MultipartScopedFilePart Text Text (MultipartUpload stored) Int
+
+data MultipartUpload stored = MultipartUpload
+  { multipartUploadStoredValue :: stored,
+    multipartUploadDiscardAction :: Maybe (stored -> IO ()),
+    multipartUploadClaimedReference :: IORef.IORef Bool
+  }
+
+promoteMultipartUpload :: MultipartUpload stored -> IO (Maybe stored)
+promoteMultipartUpload upload =
+  IORef.atomicModifyIORef' (multipartUploadClaimedReference upload) $ \claimed ->
+    if claimed then (True, Nothing) else (True, Just (multipartUploadStoredValue upload))
+
+discardMultipartUpload :: MultipartUpload stored -> IO ()
+discardMultipartUpload upload = do
+  shouldDiscard <- IORef.atomicModifyIORef' (multipartUploadClaimedReference upload) $ \claimed -> (True, not claimed)
+  when shouldDiscard (for_ (multipartUploadDiscardAction upload) ($ multipartUploadStoredValue upload))
+
 -- | The out-of-the-box multipart representation uses bounded in-memory file
 -- storage. Applications selecting another adapter use 'MultipartPartWith'
 -- at their explicit storage boundary.
@@ -538,6 +567,31 @@ consumeMultipartBodyWith storage limits boundary readChunk onPart =
         discardActiveUpload
         pure (Left consumeError)
       Right () -> pure (Right ())
+
+-- | Consume multipart parts through a scoped ownership API. A file's stored
+-- value is hidden behind 'MultipartUpload'; every upload left unpromoted is
+-- discarded after success, rejection, or an exception from @onPart@.
+withMultipartBodyWith ::
+  MultipartStorage stored ->
+  MultipartLimits ->
+  ByteString ->
+  IO ByteString ->
+  (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask $ \restore -> do
+  uploadsReference <- IORef.newIORef []
+  let discardUnclaimed = IORef.readIORef uploadsReference >>= traverse_ discardMultipartUpload
+      scopedPart = \case
+        MultipartFieldPart fieldName value -> pure (MultipartScopedFieldPart fieldName value)
+        MultipartFilePart fieldName filename storedUpload bytesWritten -> do
+          claimedReference <- IORef.newIORef False
+          let upload = MultipartUpload storedUpload (MultipartStorage.discardCompletedMultipartUpload storage) claimedReference
+          IORef.modifyIORef' uploadsReference (upload :)
+          pure (MultipartScopedFilePart fieldName filename upload bytesWritten)
+      scopedCallback part = scopedPart part >>= onPart
+  result <- restore (consumeMultipartBodyWith storage limits boundary readChunk scopedCallback) `Exception.onException` discardUnclaimed
+  discardUnclaimed
+  pure result
 
 consumeMultipartBodyWithActive ::
   IORef.IORef (Maybe (MultipartStagedUpload stored)) ->
@@ -795,3 +849,15 @@ consumeMultipartRequestBodyWith limits request onPart =
   case multipartRequestBoundary limits request of
     Left requestError -> pure (Left requestError)
     Right boundary -> consumeMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request) onPart
+
+-- | WAI request variant of 'withMultipartBodyWith', using the bounded
+-- in-memory adapter and disposing of every unpromoted upload at scope exit.
+withMultipartRequestBodyWith ::
+  MultipartLimits ->
+  Wai.Request ->
+  (MultipartScopedPart InMemoryUpload -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+withMultipartRequestBodyWith limits request onPart =
+  case multipartRequestBoundary limits request of
+    Left requestError -> pure (Left requestError)
+    Right boundary -> withMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request) onPart
