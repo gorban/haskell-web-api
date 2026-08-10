@@ -57,14 +57,12 @@ Before the formatting checks, run `.github/scripts/install-formatting-tools.sh` 
 local tools are not known to be the CI-pinned versions; it installs the exact `cabal-gild`, HLint,
 and Ormolu toolchain used by CI.
 
-The coverage script cleans and rebuilds all packages, runs Unit tests package by package, and requires 100% coverage for every package. Do not run another Cabal command while it is active.
+The coverage script cleans and rebuilds all packages, runs Unit tests package by package, and requires 100% coverage in every project report and the complete multi-package report. Do not run another Cabal command while it is active.
 
-Treat its process exit status as a hard pre-push gate: it must be zero. The multi-package
-`Full coverage report (all packages)` is diagnostic only because it mixes separately-built
-components; percentages below 100% in that section are not themselves a failure. The authoritative
-failure is the red `Per-project reports found with <100% coverage` section, which names the exact
-package and declaration category to fix. Capture the complete output and verify both conditions
-before pushing:
+Treat its process exit status as a hard pre-push gate: it must be zero. Both the red
+`Per-project reports found with <100% coverage` section and the red `Aggregate coverage report
+found <100% coverage` section are failures. Capture the complete output and verify neither
+condition appears before pushing:
 
 ```sh
 coverage_log="$(mktemp)"
@@ -72,7 +70,7 @@ if ! ./generate-code-coverage.sh >"$coverage_log" 2>&1; then
   tail -n 200 "$coverage_log"
   exit 1
 fi
-if rg -q 'Per-project reports found with <100% coverage' "$coverage_log"; then
+if rg -q 'Per-project reports found with <100% coverage|Aggregate coverage report found <100% coverage' "$coverage_log"; then
   tail -n 200 "$coverage_log"
   exit 1
 fi
