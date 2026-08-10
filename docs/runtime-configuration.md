@@ -119,6 +119,28 @@ Container memory limits are last-resort containment only: a cgroup OOM kills eve
 in that container. They should be observed in deployment drills, but are not a substitute for request
 limits and are intentionally not run by the test suite.
 
+### Manual rootless Podman containment drill
+
+On a cgroup-v2, rootless Podman host, perform this only as a manual deployment drill. It starts a
+named disposable container with no network, a read-only root filesystem, no swap beyond the 32 MiB
+memory ceiling, and a small process ceiling. The `awk` program deliberately grows beyond the cgroup
+budget; it is not an application request test.
+
+```sh
+podman run --name harch-web-oom-probe --network none --read-only \
+  --memory 32m --memory-swap 32m --pids-limit 32 \
+  registry.fedoraproject.org/fedora:latest \
+  sh -c 'awk "BEGIN { value = \"x\"; while (length(value) < 134217728) value = value value; print length(value) }"'
+podman inspect harch-web-oom-probe --format 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}'
+podman rm harch-web-oom-probe
+```
+
+The August 2026 local drill returned `OOMKilled=true` and exit `137`. This host did not expose a
+container cgroup path after the process exited, so `memory.events` was unavailable; inspect it when
+your Podman/cgroup setup provides one. Remove the named probe even after a failure. An OOM kill is
+observable emergency containment that abandons all work in that container, not graceful per-request
+admission control.
+
 ## Minimal local overrides
 
 ```dotenv
