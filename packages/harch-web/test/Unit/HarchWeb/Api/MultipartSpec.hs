@@ -79,6 +79,20 @@ fileThenMalformedFieldBody =
     <> boundaryToken
     <> "--\r\n"
 
+fieldThenMalformedFieldBody :: ByteString
+fieldThenMalformedFieldBody =
+  "--"
+    <> boundaryToken
+    <> "\r\n"
+    <> fieldPartHeaders
+    <> "\r\n\r\n"
+    <> "value1"
+    <> "\r\n--"
+    <> boundaryToken
+    <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n--"
+    <> boundaryToken
+    <> "--\r\n"
+
 expectedTwoPartEvents :: [MultipartEvent]
 expectedTwoPartEvents =
   [ MultipartPartStarted fieldPartHeaders,
@@ -142,7 +156,7 @@ storageFromOpener openUploadFile =
             (hClose handle >> pure path)
             (hClose handle)
     )
-    removeFile
+    (Just removeFile)
 
 runConsume :: MultipartLimits -> [ByteString] -> IO (Either MultipartConsumeError [MultipartPart])
 runConsume limits chunks =
@@ -381,6 +395,12 @@ spec =
             (Left MultipartMissingDisposition, Just spooledPath) -> do
               doesFileExist spooledPath `shouldReturn` False
             other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "discards an earlier completed in-memory file when a later part is malformed" $
+        shouldReject (runConsume testLimits [fileThenMalformedFieldBody]) MultipartMissingDisposition
+
+      it "does not retain an earlier field when a later part is malformed" $
+        shouldReject (runConsume testLimits [fieldThenMalformedFieldBody]) MultipartMissingDisposition
 
       it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $ do
         result <- runConsume testLimits (allByteChunks singleFieldBody)

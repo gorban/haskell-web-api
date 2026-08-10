@@ -26,7 +26,9 @@ import HarchWeb.Api.Multipart.Storage.Internal qualified as Internal
 multipartStorage ::
   (Text -> IO (MultipartStagedUpload stored)) ->
   -- | Discard a completed upload that has not been deliberately adopted.
-  (stored -> IO ()) ->
+  -- 'Nothing' is valid only when completed values own no releasable resource,
+  -- as with the built-in in-memory adapter.
+  Maybe (stored -> IO ()) ->
   MultipartStorage stored
 multipartStorage = Internal.MultipartStorage
 
@@ -53,7 +55,7 @@ inMemoryMultipartStorage =
             (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
             (IORef.modifyIORef' chunksReference (const []))
     )
-    (\_upload -> pure ())
+    Nothing
 
 inMemoryUploadBytes :: InMemoryUpload -> ByteString
 inMemoryUploadBytes (InMemoryUpload uploadBytes) = uploadBytes

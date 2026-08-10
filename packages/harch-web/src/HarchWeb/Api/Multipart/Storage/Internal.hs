@@ -12,7 +12,7 @@ import Data.Text (Text)
 
 data MultipartStorage stored = MultipartStorage
   { beginMultipartUpload :: Text -> IO (MultipartStagedUpload stored),
-    discardCompletedMultipartUpload :: stored -> IO ()
+    discardCompletedMultipartUpload :: Maybe (stored -> IO ())
   }
 
 data MultipartStagedUpload stored = MultipartStagedUpload

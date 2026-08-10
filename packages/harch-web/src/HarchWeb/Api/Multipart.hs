@@ -46,7 +46,7 @@ import Control.Monad.Except (runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
-import Data.Foldable (traverse_)
+import Data.Foldable (for_, traverse_)
 import Data.IORef qualified as IORef
 import Data.Maybe qualified as Maybe
 import Data.Text (Text)
@@ -394,13 +394,14 @@ consumeMultipartBody storage limits boundary readChunk = do
   case result of
     Left consumeError -> do
       completedParts <- IORef.readIORef completedPartsReference
-      traverse_ discardCompletedPart completedParts
+      traverse_ discardCompletedUpload (completedUploads completedParts)
       pure (Left consumeError)
     Right () -> Right . reverse <$> IORef.readIORef completedPartsReference
   where
-    discardCompletedPart = \case
-      MultipartFieldPart {} -> pure ()
-      MultipartFilePart _ _ storedUpload _ -> MultipartStorage.discardCompletedMultipartUpload storage storedUpload
+    completedUploads parts = [storedUpload | MultipartFilePart _ _ storedUpload _ <- parts]
+
+    discardCompletedUpload storedUpload =
+      for_ (MultipartStorage.discardCompletedMultipartUpload storage) ($ storedUpload)
 
 -- | Like 'consumeMultipartBody', but @onPart@ runs as soon as each part
 -- finishes, before any later part (including a later file part) is read.
