@@ -320,14 +320,14 @@ spec =
           ( Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" upload byteCount],
             Right [MultipartFieldPart "field1" "value1", MultipartFilePart "file1" "a.txt" equivalentUpload _]
             ) ->
-            expectAll
-              ( (inMemoryUploadBytes upload `shouldBe` "file content here")
-                  :| [ byteCount `shouldBe` ByteString.length "file content here",
-                       inMemoryUploadBytes upload `shouldBe` inMemoryUploadBytes equivalentUpload,
-                       show upload `shouldSatisfy` (not . null),
-                       showList [upload] "" `shouldSatisfy` (not . null)
-                     ]
-              )
+              expectAll
+                ( (inMemoryUploadBytes upload `shouldBe` "file content here")
+                    :| [ byteCount `shouldBe` ByteString.length "file content here",
+                         inMemoryUploadBytes upload `shouldBe` inMemoryUploadBytes equivalentUpload,
+                         show upload `shouldSatisfy` (not . null),
+                         showList [upload] "" `shouldSatisfy` (not . null)
+                       ]
+                )
           results -> expectationFailure ("unexpected results: " <> show results)
 
       it "consumes a single field part into a MultipartFieldPart" $ do

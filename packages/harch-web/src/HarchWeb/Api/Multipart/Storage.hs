@@ -46,7 +46,7 @@ inMemoryMultipartStorage =
       multipartStagedUpload
         (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
         (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
-        (IORef.writeIORef chunksReference $! [])
+        (IORef.modifyIORef' chunksReference (const []))
 
 inMemoryUploadBytes :: InMemoryUpload -> ByteString
 inMemoryUploadBytes (InMemoryUpload uploadBytes) = uploadBytes
