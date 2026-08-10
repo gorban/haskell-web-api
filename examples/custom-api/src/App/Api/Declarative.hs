@@ -16,6 +16,7 @@ where
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types qualified as Aeson.Types
 import Data.ByteString.Lazy qualified as LazyByteString
+import Data.IORef qualified as IORef
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -99,10 +100,18 @@ handleGreetingTarget request SubmitGreeting = do
           ApiMalformedBody -> apiTextResponse "malformed JSON body"
   where
     contentTypeHeaderText = requestHeaderText HttpTypes.hContentType request
-handleGreetingTarget request UploadAvatar = do
-  result <- consumeMultipartRequestBody defaultMultipartLimits request
+handleGreetingTarget request UploadAvatar = handleAvatarUpload request
+
+handleAvatarUpload :: Wai.Request -> IO ApiResponseBody
+handleAvatarUpload request = do
+  partCountReference <- IORef.newIORef (0 :: Int)
+  result <-
+    withMultipartRequestBodyWith defaultMultipartLimits request $ \_part -> do
+      IORef.modifyIORef' partCountReference (+ 1)
+      pure (Right ())
+  partCount <- IORef.readIORef partCountReference
   pure $ case result of
-    Right parts -> apiTextResponse (Text.pack (show (length parts)) <> " part(s) received")
+    Right () -> apiTextResponse (Text.pack (show partCount) <> " part(s) received")
     Left _consumeError -> apiTextResponse "invalid multipart body"
 
 requestHeaderText :: HttpTypes.HeaderName -> Wai.Request -> Maybe Text

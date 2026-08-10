@@ -25,8 +25,6 @@ module HarchWeb.Api.Multipart
     parseMultipartFieldDisposition,
     MultipartLimits (..),
     defaultMultipartLimits,
-    MultipartPart,
-    MultipartPartWith (..),
     MultipartScopedPart (..),
     MultipartUpload,
     promoteMultipartUpload,
@@ -40,11 +38,7 @@ module HarchWeb.Api.Multipart
     inMemoryUploadBytes,
     MultipartConsumeError (..),
     multipartBoundaryFromContentType,
-    consumeMultipartBody,
-    consumeMultipartBodyWith,
     withMultipartBodyWith,
-    consumeMultipartRequestBody,
-    consumeMultipartRequestBodyWith,
     withMultipartRequestBodyWith,
   )
 where
@@ -432,7 +426,6 @@ defaultMultipartLimits =
 data MultipartPartWith stored
   = MultipartFieldPart Text Text
   | MultipartFilePart Text Text stored Int
-  deriving (Eq, Show)
 
 -- | A file part visible only while a multipart callback is running. Its
 -- upload must be deliberately promoted or is discarded when that callback
@@ -456,11 +449,6 @@ discardMultipartUpload :: MultipartUpload stored -> IO ()
 discardMultipartUpload upload = do
   shouldDiscard <- IORef.atomicModifyIORef' (multipartUploadClaimedReference upload) $ \claimed -> (True, not claimed)
   when shouldDiscard (for_ (multipartUploadDiscardAction upload) ($ multipartUploadStoredValue upload))
-
--- | The out-of-the-box multipart representation uses bounded in-memory file
--- storage. Applications selecting another adapter use 'MultipartPartWith'
--- at their explicit storage boundary.
-type MultipartPart = MultipartPartWith InMemoryUpload
 
 data MultipartConsumeError
   = -- | The streamed body exceeded 'multipartLimitsMaxBodyBytes'.
@@ -502,72 +490,6 @@ discardActiveMultipartUpload activeUploadReference = do
   maybeActiveUpload <- IORef.atomicModifyIORef' activeUploadReference (Nothing,)
   for_ maybeActiveUpload MultipartStorage.discardMultipartUpload
 
--- | Incrementally consume a @multipart\/form-data@ body: drive
--- 'MultipartScanner' from repeated calls to @readChunk@ (an empty
--- 'ByteString' signals end of body, matching 'Network.Wai.getRequestBodyChunk'),
--- decode plain field values, and append file uploads (parts with a
--- @filename@ parameter) through an explicit storage adapter. Bounded by
--- @limits@; see 'MultipartConsumeError' for the ways this can fail.
-consumeMultipartBody ::
-  MultipartStorage stored ->
-  MultipartLimits ->
-  -- | The boundary token, without its leading @--@.
-  ByteString ->
-  -- | Reads the next body chunk; an empty result signals end of body.
-  IO ByteString ->
-  IO (Either MultipartConsumeError [MultipartPartWith stored])
-consumeMultipartBody storage limits boundary readChunk = Exception.mask $ \restore -> do
-  completedPartsReference <- IORef.newIORef []
-  let discardCompletedUploads = do
-        completedParts <- IORef.readIORef completedPartsReference
-        traverse_ discardCompletedUpload (completedUploads completedParts)
-  result <-
-    restore
-      ( consumeMultipartBodyWith storage limits boundary readChunk $ \part -> do
-          IORef.modifyIORef' completedPartsReference (part :)
-          pure (Right ())
-      )
-      `Exception.onException` discardCompletedUploads
-  case result of
-    Left consumeError -> do
-      discardCompletedUploads
-      pure (Left consumeError)
-    Right () -> Right . reverse <$> IORef.readIORef completedPartsReference
-  where
-    completedUploads parts = [storedUpload | MultipartFilePart _ _ storedUpload _ <- parts]
-
-    discardCompletedUpload storedUpload =
-      for_ (MultipartStorage.discardCompletedMultipartUpload storage) ($ storedUpload)
-
--- | Like 'consumeMultipartBody', but @onPart@ runs as soon as each part
--- finishes, before any later part (including a later file part) is read.
--- Returning @Left@ from @onPart@ aborts the body with that error
--- immediately -- e.g. a caller can reject the whole body on an invalid CSRF
--- field without ever placing a later file part in storage, satisfying RFC
--- 7578 consumers that must not let a token arriving after a file part
--- authorize an already-committed write. Cleanup and promotion for an upload
--- completed before a later abort are the storage lifecycle work tracked by
--- AD, never an implicit raw-file-path policy.
-consumeMultipartBodyWith ::
-  MultipartStorage stored ->
-  MultipartLimits ->
-  ByteString ->
-  IO ByteString ->
-  (MultipartPartWith stored -> IO (Either MultipartConsumeError ())) ->
-  IO (Either MultipartConsumeError ())
-consumeMultipartBodyWith storage limits boundary readChunk onPart =
-  Exception.mask $ \restore -> do
-    activeUploadReference <- IORef.newIORef Nothing
-    let discardActiveUpload = discardActiveMultipartUpload activeUploadReference
-    result <-
-      restore (consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk onPart)
-        `Exception.onException` discardActiveUpload
-    case result of
-      Left consumeError -> do
-        discardActiveUpload
-        pure (Left consumeError)
-      Right () -> pure (Right ())
-
 -- | Consume multipart parts through a scoped ownership API. A file's stored
 -- value is hidden behind 'MultipartUpload'; every upload left unpromoted is
 -- discarded after success, rejection, or an exception from @onPart@.
@@ -580,7 +502,9 @@ withMultipartBodyWith ::
   IO (Either MultipartConsumeError ())
 withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask $ \restore -> do
   uploadsReference <- IORef.newIORef []
+  activeUploadReference <- IORef.newIORef Nothing
   let discardUnclaimed = IORef.readIORef uploadsReference >>= traverse_ discardMultipartUpload
+      discardUploads = discardActiveMultipartUpload activeUploadReference >> discardUnclaimed
       scopedPart = \case
         MultipartFieldPart fieldName value -> pure (MultipartScopedFieldPart fieldName value)
         MultipartFilePart fieldName filename storedUpload bytesWritten -> do
@@ -589,9 +513,12 @@ withMultipartBodyWith storage limits boundary readChunk onPart = Exception.mask 
           IORef.modifyIORef' uploadsReference (upload :)
           pure (MultipartScopedFilePart fieldName filename upload bytesWritten)
       scopedCallback part = scopedPart part >>= onPart
-  result <- restore (consumeMultipartBodyWith storage limits boundary readChunk scopedCallback) `Exception.onException` discardUnclaimed
-  discardUnclaimed
-  pure result
+  result <-
+    restore (consumeMultipartBodyWithActive activeUploadReference storage limits boundary readChunk scopedCallback)
+      `Exception.onException` discardUploads
+  case result of
+    Left consumeError -> discardUploads >> pure (Left consumeError)
+    Right () -> discardUnclaimed >> pure (Right ())
 
 consumeMultipartBodyWithActive ::
   IORef.IORef (Maybe (MultipartStagedUpload stored)) ->
@@ -823,32 +750,6 @@ parseContentLength :: ByteString -> Maybe Integer
 parseContentLength value = do
   (bytes, remaining) <- ByteStringChar8.readInteger value
   if bytes >= 0 && ByteString.null remaining then Just bytes else Nothing
-
--- | Consume a WAI request's body as @multipart\/form-data@, validating its
--- @Content-Type@ boundary and declared size before reading. Field values and
--- files use the bounded in-memory adapter; applications that need durable
--- storage call 'consumeMultipartBody' with an explicit adapter.
-consumeMultipartRequestBody ::
-  MultipartLimits ->
-  Wai.Request ->
-  IO (Either MultipartConsumeError [MultipartPart])
-consumeMultipartRequestBody limits request =
-  case multipartRequestBoundary limits request of
-    Left requestError -> pure (Left requestError)
-    Right boundary -> consumeMultipartBody inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request)
-
--- | Like 'consumeMultipartRequestBody', but see 'consumeMultipartBodyWith':
--- @onPart@ runs as soon as each part finishes, before any later part
--- (including a later file part) is read.
-consumeMultipartRequestBodyWith ::
-  MultipartLimits ->
-  Wai.Request ->
-  (MultipartPart -> IO (Either MultipartConsumeError ())) ->
-  IO (Either MultipartConsumeError ())
-consumeMultipartRequestBodyWith limits request onPart =
-  case multipartRequestBoundary limits request of
-    Left requestError -> pure (Left requestError)
-    Right boundary -> consumeMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request) onPart
 
 -- | WAI request variant of 'withMultipartBodyWith', using the bounded
 -- in-memory adapter and disposing of every unpromoted upload at scope exit.

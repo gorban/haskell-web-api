@@ -189,7 +189,7 @@ middleware in front of the site's own application via `HarchWeb.runServerWithWai
 
 CSRF policy: the form carries a single-use, server-held token (embedded as a hidden field, generated on
 every `GET`) rather than a double-submit cookie, since no framework change is needed to let a plain page
-response set a cookie header this way. `consumeMultipartRequestBodyWith`'s per-part callback validates
+response set a cookie header this way. `withMultipartRequestBodyWith`'s per-part callback validates
 that field as soon as it finishes — before any later part, including the file part, is read — so a
 request whose file part precedes an invalid or absent CSRF field is rejected before that file is ever
 spooled to disk; the CSRF field must precede the file field in the form markup for the common,

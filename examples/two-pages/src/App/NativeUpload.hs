@@ -12,7 +12,7 @@
 -- a double-submit cookie, so no framework change is needed to let a plain
 -- page response set a cookie header. 'NativeUploadState' holds at most one
 -- outstanding token; issuing a fresh one (every @GET@) invalidates any
--- earlier, unsubmitted one. 'consumeMultipartRequestBodyWith' validates the
+-- earlier, unsubmitted one. 'withMultipartRequestBodyWith' validates the
 -- CSRF field via its per-part callback -- which runs as soon as that field's
 -- part finishes, before any later part is read -- so a request whose file
 -- part follows an invalid or absent CSRF field is rejected before that
@@ -141,7 +141,7 @@ data UploadOutcome
   | UploadMissingFile
   | UploadRejected MultipartConsumeError
 
--- | Drives 'consumeMultipartRequestBodyWith' with a callback that rejects
+-- | Drives 'withMultipartRequestBodyWith' with a callback that rejects
 -- the whole body -- before any later part, including a later file part, is
 -- read -- unless a valid, unexpired CSRF field already arrived. A file
 -- part's bytes are only ever considered "accepted" once this callback

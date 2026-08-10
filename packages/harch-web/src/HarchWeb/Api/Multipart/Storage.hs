@@ -39,7 +39,6 @@ multipartStagedUpload :: (ByteString -> IO ()) -> IO stored -> IO () -> Multipar
 multipartStagedUpload = Internal.MultipartStagedUpload
 
 newtype InMemoryUpload = InMemoryUpload ByteString
-  deriving (Show)
 
 -- | The small-upload backend supplied by the framework. The multipart
 -- consumer checks its file byte budget before each append, so this backend

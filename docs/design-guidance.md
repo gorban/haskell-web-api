@@ -302,15 +302,14 @@ application already has, changing behavior only for paths explicitly declared as
 `HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
 body than the boundary delimiter's length, `parseMultipartFieldDisposition` for a part's `name`/`filename`,
-and `consumeMultipartBody`/`consumeMultipartRequestBody` to drive the scanner against a chunked body
+and `withMultipartBodyWith`/`withMultipartRequestBodyWith` to drive the scanner against a chunked body
 (any `IO ByteString` source, or a WAI `Request` directly). `MultipartStorage` makes durable backends an
-explicit application choice; the WAI helpers use the supplied `InMemoryUpload` adapter, retaining no file
-bytes beyond `MultipartLimits`' max-file budget. `consumeMultipartBodyWith` and
-`consumeMultipartRequestBodyWith` are the incremental siblings: a caller-supplied callback runs as soon
-as each part finishes, before any later part (including a later file part) is read, so a caller can reject
-the whole body — on an invalid CSRF field, say — before a later file reaches storage. `consumeMultipartBody`
-is a thin wrapper that always accepts and accumulates. Cleanup after later rejection, exceptions, or aborts,
-and explicit durable promotion, remain partial work under AD.
+explicit application choice; the WAI helper uses the supplied `InMemoryUpload` adapter, retaining no file
+bytes beyond `MultipartLimits`' max-file budget. A caller-supplied callback runs as soon as each part
+finishes, before any later part (including a later file part) is read, so a caller can reject the whole body
+— on an invalid CSRF field, say — before a later file reaches storage. File data is available only via an
+opaque scoped upload: promote it deliberately to take ownership, or leave it for automatic cleanup after
+success, rejection, or an exception.
 
 Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
 usable against a real WAI application today, opt-in and additive. Neither is the application's
@@ -327,7 +326,7 @@ middleware case of each. [two-pages](../examples/two-pages/README.md)'s `/native
 kernel's `form[data-harch-action="true"]` selector never matches it and the browser submits it
 natively, with or without JavaScript), a single-use server-held CSRF token embedded as a hidden field
 (chosen over a double-submit cookie because nothing in this framework version lets a plain page response
-set a `Set-Cookie` header), and `consumeMultipartRequestBodyWith` validating that field via its
+set a `Set-Cookie` header), and `withMultipartRequestBodyWith` validating that field via its
 per-part callback — before any later part, including the file part, is read — so a request whose file
 part follows an invalid or absent CSRF field is rejected before that file reaches storage. See
 the module haddock in `examples/two-pages/src/App/NativeUpload.hs` for the full policy, and

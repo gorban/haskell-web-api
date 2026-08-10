@@ -2,6 +2,10 @@
 
 ## 0.1.2.0
 
+* Hardened `HarchWeb.Api.Multipart` ownership: removed the raw collector APIs that returned adapter
+  values (including file paths). `withMultipartBodyWith` and `withMultipartRequestBodyWith` now provide
+  the public consumption surface; file uploads are opaque, scope-bound values that applications either
+  promote deliberately or allow the framework to discard.
 * Added `HarchWeb.Api`: a declarative, method-aware `ApiEndpoint` declaration with path/method matching
   (`404`/`405`+`Allow`/`HEAD`/`OPTIONS` handling — `OPTIONS` is synthesized as `204 No Content` with an
   `Allow` header for any path with a declared endpoint, without running a handler or implementing CORS;
