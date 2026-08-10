@@ -10,6 +10,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Api.Multipart
 import Network.Wai qualified as Wai
+import System.Directory (doesFileExist, removeFile)
 import System.IO (Handle, hClose)
 import System.IO.Temp qualified as Temp
 import Test.Hspec
@@ -61,6 +62,20 @@ fileTheRejectsSecondFieldBody =
     <> "\r\n\r\n"
     <> "value1"
     <> "\r\n--"
+    <> boundaryToken
+    <> "--\r\n"
+
+fileThenMalformedFieldBody :: ByteString
+fileThenMalformedFieldBody =
+  "--"
+    <> boundaryToken
+    <> "\r\n"
+    <> filePartHeaders
+    <> "\r\n\r\n"
+    <> "file content here"
+    <> "\r\n--"
+    <> boundaryToken
+    <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n--"
     <> boundaryToken
     <> "--\r\n"
 
@@ -118,13 +133,16 @@ withTestUploadOpener action =
 
 storageFromOpener :: (Text -> IO (FilePath, Handle)) -> MultipartStorage FilePath
 storageFromOpener openUploadFile =
-  multipartStorage $ \filename -> do
-    (path, handle) <- openUploadFile filename
-    pure $
-      multipartStagedUpload
-        (ByteString.hPut handle)
-        (hClose handle >> pure path)
-        (hClose handle)
+  multipartStorage
+    ( \filename -> do
+        (path, handle) <- openUploadFile filename
+        pure $
+          multipartStagedUpload
+            (ByteString.hPut handle)
+            (hClose handle >> pure path)
+            (hClose handle)
+    )
+    removeFile
 
 runConsume :: MultipartLimits -> [ByteString] -> IO (Either MultipartConsumeError [MultipartPart])
 runConsume limits chunks =
@@ -347,6 +365,21 @@ spec =
                 ( (spooledContent `shouldBe` "file content here")
                     :| [byteCount `shouldBe` ByteString.length "file content here"]
                 )
+            other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "discards an earlier completed file when a later part is malformed" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          let trackedOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                pure (path, handle)
+          readChunk <- chunkReader [fileThenMalformedFieldBody]
+          result <- consumeMultipartBody (storageFromOpener trackedOpener) testLimits boundaryToken readChunk
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (result, maybeSpooledPath) of
+            (Left MultipartMissingDisposition, Just spooledPath) -> do
+              doesFileExist spooledPath `shouldReturn` False
             other -> expectationFailure ("unexpected result: " <> show other)
 
       it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $ do

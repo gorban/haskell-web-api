@@ -23,7 +23,11 @@ import HarchWeb.Api.Multipart.Storage.Internal qualified as Internal
 -- | Construct an application-selected storage adapter. The callback receives
 -- untrusted filename metadata only as a naming hint; it must not use it as a
 -- filesystem path or object key without application validation.
-multipartStorage :: (Text -> IO (MultipartStagedUpload stored)) -> MultipartStorage stored
+multipartStorage ::
+  (Text -> IO (MultipartStagedUpload stored)) ->
+  -- | Discard a completed upload that has not been deliberately adopted.
+  (stored -> IO ()) ->
+  MultipartStorage stored
 multipartStorage = Internal.MultipartStorage
 
 -- | Construct a request-scoped staged upload for 'multipartStorage'. The
@@ -40,13 +44,16 @@ newtype InMemoryUpload = InMemoryUpload ByteString
 -- cannot retain more than the selected 'MultipartLimits' file maximum.
 inMemoryMultipartStorage :: MultipartStorage InMemoryUpload
 inMemoryMultipartStorage =
-  multipartStorage $ \_filenameHint -> do
-    chunksReference <- IORef.newIORef []
-    pure $
-      multipartStagedUpload
-        (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
-        (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
-        (IORef.modifyIORef' chunksReference (const []))
+  multipartStorage
+    ( \_filenameHint -> do
+        chunksReference <- IORef.newIORef []
+        pure $
+          multipartStagedUpload
+            (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
+            (InMemoryUpload . ByteString.concat . reverse <$> IORef.readIORef chunksReference)
+            (IORef.modifyIORef' chunksReference (const []))
+    )
+    (\_upload -> pure ())
 
 inMemoryUploadBytes :: InMemoryUpload -> ByteString
 inMemoryUploadBytes (InMemoryUpload uploadBytes) = uploadBytes

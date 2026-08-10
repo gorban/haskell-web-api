@@ -10,8 +10,9 @@ where
 import Data.ByteString (ByteString)
 import Data.Text (Text)
 
-newtype MultipartStorage stored = MultipartStorage
-  { beginMultipartUpload :: Text -> IO (MultipartStagedUpload stored)
+data MultipartStorage stored = MultipartStorage
+  { beginMultipartUpload :: Text -> IO (MultipartStagedUpload stored),
+    discardCompletedMultipartUpload :: stored -> IO ()
   }
 
 data MultipartStagedUpload stored = MultipartStagedUpload
