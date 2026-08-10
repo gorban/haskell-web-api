@@ -140,6 +140,10 @@ jobs:
           # Fail on first non-zero exit code, including intermediate piped commands
           set -euo pipefail
 
+          # Exercise the coverage script's failure contract before spending the
+          # full coverage run on a change that could silently weaken the gate.
+          tools/test-generate-code-coverage.sh
+
           # Run coverage script, but capture exit code instead of failing immediately
           # This allows us to publish the coverage report before exiting
           coverage_exit=0

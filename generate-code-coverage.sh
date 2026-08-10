@@ -2,6 +2,56 @@
 
 set -euo pipefail
 
+coverage_fraction_is_incomplete() {
+  local fraction="$1"
+  local covered
+  local total
+
+  IFS='/' read -r covered total <<<"$fraction"
+  [ -n "$covered" ] && [ -n "$total" ] && [ "$total" != "0" ] && [ "$covered" != "$total" ]
+}
+
+coverage_percentage_is_incomplete() {
+  local percentage="$1"
+
+  awk -v percentage="$percentage" 'BEGIN { exit !(percentage + 0 < 100) }'
+}
+
+coverage_summary_line_is_incomplete() {
+  local line="$1"
+
+  if [[ "$line" =~ ([0-9]+([.][0-9]+)?)% ]]; then
+    coverage_percentage_is_incomplete "${BASH_REMATCH[1]}"
+  else
+    return 1
+  fi
+}
+
+coverage_gate_fixture() {
+  local project_fraction="$1"
+  local aggregate_percentage="$2"
+  local missing_coverage=false
+
+  if coverage_fraction_is_incomplete "$project_fraction"; then
+    missing_coverage=true
+  fi
+  # This intentionally mirrors the current diagnostic-only aggregate policy.
+  # The fixture test below must fail until that policy is reverted.
+  coverage_percentage_is_incomplete "$aggregate_percentage" || true
+  if "$missing_coverage"; then
+    return 1
+  fi
+}
+
+if [ "${1:-}" = "--coverage-gate-fixture" ]; then
+  if [ "$#" != 3 ]; then
+    printf 'usage: %s --coverage-gate-fixture <project-covered/total> <aggregate-percent>\n' "$0" >&2
+    exit 2
+  fi
+  coverage_gate_fixture "$2" "$3"
+  exit
+fi
+
 cabal clean
 
 # TODO: this is a workaround for an issue that appeared when we switched from
@@ -342,7 +392,7 @@ SCRIPT
     if [ -z "$covered" ] || [ -z "$total" ]; then
       continue
     fi
-    if [ "$total" != "0" ] && [ "$covered" != "$total" ]; then
+    if coverage_fraction_is_incomplete "$cleaned_fraction"; then
       per_project_findings+=("${categories[$idx]} coverage for $package_name ($covered/$total).")
       missing_coverage=true
     fi
@@ -382,7 +432,7 @@ if [ "${#aggregate_tix_paths[@]}" -gt 0 ]; then
   if aggregate_report_output=$(hpc report ${report_args[@]+"${report_args[@]}"} "$aggregate_tix_to_report" 2>&1); then
     printf '%s\n' "$aggregate_report_output"
     while IFS= read -r line; do
-      if [[ "$line" == *"expressions used"* || "$line" == *"boolean coverage"* || "$line" == *"alternatives used"* ]] && awk 'match($0, /[0-9]+(\.[0-9]+)?%/) { s=substr($0,RSTART,RLENGTH); gsub(/%/,"",s); if ((s+0)<100) exit 0; exit 1 } { exit 1 }' <<<"$line"; then
+      if [[ "$line" == *"expressions used"* || "$line" == *"boolean coverage"* || "$line" == *"alternatives used"* ]] && coverage_summary_line_is_incomplete "$line"; then
         trimmed_line=$(printf '%s\n' "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
         aggregate_findings+=("$trimmed_line")
       fi
