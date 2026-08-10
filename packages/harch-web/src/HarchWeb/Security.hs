@@ -50,6 +50,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Char (isHexDigit)
+import Data.Either (fromRight)
 import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -656,7 +657,7 @@ requestPathPrefix requestPolicyConfig request =
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request
   | ByteString.null rawPath = "/"
-  | otherwise = either (const Text.empty) id (TextEncoding.decodeUtf8' rawPath)
+  | otherwise = fromRight Text.empty (TextEncoding.decodeUtf8' rawPath)
   where
     rawPath = Wai.rawPathInfo request
 
