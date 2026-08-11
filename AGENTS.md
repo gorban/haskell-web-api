@@ -46,7 +46,7 @@ Before pushing, run the same checks that CI runs from the repository root. Ensur
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
-./generate-code-coverage.sh
+./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh
 ./tools/check-vscode-ormolu-formatter.sh
 cabal build all -O2 --ghc-options=-Werror
@@ -57,7 +57,10 @@ Before the formatting checks, run `.github/scripts/install-formatting-tools.sh` 
 local tools are not known to be the CI-pinned versions; it installs the exact `cabal-gild`, HLint,
 and Ormolu toolchain used by CI.
 
-The coverage script cleans and rebuilds all packages, runs Unit tests package by package, and requires 100% coverage in every project report and the complete multi-package report. Do not run another Cabal command while it is active.
+The coverage wrapper cleans and rebuilds all packages, runs Unit tests package by package, requires
+100% coverage in every project report and the complete multi-package report, and rejects actionable
+compiler or linker warnings. It records the two documented external GHC diagnostics without
+masking them; see `docs/build-diagnostics.md`. Do not run another Cabal command while it is active.
 
 Treat its process exit status as a hard pre-push gate: it must be zero. Both the red
 `Per-project reports found with <100% coverage` section and the red `Aggregate coverage report
@@ -65,15 +68,7 @@ found <100% coverage` section are failures. Capture the complete output and veri
 condition appears before pushing:
 
 ```sh
-coverage_log="$(mktemp)"
-if ! ./generate-code-coverage.sh >"$coverage_log" 2>&1; then
-  tail -n 200 "$coverage_log"
-  exit 1
-fi
-if rg -q 'Per-project reports found with <100% coverage|Aggregate coverage report found <100% coverage' "$coverage_log"; then
-  tail -n 200 "$coverage_log"
-  exit 1
-fi
+./tools/run-code-coverage-check.sh
 ```
 
 Do not treat a truncated terminal response, an HTML report existing on disk, a focused package run,
