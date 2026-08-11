@@ -48,6 +48,7 @@ module HarchWeb.Api
     apiMediaType,
     apiMediaTypeText,
     jsonMediaType,
+    plainTextMediaType,
     MissingContentTypePolicy (..),
     ApiBodyOutcome (..),
     selectApiBodyDecoder,
@@ -79,6 +80,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import HarchWeb.Api.MediaType
 import HarchWeb.Api.Negotiation
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
@@ -412,24 +414,6 @@ data ApiBodyDecoder request = ApiBodyDecoder
     apiBodyDecoderParse :: ByteString -> Either Text request
   }
 
--- | A validated bare @type\/subtype@ media type declared by application
--- configuration. Header values remain raw 'Text' until parsing succeeds, so
--- an invalid request header cannot become a declared representation.
-newtype ApiMediaType = ApiMediaType Text
-  deriving (Eq, Show)
-
--- | Validate and normalize an application-declared bare media type.
-apiMediaType :: Text -> Maybe ApiMediaType
-apiMediaType value =
-  ApiMediaType <$> contentTypeMediaType value
-
-apiMediaTypeText :: ApiMediaType -> Text
-apiMediaTypeText (ApiMediaType value) = value
-
--- | The media type used by JSON request bodies and representations.
-jsonMediaType :: ApiMediaType
-jsonMediaType = ApiMediaType "application/json"
-
 -- | What a missing @Content-Type@ header means for a declared endpoint.
 data MissingContentTypePolicy
   = -- | Treat a missing header the same as an unsupported one.
@@ -484,11 +468,6 @@ selectApiBodyDecoder missingPolicy maxBodyBytes decoders maybeContentType bodyBy
             RejectMissingContentType -> Nothing
             AssumeMediaType mediaType -> Just mediaType
 
-contentTypeMediaType :: Text -> Maybe Text
-contentTypeMediaType contentTypeValue = do
-  (typeText, subtypeText) <- parseMediaRange (Text.strip (fst (Text.breakOn ";" contentTypeValue)))
-  pure (Text.toLower typeText <> "/" <> Text.toLower subtypeText)
-
 jsonBodyDecoder :: (FromJSON request) => ApiBodyDecoder request
 jsonBodyDecoder =
   ApiBodyDecoder
@@ -504,7 +483,7 @@ jsonBodyDecoder =
 textBodyDecoder :: ApiBodyDecoder Text
 textBodyDecoder =
   ApiBodyDecoder
-    { apiBodyDecoderMediaType = ApiMediaType "text/plain",
+    { apiBodyDecoderMediaType = plainTextMediaType,
       apiBodyDecoderParse = \bodyBytes ->
         case TextEncoding.decodeUtf8' bodyBytes of
           Left _decodeError -> Left "invalid UTF-8 body"

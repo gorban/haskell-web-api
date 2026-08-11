@@ -99,6 +99,7 @@ library
     HarchWeb.Acme.Protocol.Decode
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
+    HarchWeb.Api.MediaType
     HarchWeb.Api.Multipart.Disposition
     HarchWeb.Api.Multipart.Scanner
     HarchWeb.Api.Multipart.Storage.Internal

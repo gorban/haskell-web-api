@@ -376,6 +376,8 @@ spec =
         expectAll
           ( (apiMediaType " Application/JSON " `shouldBe` Just (testMediaType "application/json"))
               :| [ apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
+                   apiMediaTypeText jsonMediaType `shouldBe` "application/json",
+                   apiMediaTypeText plainTextMediaType `shouldBe` "text/plain",
                    testMediaType "application/json" == testMediaType "application/json" `shouldBe` True,
                    testMediaType "application/json" /= testMediaType "text/plain" `shouldBe` True,
                    show (testMediaType "application/json") `shouldSatisfy` (not . null),

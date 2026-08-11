@@ -17,6 +17,7 @@ import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Read qualified as TextRead
+import HarchWeb.Api.MediaType (parseMediaRange)
 
 data AcceptedRange = AcceptedRange
   { acceptedRangeType :: Text,
@@ -49,12 +50,6 @@ parseAcceptEntry entry =
               acceptedRangeParameters = filter ((/= "q") . fst) parameters,
               acceptedRangeQuality = qualityFromParameters parameters
             }
-
-parseMediaRange :: Text -> Maybe (Text, Text)
-parseMediaRange mediaRangeText =
-  case Text.splitOn "/" mediaRangeText of
-    [typeText, subtypeText] | not (Text.null typeText), not (Text.null subtypeText) -> Just (typeText, subtypeText)
-    _ -> Nothing
 
 parseAcceptParameter :: Text -> Maybe (Text, Text)
 parseAcceptParameter parameterText =
