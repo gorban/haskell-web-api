@@ -2,7 +2,6 @@
 
 module App.App
   ( buildApplication,
-    buildNativeUploadMiddleware,
     twoPageServerConfig,
     twoPageSite,
     TwoPageAction (..),
@@ -11,7 +10,6 @@ where
 
 import App.Components.Layout (twoPageShell)
 import App.CustomPages.Preview (previewPageDefinition)
-import App.NativeUpload qualified as NativeUpload
 import App.Pages.Generated (pageRouteDefinition)
 import App.Pages.Home (nativeSubscriptionFallbackPage, subscriptionResultRegion)
 import App.Pages.Route.Generated (PageRoute (..))
@@ -54,7 +52,6 @@ import HarchWeb
     unboundedRequestHeadLimits,
   )
 import HarchWeb.Action (decodeAction)
-import HarchWeb.Api qualified as Api
 import HarchWeb.Site
   ( RouteDefinition (..),
     Site (..),
@@ -67,17 +64,6 @@ import Network.Wai qualified as Wai
 
 buildApplication :: Application TwoPageRoute TwoPageAction ()
 buildApplication = buildSiteApplication twoPageSite
-
--- | The native file-upload form's dispatch, composed in front of
--- 'buildApplication' via 'HarchWeb.runServerWithWaiMiddleware' (production,
--- see @app/Main.hs@) or 'HarchWeb.withLocalTestServerForApplication' (tests,
--- see @test/E2E/AppSpec.hs@) rather than through 'buildApplication' itself:
--- see "App.NativeUpload" for why. Each call creates its own CSRF state, so
--- callers should build this once per running application, not per request.
-buildNativeUploadMiddleware :: IO Wai.Middleware
-buildNativeUploadMiddleware =
-  Api.apiEndpointMiddleware NativeUpload.nativeUploadEndpoints . NativeUpload.handleNativeUpload
-    <$> NativeUpload.newNativeUploadState
 
 twoPageSite :: Site TwoPageRoute TwoPageAction ()
 twoPageSite =

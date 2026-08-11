@@ -1,9 +1,10 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.NativeUploadSpec (spec) where
+module Unit.MultipartUploadSpec (spec) where
 
-import App.NativeUpload (NativeUploadState, handleNativeUpload, nativeUploadDiscardCount, nativeUploadEndpoints, nativeUploadPath, newNativeUploadState)
+import App.App (multipartUploadApplication, newMultipartUploadApplication)
+import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, nativeUploadPath, newNativeUploadState)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -13,7 +14,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Api qualified as Api
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -22,7 +22,20 @@ import TestCore.CustomAssertions (expectAll)
 
 spec :: Spec
 spec =
-  describe "Unit.App.NativeUpload" $ do
+  describe "Unit.App.MultipartUpload" $ do
+    it "builds the standalone application once and keeps unrelated paths outside the upload endpoint" $ do
+      application <- newMultipartUploadApplication
+      uploadResponse <- performWaiRequest application getRequest
+      missingResponse <- performWaiRequest application (Wai.defaultRequest {Wai.rawPathInfo = "/missing"})
+      missingBody <- readResponseBody missingResponse
+      expectAll
+        ( (Wai.responseStatus uploadResponse `shouldBe` HttpTypes.status200)
+            :| [ Wai.responseStatus missingResponse `shouldBe` HttpTypes.status404,
+                 Wai.responseHeaders missingResponse `shouldBe` [],
+                 missingBody `shouldBe` "Not found"
+               ]
+        )
+
     describe "GET /native-upload" $
       it "renders a native, script-free multipart form with a fresh CSRF field" $ do
         application <- newUploadApplication
@@ -60,6 +73,22 @@ spec =
             (multipartRequest (csrfPart csrfToken <> fieldPart "note" "hi" <> filePart "a.txt" "abc" <> closingBoundary))
         body <- readResponseBody response
         Text.isInfixOf "a.txt (3 bytes) was received." body `shouldBe` True
+
+      it "discards an accepted file before reporting a later malformed part" $ do
+        (application, state) <- newUploadApplicationWithState
+        csrfToken <- currentCsrfToken application
+        response <-
+          performRequest
+            application
+            (multipartRequest (csrfPart csrfToken <> filePart "hello.txt" "file bytes" <> malformedPart <> closingBoundary))
+        body <- readResponseBody response
+        discardCount <- nativeUploadDiscardCount state
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status400)
+              :| [ Text.isInfixOf "This upload was invalid." body `shouldBe` True,
+                   discardCount `shouldBe` 1
+                 ]
+          )
 
       it "rejects a mismatched CSRF token before any file part is ever read" $ do
         application <- newUploadApplication
@@ -143,6 +172,9 @@ filePart :: ByteString -> ByteString -> ByteString
 filePart filename fileContent =
   "--" <> boundaryToken <> "\r\nContent-Disposition: form-data; name=\"upload\"; filename=\"" <> filename <> "\"\r\n\r\n" <> fileContent <> "\r\n"
 
+malformedPart :: ByteString
+malformedPart = "--" <> boundaryToken <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n"
+
 closingBoundary :: ByteString
 closingBoundary = "--" <> boundaryToken <> "--\r\n"
 
@@ -152,8 +184,7 @@ newUploadApplication = fst <$> newUploadApplicationWithState
 newUploadApplicationWithState :: IO (Wai.Application, NativeUploadState)
 newUploadApplicationWithState = do
   state <- newNativeUploadState
-  let fallback _request respond = respond (Wai.responseLBS HttpTypes.status404 [] "not found")
-  pure (Api.apiEndpointMiddleware nativeUploadEndpoints (handleNativeUpload state) fallback, state)
+  pure (multipartUploadApplication state, state)
 
 currentCsrfToken :: Wai.Application -> IO Text
 currentCsrfToken application = do

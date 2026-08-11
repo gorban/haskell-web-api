@@ -3,10 +3,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | A CSRF-protected, JS-optional native file-upload form dispatched
--- through "HarchWeb.Api".'HarchWeb.Api.apiEndpointMiddleware', composed in
--- front of the site's own application (see 'App.App.buildNativeUploadMiddleware')
--- rather than through 'App.Routes.routeCodec': a native @POST@ needs the raw,
--- incremental request body that path-only route matching does not have.
+-- through "HarchWeb.Api".'HarchWeb.Api.apiEndpointMiddleware'. This dedicated
+-- example owns the raw, incremental request body a native @POST@ needs,
+-- rather than coupling multipart-specific middleware to a general page app.
 --
 -- CSRF policy: the form carries a single-use, server-held token rather than
 -- a double-submit cookie, so no framework change is needed to let a plain
@@ -25,7 +24,7 @@
 -- kernel's @form[data-harch-action="true"]@ selector never matches it and
 -- the browser submits it natively -- no file bytes are ever read by client
 -- script, with or without JavaScript enabled.
-module App.NativeUpload
+module App.MultipartUpload
   ( NativeUploadState,
     NativeUploadTarget (..),
     handleNativeUpload,
@@ -36,24 +35,12 @@ module App.NativeUpload
   )
 where
 
-import App.Components.Layout (twoPageShell)
-import App.Pages.Route.Generated (PageRoute (HomePage, LiveDataPage, SecondPage))
-import App.Routes (CustomRoute (NativeSubscriptionFallback), TwoPageRoute (Custom), routeCodec)
-import App.Routes qualified as Routes
 import Control.Monad (void)
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb
-  ( NavigationItem (..),
-    Page (..),
-    PageShell (..),
-    buildPageShell,
-    generateRuntimeNonce,
-    renderDocumentWithNonce,
-  )
 import HarchWeb.Api
   ( ApiEndpoint,
     ApiMethod (ApiGet, ApiPost),
@@ -253,44 +240,16 @@ uploadFormBody csrfToken =
       Markup.element Markup.buttonTag [Markup.inputType "submit"] [Markup.text "Upload"]
     ]
 
--- The `$!` on `Custom NativeSubscriptionFallback` (already-WHNF) exists so
--- HPC ticks it on every invocation instead of treating the closed literal
--- as a once-shared reference; it has no runtime effect.
+-- The `$!` on the content type (already-WHNF) exists so HPC ticks this call
+-- on every invocation instead of treating the closed literal as a once-shared
+-- reference; it has no runtime effect.
 {-# ANN renderNativeUploadPage ("HLint: ignore Redundant $!" :: String) #-}
 renderNativeUploadPage :: Int -> Text -> Markup.Html -> IO ApiResponseBody
 renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
-  nonce <- generateRuntimeNonce
-  let page =
-        Page
-          { pageTitle = pageTitleText,
-            -- A structural identity only: this page is never dispatched
-            -- through 'routeCodec' (see the module header), and no route in
-            -- 'App.Routes.siteNavigationRoutes' equals it, so it never
-            -- affects active-navigation highlighting.
-            pageRoute = Custom $! NativeSubscriptionFallback,
-            pageContext = (),
-            pageBody = pageBodyHtml,
-            pageBootstrapHooks = []
-          }
-      -- This app's 'App.Routes.routeCodec' never reads a page's context
-      -- (it is always `()`), so nothing downstream ever forces this
-      -- field on its own; force it explicitly here (via BangPatterns, so
-      -- optimization can't prove the forcing is unobservable and elide
-      -- it) purely so HPC ticks 'pageContext's initializer above on every
-      -- call instead of reporting genuinely-dead code.
-      !_pageContextForced = pageContext page
-      -- Set directly rather than through 'HarchWeb.Site's automatic
-      -- navigation injection (this page bypasses 'routeCodec' dispatch;
-      -- see the module header), so a visitor can still reach the rest of
-      -- the site from here.
-      shell = (twoPageShell page) {shellNavigationItems = siteNavigationItems}
-      document = (buildPageShell $! routeCodec) shell page
-      renderedHtml = (renderDocumentWithNonce $! nonce) document
+  let renderedHtml =
+        "<!doctype html><html><head><title>"
+          <> Markup.renderHtml (Markup.text pageTitleText)
+          <> "</title></head><body><main id=\"app-main\">"
+          <> Markup.renderHtml pageBodyHtml
+          <> "</main></body></html>"
   pure ((apiBytesResponse $! "text/html; charset=utf-8") (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}
-
-siteNavigationItems :: [NavigationItem TwoPageRoute]
-siteNavigationItems =
-  [ NavigationItem "Home" (Routes.Page HomePage),
-    NavigationItem "Second" (Routes.Page SecondPage),
-    NavigationItem "Live updates" (Routes.Page LiveDataPage)
-  ]

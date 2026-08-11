@@ -1,6 +1,7 @@
 packages:
   examples/custom-api/
   examples/custom-db-adapter/
+  examples/multipart-upload/
   examples/two-pages/
   packages/core/
   packages/harch-web/

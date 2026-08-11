@@ -1,0 +1,60 @@
+cabal-version: 3.14
+name: multipart-upload-example
+version: 0.1.0.0
+synopsis: A CSRF-protected bounded multipart upload example for HarchWeb.Api
+license: BSD-2-Clause-Patent
+build-type: Simple
+extra-doc-files: README.md
+
+common common
+  ghc-options: -Wall
+  default-language: GHC2024
+
+library
+  import: common
+  exposed-modules:
+    App.App
+    App.MultipartUpload
+  hs-source-dirs: src
+  build-depends:
+    base ^>=4.22.0.0,
+    bytestring,
+    harch-web,
+    http-types,
+    text,
+    wai,
+
+executable multipart-upload-example
+  import: common
+  main-is: Main.hs
+  hs-source-dirs: app
+  build-depends:
+    base ^>=4.22.0.0,
+    multipart-upload-example,
+    warp,
+
+test-suite multipart-upload-example-tests
+  import: common
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs: test
+  ghc-options:
+    -F
+    -pgmF=spec-preprocessor
+    -Wno-missing-home-modules
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+  build-depends:
+    base ^>=4.22.0.0,
+    bytestring,
+    harch-web,
+    hspec,
+    http-types,
+    multipart-upload-example,
+    temporary,
+    test-core,
+    text,
+    wai,
+  build-tool-depends:
+    test-core:spec-preprocessor
