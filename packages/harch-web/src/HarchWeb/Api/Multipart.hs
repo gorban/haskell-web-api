@@ -660,25 +660,23 @@ appendMultipartPartBytes ::
 appendMultipartPartBytes consumer accumulator bodyBytes =
   case accumulator of
     FieldAccumulator fieldName buffered ->
-      if
-          exceedsMultipartLimit
-            (multipartLimitsMaxFieldBytes (multipartConsumerLimits consumer))
-            (ByteString.length buffered)
-            (ByteString.length bodyBytes)
-            then throwError (MultipartFieldTooLarge fieldName)
-            else pure (FieldAccumulator fieldName (buffered <> bodyBytes))
+      if exceedsMultipartLimit
+        (multipartLimitsMaxFieldBytes (multipartConsumerLimits consumer))
+        (ByteString.length buffered)
+        (ByteString.length bodyBytes)
+        then throwError (MultipartFieldTooLarge fieldName)
+        else pure (FieldAccumulator fieldName (buffered <> bodyBytes))
     FileAccumulator fieldName filename stagedUpload bytesWritten ->
-      if
-            exceedsMultipartLimit
-              (multipartLimitsMaxFileBytes (multipartConsumerLimits consumer))
-              bytesWritten
-              (ByteString.length bodyBytes)
-            then do
-              liftIO (discardActiveMultipartUpload (multipartConsumerActiveUploadReference consumer))
-              throwError (MultipartFileTooLarge fieldName)
-            else do
-              liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
-              pure (FileAccumulator fieldName filename stagedUpload (bytesWritten + ByteString.length bodyBytes))
+      if exceedsMultipartLimit
+        (multipartLimitsMaxFileBytes (multipartConsumerLimits consumer))
+        bytesWritten
+        (ByteString.length bodyBytes)
+        then do
+          liftIO (discardActiveMultipartUpload (multipartConsumerActiveUploadReference consumer))
+          throwError (MultipartFileTooLarge fieldName)
+        else do
+          liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
+          pure (FileAccumulator fieldName filename stagedUpload (bytesWritten + ByteString.length bodyBytes))
 
 exceedsMultipartLimit :: Int -> Int -> Int -> Bool
 exceedsMultipartLimit maximumBytes current increment =
