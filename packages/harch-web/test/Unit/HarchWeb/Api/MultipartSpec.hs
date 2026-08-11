@@ -413,6 +413,16 @@ spec =
           Right [ObservedField "field1" "value1"] -> pure ()
           other -> expectationFailure ("unexpected result: " <> show other)
 
+      it "decodes invalid UTF-8 field bytes leniently" $ do
+        let invalidUtf8FieldBody =
+              "--"
+                <> boundaryToken
+                <> "\r\nContent-Disposition: form-data; name=\"field1\"\r\n\r\nbad\xFF\r\n--"
+                <> boundaryToken
+                <> "--\r\n"
+        result <- runConsume testLimits [invalidUtf8FieldBody]
+        result `shouldBe` Right [ObservedField "field1" "bad\65533"]
+
       it "uses an application-supplied storage adapter for a file part" $
         withTestUploadOpener $ \openUploadFile -> do
           readChunk <- chunkReader [twoPartBody]
