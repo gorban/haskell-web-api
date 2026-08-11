@@ -8,6 +8,13 @@ module HarchWeb.Api.MediaType
     apiMediaTypeText,
     jsonMediaType,
     plainTextMediaType,
+    htmlMediaType,
+    ApiContentType,
+    apiContentType,
+    apiUtf8ContentType,
+    apiContentTypeText,
+    jsonContentType,
+    plainTextContentType,
     apiMediaTypeParts,
     parseMediaRange,
   )
@@ -37,6 +44,49 @@ jsonMediaType = ApiMediaType "application/json"
 -- | The bare media type used by UTF-8 plain-text request bodies.
 plainTextMediaType :: ApiMediaType
 plainTextMediaType = ApiMediaType "text/plain"
+
+-- | The bare media type used by UTF-8 HTML responses.
+htmlMediaType :: ApiMediaType
+htmlMediaType = ApiMediaType "text/html"
+
+-- | A response @Content-Type@ derived from a declared media type. The
+-- constructor is private so a caller cannot accidentally put an unvalidated
+-- header value on an API response.
+data ApiContentType = ApiContentType ApiMediaType ApiContentTypeCharset
+  deriving (Eq, Show)
+
+data ApiContentTypeCharset
+  = NoCharset
+  | Utf8Charset
+  deriving (Eq, Show)
+
+-- | Use a declared media type without a charset parameter, appropriate for
+-- bytes whose encoding is application-defined or not textual.
+apiContentType :: ApiMediaType -> ApiContentType
+apiContentType mediaType = ApiContentType mediaType NoCharset
+
+-- | Declare that a textual response is encoded as UTF-8.
+apiUtf8ContentType :: ApiMediaType -> ApiContentType
+apiUtf8ContentType mediaType = ApiContentType mediaType Utf8Charset
+
+-- | Render a validated response @Content-Type@ header value.
+apiContentTypeText :: ApiContentType -> Text
+apiContentTypeText (ApiContentType mediaType charset) =
+  apiMediaTypeText mediaType <> renderedCharset charset
+
+renderedCharset :: ApiContentTypeCharset -> Text
+renderedCharset charset =
+  case charset of
+    NoCharset -> ""
+    Utf8Charset -> "; charset=utf-8"
+
+-- | The @Content-Type@ emitted by JSON response helpers.
+jsonContentType :: ApiContentType
+jsonContentType = apiUtf8ContentType jsonMediaType
+
+-- | The @Content-Type@ emitted by plain-text response helpers.
+plainTextContentType :: ApiContentType
+plainTextContentType = apiUtf8ContentType plainTextMediaType
 
 apiMediaTypeParts :: ApiMediaType -> (Text, Text)
 apiMediaTypeParts (ApiMediaType mediaType) =

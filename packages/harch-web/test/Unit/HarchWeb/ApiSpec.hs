@@ -460,27 +460,27 @@ spec =
     describe "ResponseCodec" $ do
       it "renders a JSON response with its content type" $
         expectAll
-          ( (apiResponseContentType (apiJsonResponse (42 :: Int)) `shouldBe` "application/json; charset=utf-8")
+          ( (apiContentTypeText (apiResponseContentType (apiJsonResponse (42 :: Int))) `shouldBe` "application/json; charset=utf-8")
               :| [apiResponseBodyBytes (apiJsonResponse (42 :: Int)) `shouldBe` "42"]
           )
 
       it "renders a text response with its content type" $
         expectAll
-          ( (apiResponseContentType (apiTextResponse "hello") `shouldBe` "text/plain; charset=utf-8")
+          ( (apiContentTypeText (apiResponseContentType (apiTextResponse "hello")) `shouldBe` "text/plain; charset=utf-8")
               :| [apiResponseBodyBytes (apiTextResponse "hello") `shouldBe` "hello"]
           )
 
       it "renders a bytes response with an explicit content type" $
         expectAll
-          ( (apiResponseContentType (apiBytesResponse "image/svg+xml" "<svg/>") `shouldBe` "image/svg+xml")
-              :| [apiResponseBodyBytes (apiBytesResponse "image/svg+xml" "<svg/>") `shouldBe` "<svg/>"]
+          ( (apiContentTypeText (apiResponseContentType (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>")) `shouldBe` "image/svg+xml")
+              :| [apiResponseBodyBytes (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` "<svg/>"]
           )
 
       it "defaults every built-in response body to status 200" $
         expectAll
           ( (apiResponseStatus (apiJsonResponse (42 :: Int)) `shouldBe` 200)
               :| [ apiResponseStatus (apiTextResponse "hello") `shouldBe` 200,
-                   apiResponseStatus (apiBytesResponse "image/svg+xml" "<svg/>") `shouldBe` 200
+                   apiResponseStatus (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` 200
                  ]
           )
 
@@ -488,7 +488,7 @@ spec =
         apiResponseStatus (apiTextResponse "invalid") {apiResponseStatus = 422} `shouldBe` 422
 
       it "derives comparable, printable representations for response bodies" $
-        let bodies = [apiJsonResponse (1 :: Int), apiTextResponse "x", apiBytesResponse "image/svg+xml" "<svg/>"]
+        let bodies = [apiJsonResponse (1 :: Int), apiTextResponse "x", apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>"]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- bodies, right <- bodies] `shouldBe` length bodies)
                   :| [ sum [fromEnum (left /= right) | left <- bodies, right <- bodies] `shouldBe` length bodies * (length bodies - 1),

@@ -49,6 +49,13 @@ module HarchWeb.Api
     apiMediaTypeText,
     jsonMediaType,
     plainTextMediaType,
+    htmlMediaType,
+    ApiContentType,
+    apiContentType,
+    apiUtf8ContentType,
+    apiContentTypeText,
+    jsonContentType,
+    plainTextContentType,
     MissingContentTypePolicy (..),
     ApiBodyOutcome (..),
     selectApiBodyDecoder,
@@ -226,7 +233,7 @@ renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
 renderedApiResponse body =
   ApiHttpResponse
     { apiHttpResponseStatus = apiResponseStatus body,
-      apiHttpResponseHeaders = [("Content-Type", apiResponseContentType body)],
+      apiHttpResponseHeaders = [("Content-Type", apiContentTypeText (apiResponseContentType body))],
       apiHttpResponseBody = Just body
     }
 
@@ -506,7 +513,7 @@ bytesBodyDecoder mediaType =
 -- renders is otherwise indistinguishable from any other successful match.
 data ApiResponseBody = ApiResponseBody
   { apiResponseStatus :: Int,
-    apiResponseContentType :: Text,
+    apiResponseContentType :: ApiContentType,
     apiResponseBodyBytes :: ByteString
   }
   deriving (Eq, Show)
@@ -515,7 +522,7 @@ apiJsonResponse :: (ToJSON value) => value -> ApiResponseBody
 apiJsonResponse value =
   ApiResponseBody
     { apiResponseStatus = 200,
-      apiResponseContentType = "application/json; charset=utf-8",
+      apiResponseContentType = jsonContentType,
       apiResponseBodyBytes = LazyByteString.toStrict (Aeson.encode value)
     }
 
@@ -523,11 +530,11 @@ apiTextResponse :: Text -> ApiResponseBody
 apiTextResponse bodyText =
   ApiResponseBody
     { apiResponseStatus = 200,
-      apiResponseContentType = "text/plain; charset=utf-8",
+      apiResponseContentType = plainTextContentType,
       apiResponseBodyBytes = TextEncoding.encodeUtf8 bodyText
     }
 
-apiBytesResponse :: Text -> ByteString -> ApiResponseBody
+apiBytesResponse :: ApiContentType -> ByteString -> ApiResponseBody
 apiBytesResponse contentType bodyBytes =
   ApiResponseBody
     { apiResponseStatus = 200,

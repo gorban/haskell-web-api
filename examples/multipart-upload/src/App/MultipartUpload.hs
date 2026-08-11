@@ -48,14 +48,16 @@ import HarchWeb.Api
     apiBytesResponse,
     apiEndpoint,
     apiResponseStatus,
+    apiUtf8ContentType,
     at,
+    htmlMediaType,
   )
 import HarchWeb.Api.Multipart
   ( MultipartConsumeError (..),
     MultipartLimits,
     MultipartScopedPart (..),
-    discardMultipartUpload,
     defaultMultipartLimits,
+    discardMultipartUpload,
     inMemoryMultipartStorage,
     withMultipartRequestBodyWithStorage,
   )
@@ -254,4 +256,4 @@ renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
           <> "</title></head><body><main id=\"app-main\">"
           <> Markup.renderHtml pageBodyHtml
           <> "</main></body></html>"
-  pure ((apiBytesResponse $! "text/html; charset=utf-8") (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}
+  pure ((apiBytesResponse $! apiUtf8ContentType htmlMediaType) (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}

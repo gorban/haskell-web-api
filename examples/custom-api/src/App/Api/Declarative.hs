@@ -86,8 +86,8 @@ renderGreetingWith (Just greetingMediaType) request greeting =
   case selectRepresentation (jsonMediaType :| [greetingMediaType]) acceptHeaderText of
     SelectedRepresentation selectedMediaType
       | selectedMediaType == greetingMediaType ->
-          (apiBytesResponse $! apiMediaTypeText selectedMediaType) (TextEncoding.encodeUtf8 ("GREETING " <> greetingText greeting))
-    _ -> (apiBytesResponse $! "application/json; charset=utf-8") (LazyByteString.toStrict (Aeson.encode (encodeGreetingResponse greeting)))
+          (apiBytesResponse $! apiContentType selectedMediaType) (TextEncoding.encodeUtf8 ("GREETING " <> greetingText greeting))
+    _ -> (apiBytesResponse $! jsonContentType) (LazyByteString.toStrict (Aeson.encode (encodeGreetingResponse greeting)))
   where
     acceptHeaderText = requestHeaderText HttpTypes.hAccept request
 
