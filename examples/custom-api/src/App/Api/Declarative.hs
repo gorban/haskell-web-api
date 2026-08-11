@@ -53,7 +53,7 @@ newtype GreetingRequest = GreetingRequest {requestedName :: Text}
 greetingRequestBodyDecoder :: ApiBodyDecoder GreetingRequest
 greetingRequestBodyDecoder =
   ApiBodyDecoder
-    { apiBodyDecoderMediaType = "application/json",
+    { apiBodyDecoderMediaType = jsonMediaType,
       apiBodyDecoderParse = \bodyBytes ->
         case Aeson.eitherDecodeStrict bodyBytes >>= Aeson.Types.parseEither parseGreetingRequest of
           Left errorMessage -> Left $! Text.pack errorMessage

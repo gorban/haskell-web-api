@@ -44,6 +44,10 @@ module HarchWeb.Api
     fieldWithDefault,
     runRequestCodec,
     ApiBodyDecoder (..),
+    ApiMediaType,
+    apiMediaType,
+    apiMediaTypeText,
+    jsonMediaType,
     MissingContentTypePolicy (..),
     ApiBodyOutcome (..),
     selectApiBodyDecoder,
@@ -404,9 +408,27 @@ fieldWithDefault defaultValue (RequestField decode) =
 -- decoder, such as multipart, is a separate, non-buffered concern; see
 -- 'HarchWeb.Api.Multipart'.
 data ApiBodyDecoder request = ApiBodyDecoder
-  { apiBodyDecoderMediaType :: Text,
+  { apiBodyDecoderMediaType :: ApiMediaType,
     apiBodyDecoderParse :: ByteString -> Either Text request
   }
+
+-- | A validated bare @type\/subtype@ media type declared by application
+-- configuration. Header values remain raw 'Text' until parsing succeeds, so
+-- an invalid request header cannot become a declared representation.
+newtype ApiMediaType = ApiMediaType Text
+  deriving (Eq, Show)
+
+-- | Validate and normalize an application-declared bare media type.
+apiMediaType :: Text -> Maybe ApiMediaType
+apiMediaType value =
+  ApiMediaType <$> contentTypeMediaType value
+
+apiMediaTypeText :: ApiMediaType -> Text
+apiMediaTypeText (ApiMediaType value) = value
+
+-- | The media type used by JSON request bodies and representations.
+jsonMediaType :: ApiMediaType
+jsonMediaType = ApiMediaType "application/json"
 
 -- | What a missing @Content-Type@ header means for a declared endpoint.
 data MissingContentTypePolicy
@@ -414,14 +436,14 @@ data MissingContentTypePolicy
     RejectMissingContentType
   | -- | Decode as if this media type were declared, e.g. an application or
     -- framework JSON default.
-    AssumeMediaType Text
+    AssumeMediaType ApiMediaType
   deriving (Eq, Show)
 
 data ApiBodyOutcome request
   = -- | No declared decoder accepts the request's media type (or none was
     -- given and the policy rejects that): respond @415 Unsupported Media Type@,
     -- advertising these declared media types.
-    ApiUnsupportedMediaType [Text]
+    ApiUnsupportedMediaType [ApiMediaType]
   | -- | The body exceeded the caller's declared byte limit: respond @413@.
     ApiBodyTooLarge
   | -- | The selected decoder rejected the body's syntax: respond @400@.
@@ -448,7 +470,7 @@ selectApiBodyDecoder missingPolicy maxBodyBytes decoders maybeContentType bodyBy
       case resolvedMediaType of
         Nothing -> ApiUnsupportedMediaType declaredMediaTypes
         Just mediaType ->
-          case [decoder | decoder <- decoders, Text.toLower (apiBodyDecoderMediaType decoder) == mediaType] of
+          case [decoder | decoder <- decoders, apiBodyDecoderMediaType decoder == mediaType] of
             [] -> ApiUnsupportedMediaType declaredMediaTypes
             decoder : _ ->
               either (const ApiMalformedBody) ApiDecodedBody (apiBodyDecoderParse decoder bodyBytes)
@@ -456,11 +478,11 @@ selectApiBodyDecoder missingPolicy maxBodyBytes decoders maybeContentType bodyBy
     declaredMediaTypes = map apiBodyDecoderMediaType decoders
     resolvedMediaType =
       case maybeContentType of
-        Just contentTypeValue -> contentTypeMediaType contentTypeValue
+        Just contentTypeValue -> apiMediaType contentTypeValue
         Nothing ->
           case missingPolicy of
             RejectMissingContentType -> Nothing
-            AssumeMediaType mediaType -> Just (Text.toLower mediaType)
+            AssumeMediaType mediaType -> Just mediaType
 
 contentTypeMediaType :: Text -> Maybe Text
 contentTypeMediaType contentTypeValue = do
@@ -470,7 +492,7 @@ contentTypeMediaType contentTypeValue = do
 jsonBodyDecoder :: (FromJSON request) => ApiBodyDecoder request
 jsonBodyDecoder =
   ApiBodyDecoder
-    { apiBodyDecoderMediaType = "application/json",
+    { apiBodyDecoderMediaType = jsonMediaType,
       apiBodyDecoderParse = \bodyBytes ->
         case Aeson.eitherDecodeStrict' bodyBytes of
           Left errorMessage -> Left (Text.pack errorMessage)
@@ -482,7 +504,7 @@ jsonBodyDecoder =
 textBodyDecoder :: ApiBodyDecoder Text
 textBodyDecoder =
   ApiBodyDecoder
-    { apiBodyDecoderMediaType = "text/plain",
+    { apiBodyDecoderMediaType = ApiMediaType "text/plain",
       apiBodyDecoderParse = \bodyBytes ->
         case TextEncoding.decodeUtf8' bodyBytes of
           Left _decodeError -> Left "invalid UTF-8 body"
@@ -490,7 +512,7 @@ textBodyDecoder =
     }
 
 -- | Passes the body through unparsed for the given media type.
-bytesBodyDecoder :: Text -> ApiBodyDecoder ByteString
+bytesBodyDecoder :: ApiMediaType -> ApiBodyDecoder ByteString
 bytesBodyDecoder mediaType =
   ApiBodyDecoder
     { apiBodyDecoderMediaType = mediaType,

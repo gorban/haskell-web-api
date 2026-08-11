@@ -59,6 +59,9 @@ readResponseBody response = do
   chunks <- readIORef chunksReference
   pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (LazyByteString.concat chunks)))
 
+testMediaType :: Text -> ApiMediaType
+testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
+
 spec :: Spec
 spec =
   describe "HarchWeb.Api" $ do
@@ -369,6 +372,18 @@ spec =
     describe "request body decoding" $ do
       let jsonDecoder = jsonBodyDecoder :: ApiBodyDecoder Int
 
+      it "validates and normalizes an application-declared media type" $
+        expectAll
+          ( (apiMediaType " Application/JSON " `shouldBe` Just (testMediaType "application/json"))
+              :| [ apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
+                   testMediaType "application/json" == testMediaType "application/json" `shouldBe` True,
+                   testMediaType "application/json" /= testMediaType "text/plain" `shouldBe` True,
+                   show (testMediaType "application/json") `shouldSatisfy` (not . null),
+                   apiMediaType "not-a-media-type" `shouldBe` Nothing,
+                   apiMediaType "text" `shouldBe` Nothing
+                 ]
+          )
+
       it "decodes a JSON body when Content-Type matches" $
         selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "application/json") "42"
           `shouldBe` ApiDecodedBody 42
@@ -383,18 +398,18 @@ spec =
 
       it "reports unsupported media type for an undeclared Content-Type" $
         selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "text/plain") "3"
-          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
 
       it "reports unsupported media type for a malformed Content-Type header" $
         selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] (Just "garbage") "3"
-          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
 
       it "rejects a missing Content-Type when the policy requires one" $
         selectApiBodyDecoder RejectMissingContentType 1024 [jsonDecoder] Nothing "42"
-          `shouldBe` ApiUnsupportedMediaType ["application/json"]
+          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
 
       it "assumes a declared media type when Content-Type is missing and the policy allows it" $
-        selectApiBodyDecoder (AssumeMediaType "application/json") 1024 [jsonDecoder] Nothing "42"
+        selectApiBodyDecoder (AssumeMediaType (testMediaType "application/json")) 1024 [jsonDecoder] Nothing "42"
           `shouldBe` ApiDecodedBody 42
 
       it "reports a malformed body when the selected decoder rejects the syntax" $
@@ -422,12 +437,12 @@ spec =
         apiBodyDecoderParse textBodyDecoder "bad\xFF" `shouldBe` Left "invalid UTF-8 body"
 
       it "passes a body through unparsed for a declared bytes media type" $
-        selectApiBodyDecoder RejectMissingContentType 1024 [bytesBodyDecoder "application/octet-stream"] (Just "application/octet-stream") "\1\2\3"
+        selectApiBodyDecoder RejectMissingContentType 1024 [bytesBodyDecoder (testMediaType "application/octet-stream")] (Just "application/octet-stream") "\1\2\3"
           `shouldBe` ApiDecodedBody "\1\2\3"
 
       it "derives comparable, printable representations for MissingContentTypePolicy and ApiBodyOutcome" $
-        let policies = [RejectMissingContentType, AssumeMediaType "application/json"]
-            outcomes = [ApiUnsupportedMediaType ["application/json"], ApiBodyTooLarge, ApiMalformedBody, ApiDecodedBody (1 :: Int)]
+        let policies = [RejectMissingContentType, AssumeMediaType (testMediaType "application/json")]
+            outcomes = [ApiUnsupportedMediaType [testMediaType "application/json"], ApiBodyTooLarge, ApiMalformedBody, ApiDecodedBody (1 :: Int)]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- policies, right <- policies] `shouldBe` length policies)
                   :| [ sum [fromEnum (left /= right) | left <- policies, right <- policies]
