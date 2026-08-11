@@ -17,7 +17,7 @@ import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Read qualified as TextRead
-import HarchWeb.Api.MediaType (parseMediaRange)
+import HarchWeb.Api.MediaType (ApiMediaType, apiMediaTypeParts, parseMediaRange)
 
 data AcceptedRange = AcceptedRange
   { acceptedRangeType :: Text,
@@ -75,12 +75,6 @@ mediaRangeSpecificity range
   | acceptedRangeSubtype range == "*" = 1
   | otherwise = 2
 
-mediaTypeParts :: Text -> (Text, Text)
-mediaTypeParts mediaType =
-  case Text.splitOn "/" mediaType of
-    [typeText, subtypeText] -> (Text.toLower typeText, Text.toLower subtypeText)
-    _ -> (Text.toLower mediaType, "")
-
 rangeMatchesRepresentation :: (Text, Text) -> AcceptedRange -> Bool
 rangeMatchesRepresentation (declaredType, declaredSubtype) range =
   (acceptedRangeType range == "*" || acceptedRangeType range == declaredType)
@@ -90,9 +84,9 @@ rangeMatchesRepresentation (declaredType, declaredSubtype) range =
 -- Per RFC 9110 section 12.5.1, when more than one range in the header
 -- applies to a representation, the most specific one governs its quality
 -- regardless of a less specific range's own quality.
-bestMatchingRange :: Text -> [AcceptedRange] -> Maybe AcceptedRange
+bestMatchingRange :: ApiMediaType -> [AcceptedRange] -> Maybe AcceptedRange
 bestMatchingRange declaredMediaType ranges =
-  case filter (rangeMatchesRepresentation (mediaTypeParts declaredMediaType)) ranges of
+  case filter (rangeMatchesRepresentation (apiMediaTypeParts declaredMediaType)) ranges of
     [] -> Nothing
     matches -> Just (foldl1' preferMoreSpecific matches)
   where
@@ -105,7 +99,7 @@ data ApiNegotiationResult
     NoAcceptableRepresentation
   | -- | The selected declared representation. A caller that declares more
     -- than one representation must add @Vary: Accept@ to the response.
-    SelectedRepresentation Text
+    SelectedRepresentation ApiMediaType
   deriving (Eq, Show)
 
 -- | Negotiate a response representation from a declared,
@@ -114,7 +108,7 @@ data ApiNegotiationResult
 -- excludes every declared representation is @406@; otherwise each
 -- representation's most specific matching range determines its quality, the
 -- highest quality is selected, and ties keep server declaration order.
-selectRepresentation :: NonEmpty Text -> Maybe Text -> ApiNegotiationResult
+selectRepresentation :: NonEmpty ApiMediaType -> Maybe Text -> ApiNegotiationResult
 selectRepresentation declaredRepresentations maybeAcceptHeader =
   case maybeAcceptHeader of
     Nothing -> SelectedRepresentation (NonEmpty.head declaredRepresentations)

@@ -497,31 +497,31 @@ spec =
               )
 
     describe "Content negotiation" $ do
-      let jsonAndText = "application/json" :| ["text/plain"]
+      let jsonAndText = testMediaType "application/json" :| [testMediaType "text/plain"]
 
       it "selects the first declared representation when Accept is absent" $
-        selectRepresentation jsonAndText Nothing `shouldBe` SelectedRepresentation "application/json"
+        selectRepresentation jsonAndText Nothing `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
       it "selects an exact match" $
-        selectRepresentation jsonAndText (Just "text/plain") `shouldBe` SelectedRepresentation "text/plain"
+        selectRepresentation jsonAndText (Just "text/plain") `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
       it "prefers the higher client quality between two acceptable representations" $
         selectRepresentation jsonAndText (Just "application/json;q=0.2, text/plain;q=0.8")
-          `shouldBe` SelectedRepresentation "text/plain"
+          `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
       it "breaks a quality tie with server declaration order" $
         selectRepresentation jsonAndText (Just "application/json;q=0.5, text/plain;q=0.5")
-          `shouldBe` SelectedRepresentation "application/json"
+          `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
       it "matches a type wildcard" $
-        selectRepresentation jsonAndText (Just "text/*") `shouldBe` SelectedRepresentation "text/plain"
+        selectRepresentation jsonAndText (Just "text/*") `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
       it "matches the full wildcard" $
-        selectRepresentation jsonAndText (Just "*/*") `shouldBe` SelectedRepresentation "application/json"
+        selectRepresentation jsonAndText (Just "*/*") `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
       it "lets a more specific range's q=0 exclude a representation despite a permissive wildcard" $
         selectRepresentation jsonAndText (Just "*/*;q=1, application/json;q=0")
-          `shouldBe` SelectedRepresentation "text/plain"
+          `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
       it "returns 406 when every declared representation is excluded" $
         selectRepresentation jsonAndText (Just "text/html, application/xml")
@@ -532,19 +532,14 @@ spec =
 
       it "keeps the less specific match when a later range in the header is no more specific" $
         selectRepresentation jsonAndText (Just "application/json, */*")
-          `shouldBe` SelectedRepresentation "application/json"
+          `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
       it "lets a type wildcard's specificity win over its own higher quality against a more specific, lower-quality match" $
         selectRepresentation jsonAndText (Just "*/*;q=0.1, text/*;q=0.9, text/plain;q=0.5")
-          `shouldBe` SelectedRepresentation "text/plain"
+          `shouldBe` SelectedRepresentation (testMediaType "text/plain")
 
-      it "never matches a declared representation that is not a well-formed media type" $
-        expectAll
-          ( (selectRepresentation ("not-a-media-type" :| ["text/plain"]) (Just "text/plain") `shouldBe` SelectedRepresentation "text/plain")
-              :| [ selectRepresentation ("text" :| ["text/plain"]) (Just "text/plain")
-                     `shouldBe` SelectedRepresentation "text/plain"
-                 ]
-          )
+      it "only accepts validated declared representations" $
+        apiMediaType "not-a-media-type" `shouldBe` Nothing
 
       it "drops an Accept parameter that has no '=' rather than failing the whole entry" $
         parseAcceptHeader "text/plain;malformed, application/json"
@@ -552,7 +547,7 @@ spec =
 
       it "is case-insensitive for the declared media type" $
         selectRepresentation jsonAndText (Just "APPLICATION/JSON")
-          `shouldBe` SelectedRepresentation "application/json"
+          `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
       it "parses quality, whitespace, and multiple ranges from a header" $
         expectAll
@@ -570,7 +565,7 @@ spec =
 
       it "derives comparable, printable representations for negotiation types" $
         let ranges = parseAcceptHeader "text/plain;q=0.5;level=1, application/json"
-            results = [NoAcceptableRepresentation, SelectedRepresentation "application/json"]
+            results = [NoAcceptableRepresentation, SelectedRepresentation (testMediaType "application/json")]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- ranges, right <- ranges] `shouldBe` length ranges)
                   :| [ sum [fromEnum (left /= right) | left <- ranges, right <- ranges] `shouldBe` length ranges * (length ranges - 1),

@@ -18,6 +18,7 @@ import Data.Aeson.Types qualified as Aeson.Types
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef qualified as IORef
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -77,12 +78,16 @@ greetingFor name = GreetingResponse ("Hello, " <> name <> "!")
 -- endpoint.
 renderGreeting :: Wai.Request -> GreetingResponse -> ApiResponseBody
 renderGreeting request greeting =
-  case selectRepresentation ("application/json" :| ["text/x-greeting"]) acceptHeaderText of
-    SelectedRepresentation "text/x-greeting" ->
-      (apiBytesResponse $! "text/x-greeting") (TextEncoding.encodeUtf8 ("GREETING " <> greetingText greeting))
+  case selectRepresentation (jsonMediaType :| [greetingMediaType]) acceptHeaderText of
+    SelectedRepresentation selectedMediaType
+      | selectedMediaType == greetingMediaType ->
+          (apiBytesResponse $! apiMediaTypeText selectedMediaType) (TextEncoding.encodeUtf8 ("GREETING " <> greetingText greeting))
     _ -> (apiBytesResponse $! "application/json; charset=utf-8") (LazyByteString.toStrict (Aeson.encode (encodeGreetingResponse greeting)))
   where
     acceptHeaderText = requestHeaderText HttpTypes.hAccept request
+
+greetingMediaType :: ApiMediaType
+greetingMediaType = fromMaybe plainTextMediaType (apiMediaType "text/x-greeting")
 
 handleGreetingTarget :: Wai.Request -> GreetingTarget -> IO ApiResponseBody
 handleGreetingTarget request ReadGreeting =

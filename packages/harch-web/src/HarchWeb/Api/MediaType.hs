@@ -8,6 +8,7 @@ module HarchWeb.Api.MediaType
     apiMediaTypeText,
     jsonMediaType,
     plainTextMediaType,
+    apiMediaTypeParts,
     parseMediaRange,
   )
 where
@@ -36,6 +37,10 @@ jsonMediaType = ApiMediaType "application/json"
 -- | The bare media type used by UTF-8 plain-text request bodies.
 plainTextMediaType :: ApiMediaType
 plainTextMediaType = ApiMediaType "text/plain"
+
+apiMediaTypeParts :: ApiMediaType -> (Text, Text)
+apiMediaTypeParts (ApiMediaType mediaType) =
+  (Text.takeWhile (/= '/') mediaType, Text.drop 1 (Text.dropWhile (/= '/') mediaType))
 
 normalizeMediaType :: Text -> Maybe Text
 normalizeMediaType contentTypeValue = do
