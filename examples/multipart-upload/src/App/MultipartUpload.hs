@@ -256,4 +256,4 @@ renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
           <> "</title></head><body><main id=\"app-main\">"
           <> Markup.renderHtml pageBodyHtml
           <> "</main></body></html>"
-  pure ((apiBytesResponse $! apiUtf8ContentType htmlMediaType) (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}
+  pure ((apiBytesResponse $! apiUtf8ContentType $! htmlMediaType) (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}
