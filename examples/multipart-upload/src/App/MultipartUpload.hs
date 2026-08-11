@@ -56,7 +56,8 @@ import HarchWeb.Api.Multipart
     MultipartScopedPart (..),
     discardMultipartUpload,
     defaultMultipartLimits,
-    withMultipartRequestBodyWith,
+    inMemoryMultipartStorage,
+    withMultipartRequestBodyWithStorage,
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
@@ -140,7 +141,8 @@ data UploadOutcome
   | UploadMissingFile
   | UploadRejected MultipartConsumeError
 
--- | Drives 'withMultipartRequestBodyWith' with a callback that rejects
+-- | Drives 'withMultipartRequestBodyWithStorage' with the explicitly chosen
+-- bounded in-memory adapter and a callback that rejects
 -- the whole body -- before any later part, including a later file part, is
 -- read -- unless a valid, unexpired CSRF field already arrived. A file
 -- part's bytes are only ever considered "accepted" once this callback
@@ -160,7 +162,7 @@ consumeUpload state limits request = do
   acceptedReference <- newIORef Nothing
   csrfRejectedReference <- newIORef False
   consumeResult <-
-    withMultipartRequestBodyWith limits request $ \case
+    withMultipartRequestBodyWithStorage inMemoryMultipartStorage limits request $ \case
       MultipartScopedFieldPart "_harch_csrf" suppliedTokenText -> do
         claimed <- claimUploadToken state suppliedTokenText
         if claimed

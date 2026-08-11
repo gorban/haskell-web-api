@@ -910,6 +910,30 @@ spec =
               pure (Right ())
         result `shouldBe` Right ()
 
+      it "lets a WAI request select and promote an application storage adapter" $
+        withTestUploadOpener $ \openUploadFile -> do
+          promotedReference <- IORef.newIORef Nothing
+          readChunk <- chunkReader [twoPartBody]
+          let request = multipartRequest readChunk []
+          result <-
+            withMultipartRequestBodyWithStorage
+              (storageFromOpener openUploadFile)
+              defaultMultipartLimits
+              request
+              $ \case
+              MultipartScopedFieldPart _ _ -> pure (Right ())
+              MultipartScopedFilePart _ _ upload _ -> do
+                promoted <- promoteMultipartUpload upload
+                IORef.writeIORef promotedReference promoted
+                pure (Right ())
+          maybePath <- IORef.readIORef promotedReference
+          case maybePath of
+            Nothing -> expectationFailure "expected the callback to promote its upload"
+            Just path -> do
+              contents <- ByteString.readFile path
+              removeFile path
+              expectAll ((result `shouldBe` Right ()) :| [contents `shouldBe` "file content here"])
+
       it "consumes a WAI request's body incrementally, calling onPart for each part" $
         withTestUploadOpener $ \_unusedOpener -> do
           seenPartsRef <- IORef.newIORef []

@@ -55,11 +55,17 @@ The filename is deliberately ignored when allocating a local file: it is
 untrusted metadata, not a path. The completed path remains inaccessible until
 `onPart` explicitly calls `promoteMultipartUpload`; otherwise the parser
 discards it after callback completion, rejection, malformed input, or an
-exception. For WAI applications, keep the same early media-type,
-`Content-Length`, and boundary validation that
-`withMultipartRequestBodyWith` performs before using the lower-level
-consumer. A storage-selected WAI convenience boundary is tracked by AD; until
-then, do not reimplement only part of that validation.
+exception. A WAI application can preserve the convenience boundary's
+media-type, `Content-Length`, and boundary validation while selecting this
+adapter:
+
+```haskell
+withMultipartRequestBodyWithStorage
+  (localFileStorage uploadDirectory)
+  limits
+  request
+  onPart
+```
 
 The CSRF field precedes the file field. The per-part callback validates it
 before a later file is opened, so an invalid form is rejected without storing

@@ -39,6 +39,7 @@ module HarchWeb.Api.Multipart
     MultipartConsumeError (..),
     multipartBoundaryFromContentType,
     withMultipartBodyWith,
+    withMultipartRequestBodyWithStorage,
     withMultipartRequestBodyWith,
   )
 where
@@ -751,14 +752,27 @@ parseContentLength value = do
   (bytes, remaining) <- ByteStringChar8.readInteger value
   if bytes >= 0 && ByteString.null remaining then Just bytes else Nothing
 
--- | WAI request variant of 'withMultipartBodyWith', using the bounded
--- in-memory adapter and disposing of every unpromoted upload at scope exit.
+-- | WAI request variant of 'withMultipartBodyWith'. The application selects
+-- the storage adapter explicitly; every upload left unpromoted is discarded
+-- at scope exit.
+withMultipartRequestBodyWithStorage ::
+  MultipartStorage stored ->
+  MultipartLimits ->
+  Wai.Request ->
+  (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
+  IO (Either MultipartConsumeError ())
+withMultipartRequestBodyWithStorage storage limits request onPart =
+  case multipartRequestBoundary limits request of
+    Left requestError -> pure (Left requestError)
+    Right boundary -> withMultipartBodyWith storage limits boundary (Wai.getRequestBodyChunk request) onPart
+
+-- | Bounded in-memory convenience variant of
+-- 'withMultipartRequestBodyWithStorage'. Applications needing disk, object
+-- storage, a scanning quarantine, or another durable backend must select
+-- that adapter explicitly with the storage-selected variant.
 withMultipartRequestBodyWith ::
   MultipartLimits ->
   Wai.Request ->
   (MultipartScopedPart InMemoryUpload -> IO (Either MultipartConsumeError ())) ->
   IO (Either MultipartConsumeError ())
-withMultipartRequestBodyWith limits request onPart =
-  case multipartRequestBoundary limits request of
-    Left requestError -> pure (Left requestError)
-    Right boundary -> withMultipartBodyWith inMemoryMultipartStorage limits boundary (Wai.getRequestBodyChunk request) onPart
+withMultipartRequestBodyWith = withMultipartRequestBodyWithStorage inMemoryMultipartStorage
