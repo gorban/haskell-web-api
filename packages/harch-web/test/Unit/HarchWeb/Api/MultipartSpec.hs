@@ -493,6 +493,28 @@ spec =
             (Left _, Just spooledPath) -> doesFileExist spooledPath `shouldReturn` False
             other -> expectationFailure ("unexpected result: " <> show other)
 
+      it "discards a file that is still staged when the body reader is cancelled" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          nextChunkReference <- IORef.newIORef (Just ("--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\npartial file contents"))
+          let trackedOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                pure (path, handle)
+              cancelledReadChunk = do
+                maybeChunk <- IORef.atomicModifyIORef' nextChunkReference (Nothing,)
+                case maybeChunk of
+                  Just chunk -> pure chunk
+                  Nothing -> Exception.throwIO Exception.ThreadKilled
+          attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
+            Exception.try (withMultipartBodyWith (storageFromOpener trackedOpener) testLimits boundaryToken cancelledReadChunk (const (pure (Right ()))))
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (attempt, maybeSpooledPath) of
+            (Left exception, Just spooledPath) -> do
+              Exception.fromException exception `shouldBe` Just Exception.ThreadKilled
+              doesFileExist spooledPath `shouldReturn` False
+            other -> expectationFailure ("unexpected result: " <> show other)
+
       it "consumes a body delivered one byte at a time, exercising the multi-chunk driving loop" $ do
         result <- runConsume testLimits (allByteChunks singleFieldBody)
         case result of
