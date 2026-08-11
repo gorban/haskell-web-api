@@ -158,8 +158,8 @@ startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits transpor
     (startWarpTlsServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits)
 
 startManualTlsRuntimeServerWithStarter :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithStarter startTlsServer =
-  startManualTlsRuntimeServerWithStarterAndRequestTransportLimits startTlsServer
+startManualTlsRuntimeServerWithStarter =
+  startManualTlsRuntimeServerWithStarterAndRequestTransportLimits
 
 startManualTlsRuntimeServerWithStarterAndRequestTransportLimits :: (ListenerEndpoint -> WarpTLS.TLSSettings -> Socket.Socket -> (Observability.ConnectionObservability -> IO ()) -> Wai.Application -> IO ThreadId) -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
 startManualTlsRuntimeServerWithStarterAndRequestTransportLimits startTlsServer manualTlsPlan waiApplication connectionReporter = do
