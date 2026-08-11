@@ -102,6 +102,7 @@ library
     HarchWeb.Api.Multipart.Disposition
     HarchWeb.Api.Multipart.Scanner
     HarchWeb.Api.Multipart.Storage.Internal
+    HarchWeb.Api.Negotiation
     HarchWeb.Markup.Attributes
     HarchWeb.Markup.Elements
     HarchWeb.Markup.Implementation
