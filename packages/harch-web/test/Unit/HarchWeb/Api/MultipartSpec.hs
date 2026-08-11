@@ -847,17 +847,26 @@ spec =
                    ]
             )
 
-      it "aborts with a rejecting callback's error before a later file part is ever opened" $ do
-        uploadOpenedRef <- IORef.newIORef False
-        readChunk <- chunkReader [twoPartBody]
+      it "stops reading after a rejecting callback, leaving the unread body to the transport" $ do
+        readCountReference <- IORef.newIORef (0 :: Int)
+        chunksReference <-
+          IORef.newIORef
+            [ "--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\nvalue1\r\n--" <> boundaryToken <> "\r\n",
+              filePartHeaders <> "\r\n\r\nfile content here\r\n--" <> boundaryToken <> "--\r\n"
+            ]
+        let readChunk = do
+              IORef.modifyIORef' readCountReference (+ 1)
+              IORef.atomicModifyIORef' chunksReference $ \case
+                [] -> ([], ByteString.empty)
+                chunk : rest -> (rest, chunk)
         result <-
           withMultipartBodyWith inMemoryMultipartStorage defaultMultipartLimits boundaryToken readChunk $ \case
             MultipartScopedFieldPart "field1" _ -> pure (Left MultipartMalformedBody)
             _ -> expectationFailure "did not expect another multipart part" >> pure (Right ())
-        uploadOpened <- IORef.readIORef uploadOpenedRef
+        readCount <- IORef.readIORef readCountReference
         expectAll
           ( (result `shouldBe` Left MultipartMalformedBody)
-              :| [uploadOpened `shouldBe` False]
+              :| [readCount `shouldBe` 1]
           )
 
       it "retains an application-owned completed upload when a later part is rejected" $

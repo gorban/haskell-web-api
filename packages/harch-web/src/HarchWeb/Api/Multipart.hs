@@ -493,7 +493,11 @@ discardActiveMultipartUpload activeUploadReference = do
 
 -- | Consume multipart parts through a scoped ownership API. A file's stored
 -- value is hidden behind 'MultipartUpload'; every upload left unpromoted is
--- discarded after success, rejection, or an exception from @onPart@.
+-- discarded after success, rejection, or an exception from @onPart@. On the
+-- first consume error or callback rejection, this function stops calling
+-- @readChunk@ after cleanup rather than draining an unbounded unread body.
+-- The WAI server's connection and request-body limits consequently remain
+-- responsible for the unread remainder's transport policy.
 withMultipartBodyWith ::
   MultipartStorage stored ->
   MultipartLimits ->
