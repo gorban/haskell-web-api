@@ -132,28 +132,28 @@ spec =
     describe "respondApiMatch" $ do
       it "renders a matched target's status and Content-Type, with its body" $
         respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatched ReadStatus)
-          `shouldBe` ApiHttpResponse 200 [("Content-Type", "text/plain; charset=utf-8")] (Just (apiTextResponse "hello"))
+          `shouldBe` ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain; charset=utf-8")] (Just (apiTextResponse "hello"))
 
       it "renders a HEAD match with the same status and headers but no body" $
         respondApiMatch (const (apiTextResponse "hello")) (ApiRouteMatchedHead ReadStatus)
-          `shouldBe` ApiHttpResponse 200 [("Content-Type", "text/plain; charset=utf-8")] Nothing
+          `shouldBe` ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain; charset=utf-8")] Nothing
 
       it "renders 404 with no headers or body for no route match" $
         respondApiMatch (const (apiTextResponse "unused")) NoApiRouteMatch
-          `shouldBe` ApiHttpResponse 404 [] Nothing
+          `shouldBe` ApiHttpResponse HttpTypes.status404 [] Nothing
 
       it "renders 405 with an Allow header derived from the declared methods" $
         respondApiMatch (const (apiTextResponse "unused")) (ApiMethodNotAllowed (ApiGet :| [ApiPost]))
-          `shouldBe` ApiHttpResponse 405 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
+          `shouldBe` ApiHttpResponse HttpTypes.status405 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
 
       it "renders 204 with an Allow header and no body for a synthesized OPTIONS match" $
         respondApiMatch (const (apiTextResponse "unused")) (ApiRouteOptions (ApiGet :| [ApiPost]))
-          `shouldBe` ApiHttpResponse 204 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
+          `shouldBe` ApiHttpResponse HttpTypes.status204 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing
 
       it "forwards a matched target's overridden status, e.g. 422 for semantically invalid input" $
-        let invalidBody = (apiTextResponse "invalid") {apiResponseStatus = 422}
+        let invalidBody = (apiTextResponse "invalid") {apiResponseStatus = HttpTypes.status422}
          in respondApiMatch (const invalidBody) (ApiRouteMatched ReadStatus)
-              `shouldBe` ApiHttpResponse 422 [("Content-Type", "text/plain; charset=utf-8")] (Just invalidBody)
+              `shouldBe` ApiHttpResponse HttpTypes.status422 [("Content-Type", "text/plain; charset=utf-8")] (Just invalidBody)
 
       it "derives comparable, printable representations for ApiHttpResponse" $
         let responses =
@@ -195,7 +195,7 @@ spec =
 
     describe "apiHttpResponseToWaiResponse" $ do
       it "renders a matched response's status, headers, and body" $ do
-        let waiResponse = apiHttpResponseToWaiResponse (ApiHttpResponse 200 [("Content-Type", "text/plain")] (Just (apiTextResponse "hello")))
+        let waiResponse = apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain")] (Just (apiTextResponse "hello")))
         body <- readResponseBody waiResponse
         expectAll
           ( (Wai.responseStatus waiResponse `shouldBe` HttpTypes.status200)
@@ -206,21 +206,21 @@ spec =
 
       it "renders 204, 400, 403, 404, 405, and 422 with their standard reason phrases" $
         expectAll
-          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 204 [] Nothing)) `shouldBe` HttpTypes.status204)
-              :| [ Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 400 [] Nothing)) `shouldBe` HttpTypes.status400,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 403 [] Nothing)) `shouldBe` HttpTypes.status403,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing)) `shouldBe` HttpTypes.status404,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [] Nothing)) `shouldBe` HttpTypes.status405,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 422 [] Nothing)) `shouldBe` HttpTypes.status422
+          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [] Nothing)) `shouldBe` HttpTypes.status204)
+              :| [ Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status400 [] Nothing)) `shouldBe` HttpTypes.status400,
+                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status403 [] Nothing)) `shouldBe` HttpTypes.status403,
+                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)) `shouldBe` HttpTypes.status404,
+                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [] Nothing)) `shouldBe` HttpTypes.status405,
+                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status422 [] Nothing)) `shouldBe` HttpTypes.status422
                  ]
           )
 
       it "renders an empty body when no body is present" $ do
-        body <- readResponseBody (apiHttpResponseToWaiResponse (ApiHttpResponse 404 [] Nothing))
+        body <- readResponseBody (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status404 [] Nothing))
         body `shouldBe` ""
 
-      it "falls back to an empty reason phrase for a status this module never produces" $
-        HttpTypes.statusMessage (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse 500 [] Nothing))) `shouldBe` ""
+      it "preserves the reason phrase of a supplied HTTP status" $
+        HttpTypes.statusMessage (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status500 [] Nothing))) `shouldBe` "Internal Server Error"
 
     describe "apiEndpointMiddleware" $ do
       let innerApplication :: Wai.Application
@@ -281,7 +281,7 @@ spec =
         let invalidMiddleware =
               apiEndpointMiddleware
                 testEndpoints
-                (\_request _target -> pure (apiTextResponse "invalid") {apiResponseStatus = 422})
+                (\_request _target -> pure (apiTextResponse "invalid") {apiResponseStatus = HttpTypes.status422})
         response <- performWaiRequest (invalidMiddleware innerApplication) (waiRequestFor "GET" "/api/status")
         Wai.responseStatus response `shouldBe` HttpTypes.status422
 
@@ -478,14 +478,14 @@ spec =
 
       it "defaults every built-in response body to status 200" $
         expectAll
-          ( (apiResponseStatus (apiJsonResponse (42 :: Int)) `shouldBe` 200)
-              :| [ apiResponseStatus (apiTextResponse "hello") `shouldBe` 200,
-                   apiResponseStatus (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` 200
+          ( (apiResponseStatus (apiJsonResponse (42 :: Int)) `shouldBe` HttpTypes.status200)
+              :| [ apiResponseStatus (apiTextResponse "hello") `shouldBe` HttpTypes.status200,
+                   apiResponseStatus (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` HttpTypes.status200
                  ]
           )
 
       it "lets a caller override the status with a record update, e.g. 422 for a semantically invalid request" $
-        apiResponseStatus (apiTextResponse "invalid") {apiResponseStatus = 422} `shouldBe` 422
+        apiResponseStatus (apiTextResponse "invalid") {apiResponseStatus = HttpTypes.status422} `shouldBe` HttpTypes.status422
 
       it "derives comparable, printable representations for response bodies" $
         let bodies = [apiJsonResponse (1 :: Int), apiTextResponse "x", apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>"]

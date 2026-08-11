@@ -63,6 +63,7 @@ import HarchWeb.Api.Multipart
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
+import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
 data NativeUploadTarget
@@ -130,12 +131,12 @@ handleUploadSubmission state request = do
   outcome <- consumeUpload state defaultMultipartLimits request
   case outcome of
     UploadAccepted filename byteCount -> successPage filename byteCount
-    UploadCsrfRejected -> errorPage 403 "Your upload form had expired. Go back and try again."
-    UploadMissingFile -> errorPage 422 "Choose a file before submitting."
+    UploadCsrfRejected -> errorPage HttpTypes.status403 "Your upload form had expired. Go back and try again."
+    UploadMissingFile -> errorPage HttpTypes.status422 "Choose a file before submitting."
     -- Every 'MultipartConsumeError' (media type, declared size limits,
     -- malformed structure, truncation) renders the same way here: the
     -- distinction is exercised by "HarchWeb.Api.Multipart"'s unit suite.
-    UploadRejected _consumeError -> errorPage 400 "This upload was invalid."
+    UploadRejected _consumeError -> errorPage HttpTypes.status400 "This upload was invalid."
 
 data UploadOutcome
   = UploadAccepted Text Int
@@ -192,7 +193,7 @@ consumeUpload state limits request = do
 successPage :: Text -> Int -> IO ApiResponseBody
 successPage filename byteCount =
   renderNativeUploadPage
-    200
+    HttpTypes.status200
     "Upload received"
     ( Markup.element
         Markup.divTag
@@ -205,7 +206,7 @@ successPage filename byteCount =
         ]
     )
 
-errorPage :: Int -> Text -> IO ApiResponseBody
+errorPage :: HttpTypes.Status -> Text -> IO ApiResponseBody
 errorPage statusCode message =
   renderNativeUploadPage
     statusCode
@@ -224,7 +225,7 @@ errorPage statusCode message =
 
 renderUploadFormPage :: CsrfToken -> IO ApiResponseBody
 renderUploadFormPage csrfToken =
-  renderNativeUploadPage 200 "Upload a file" (uploadFormBody csrfToken)
+  renderNativeUploadPage HttpTypes.status200 "Upload a file" (uploadFormBody csrfToken)
 
 -- | The CSRF field must precede the file field: 'consumeUpload' rejects
 -- before opening a later part, so this ordering is what lets an invalid or
@@ -248,7 +249,7 @@ uploadFormBody csrfToken =
 -- on every invocation instead of treating the closed literal as a once-shared
 -- reference; it has no runtime effect.
 {-# ANN renderNativeUploadPage ("HLint: ignore Redundant $!" :: String) #-}
-renderNativeUploadPage :: Int -> Text -> Markup.Html -> IO ApiResponseBody
+renderNativeUploadPage :: HttpTypes.Status -> Text -> Markup.Html -> IO ApiResponseBody
 renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
   let renderedHtml =
         "<!doctype html><html><head><title>"

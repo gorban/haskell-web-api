@@ -63,7 +63,7 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
     it "fails closed when its application-defined representation is invalid" $
       let response = renderGreetingWith Nothing Wai.defaultRequest (GreetingResponse "Hello, World!")
        in (apiResponseStatus response, apiResponseBodyBytes response)
-            `shouldBe` (500, "API representation configuration is invalid")
+            `shouldBe` (HttpTypes.status500, "API representation configuration is invalid")
 
     it "renders JSON by default" $ do
       response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/greeting"}

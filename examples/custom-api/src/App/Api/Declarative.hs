@@ -81,7 +81,7 @@ renderGreeting = renderGreetingWith (apiMediaType "text/x-greeting")
 
 renderGreetingWith :: Maybe ApiMediaType -> Wai.Request -> GreetingResponse -> ApiResponseBody
 renderGreetingWith Nothing _request _greeting =
-  (apiTextResponse "API representation configuration is invalid") {apiResponseStatus = 500}
+  (apiTextResponse "API representation configuration is invalid") {apiResponseStatus = HttpTypes.status500}
 renderGreetingWith (Just greetingMediaType) request greeting =
   case selectRepresentation (jsonMediaType :| [greetingMediaType]) acceptHeaderText of
     SelectedRepresentation selectedMediaType

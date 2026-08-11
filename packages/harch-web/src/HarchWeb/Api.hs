@@ -208,7 +208,7 @@ apiAllowHeaderValue declaredMethodsValue =
 -- optional body (omitted for @HEAD@). Framework/transport-agnostic; adapt it
 -- to a concrete server's response type at the integration boundary.
 data ApiHttpResponse = ApiHttpResponse
-  { apiHttpResponseStatus :: Int,
+  { apiHttpResponseStatus :: HttpTypes.Status,
     apiHttpResponseHeaders :: [(Text, Text)],
     apiHttpResponseBody :: Maybe ApiResponseBody
   }
@@ -221,13 +221,13 @@ data ApiHttpResponse = ApiHttpResponse
 respondApiMatch :: (target -> ApiResponseBody) -> ApiMatchResult target -> ApiHttpResponse
 respondApiMatch renderTarget matchResult =
   case matchResult of
-    NoApiRouteMatch -> ApiHttpResponse 404 [] Nothing
+    NoApiRouteMatch -> ApiHttpResponse HttpTypes.status404 [] Nothing
     ApiMethodNotAllowed declaredMethodsValue ->
-      ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
+      ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
     ApiRouteMatched target -> renderedApiResponse (renderTarget $! target)
     ApiRouteMatchedHead target -> (renderedApiResponse (renderTarget $! target)) {apiHttpResponseBody = Nothing}
     ApiRouteOptions declaredMethodsValue ->
-      ApiHttpResponse 204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
+      ApiHttpResponse HttpTypes.status204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
 
 renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
 renderedApiResponse body =
@@ -237,30 +237,15 @@ renderedApiResponse body =
       apiHttpResponseBody = Just body
     }
 
--- | Render an 'ApiHttpResponse' as a WAI response. Every status this module
--- knows a standard reason phrase for (@200@, @204@, @400@, @403@, @404@,
--- @405@, and @422@) gets one; any other declared status -- including any
--- status an 'ApiResponseBody' target renders via 'apiResponseStatus' that
--- isn't in that set -- falls back to an empty reason phrase, since HTTP/2
--- and later never transmit it and most HTTP/1.1 clients do not inspect it.
+-- | Render an 'ApiHttpResponse' as a WAI response. Status values remain the
+-- validated protocol values supplied by @http-types@; this boundary only
+-- encodes the framework-neutral header and body representation.
 apiHttpResponseToWaiResponse :: ApiHttpResponse -> Wai.Response
 apiHttpResponseToWaiResponse httpResponse =
   Wai.responseLBS
-    (apiHttpStatus (apiHttpResponseStatus httpResponse))
+    (apiHttpResponseStatus httpResponse)
     [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value) | (name, value) <- apiHttpResponseHeaders httpResponse]
     (maybe LazyByteString.empty (LazyByteString.fromStrict . apiResponseBodyBytes) (apiHttpResponseBody httpResponse))
-
-apiHttpStatus :: Int -> HttpTypes.Status
-apiHttpStatus code =
-  case code of
-    200 -> HttpTypes.status200
-    204 -> HttpTypes.status204
-    400 -> HttpTypes.status400
-    403 -> HttpTypes.status403
-    404 -> HttpTypes.status404
-    405 -> HttpTypes.status405
-    422 -> HttpTypes.status422
-    _ -> (HttpTypes.mkStatus $! code) ByteString.empty
 
 -- | A WAI middleware an application opts into by wrapping its own
 -- 'Wai.Application': a request whose path matches a declared endpoint is
@@ -286,7 +271,7 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
   case matchApiEndpoints requestMethodText requestPathText endpoints of
     NoApiRouteMatch -> (innerApplication $! request) respond
     ApiMethodNotAllowed declaredMethodsValue ->
-      respond (apiHttpResponseToWaiResponse (ApiHttpResponse 405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
+      respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
     ApiRouteMatched target -> do
       body <- (runTarget $! request) $! target
       respond (apiHttpResponseToWaiResponse (renderedApiResponse body))
@@ -294,7 +279,7 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
       body <- (runTarget $! request) $! target
       respond (apiHttpResponseToWaiResponse (renderedApiResponse $! body) {apiHttpResponseBody = Nothing})
     ApiRouteOptions declaredMethodsValue ->
-      respond (apiHttpResponseToWaiResponse (ApiHttpResponse 204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
+      respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] $! Nothing))
   where
     requestMethodText = decodeUtf8Leniently (Wai.requestMethod request)
     requestPathText = decodeUtf8Leniently (Wai.rawPathInfo request)
@@ -512,7 +497,7 @@ bytesBodyDecoder mediaType =
 -- invalid but syntactically well-formed request) since the status a target
 -- renders is otherwise indistinguishable from any other successful match.
 data ApiResponseBody = ApiResponseBody
-  { apiResponseStatus :: Int,
+  { apiResponseStatus :: HttpTypes.Status,
     apiResponseContentType :: ApiContentType,
     apiResponseBodyBytes :: ByteString
   }
@@ -521,7 +506,7 @@ data ApiResponseBody = ApiResponseBody
 apiJsonResponse :: (ToJSON value) => value -> ApiResponseBody
 apiJsonResponse value =
   ApiResponseBody
-    { apiResponseStatus = 200,
+    { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = jsonContentType,
       apiResponseBodyBytes = LazyByteString.toStrict (Aeson.encode value)
     }
@@ -529,7 +514,7 @@ apiJsonResponse value =
 apiTextResponse :: Text -> ApiResponseBody
 apiTextResponse bodyText =
   ApiResponseBody
-    { apiResponseStatus = 200,
+    { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = plainTextContentType,
       apiResponseBodyBytes = TextEncoding.encodeUtf8 bodyText
     }
@@ -537,7 +522,7 @@ apiTextResponse bodyText =
 apiBytesResponse :: ApiContentType -> ByteString -> ApiResponseBody
 apiBytesResponse contentType bodyBytes =
   ApiResponseBody
-    { apiResponseStatus = 200,
+    { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = contentType,
       apiResponseBodyBytes = bodyBytes
     }
