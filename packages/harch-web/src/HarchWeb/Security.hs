@@ -8,6 +8,8 @@ module HarchWeb.Security
     RequestHeadLimits (..),
     RequestHeaderCountLimit,
     RequestItemCountLimit,
+    RequestTimeoutSeconds,
+    RequestTransportLimits (..),
     RequestContextField (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
@@ -25,6 +27,8 @@ module HarchWeb.Security
     requestByteLimitValue,
     mkRequestHeaderCountLimit,
     requestItemCountLimit,
+    requestTimeoutSeconds,
+    requestTimeoutSecondsValue,
     requestContextFields,
     requestHostWithoutPort,
     requestLogContextFields,
@@ -39,6 +43,7 @@ module HarchWeb.Security
     socketAddressText,
     stripRequestPathPrefix,
     unboundedRequestHeadLimits,
+    warpDefaultRequestTransportLimits,
     validateRequestHead,
     waiRequestPath,
     waiRequestRouteTarget,
@@ -138,6 +143,7 @@ data RequestPolicyConfig = RequestPolicyConfig
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
     trustForwardedHeaders :: Bool,
     requestHeadLimits :: RequestHeadLimits,
+    requestTransportLimits :: RequestTransportLimits,
     corsPolicy :: CorsPolicyConfig,
     responseSecurityHeaders :: ResponseSecurityHeadersConfig
   }
@@ -156,6 +162,20 @@ requestByteLimit byteCount
 
 requestByteLimitValue :: RequestByteLimit -> Int
 requestByteLimitValue (RequestByteLimit byteCount) = byteCount
+
+-- | A non-negative network-progress timeout in seconds. A value of zero has
+-- Warp's documented meaning of disabling its timer; absence leaves Warp's
+-- established default unchanged.
+newtype RequestTimeoutSeconds = RequestTimeoutSeconds Int
+  deriving (Eq, Show)
+
+requestTimeoutSeconds :: Int -> Maybe RequestTimeoutSeconds
+requestTimeoutSeconds seconds
+  | seconds >= 0 = Just (RequestTimeoutSeconds seconds)
+  | otherwise = Nothing
+
+requestTimeoutSecondsValue :: RequestTimeoutSeconds -> Int
+requestTimeoutSecondsValue (RequestTimeoutSeconds seconds) = seconds
 
 -- | A non-negative bound on the number of request header fields.
 newtype RequestHeaderCountLimit = RequestHeaderCountLimit Int
@@ -206,6 +226,22 @@ unboundedRequestHeadLimits =
       requestPathSegmentByteLimit = Nothing,
       requestQueryFieldCountLimit = Nothing,
       requestQueryFieldByteLimit = Nothing
+    }
+
+-- | Opt-in limits applied by the listener while network data arrives. 'Nothing'
+-- deliberately preserves the installed Warp defaults, instead of introducing a
+-- framework-wide production policy during an upgrade.
+data RequestTransportLimits = RequestTransportLimits
+  { requestNetworkTimeout :: Maybe RequestTimeoutSeconds,
+    requestSlowlorisByteLimit :: Maybe RequestByteLimit
+  }
+  deriving (Eq, Show)
+
+warpDefaultRequestTransportLimits :: RequestTransportLimits
+warpDefaultRequestTransportLimits =
+  RequestTransportLimits
+    { requestNetworkTimeout = Nothing,
+      requestSlowlorisByteLimit = Nothing
     }
 
 -- | A stable, low-cardinality explanation for rejecting an inbound request

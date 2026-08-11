@@ -64,6 +64,8 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `REQUEST_PATH_SEGMENT_MAX_BYTES` | Optional maximum bytes in a raw path segment before route parsing. | unset (unbounded) |
 | `REQUEST_QUERY_FIELD_MAX_COUNT` | Optional maximum number of raw query-field slots, including empty slots separated by `&`. | unset (unbounded) |
 | `REQUEST_QUERY_FIELD_MAX_BYTES` | Optional maximum bytes in one raw query-field slot before query parsing. | unset (unbounded) |
+| `REQUEST_NETWORK_TIMEOUT_SECONDS` | Optional Warp network-progress timeout. `0` disables Warp's timer; choose a positive value for slow-request containment. | unset (Warp default: 30 seconds) |
+| `REQUEST_SLOWLORIS_MAX_BYTES` | Optional number of bytes that must arrive before Warp treats a connection as making progress for its timeout timer. | unset (Warp default: 2048 bytes) |
 | `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
 | `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
 | `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |
@@ -114,6 +116,12 @@ separate because JSON, form, streaming, and multipart endpoints have different v
 framework's client-action reader remains capped at 64 KiB, and the native subscription example uses an
 explicit 8 KiB incremental body reader; multipart limits and storage ownership are being completed
 under the tracked multipart task.
+
+`REQUEST_NETWORK_TIMEOUT_SECONDS` and `REQUEST_SLOWLORIS_MAX_BYTES` are listener-level network
+controls, not application body budgets. They apply consistently to HTTP, manual TLS, and
+ACME-managed TLS listeners. Leaving either unset deliberately retains the installed Warp default;
+set both only after measuring legitimate slow clients and proxy behavior. A timeout closes the
+connection rather than producing an application response.
 
 Container memory limits are last-resort containment only: a cgroup OOM kills every in-flight request
 in that container. They should be observed in deployment drills, but are not a substitute for request

@@ -48,6 +48,7 @@ defaultRequestPolicy =
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
+      requestTransportLimits = warpDefaultRequestTransportLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }

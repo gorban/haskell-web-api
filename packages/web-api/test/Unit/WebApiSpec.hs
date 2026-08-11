@@ -969,6 +969,7 @@ spec = do
                   strictTransportSecurity = Nothing,
                   trustForwardedHeaders = False,
                   requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                  requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 },
@@ -1100,6 +1101,7 @@ spec = do
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1444,6 +1446,7 @@ spec = do
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1668,6 +1671,7 @@ spec = do
                           },
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1697,6 +1701,7 @@ spec = do
                           },
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1722,6 +1727,7 @@ spec = do
                           },
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1753,7 +1759,9 @@ spec = do
               ("REQUEST_PATH_SEGMENT_MAX_COUNT", "8"),
               ("REQUEST_PATH_SEGMENT_MAX_BYTES", "128"),
               ("REQUEST_QUERY_FIELD_MAX_COUNT", "16"),
-              ("REQUEST_QUERY_FIELD_MAX_BYTES", "256")
+              ("REQUEST_QUERY_FIELD_MAX_BYTES", "256"),
+              ("REQUEST_NETWORK_TIMEOUT_SECONDS", "12"),
+              ("REQUEST_SLOWLORIS_MAX_BYTES", "512")
             ]
         )
         `shouldBe` Right
@@ -1768,6 +1776,11 @@ spec = do
                     HarchWeb.requestPathSegmentByteLimit = HarchWeb.requestByteLimit 128,
                     HarchWeb.requestQueryFieldCountLimit = HarchWeb.requestItemCountLimit 16,
                     HarchWeb.requestQueryFieldByteLimit = HarchWeb.requestByteLimit 256
+                  },
+              requestTransportLimits =
+                HarchWeb.RequestTransportLimits
+                  { HarchWeb.requestNetworkTimeout = HarchWeb.requestTimeoutSeconds 12,
+                    HarchWeb.requestSlowlorisByteLimit = HarchWeb.requestByteLimit 512
                   }
             }
 
@@ -1859,6 +1872,7 @@ spec = do
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1934,6 +1948,7 @@ spec = do
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
+                    requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }

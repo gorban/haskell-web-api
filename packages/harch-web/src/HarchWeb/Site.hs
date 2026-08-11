@@ -38,6 +38,7 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     navigationRuntimeScriptSource,
     unboundedRequestHeadLimits,
+    warpDefaultRequestTransportLimits,
   )
 import HarchWeb qualified
 import HarchWeb.Document qualified as Document
@@ -242,6 +243,7 @@ defaultSiteRequestPolicy =
       strictTransportSecurity = Nothing :: Maybe StrictTransportSecurityConfig,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
+      requestTransportLimits = warpDefaultRequestTransportLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }

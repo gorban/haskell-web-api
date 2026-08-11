@@ -40,6 +40,7 @@ import HarchWeb
     redirectHttpToHttps,
     renderRoute,
     requestPolicy,
+    requestTransportLimits,
     responseSecurityHeaders,
     staticAssetContentTypes,
     staticAssetRoots,
@@ -49,6 +50,7 @@ import HarchWeb
     toWaiApplication,
     tracingExporter,
     trustForwardedHeaders,
+    warpDefaultRequestTransportLimits,
   )
 import HarchWeb qualified
 import HarchWeb.Site
@@ -91,6 +93,7 @@ spec =
                    httpsRedirectPort (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    strictTransportSecurity (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    trustForwardedHeaders (siteRequestPolicy twoPageSite) `shouldBe` False,
+                   requestTransportLimits (siteRequestPolicy twoPageSite) `shouldBe` warpDefaultRequestTransportLimits,
                    corsPolicy (siteRequestPolicy twoPageSite) `shouldBe` defaultCorsPolicyConfig,
                    responseSecurityHeaders (siteRequestPolicy twoPageSite) `shouldBe` defaultResponseSecurityHeadersConfig
                  ]
@@ -116,6 +119,7 @@ spec =
                    httpsRedirectPort (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    strictTransportSecurity (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    trustForwardedHeaders (requestPolicy twoPageServerConfig) `shouldBe` False,
+                   requestTransportLimits (requestPolicy twoPageServerConfig) `shouldBe` warpDefaultRequestTransportLimits,
                    corsPolicy (requestPolicy twoPageServerConfig) `shouldBe` defaultCorsPolicyConfig,
                    responseSecurityHeaders (requestPolicy twoPageServerConfig) `shouldBe` defaultResponseSecurityHeadersConfig,
                    tracingExporter (observability twoPageServerConfig) `shouldBe` Nothing,

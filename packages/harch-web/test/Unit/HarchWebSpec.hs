@@ -244,6 +244,7 @@ defaultRequestPolicy =
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
+      requestTransportLimits = warpDefaultRequestTransportLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
@@ -650,6 +651,7 @@ spec = do
       differentHeaderCountLimitInput <- newIORef 3
       itemCountLimitInput <- newIORef 4
       differentItemCountLimitInput <- newIORef 5
+      timeoutSecondsInput <- newIORef 12
       failureInput <- newIORef RequestHeadersTooLarge
       byteLimit <- requestByteLimit <$> readIORef byteLimitInput
       differentByteLimit <- requestByteLimit <$> readIORef differentByteLimitInput
@@ -657,6 +659,7 @@ spec = do
       differentHeaderCountLimit <- mkRequestHeaderCountLimit <$> readIORef differentHeaderCountLimitInput
       itemCountLimit <- requestItemCountLimit <$> readIORef itemCountLimitInput
       differentItemCountLimit <- requestItemCountLimit <$> readIORef differentItemCountLimitInput
+      timeoutSeconds <- requestTimeoutSeconds <$> readIORef timeoutSecondsInput
       failure <- readIORef failureInput
       let byteLimitValue = fromMaybe (error "expected request byte limit") byteLimit
           differentByteLimitValue = fromMaybe (error "expected distinct request byte limit") differentByteLimit
@@ -664,6 +667,7 @@ spec = do
           differentHeaderCountLimitValue = fromMaybe (error "expected distinct request header count limit") differentHeaderCountLimit
           itemCountLimitValue = fromMaybe (error "expected request item count limit") itemCountLimit
           differentItemCountLimitValue = fromMaybe (error "expected distinct request item count limit") differentItemCountLimit
+          timeoutSecondsValue = fromMaybe (error "expected request timeout") timeoutSeconds
           boundedHeadLimits =
             unboundedRequestHeadLimits
               { requestTargetByteLimit = byteLimit,
@@ -674,10 +678,20 @@ spec = do
               { requestTargetByteLimit = differentByteLimit,
                 requestHeaderCountLimit = differentHeaderCountLimit
               }
+          transportLimits =
+            warpDefaultRequestTransportLimits
+              { requestNetworkTimeout = timeoutSeconds,
+                requestSlowlorisByteLimit = byteLimit
+              }
+          differentTransportLimits =
+            transportLimits
+              { requestNetworkTimeout = requestTimeoutSeconds 13
+              }
       expectAll
         ( (requestByteLimit (-1) `shouldBe` Nothing)
             :| [ mkRequestHeaderCountLimit (-1) `shouldBe` Nothing,
                  requestItemCountLimit (-1) `shouldBe` Nothing,
+                 requestTimeoutSeconds (-1) `shouldBe` Nothing,
                  byteLimit `shouldNotBe` differentByteLimit,
                  headerCountLimit `shouldNotBe` differentHeaderCountLimit,
                  show byteLimit `shouldBe` "Just (RequestByteLimit 8)",
@@ -697,6 +711,14 @@ spec = do
                  itemCountLimitValue /= differentItemCountLimitValue `shouldBe` True,
                  show itemCountLimitValue `shouldBe` "RequestItemCountLimit 4",
                  show [itemCountLimitValue] `shouldBe` "[RequestItemCountLimit 4]",
+                 timeoutSecondsValue /= fromMaybe (error "expected distinct request timeout") (requestTimeoutSeconds 13) `shouldBe` True,
+                 requestTimeoutSecondsValue timeoutSecondsValue `shouldBe` 12,
+                 show timeoutSecondsValue `shouldBe` "RequestTimeoutSeconds 12",
+                 show [timeoutSecondsValue] `shouldBe` "[RequestTimeoutSeconds 12]",
+                 transportLimits `shouldBe` transportLimits,
+                 transportLimits /= differentTransportLimits `shouldBe` True,
+                 show transportLimits `shouldBe` "RequestTransportLimits {requestNetworkTimeout = Just (RequestTimeoutSeconds 12), requestSlowlorisByteLimit = Just (RequestByteLimit 8)}",
+                 show [transportLimits] `shouldBe` "[RequestTransportLimits {requestNetworkTimeout = Just (RequestTimeoutSeconds 12), requestSlowlorisByteLimit = Just (RequestByteLimit 8)}]",
                  length (show boundedHeadLimits) + length (showList [boundedHeadLimits] "")
                    `shouldSatisfy` (> 0),
                  length (show failure) + length (showList [failure] "")
@@ -1127,6 +1149,7 @@ spec = do
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -1242,6 +1265,7 @@ spec = do
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
                 corsPolicy = corsPolicyConfig,
                 responseSecurityHeaders = responseSecurityHeadersConfig
               }
@@ -1252,6 +1276,7 @@ spec = do
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
                 corsPolicy =
                   defaultCorsPolicyConfig
                     { corsAllowedOrigins = ["https://app.example.com"]
@@ -2603,6 +2628,7 @@ spec = do
                       },
                 trustForwardedHeaders = True,
                 requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -2634,6 +2660,7 @@ spec = do
                       },
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -3920,6 +3947,7 @@ spec = do
                         },
                   trustForwardedHeaders = True,
                   requestHeadLimits = unboundedRequestHeadLimits,
+                  requestTransportLimits = warpDefaultRequestTransportLimits,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 }
@@ -6800,7 +6828,15 @@ spec = do
       let limitedApplication =
             sampleApplicationWithConfig
               emptyStaticAssets
-              (defaultRequestPolicy {requestHeadLimits = unboundedRequestHeadLimits {requestHeaderByteLimit = requestByteLimit 64}})
+              ( defaultRequestPolicy
+                  { requestHeadLimits = unboundedRequestHeadLimits {requestHeaderByteLimit = requestByteLimit 64},
+                    requestTransportLimits =
+                      warpDefaultRequestTransportLimits
+                        { requestNetworkTimeout = requestTimeoutSeconds 1,
+                          requestSlowlorisByteLimit = requestByteLimit 1
+                        }
+                  }
+              )
       withLocalTestServer limitedApplication $ \localTestServer -> do
         responseBytes <-
           readRawLoopbackHttpResponse
@@ -6810,6 +6846,28 @@ spec = do
         -- with its stable parser-level 400. The WAI gate supplies 431 for the
         -- count and individual-value limits it can inspect.
         responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "400 Bad Request"
+
+    it "closes an incomplete request that makes no configured network progress" $ do
+      let limitedApplication =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              ( defaultRequestPolicy
+                  { requestTransportLimits =
+                      warpDefaultRequestTransportLimits
+                        { requestNetworkTimeout = requestTimeoutSeconds 1,
+                          requestSlowlorisByteLimit = requestByteLimit 2
+                        }
+                  }
+              )
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        clientSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+        socketResult <- try $ do
+          Socket.connect clientSocket (Socket.SockAddrInet (fromIntegral (localServerPort localTestServer)) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+          SocketByteString.sendAll clientSocket "G"
+          threadDelay 2500000
+          SocketByteString.recv clientSocket 1
+        Socket.close clientSocket
+        socketResult `shouldBe` (Right ByteString.empty :: Either IOError ByteString.ByteString)
 
   describe "withLocalTestServerForApplication" $ do
     it "serves an already-built Wai.Application over a real loopback HTTP listener" $

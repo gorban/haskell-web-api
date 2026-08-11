@@ -85,6 +85,8 @@ import HarchWeb
     RequestHeaderCountLimit,
     RequestItemCountLimit,
     RequestPolicyConfig (..),
+    RequestTimeoutSeconds,
+    RequestTransportLimits (..),
     ResponseSecurityHeadersConfig (..),
     ServerConfig (..),
     StaticAssetRoot (..),
@@ -102,7 +104,9 @@ import HarchWeb
     mkRequestHeaderCountLimit,
     requestByteLimit,
     requestItemCountLimit,
+    requestTimeoutSeconds,
     unboundedRequestHeadLimits,
+    warpDefaultRequestTransportLimits,
   )
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
@@ -313,6 +317,7 @@ defaultAppConfig =
             strictTransportSecurity = Nothing,
             trustForwardedHeaders = False,
             requestHeadLimits = unboundedRequestHeadLimits,
+            requestTransportLimits = warpDefaultRequestTransportLimits,
             corsPolicy = defaultCorsPolicyConfig,
             responseSecurityHeaders = defaultResponseSecurityHeadersConfig
           },
@@ -703,6 +708,7 @@ parseRequestPolicyConfigP parsedListeners =
     <*> parseOptionalStrictTransportSecurityP
     <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
     <*> parseRequestHeadLimitsP
+    <*> parseRequestTransportLimitsP
     <*> parseCorsPolicyConfigP
     <*> parseResponseSecurityHeadersConfigP
 
@@ -722,11 +728,23 @@ parseRequestHeadLimitsP =
     <*> parseOptionalRequestItemCountLimitP "REQUEST_QUERY_FIELD_MAX_COUNT"
     <*> parseOptionalRequestByteLimitP "REQUEST_QUERY_FIELD_MAX_BYTES"
 
+parseRequestTransportLimitsP :: ConfigParser RequestTransportLimits
+parseRequestTransportLimitsP =
+  RequestTransportLimits
+    <$> parseOptionalRequestTimeoutSecondsP "REQUEST_NETWORK_TIMEOUT_SECONDS"
+    <*> parseOptionalRequestByteLimitP "REQUEST_SLOWLORIS_MAX_BYTES"
+
 parseOptionalRequestByteLimitP :: Text -> ConfigParser (Maybe RequestByteLimit)
 parseOptionalRequestByteLimitP key = do
   maybeValue <- optionalConfigValueP key
   parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
   pure (parsedValue >>= requestByteLimit)
+
+parseOptionalRequestTimeoutSecondsP :: Text -> ConfigParser (Maybe RequestTimeoutSeconds)
+parseOptionalRequestTimeoutSecondsP key = do
+  maybeValue <- optionalConfigValueP key
+  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
+  pure (parsedValue >>= requestTimeoutSeconds)
 
 parseOptionalRequestHeaderCountLimitP :: Text -> ConfigParser (Maybe RequestHeaderCountLimit)
 parseOptionalRequestHeaderCountLimitP key = do

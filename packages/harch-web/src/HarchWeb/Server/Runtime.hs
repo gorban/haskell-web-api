@@ -18,16 +18,16 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Acme
-import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestHeadLimits, stopAcmeRuntimeServers)
+import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits)
+import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
 import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.Transport
-  ( startHttpRuntimeServersWithRequestHeadLimits,
-    startManualTlsRuntimeServersWithRequestHeadLimits,
+  ( startHttpRuntimeServersWithRequestTransportLimits,
+    startManualTlsRuntimeServersWithRequestTransportLimits,
     stopRuntimeServers,
   )
 import Network.Wai qualified as Wai
@@ -79,18 +79,21 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
   challengeStore <- AcmeChallengeStore <$> newMVar []
   let runtimeApplication = toRuntimeWaiApplication waiMiddleware challengeStore webApplication
       connectionReporter = reportConnectionObservability webApplication
+      runtimeRequestPolicy = requestPolicy (toServerConfig config)
+      runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
+      runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
   connectionReporter `seq`
     observabilityPlan `seq`
       bracket
-        (startHttpRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
+        (startHttpRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (httpEndpoints (httpBindPlan startupPlan)) runtimeApplication)
         stopRuntimeServers
         ( \httpServers ->
             bracket
-              (startAcmeRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
+              (startAcmeRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
               stopAcmeRuntimeServers
               ( \acmeServers ->
                   bracket
-                    (startManualTlsRuntimeServersWithRequestHeadLimits (requestHeadLimits (requestPolicy (toServerConfig config))) (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
+                    (startManualTlsRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (manualTlsBindPlans startupPlan) runtimeApplication connectionReporter)
                     stopRuntimeServers
                     ( \manualTlsServers ->
                         httpServers `seq`

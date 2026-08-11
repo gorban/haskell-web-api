@@ -50,6 +50,7 @@ import HarchWeb
     replaceRegion,
     serverSentEventSourceFromList,
     unboundedRequestHeadLimits,
+    warpDefaultRequestTransportLimits,
   )
 import HarchWeb.Action (decodeAction)
 import HarchWeb.Site
@@ -260,6 +261,7 @@ twoPageRequestPolicy =
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
+      requestTransportLimits = warpDefaultRequestTransportLimits,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
