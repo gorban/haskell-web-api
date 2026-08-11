@@ -573,10 +573,16 @@ driveMultipartConsumer consumer !scanner !currentPart !partCount !bodyBytesRead 
       [] -> throwError MultipartTruncatedBody
       finalEvents -> consumeMultipartEvents consumer finalEvents scanner currentPart partCount bodyBytesRead True
     else do
-      let bodyBytesRead' = bodyBytesRead + ByteString.length chunk
-      when (bodyBytesRead' > multipartLimitsMaxBodyBytes (multipartConsumerLimits consumer)) (throwError MultipartBodyTooLarge)
+      let chunkBytes = ByteString.length chunk
+      when
+        ( exceedsMultipartLimit
+            (multipartLimitsMaxBodyBytes (multipartConsumerLimits consumer))
+            bodyBytesRead
+            chunkBytes
+        )
+        (throwError MultipartBodyTooLarge)
       let (events, scanner') = feedMultipartChunk scanner chunk
-      consumeMultipartEvents consumer events scanner' currentPart partCount bodyBytesRead' False
+      consumeMultipartEvents consumer events scanner' currentPart partCount (bodyBytesRead + chunkBytes) False
 
 consumeMultipartEvents ::
   MultipartConsumer stored ->
@@ -654,19 +660,29 @@ appendMultipartPartBytes ::
 appendMultipartPartBytes consumer accumulator bodyBytes =
   case accumulator of
     FieldAccumulator fieldName buffered ->
-      let grown = buffered <> bodyBytes
-       in if ByteString.length grown > multipartLimitsMaxFieldBytes (multipartConsumerLimits consumer)
+      if
+          exceedsMultipartLimit
+            (multipartLimitsMaxFieldBytes (multipartConsumerLimits consumer))
+            (ByteString.length buffered)
+            (ByteString.length bodyBytes)
             then throwError (MultipartFieldTooLarge fieldName)
-            else pure (FieldAccumulator fieldName grown)
+            else pure (FieldAccumulator fieldName (buffered <> bodyBytes))
     FileAccumulator fieldName filename stagedUpload bytesWritten ->
-      let bytesWritten' = bytesWritten + ByteString.length bodyBytes
-       in if bytesWritten' > multipartLimitsMaxFileBytes (multipartConsumerLimits consumer)
+      if
+            exceedsMultipartLimit
+              (multipartLimitsMaxFileBytes (multipartConsumerLimits consumer))
+              bytesWritten
+              (ByteString.length bodyBytes)
             then do
               liftIO (discardActiveMultipartUpload (multipartConsumerActiveUploadReference consumer))
               throwError (MultipartFileTooLarge fieldName)
             else do
               liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
-              pure (FileAccumulator fieldName filename stagedUpload bytesWritten')
+              pure (FileAccumulator fieldName filename stagedUpload (bytesWritten + ByteString.length bodyBytes))
+
+exceedsMultipartLimit :: Int -> Int -> Int -> Bool
+exceedsMultipartLimit maximumBytes current increment =
+  toInteger current + toInteger increment > toInteger maximumBytes
 
 finalizeMultipartPart :: MultipartConsumer stored -> PartAccumulator stored -> IO (MultipartPartWith stored)
 finalizeMultipartPart consumer accumulator =
