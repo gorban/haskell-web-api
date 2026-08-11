@@ -277,6 +277,17 @@ spec =
         body <- readResponseBody response
         body `shouldBe` "inner application"
 
+      it "handles malformed method and path bytes without crashing the middleware" $ do
+        malformedMethodResponse <- performWaiRequest (middleware innerApplication) (waiRequestFor "\xFF" "/api/status")
+        malformedPathResponse <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/api/\xFF")
+        malformedPathBody <- readResponseBody malformedPathResponse
+        expectAll
+          ( (Wai.responseStatus malformedMethodResponse `shouldBe` HttpTypes.status405)
+              :| [ Wai.responseStatus malformedPathResponse `shouldBe` HttpTypes.status200,
+                   malformedPathBody `shouldBe` "inner application"
+                 ]
+          )
+
       it "forwards a target's overridden status through to the real WAI response" $ do
         let invalidMiddleware =
               apiEndpointMiddleware
