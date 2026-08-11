@@ -180,7 +180,7 @@ spec =
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData
                 { apiRequestQueryParameters = [("q", "hello")],
-                  apiRequestHeaders = [("x-custom", "value")]
+                  apiRequestHeaders = [(apiHeaderName "x-custom", "value")]
                 }
 
       it "decodes a flag-style query parameter with no value as empty rather than dropping it" $
@@ -289,7 +289,7 @@ spec =
       let sampleRequestData =
             ApiRequestData
               { apiRequestQueryParameters = [("q", "hello"), ("dup", "one"), ("dup", "two")],
-                apiRequestHeaders = [("X-Token", "secret"), ("X-Bad", "")]
+                apiRequestHeaders = [(apiHeaderName "X-Token", "secret"), (apiHeaderName "X-Bad", "")]
               }
 
       it "decodes a required, present field from its declared source" $
@@ -297,8 +297,25 @@ spec =
           `shouldBe` ([], Just "hello")
 
       it "decodes a required header field" $
-        runRequestCodec (requiredField (headerField "X-Token" apiTextValue)) sampleRequestData
+        runRequestCodec (requiredField (headerField (apiHeaderName "X-Token") apiTextValue)) sampleRequestData
           `shouldBe` ([], Just "secret")
+
+      it "canonicalizes header names for equality and diagnostics" $
+        let declaredName = apiHeaderName "X-Token"
+         in expectAll
+              ( (declaredName `shouldBe` apiHeaderName "x-token")
+                  :| [ declaredName `shouldNotBe` apiHeaderName "x-other",
+                       apiHeaderNameText declaredName `shouldBe` "x-token",
+                       length (show declaredName) + length (showList [declaredName] "") `shouldSatisfy` (> 0)
+                     ]
+              )
+
+      it "matches declared and extracted header names case-insensitively" $
+        let request = Wai.defaultRequest {Wai.requestHeaders = [("X-Token", "secret")]}
+         in runRequestCodec
+              (requiredField (headerField (apiHeaderName "x-TOKEN") apiTextValue))
+              (apiRequestDataFromWaiRequest request)
+              `shouldBe` ([], Just "secret")
 
       it "reports a missing required field" $
         runRequestCodec (requiredField (queryField "missing" apiTextValue)) sampleRequestData
@@ -342,10 +359,10 @@ spec =
         runRequestCodec
           ( (,)
               <$> requiredField (queryField "missing" apiTextValue)
-              <*> requiredField (headerField "X-Missing" apiTextValue)
+              <*> requiredField (headerField (apiHeaderName "X-Missing") apiTextValue)
           )
           sampleRequestData
-          `shouldBe` ( [MissingApiField ApiQuerySource "missing", MissingApiField ApiHeaderSource "X-Missing"],
+          `shouldBe` ( [MissingApiField ApiQuerySource "missing", MissingApiField ApiHeaderSource "x-missing"],
                        Nothing
                      )
 

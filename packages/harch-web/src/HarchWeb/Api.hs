@@ -32,6 +32,9 @@ module HarchWeb.Api
     apiRequestDataFromWaiRequest,
     ApiRequestSource (..),
     ApiRequestParseError (..),
+    ApiHeaderName,
+    apiHeaderName,
+    apiHeaderNameText,
     ApiFieldValue,
     RequestField,
     RequestCodec,
@@ -289,7 +292,7 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
 -- and headers are supported today.
 data ApiRequestData = ApiRequestData
   { apiRequestQueryParameters :: [(Text, Text)],
-    apiRequestHeaders :: [(Text, Text)]
+    apiRequestHeaders :: [(ApiHeaderName, Text)]
   }
   deriving (Eq, Show)
 
@@ -305,7 +308,7 @@ apiRequestDataFromWaiRequest request =
         | (name, value) <- Wai.queryString request
         ],
       apiRequestHeaders =
-        [ (decodeUtf8Leniently (CaseInsensitive.foldedCase name), decodeUtf8Leniently value)
+        [ (apiHeaderName (decodeUtf8Leniently (CaseInsensitive.foldedCase name)), decodeUtf8Leniently value)
         | (name, value) <- Wai.requestHeaders request
         ]
     }
@@ -327,6 +330,18 @@ data ApiRequestParseError
   | DuplicateApiField ApiRequestSource Text
   | InvalidApiField ApiRequestSource Text
   deriving (Eq, Show)
+
+-- | A case-insensitive HTTP header field name. Construct it with
+-- 'apiHeaderName' at the declaration boundary; WAI-extracted names use the
+-- same canonical form, so a declaration never depends on header casing.
+newtype ApiHeaderName = ApiHeaderName Text
+  deriving (Eq, Show)
+
+apiHeaderName :: Text -> ApiHeaderName
+apiHeaderName = ApiHeaderName . Text.toCaseFold
+
+apiHeaderNameText :: ApiHeaderName -> Text
+apiHeaderNameText (ApiHeaderName name) = name
 
 newtype ApiFieldValue value = ApiFieldValue
   { runApiFieldValue :: Text -> Maybe value
@@ -356,7 +371,7 @@ sourceFields :: ApiRequestSource -> ApiRequestData -> [(Text, Text)]
 sourceFields source requestData =
   case source of
     ApiQuerySource -> apiRequestQueryParameters requestData
-    ApiHeaderSource -> apiRequestHeaders requestData
+    ApiHeaderSource -> [(apiHeaderNameText name, value) | (name, value) <- apiRequestHeaders requestData]
 
 requestField :: ApiRequestSource -> Text -> ApiFieldValue value -> RequestField value
 requestField source fieldName valueDecoder =
@@ -374,9 +389,10 @@ requestField source fieldName valueDecoder =
 queryField :: Text -> ApiFieldValue value -> RequestField value
 queryField = requestField ApiQuerySource
 
--- | Declare a field sourced from the request's headers.
-headerField :: Text -> ApiFieldValue value -> RequestField value
-headerField = requestField ApiHeaderSource
+-- | Declare a field sourced from the request's headers. 'ApiHeaderName'
+-- keeps comparison case-insensitive at the declaration boundary too.
+headerField :: ApiHeaderName -> ApiFieldValue value -> RequestField value
+headerField name = requestField ApiHeaderSource (apiHeaderNameText name)
 
 requiredField :: RequestField value -> RequestCodec value
 requiredField (RequestField decode) = requestCodec decode
