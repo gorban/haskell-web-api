@@ -10,6 +10,7 @@ module App.Api.Declarative
     GreetingResponse (..),
     declarativeApiEndpoints,
     declarativeApiApplication,
+    renderGreetingWith,
   )
 where
 
@@ -18,7 +19,6 @@ import Data.Aeson.Types qualified as Aeson.Types
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef qualified as IORef
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -77,7 +77,12 @@ greetingFor name = GreetingResponse ("Hello, " <> name <> "!")
 -- application-defined @text/x-greeting@ media type, declared only for this
 -- endpoint.
 renderGreeting :: Wai.Request -> GreetingResponse -> ApiResponseBody
-renderGreeting request greeting =
+renderGreeting = renderGreetingWith (apiMediaType "text/x-greeting")
+
+renderGreetingWith :: Maybe ApiMediaType -> Wai.Request -> GreetingResponse -> ApiResponseBody
+renderGreetingWith Nothing _request _greeting =
+  (apiTextResponse "API representation configuration is invalid") {apiResponseStatus = 500}
+renderGreetingWith (Just greetingMediaType) request greeting =
   case selectRepresentation (jsonMediaType :| [greetingMediaType]) acceptHeaderText of
     SelectedRepresentation selectedMediaType
       | selectedMediaType == greetingMediaType ->
@@ -85,9 +90,6 @@ renderGreeting request greeting =
     _ -> (apiBytesResponse $! "application/json; charset=utf-8") (LazyByteString.toStrict (Aeson.encode (encodeGreetingResponse greeting)))
   where
     acceptHeaderText = requestHeaderText HttpTypes.hAccept request
-
-greetingMediaType :: ApiMediaType
-greetingMediaType = fromMaybe plainTextMediaType (apiMediaType "text/x-greeting")
 
 handleGreetingTarget :: Wai.Request -> GreetingTarget -> IO ApiResponseBody
 handleGreetingTarget request ReadGreeting =
