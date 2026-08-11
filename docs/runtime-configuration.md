@@ -121,25 +121,28 @@ limits and are intentionally not run by the test suite.
 
 ### Manual rootless Podman containment drill
 
-On a cgroup-v2, rootless Podman host, perform this only as a manual deployment drill. It starts a
-named disposable container with no network, a read-only root filesystem, no swap beyond the 32 MiB
-memory ceiling, and a small process ceiling. The `awk` program deliberately grows beyond the cgroup
+On a cgroup-v2, rootless Podman host, perform this only as a manual deployment drill. The August 2026
+verification used Podman 5.8.4 with the systemd cgroup manager and `crun`. It starts a named
+disposable container with no network, a read-only root filesystem, no swap beyond the 32 MiB memory
+ceiling, and a small process ceiling. The Python allocation deliberately grows beyond the cgroup
 budget; it is not an application request test.
 
 ```sh
 podman run --name harch-web-oom-probe --network none --read-only \
   --memory 32m --memory-swap 32m --pids-limit 32 \
-  registry.fedoraproject.org/fedora:latest \
-  sh -c 'awk "BEGIN { value = \"x\"; while (length(value) < 134217728) value = value value; print length(value) }"'
-podman inspect harch-web-oom-probe --format 'OOMKilled={{.State.OOMKilled}} ExitCode={{.State.ExitCode}}'
+  docker.io/library/python:3.12-alpine \
+  python -c 'payload = bytearray(128 * 1024 * 1024); print(len(payload))'
+podman inspect harch-web-oom-probe --format '{{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}}'
 podman rm harch-web-oom-probe
 ```
 
-The August 2026 local drill returned `OOMKilled=true` and exit `137`. This host did not expose a
-container cgroup path after the process exited, so `memory.events` was unavailable; inspect it when
-your Podman/cgroup setup provides one. Remove the named probe even after a failure. An OOM kill is
-observable emergency containment that abandons all work in that container, not graceful per-request
-admission control.
+The verification returned `exited exit=137 oom=true`. The host's root `memory.events` was readable,
+but rootless Podman with systemd reported a namespace-relative container cgroup path, so its
+per-container `memory.events` was not directly available from the host shell after exit. Where your
+Podman/cgroup setup maps that path into the host hierarchy, inspect `memory.events` before and after
+the allocation as an additional signal. Always remove the named probe, including after a failed
+command. An OOM kill is observable emergency containment that abandons all work in that container,
+not graceful per-request admission control.
 
 ## Minimal local overrides
 
