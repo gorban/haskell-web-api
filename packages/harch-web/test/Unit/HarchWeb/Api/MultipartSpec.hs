@@ -921,11 +921,11 @@ spec =
               defaultMultipartLimits
               request
               $ \case
-              MultipartScopedFieldPart _ _ -> pure (Right ())
-              MultipartScopedFilePart _ _ upload _ -> do
-                promoted <- promoteMultipartUpload upload
-                IORef.writeIORef promotedReference promoted
-                pure (Right ())
+                MultipartScopedFieldPart _ _ -> pure (Right ())
+                MultipartScopedFilePart _ _ upload _ -> do
+                  promoted <- promoteMultipartUpload upload
+                  IORef.writeIORef promotedReference promoted
+                  pure (Right ())
           maybePath <- IORef.readIORef promotedReference
           case maybePath of
             Nothing -> expectationFailure "expected the callback to promote its upload"
