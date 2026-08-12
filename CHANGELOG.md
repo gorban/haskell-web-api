@@ -9,7 +9,9 @@
 3. Switched the first-party `web-api` composition root onto that `HarchWeb.Site` path while preserving current page/API behavior and keeping the route-aware shell output stable under the existing test suite.
 4. Replaced destructive client-action queue draining with retained, control-local capture ownership and
    visible pending/recoverable/cancelled states; native action submission is now an explicit capability.
-5. Added `HarchWeb.Api`: a declarative, method-aware `ApiEndpoint` declaration with path/method matching,
+5. Added `HarchWeb.Api`: low-level `ApiEndpoint` compatibility matching plus a shared-route
+   `apiRouteEndpoint` declaration with typed request values, one declared body consumer, typed response
+   encoders, RFC 9110 `Accept` selection, `Vary: Accept`, and `406` for incompatible representations;
    request/response codecs, `Content-Type`-selected request-body decoding, RFC 9110 `Accept` negotiation,
    and `apiEndpointMiddleware`, an opt-in `Wai.Middleware` an application wraps around its own
    `Wai.Application` to dispatch declared paths. Added `HarchWeb.Api.Multipart`, a bounded, incremental

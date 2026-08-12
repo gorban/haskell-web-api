@@ -284,8 +284,8 @@ enforces a byte limit before decoding, and distinguishes an unsupported media ty
 body (`413`), and a malformed body (`400`) from a successful decode; `MissingContentTypePolicy` lets each
 endpoint decide whether a missing header is rejected or resolved to a declared default.
 `selectRepresentation` negotiates a response media type from a server-preference-ordered list and an
-optional `Accept` header per RFC 9110 §12.5.1 (quality weights, wildcards, specificity precedence, `q=0`
-exclusion, `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
+optional `Accept` header per RFC 9110 §12.5.1 (bounded three-decimal quality values, wildcards,
+specificity precedence, `q=0` exclusion, and `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
 transport-agnostic `ApiHttpResponse` (status, headers, optional body): `404`/`405`+`Allow` for the two
 non-matching outcomes, and the matched target's rendered status/`Content-Type` otherwise, with the body
 omitted for a `HEAD` match. A target's `ApiResponseBody` carries its own `apiResponseStatus`, defaulted
@@ -320,8 +320,11 @@ enforced the table's method policy, so API declarations cannot create competing 
 `OPTIONS` behaviour. Fields are validated before a body reader runs; rejected fields return a stable
 400 without consuming the body. A bounded buffered decoder maps oversized, unsupported-media, and
 malformed input to 413, 415, and 400 respectively, and passes expected domain failures through the
-endpoint's explicit interpreter. Streaming codecs and representation negotiation remain AC follow-up
-work; multipart storage and ownership remain AD work.
+endpoint's explicit interpreter. Endpoint handlers return a typed `ApiResponse`; the declaration's
+non-empty `ApiResponseEncoder` list selects and encodes an acceptable representation, sends its
+`Content-Type`, preserves application status and headers, adds or merges `Vary: Accept` when alternatives
+exist, and returns 406 for an explicitly incompatible `Accept`. Streaming codecs remain AC follow-up work;
+multipart storage and ownership remain AD work.
 
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
@@ -334,9 +337,10 @@ first delivered portion of the decision: an application wrapper can no longer ch
 method table. `ProtocolResponseResult` supplies the response half of that boundary: strict bytes or a
 request-scoped WAI stream retain normal response security, diagnostics, and observability. The next
 delivered portion adds `apiRouteEndpoint`/`apiRouteDefinition`: typed API fields and one bounded buffered
-body consumer now run inside that same route table and response interpreter. A closed route-family
-registry, cookie/form fields, streaming codecs, and full response representation negotiation remain AC
-steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
+body consumer now run inside that same route table and response interpreter. Typed response values now use
+declarative JSON, text, byte, or custom encoders with RFC 9110 `Accept` selection and `Vary: Accept`.
+A closed route-family registry, cookie/form fields, response media-range parameter matching, and streaming
+codecs remain AC steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
 follow AD; an API route may select it but does not change its lifecycle policy.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make

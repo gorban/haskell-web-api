@@ -10,6 +10,7 @@ module HarchWeb.Api.Negotiation
   )
 where
 
+import Data.Char (isAscii, isDigit)
 import Data.List (foldl1')
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
@@ -43,12 +44,13 @@ parseAcceptEntry entry =
    in do
         (typeText, subtypeText) <- parseMediaRange (Text.strip mediaRangeText)
         let parameters = Maybe.mapMaybe parseAcceptParameter parameterTexts
+        quality <- qualityFromParameters parameters
         pure
           AcceptedRange
             { acceptedRangeType = Text.toLower typeText,
               acceptedRangeSubtype = Text.toLower subtypeText,
               acceptedRangeParameters = filter ((/= "q") . fst) parameters,
-              acceptedRangeQuality = qualityFromParameters parameters
+              acceptedRangeQuality = quality
             }
 
 parseAcceptParameter :: Text -> Maybe (Text, Text)
@@ -60,14 +62,32 @@ parseAcceptParameter parameterText =
           Just (Text.toLower name, Text.strip (Text.drop 1 value))
     _ -> Nothing
 
-qualityFromParameters :: [(Text, Text)] -> Double
+qualityFromParameters :: [(Text, Text)] -> Maybe Double
 qualityFromParameters parameters =
   case lookup "q" parameters of
-    Nothing -> 1.0
-    Just qualityText ->
-      case TextRead.double qualityText of
-        Right (qualityValue, _) -> qualityValue
-        Left _ -> 1.0
+    Nothing -> Just 1.0
+    Just qualityText -> parseQuality qualityText
+
+parseQuality :: Text -> Maybe Double
+parseQuality qualityText =
+  case Text.splitOn "." qualityText of
+    ["0"] -> Just 0.0
+    ["0", fraction] | validFraction fraction -> parseFraction fraction
+    ["1"] -> Just 1.0
+    ["1", fraction] | validFraction fraction, Text.all (== '0') fraction -> Just 1.0
+    _ -> Nothing
+
+validFraction :: Text -> Bool
+validFraction fraction = Text.length fraction <= 3 && Text.all isAsciiDigit fraction
+
+parseFraction :: Text -> Maybe Double
+parseFraction fraction =
+  case TextRead.double ("0." <> fraction) of
+    Right (quality, "") -> Just quality
+    _ -> Nothing
+
+isAsciiDigit :: Char -> Bool
+isAsciiDigit character = isAscii character && isDigit character
 
 mediaRangeSpecificity :: AcceptedRange -> Int
 mediaRangeSpecificity range

@@ -9,6 +9,12 @@ module HarchWeb.Api.Response
     jsonBodyDecoder,
     textBodyDecoder,
     bytesBodyDecoder,
+    ApiResponse (..),
+    apiResponse,
+    ApiResponseEncoder (..),
+    jsonResponseEncoder,
+    textResponseEncoder,
+    bytesResponseEncoder,
     ApiResponseBody (..),
     apiJsonResponse,
     apiTextResponse,
@@ -48,6 +54,50 @@ data ApiBodyOutcome request
   | ApiMalformedBody
   | ApiDecodedBody request
   deriving (Eq, Show)
+
+-- | A typed endpoint result before its representation is selected. Status and
+-- headers are application data; encoding remains declared by the endpoint.
+data ApiResponse response = ApiResponse
+  { apiEndpointResponseStatus :: HttpTypes.Status,
+    apiEndpointResponseHeaders :: [(Text, Text)],
+    apiEndpointResponseValue :: response
+  }
+
+-- | Construct an ordinary successful API result without application headers.
+apiResponse :: response -> ApiResponse response
+apiResponse responseValue =
+  ApiResponse
+    { apiEndpointResponseStatus = HttpTypes.status200,
+      apiEndpointResponseHeaders = [],
+      apiEndpointResponseValue = responseValue
+    }
+
+-- | One declared way to render a typed API result.
+data ApiResponseEncoder response = ApiResponseEncoder
+  { apiResponseEncoderContentType :: ApiContentType,
+    apiResponseEncoderEncode :: response -> ByteString
+  }
+
+jsonResponseEncoder :: (ToJSON response) => ApiResponseEncoder response
+jsonResponseEncoder =
+  ApiResponseEncoder
+    { apiResponseEncoderContentType = jsonContentType,
+      apiResponseEncoderEncode = LazyByteString.toStrict . Aeson.encode
+    }
+
+textResponseEncoder :: ApiResponseEncoder Text
+textResponseEncoder =
+  ApiResponseEncoder
+    { apiResponseEncoderContentType = plainTextContentType,
+      apiResponseEncoderEncode = TextEncoding.encodeUtf8
+    }
+
+bytesResponseEncoder :: ApiContentType -> ApiResponseEncoder ByteString
+bytesResponseEncoder contentType =
+  ApiResponseEncoder
+    { apiResponseEncoderContentType = contentType,
+      apiResponseEncoderEncode = id
+    }
 
 -- | Select a declared decoder by the request's @Content-Type@ (ignoring its
 -- parameters) and run it against an already-bounded body. Never reads more
@@ -113,6 +163,7 @@ bytesBodyDecoder mediaType =
 data ApiResponseBody = ApiResponseBody
   { apiResponseStatus :: HttpTypes.Status,
     apiResponseContentType :: ApiContentType,
+    apiResponseHeaders :: [(Text, Text)],
     apiResponseBodyBytes :: ByteString
   }
   deriving (Eq, Show)
@@ -122,6 +173,7 @@ apiJsonResponse value =
   ApiResponseBody
     { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = jsonContentType,
+      apiResponseHeaders = [],
       apiResponseBodyBytes = LazyByteString.toStrict (Aeson.encode value)
     }
 
@@ -130,6 +182,7 @@ apiTextResponse bodyText =
   ApiResponseBody
     { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = plainTextContentType,
+      apiResponseHeaders = [],
       apiResponseBodyBytes = TextEncoding.encodeUtf8 bodyText
     }
 
@@ -138,5 +191,6 @@ apiBytesResponse contentType bodyBytes =
   ApiResponseBody
     { apiResponseStatus = HttpTypes.status200,
       apiResponseContentType = contentType,
+      apiResponseHeaders = [],
       apiResponseBodyBytes = bodyBytes
     }

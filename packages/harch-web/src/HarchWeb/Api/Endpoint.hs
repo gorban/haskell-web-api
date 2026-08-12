@@ -38,7 +38,9 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb qualified
-import HarchWeb.Api.MediaType (apiContentTypeText)
+import HarchWeb.Api.MediaType (ApiMediaType, apiContentTypeText)
+import HarchWeb.Api.MediaType qualified as MediaType
+import HarchWeb.Api.Negotiation
 import HarchWeb.Api.Request
 import HarchWeb.Api.Response
 import HarchWeb.Server.RequestBody
@@ -89,15 +91,16 @@ apiEndpoint = ApiEndpoint
 -- table. It owns field decoding, exactly one declared body consumer, domain
 -- failure interpretation, and the response representation. Path matching and
 -- method policy remain owned by 'HarchWeb.Routing.RouteCodec'.
-data ApiRouteEndpoint fields body domainFailure where
+data ApiRouteEndpoint fields body domainFailure response where
   ApiRouteEndpoint ::
     { apiRouteEndpointMethod :: ApiMethod,
       apiRouteEndpointFields :: RequestCodec fields,
       apiRouteEndpointBody :: ApiRequestBody body,
-      apiRouteEndpointHandler :: ApiEndpointRequest fields body -> IO (Either domainFailure ApiResponseBody),
-      apiRouteEndpointFailureResponse :: domainFailure -> ApiResponseBody
+      apiRouteEndpointEncoders :: NonEmpty (ApiResponseEncoder response),
+      apiRouteEndpointHandler :: ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response)),
+      apiRouteEndpointFailureResponse :: domainFailure -> ApiResponse response
     } ->
-    ApiRouteEndpoint fields body domainFailure
+    ApiRouteEndpoint fields body domainFailure response
 
 -- | Cohesive decoded input supplied to an endpoint handler.
 data ApiEndpointRequest fields body = ApiEndpointRequest
@@ -121,15 +124,16 @@ apiRouteEndpoint ::
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
-  (ApiEndpointRequest fields body -> IO (Either domainFailure ApiResponseBody)) ->
-  (domainFailure -> ApiResponseBody) ->
-  ApiRouteEndpoint fields body domainFailure
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint fields body domainFailure response
 apiRouteEndpoint = ApiRouteEndpoint
 
 -- | Convert a declaration into one entry in a 'RouteDefinition' table. The
 -- server has already selected the route and method before this runs, so it
 -- cannot produce a competing 404/405/HEAD/OPTIONS policy.
-apiRouteDefinition :: ApiRouteEndpoint fields body domainFailure -> RouteDefinition route context
+apiRouteDefinition :: ApiRouteEndpoint fields body domainFailure response -> RouteDefinition route context
 apiRouteDefinition endpoint =
   RouteDefinition
     { routeNavigationLabel = Nothing,
@@ -137,7 +141,7 @@ apiRouteDefinition endpoint =
       routeResponse = \request _ -> runApiRouteEndpoint endpoint request
     }
 
-runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure -> Wai.Request -> IO (HarchWeb.Response route context)
+runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (HarchWeb.Response route context)
 runApiRouteEndpoint endpoint request =
   case runRequestCodec (apiRouteEndpointFields endpoint) (apiRequestDataFromWaiRequest request) of
     ([], Just decodedFields) -> decodeBody decodedFields (apiRouteEndpointBody endpoint)
@@ -159,16 +163,60 @@ runApiRouteEndpoint endpoint request =
 
     runHandler decodedFields decodedBody = do
       handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
-      pure $
-        case handlerResult of
-          Left domainFailure -> apiResponseBodyToResponse (apiRouteEndpointFailureResponse endpoint domainFailure)
-          Right responseBody -> apiResponseBodyToResponse responseBody
+      pure (renderEndpointResult endpoint request (either (apiRouteEndpointFailureResponse endpoint) id handlerResult))
 
 contentType :: Wai.Request -> Maybe Text
 contentType request =
   case [value | (name, value) <- apiRequestHeaders (apiRequestDataFromWaiRequest request), name == apiHeaderName "content-type"] of
     [value] -> Just value
     _ -> Nothing
+
+acceptHeader :: Wai.Request -> Maybe Text
+acceptHeader request =
+  case [value | (name, value) <- apiRequestHeaders (apiRequestDataFromWaiRequest request), name == apiHeaderName "accept"] of
+    [value] -> Just value
+    _ -> Nothing
+
+renderEndpointResult :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> ApiResponse response -> HarchWeb.Response route context
+renderEndpointResult endpoint request responseValue =
+  case selectRepresentation declaredMediaTypes (acceptHeader request) of
+    NoAcceptableRepresentation -> apiFailureResponse HttpTypes.status406 "API response has no acceptable representation."
+    SelectedRepresentation selectedMediaType ->
+      apiResponseBodyToResponse
+        ApiResponseBody
+          { apiResponseStatus = apiEndpointResponseStatus responseValue,
+            apiResponseContentType = apiResponseEncoderContentType selectedEncoder,
+            apiResponseHeaders = endpointResponseHeaders endpoint responseValue,
+            apiResponseBodyBytes = apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)
+          }
+      where
+        selectedEncoder = responseEncoderFor selectedMediaType (apiRouteEndpointEncoders endpoint)
+  where
+    declaredMediaTypes = MediaType.apiContentTypeMediaType . apiResponseEncoderContentType <$> apiRouteEndpointEncoders endpoint
+
+responseEncoderFor :: ApiMediaType -> NonEmpty (ApiResponseEncoder response) -> ApiResponseEncoder response
+responseEncoderFor selectedMediaType encoders =
+  foldr preferEncoder (NonEmpty.head encoders) (NonEmpty.tail encoders)
+  where
+    preferEncoder candidate fallback
+      | MediaType.apiContentTypeMediaType (apiResponseEncoderContentType candidate) == selectedMediaType = candidate
+      | otherwise = fallback
+
+endpointResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -> ApiResponse response -> [(Text, Text)]
+endpointResponseHeaders endpoint responseValue
+  | length (apiRouteEndpointEncoders endpoint) > 1 = addVaryAccept (apiEndpointResponseHeaders responseValue)
+  | otherwise = apiEndpointResponseHeaders responseValue
+
+addVaryAccept :: [(Text, Text)] -> [(Text, Text)]
+addVaryAccept headers =
+  case break ((== "vary") . Text.toCaseFold . fst) headers of
+    (_, []) -> headers <> [("Vary", "Accept")]
+    (beforeVary, (name, value) : afterVary) -> beforeVary <> [(name, varyValueWithAccept value)] <> afterVary
+
+varyValueWithAccept :: Text -> Text
+varyValueWithAccept value
+  | any ((== "accept") . Text.toCaseFold . Text.strip) (Text.splitOn "," value) = value
+  | otherwise = value <> ", Accept"
 
 apiFailureResponse :: HttpTypes.Status -> Text -> HarchWeb.Response route context
 apiFailureResponse status bodyText =
@@ -261,7 +309,7 @@ renderedApiResponse :: ApiResponseBody -> ApiHttpResponse
 renderedApiResponse body =
   ApiHttpResponse
     { apiHttpResponseStatus = apiResponseStatus body,
-      apiHttpResponseHeaders = [("Content-Type", apiContentTypeText (apiResponseContentType body))],
+      apiHttpResponseHeaders = ("Content-Type", apiContentTypeText (apiResponseContentType body)) : apiResponseHeaders body,
       apiHttpResponseBody = Just body
     }
 

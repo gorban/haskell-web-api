@@ -11,6 +11,7 @@ module HarchWeb.Api.MediaType
     htmlMediaType,
     ApiContentType,
     apiContentType,
+    apiContentTypeMediaType,
     apiUtf8ContentType,
     apiContentTypeText,
     jsonContentType,
@@ -64,6 +65,10 @@ data ApiContentTypeCharset
 -- bytes whose encoding is application-defined or not textual.
 apiContentType :: ApiMediaType -> ApiContentType
 apiContentType mediaType = ApiContentType mediaType NoCharset
+
+-- | Recover the validated media type from a declared response content type.
+apiContentTypeMediaType :: ApiContentType -> ApiMediaType
+apiContentTypeMediaType (ApiContentType mediaType _) = mediaType
 
 -- | Declare that a textual response is encoded as UTF-8.
 apiUtf8ContentType :: ApiMediaType -> ApiContentType

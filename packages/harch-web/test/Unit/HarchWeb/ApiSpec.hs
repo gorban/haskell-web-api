@@ -97,7 +97,13 @@ apiRouteResponseBody response =
         ProtocolResponseStream _ -> error "expected API route to render strict protocol bytes"
     _ -> error "expected API route to render a protocol response"
 
-runApiRoute :: ApiRouteEndpoint fields body domainFailure -> Wai.Request -> IO (Response () ())
+apiRouteResponseHeaders :: Response route context -> HttpTypes.ResponseHeaders
+apiRouteResponseHeaders response =
+  case response of
+    ProtocolResponseResult protocolResponse -> protocolResponseHeaders protocolResponse
+    _ -> error "expected API route to render a protocol response"
+
+runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
 
@@ -239,23 +245,25 @@ spec =
               ApiPost
               requiredQuery
               ApiNoRequestBody
-              (pure . Right . apiTextResponse . apiEndpointRequestFields)
-              (\() -> apiTextResponse "unreachable")
+              (textResponseEncoder :| [])
+              (pure . Right . apiResponse . apiEndpointRequestFields)
+              (\() -> apiResponse "unreachable")
           domainFailureEndpoint =
             apiRouteEndpoint
               ApiGet
               (pure ())
               ApiNoRequestBody
+              (textResponseEncoder :| [])
               (const (pure (Left ())))
-              (\() -> (apiTextResponse "domain failure") {apiResponseStatus = HttpTypes.status422})
+              (\() -> (apiResponse "domain failure") {apiEndpointResponseStatus = HttpTypes.status422})
 
       it "declares its one method in the shared route table" $
         expectAll
           ( (routeMethods (apiRouteDefinition successfulEndpoint) `shouldBe` [HarchWeb.RoutePost])
               :| [ routeMethods (apiRouteDefinition domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RoutePut],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
-                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePut],
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (textResponseEncoder :| []) (const (pure (Right (apiResponse "")))) (\() -> apiResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
                  ]
           )
 
@@ -275,7 +283,10 @@ spec =
         response <- runApiRoute successfulEndpoint (Wai.defaultRequest {Wai.queryString = [("q", Just "accepted")]})
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
-              :| [apiRouteResponseBody response `shouldBe` "accepted"]
+              :| [ apiRouteResponseBody response `shouldBe` "accepted",
+                   lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8",
+                   lookup "Vary" (apiRouteResponseHeaders response) `shouldBe` Nothing
+                 ]
           )
 
       it "interprets expected domain failures at the endpoint boundary" $ do
@@ -291,8 +302,9 @@ spec =
                 ApiPost
                 (pure ())
                 (ApiBufferedRequestBody RejectMissingContentType 4 [textBodyDecoder])
-                (pure . Right . apiTextResponse . apiEndpointRequestBody)
-                (\() -> apiTextResponse "unreachable")
+                (textResponseEncoder :| [])
+                (pure . Right . apiResponse . apiEndpointRequestBody)
+                (\() -> apiResponse "unreachable")
         oversizedRequest <- requestWithBody [("Content-Type", "text/plain")] ["123", "45"]
         unsupportedRequest <- requestWithBody [("Content-Type", "application/json")] ["ok"]
         malformedRequest <- requestWithBody [("Content-Type", "text/plain")] ["bad\xFF"]
@@ -308,6 +320,71 @@ spec =
                    apiRouteResponseStatus acceptedResponse `shouldBe` HttpTypes.status200,
                    apiRouteResponseBody acceptedResponse `shouldBe` "ok"
                  ]
+          )
+
+      it "negotiates declared response encoders and adds Vary: Accept" $ do
+        let negotiatedEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (jsonResponseEncoder :| [textResponseEncoder])
+                ( \_ ->
+                    pure
+                      ( Right
+                          ( (apiResponse "hello")
+                              { apiEndpointResponseHeaders = [("Cache-Control", "no-store")]
+                              }
+                          )
+                      )
+                )
+                (\() -> apiResponse "unreachable")
+        textResponse <- runApiRoute negotiatedEndpoint (Wai.defaultRequest {Wai.requestHeaders = [("Accept", "text/plain")]})
+        jsonResponse <- runApiRoute negotiatedEndpoint (Wai.defaultRequest {Wai.requestHeaders = [("Accept", "application/json")]})
+        unacceptableResponse <- runApiRoute negotiatedEndpoint (Wai.defaultRequest {Wai.requestHeaders = [("Accept", "application/xml")]})
+        expectAll
+          ( (apiRouteResponseStatus textResponse `shouldBe` HttpTypes.status200)
+              :| [ apiRouteResponseBody textResponse `shouldBe` "hello",
+                   lookup "Content-Type" (apiRouteResponseHeaders textResponse) `shouldBe` Just "text/plain; charset=utf-8",
+                   lookup "Vary" (apiRouteResponseHeaders textResponse) `shouldBe` Just "Accept",
+                   lookup "Cache-Control" (apiRouteResponseHeaders textResponse) `shouldBe` Just "no-store",
+                   apiRouteResponseBody jsonResponse `shouldBe` "\"hello\"",
+                   lookup "Content-Type" (apiRouteResponseHeaders jsonResponse) `shouldBe` Just "application/json; charset=utf-8",
+                   apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
+                   apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                 ]
+          )
+
+      it "merges Accept into an application Vary header without changing its spelling" $ do
+        let varyEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [jsonResponseEncoder])
+                ( \_ ->
+                    pure
+                      ( Right
+                          ( (apiResponse "hello")
+                              { apiEndpointResponseHeaders = [("vArY", "Origin")]
+                              }
+                          )
+                      )
+                )
+                (\() -> apiResponse "unreachable")
+            alreadyVaryEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [jsonResponseEncoder])
+                (\_ -> pure (Right ((apiResponse "hello") {apiEndpointResponseHeaders = [("Vary", "Accept")]})))
+                (\() -> apiResponse "unreachable")
+        response <- runApiRoute varyEndpoint Wai.defaultRequest
+        alreadyVaryResponse <- runApiRoute alreadyVaryEndpoint Wai.defaultRequest
+        expectAll
+          ( (lookup "vArY" (apiRouteResponseHeaders response) `shouldBe` Just "Origin, Accept")
+              :| [lookup "Vary" (apiRouteResponseHeaders alreadyVaryResponse) `shouldBe` Just "Accept"]
           )
 
     describe "apiHttpResponseToWaiResponse" $ do
@@ -638,11 +715,26 @@ spec =
               :| [apiResponseBodyBytes (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` "<svg/>"]
           )
 
+      it "keeps typed response data separate from its declared pure encoders" $
+        let svgContentType = apiContentType (testMediaType "image/svg+xml")
+            responseValue = apiResponse "hello"
+         in expectAll
+              ( (apiEndpointResponseStatus responseValue `shouldBe` HttpTypes.status200)
+                  :| [ apiEndpointResponseHeaders responseValue `shouldBe` [],
+                       apiEndpointResponseValue responseValue `shouldBe` ("hello" :: Text),
+                       apiResponseEncoderEncode jsonResponseEncoder ("hello" :: Text) `shouldBe` "\"hello\"",
+                       apiResponseEncoderEncode textResponseEncoder "hello" `shouldBe` "hello",
+                       apiResponseEncoderEncode (bytesResponseEncoder svgContentType) "<svg/>" `shouldBe` "<svg/>",
+                       apiContentTypeMediaType svgContentType `shouldBe` testMediaType "image/svg+xml"
+                     ]
+              )
+
       it "defaults every built-in response body to status 200" $
         expectAll
           ( (apiResponseStatus (apiJsonResponse (42 :: Int)) `shouldBe` HttpTypes.status200)
               :| [ apiResponseStatus (apiTextResponse "hello") `shouldBe` HttpTypes.status200,
-                   apiResponseStatus (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` HttpTypes.status200
+                   apiResponseStatus (apiBytesResponse (apiContentType (testMediaType "image/svg+xml")) "<svg/>") `shouldBe` HttpTypes.status200,
+                   apiResponseHeaders (apiTextResponse "hello") `shouldBe` []
                  ]
           )
 
@@ -719,10 +811,20 @@ spec =
                  ]
           )
 
-      it "defaults an unparsable quality value to 1.0 and drops a malformed entry" $
+      it "drops a malformed quality value and malformed media range" $
         expectAll
-          ( (map acceptedRangeQuality (parseAcceptHeader "text/plain;q=nope") `shouldBe` [1.0])
+          ( (parseAcceptHeader "text/plain;q=nope" `shouldBe` [])
               :| [parseAcceptHeader "not-a-media-type, text/plain" `shouldBe` [AcceptedRange "text" "plain" [] 1.0]]
+          )
+
+      it "accepts only RFC-bounded quality values with at most three decimal places" $
+        expectAll
+          ( (map acceptedRangeQuality (parseAcceptHeader "text/plain;q=0, application/json;q=0.125, image/svg+xml;q=1.000") `shouldBe` [0.0, 0.125, 1.0])
+              :| [ parseAcceptHeader "text/plain;q=1.001" `shouldBe` [],
+                   parseAcceptHeader "text/plain;q=0.1234" `shouldBe` [],
+                   parseAcceptHeader "text/plain;q=2" `shouldBe` [],
+                   parseAcceptHeader "text/plain;q=0.5suffix" `shouldBe` []
+                 ]
           )
 
       it "derives comparable, printable representations for negotiation types" $

@@ -2,6 +2,11 @@
 
 ## 0.1.2.0
 
+* Extended the shared-route `apiRouteEndpoint` boundary with typed response values and declared pure
+  representation encoders. It now negotiates a request's RFC 9110 `Accept` header, emits the selected
+  `Content-Type`, preserves endpoint status and headers, merges `Vary: Accept` for alternate encodings,
+  and returns `406 Not Acceptable` for explicit incompatibility. Invalid quality weights are rejected unless
+  they are within the RFC's 0–1, three-decimal bound.
 * Hardened `HarchWeb.Api.Multipart` ownership: removed the raw collector APIs that returned adapter
   values (including file paths). `withMultipartBodyWith` and `withMultipartRequestBodyWith` now provide
   the public consumption surface; file uploads are opaque, scope-bound values that applications either
