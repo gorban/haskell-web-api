@@ -625,7 +625,7 @@ spec =
                         case part of
                           MultipartScopedFieldPart fieldName fieldValue ->
                             atomicModifyIORef' consumedFieldsReference (\fields -> (fields <> [(fieldName, fieldValue)], ()))
-                          MultipartScopedFilePart _ _ _ _ -> pure ()
+                          MultipartScopedFilePart {} -> pure ()
                         pure (Right ())
                     secondConsumption <- withApiMultipartRequest (apiEndpointRequestBody endpointRequest) (const (pure (Right ())))
                     pure $

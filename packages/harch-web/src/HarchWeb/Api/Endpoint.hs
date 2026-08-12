@@ -1,5 +1,6 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 -- | Method-aware endpoint matching and WAI dispatch.
 module HarchWeb.Api.Endpoint
@@ -33,6 +34,7 @@ where
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
+import Data.IORef qualified as IORef
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
@@ -40,7 +42,6 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
-import Data.IORef qualified as IORef
 import HarchWeb qualified
 import HarchWeb.Api.MediaType (ApiContentType, apiContentTypeText)
 import HarchWeb.Api.Multipart
@@ -240,7 +241,7 @@ newApiMultipartRequest storage limits request = do
   pure
     ApiMultipartRequest
       { consumeApiMultipartRequest = \onPart -> do
-          alreadyConsumed <- IORef.atomicModifyIORef' consumedReference (\consumed -> (True, consumed))
+          alreadyConsumed <- IORef.atomicModifyIORef' consumedReference (True,)
           if alreadyConsumed
             then pure (Left ApiMultipartRequestAlreadyConsumed)
             else do
