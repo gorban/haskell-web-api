@@ -42,7 +42,8 @@ and the follow-up task that closes it, in both places.
 
 # CI-equivalent checks
 
-Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL and Jaeger prerequisites are available, then seed the test database and run:
+Before pushing, run the same checks that CI runs from the repository root. Ensure the local PostgreSQL,
+Jaeger, and LLVM `ld.lld` prerequisites are available, then seed the test database and run:
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
@@ -60,9 +61,9 @@ and Ormolu toolchain used by CI.
 The optimized-build wrapper first tests the warning classifier, then rejects actionable compiler or
 linker warnings before the longer coverage run. The coverage wrapper cleans and rebuilds all
 packages, runs Unit tests package by package, requires 100% coverage in every project report and
-the complete multi-package report, and applies the same diagnostic gate. They record the two
-documented external GHC diagnostics without masking them; see `docs/build-diagnostics.md`. Do not
-run another Cabal command while either wrapper is active.
+the complete multi-package report, and applies the same diagnostic gate. They record only the
+documented GHC HPC diagnostic without masking it; see `docs/build-diagnostics.md`. Do not run
+another Cabal command while either wrapper is active.
 
 Treat its process exit status as a hard pre-push gate: it must be zero. Both the red
 `Per-project reports found with <100% coverage` section and the red `Aggregate coverage report

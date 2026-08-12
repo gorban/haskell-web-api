@@ -8,8 +8,13 @@ trap 'rm -f "$build_log"' EXIT
 
 "$repo_root/tools/test-check-build-diagnostics.sh"
 
+if ! command -v ld.lld >/dev/null; then
+  printf '%s\n' 'LLVM lld is required for the optimized diagnostic gate; install an ld.lld executable before running this check.' >&2
+  exit 2
+fi
+
 set +e
-cabal build all -O2 --ghc-options=-Werror >"$build_log" 2>&1
+cabal build all -O2 --ghc-options="-Werror -optl-fuse-ld=lld" >"$build_log" 2>&1
 build_exit=$?
 set -e
 

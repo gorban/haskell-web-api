@@ -42,6 +42,11 @@ if [ "${1:-}" = "--coverage-gate-fixture" ]; then
   exit
 fi
 
+if ! command -v ld.lld >/dev/null; then
+  printf '%s\n' 'LLVM lld is required for the coverage build; install an ld.lld executable before running this check.' >&2
+  exit 2
+fi
+
 cabal clean
 
 # TODO: this is a workaround for an issue that appeared when we switched from
@@ -50,7 +55,7 @@ cabal clean
 #       Could not find test program "<repo-root>\dist-newstyle\build\<arch>\ghc-<version>\
 #         <package>\opt\build\<package>-tests\<package>-tests.exe".
 #         Did you build the package first?
-cabal build all --jobs=1
+cabal build all --jobs=1 --ghc-options=-optl-fuse-ld=lld
 
 cat > hpc_index.html <<'EOF'
 <html><head><title>haskell-web-api Coverage Reports</title><style>
@@ -188,7 +193,7 @@ EOF
     done
 
     # Use -O0 to disable optimization for accurate coverage (prevents inlining)
-    cabal configure --disable-backup --ghc-options=-O0
+    cabal configure --disable-backup --ghc-options="-O0 -optl-fuse-ld=lld"
 
     # Clean build artifacts to avoid stale tix data that can bleed between runs.
     find dist-newstyle -name "*.tix" -type f -print0 | xargs -0 rm -f --

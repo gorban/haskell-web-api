@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       DATABASE_HOST: 127.0.0.1
       DATABASE_PORT: 5432
@@ -82,7 +82,7 @@ jobs:
         id: dos2unix
         run: |
           sudo apt-get update
-          sudo apt-get install -y dos2unix postgresql-client
+          sudo apt-get install -y dos2unix lld postgresql-client
 
       - name: Install Playwright Chromium
         if: steps.dos2unix.outcome == 'success'
@@ -262,7 +262,7 @@ jobs:
         if: steps.check_coverage_result.outcome == 'success'
         id: run_tests_skip_unit
         run: |
-          cabal test all -O2 --test-options="--skip Unit"
+          cabal test all -O2 --ghc-options=-optl-fuse-ld=lld --test-options="--skip Unit"
 
       - name: Upload Playwright failure artifacts
         if: failure() && steps.run_tests_skip_unit.outcome == 'failure'

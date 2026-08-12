@@ -14,12 +14,6 @@ if [ ! -f "$build_log" ]; then
   exit 2
 fi
 
-is_documented_external_warning() {
-  local line="$1"
-
-  [[ "$line" =~ ^/usr/bin/ld(\.bfd)?:\ warning:\ type\ and\ size\ of\ dynamic\ symbol\ \`[[:alnum:]_]+_closure\'\ are\ not\ defined$ ]]
-}
-
 is_documented_hpc_deprecation_warning() {
   local index="$1"
   local -n log_lines="$2"
@@ -43,12 +37,8 @@ for ((index = 0; index < ${#lines[@]}; index += 1)); do
 
   case "$line" in
     *warning:* | *Warning:*)
-      if is_documented_external_warning "$line"; then
-        printf 'Documented external GHC dynamic-link warning: %s\n' "$line" >&2
-      else
-        printf 'Actionable build warning: %s\n' "$line" >&2
-        diagnostic_failure=true
-      fi
+      printf 'Actionable build warning: %s\n' "$line" >&2
+      diagnostic_failure=true
       ;;
   esac
 done
