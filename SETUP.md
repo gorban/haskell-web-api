@@ -134,7 +134,8 @@ But, we also have a custom pre-commit hook that uses `dos2unix` for formatting c
 install that as well with Homebrew:
 
 ```bash
-brew install llvm dos2unix
+brew install llvm lld dos2unix
+ld.lld --version
 ```
 
 ## Install GHCup
