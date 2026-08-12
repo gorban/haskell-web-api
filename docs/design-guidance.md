@@ -323,8 +323,11 @@ malformed input to 413, 415, and 400 respectively, and passes expected domain fa
 endpoint's explicit interpreter. Endpoint handlers return a typed `ApiResponse`; the declaration's
 non-empty `ApiResponseEncoder` list selects and encodes an acceptable representation, sends its
 `Content-Type`, preserves application status and headers, adds or merges `Vary: Accept` when alternatives
-exist, and returns 406 for an explicitly incompatible `Accept`. Streaming codecs remain AC follow-up work;
-multipart storage and ownership remain AD work.
+exist, and returns 406 for an explicitly incompatible `Accept`. `ApiMultipartRequestBody` is the
+streaming multipart request capability: it gives the handler a one-shot scoped consumer backed by an
+application-selected storage adapter and `MultipartLimits`, preserving both duplicate-consumption rejection
+and the multipart parser's typed failure. Additional streaming codec shapes and multipart storage policy
+remain AC/AD follow-up work.
 
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
@@ -348,9 +351,10 @@ This preserves parse failure separately from field validation. Response `Accept`
 declared `Content-Type` parameters (including a quoted, case-insensitive UTF-8 charset); ranges after `q`
 are extensions and do not constrain matching. Typed response encoders may now emit strict bytes or a
 request-scoped WAI stream, preserving the existing server response boundary without materializing a lazy
-body. A closed route-family registry and streaming request codecs remain AC steps. Multipart remains a separate
-body-consumer capability: its storage adapter and staged ownership
-follow AD; an API route may select it but does not change its lifecycle policy.
+body. A closed route-family registry and additional streaming request codecs remain AC steps.
+`ApiMultipartRequestBody` now lets an API route select the existing scoped multipart consumer exactly once;
+its storage adapter and staged ownership remain AD policy, so the endpoint does not create a new upload
+lifecycle or default to local files.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
 `apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a

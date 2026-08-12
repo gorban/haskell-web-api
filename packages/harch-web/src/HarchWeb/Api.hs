@@ -6,7 +6,8 @@
 -- the server response interpreter so pages, actions, and APIs have one
 -- method/path owner. See @docs/design-guidance.md@. The existing middleware is
 -- retained only as a compatibility helper while that boundary is completed.
--- Streaming request bodies such as multipart remain separate; see
+-- A typed endpoint may declare a scoped multipart request capability through
+-- 'ApiMultipartRequestBody'; its storage adapter remains supplied by
 -- 'HarchWeb.Api.Multipart'. Typed API response encoders can return a
 -- request-scoped stream through 'streamingResponseEncoder'.
 module HarchWeb.Api
@@ -16,6 +17,9 @@ module HarchWeb.Api
     ApiRouteEndpoint,
     ApiEndpointRequest (..),
     ApiRequestBody (..),
+    ApiMultipartRequest,
+    ApiMultipartRequestError (..),
+    withApiMultipartRequest,
     ApiMatchResult (..),
     apiMethodText,
     apiEndpoint,

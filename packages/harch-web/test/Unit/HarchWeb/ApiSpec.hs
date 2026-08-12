@@ -14,6 +14,12 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb qualified
 import HarchWeb.Api
+import HarchWeb.Api.Multipart
+  ( MultipartConsumeError (..),
+    MultipartScopedPart (..),
+    defaultMultipartLimits,
+    inMemoryMultipartStorage,
+  )
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
 import HarchWeb.Site (RouteDefinition (..))
@@ -600,6 +606,72 @@ spec =
                    lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8",
                    protocolResponseObservabilityAttributes (apiRouteProtocolResponse response) `shouldBe` [],
                    protocolResponseLogEntries (apiRouteProtocolResponse response) `shouldBe` []
+                 ]
+          )
+
+      it "gives a multipart endpoint one scoped body consumer" $ do
+        consumedFieldsReference <- newIORef []
+        let requestBody =
+              "--endpoint-boundary\r\nContent-Disposition: form-data; name=\"title\"\r\n\r\nQuarterly report\r\n--endpoint-boundary\r\nContent-Disposition: form-data; name=\"attachment\"; filename=\"report.txt\"\r\n\r\ncontents\r\n--endpoint-boundary--\r\n"
+            multipartEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (requiredField (queryField "mode" apiTextValue))
+                (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
+                (textResponseEncoder :| [])
+                ( \endpointRequest -> do
+                    firstConsumption <-
+                      withApiMultipartRequest (apiEndpointRequestBody endpointRequest) $ \part -> do
+                        case part of
+                          MultipartScopedFieldPart fieldName fieldValue ->
+                            atomicModifyIORef' consumedFieldsReference (\fields -> (fields <> [(fieldName, fieldValue)], ()))
+                          MultipartScopedFilePart _ _ _ _ -> pure ()
+                        pure (Right ())
+                    secondConsumption <- withApiMultipartRequest (apiEndpointRequestBody endpointRequest) (const (pure (Right ())))
+                    pure $
+                      case (apiEndpointRequestFields endpointRequest, firstConsumption, secondConsumption) of
+                        ("multipart", Right (), Left ApiMultipartRequestAlreadyConsumed) -> Right (apiResponse "multipart consumed")
+                        _ -> Left ()
+                )
+                (const (apiResponse "multipart endpoint failed"))
+        request <- requestWithBody [("Content-Type", "multipart/form-data; boundary=endpoint-boundary")] [requestBody]
+        response <- runApiRoute multipartEndpoint (request {Wai.queryString = [("mode", Just "multipart")]})
+        consumedFields <- readIORef consumedFieldsReference
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [ apiRouteResponseBody response `shouldBe` "multipart consumed",
+                   consumedFields `shouldBe` [("title", "Quarterly report")]
+                 ]
+          )
+
+      it "leaves a multipart parser failure typed for the endpoint handler" $ do
+        let multipartEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
+                (textResponseEncoder :| [])
+                ( \endpointRequest -> do
+                    consumption <- withApiMultipartRequest (apiEndpointRequestBody endpointRequest) (const (pure (Right ())))
+                    pure $
+                      case consumption of
+                        Left (ApiMultipartRequestFailed MultipartInvalidContentType) ->
+                          Right ((apiResponse "multipart media type rejected") {apiEndpointResponseStatus = HttpTypes.status415})
+                        _ -> Left ()
+                )
+                (const (apiResponse "multipart endpoint failed"))
+        response <- runApiRoute multipartEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status415)
+              :| [apiRouteResponseBody response `shouldBe` "multipart media type rejected"]
+          )
+
+      it "derives comparable, printable multipart request errors" $
+        expectAll
+          ( (ApiMultipartRequestAlreadyConsumed `shouldBe` ApiMultipartRequestAlreadyConsumed)
+              :| [ ApiMultipartRequestFailed MultipartInvalidContentType `shouldBe` ApiMultipartRequestFailed MultipartInvalidContentType,
+                   show ApiMultipartRequestAlreadyConsumed `shouldBe` "ApiMultipartRequestAlreadyConsumed",
+                   show (ApiMultipartRequestFailed MultipartInvalidContentType) `shouldBe` "ApiMultipartRequestFailed MultipartInvalidContentType"
                  ]
           )
 

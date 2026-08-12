@@ -9,6 +9,9 @@ module HarchWeb.Api.Endpoint
     ApiRouteEndpoint,
     ApiEndpointRequest (..),
     ApiRequestBody (..),
+    ApiMultipartRequest,
+    ApiMultipartRequestError (..),
+    withApiMultipartRequest,
     ApiMatchResult (..),
     apiMethodText,
     apiEndpoint,
@@ -37,8 +40,16 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import Data.IORef qualified as IORef
 import HarchWeb qualified
 import HarchWeb.Api.MediaType (ApiContentType, apiContentTypeText)
+import HarchWeb.Api.Multipart
+  ( MultipartConsumeError,
+    MultipartLimits,
+    MultipartScopedPart,
+    MultipartStorage,
+    withMultipartRequestBodyWithStorage,
+  )
 import HarchWeb.Api.Negotiation
 import HarchWeb.Api.Request
 import HarchWeb.Api.Response
@@ -108,10 +119,36 @@ data ApiEndpointRequest fields body = ApiEndpointRequest
     apiEndpointRequestBody :: body
   }
 
+-- | A scoped, single-use multipart request consumer. Its callback is the
+-- only place a completed file upload is visible, so an upload must be
+-- promoted there to outlive the request. Calling it twice is rejected before
+-- attempting a second WAI body read.
+newtype ApiMultipartRequest stored = ApiMultipartRequest
+  { consumeApiMultipartRequest ::
+      (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
+      IO (Either ApiMultipartRequestError ())
+  }
+
+-- | Multipart consumption either has the parser's precise failure or was
+-- already claimed by the endpoint handler.
+data ApiMultipartRequestError
+  = ApiMultipartRequestAlreadyConsumed
+  | ApiMultipartRequestFailed MultipartConsumeError
+  deriving (Eq, Show)
+
+-- | Consume the endpoint's declared multipart body once. This keeps the
+-- request-scoped storage lifecycle inside the existing multipart adapter;
+-- callers map its typed result to their ordinary endpoint outcome.
+withApiMultipartRequest ::
+  ApiMultipartRequest stored ->
+  (MultipartScopedPart stored -> IO (Either MultipartConsumeError ())) ->
+  IO (Either ApiMultipartRequestError ())
+withApiMultipartRequest = consumeApiMultipartRequest
+
 -- | An endpoint either declares no body consumer, one bounded buffered
 -- decoder, or a bounded URL-encoded form whose fields join the request codec.
--- Streaming codecs (including multipart) will use a separate constructor once
--- their storage lifecycle boundary is complete.
+-- A multipart body remains scoped: its callback owns each completed part, and
+-- must deliberately promote any file that needs to outlive the request.
 data ApiRequestBody body where
   ApiNoRequestBody :: ApiRequestBody ()
   ApiBufferedRequestBody ::
@@ -125,6 +162,10 @@ data ApiRequestBody body where
     Int ->
     Natural ->
     ApiRequestBody ApiForm
+  ApiMultipartRequestBody ::
+    MultipartStorage stored ->
+    MultipartLimits ->
+    ApiRequestBody (ApiMultipartRequest stored)
 
 apiRouteEndpoint ::
   ApiMethod ->
@@ -164,6 +205,10 @@ runApiRouteEndpoint endpoint request =
             maximumBytes
             [urlEncodedFormBodyDecoder maximumFields]
             (\decodedForm -> decodeFormFields decodedForm (apiRequestDataWithForm decodedForm requestData))
+        ApiMultipartRequestBody storage limits ->
+          decodeInitialFields $ \decodedFields -> do
+            multipartRequest <- newApiMultipartRequest storage limits request
+            runHandler decodedFields multipartRequest
 
     decodeInitialFields onDecodedFields =
       case runRequestCodec (apiRouteEndpointFields endpoint) requestData of
@@ -188,6 +233,23 @@ runApiRouteEndpoint endpoint request =
     runHandler decodedFields decodedBody = do
       handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
       pure (renderEndpointResult endpoint request (either (apiRouteEndpointFailureResponse endpoint) id handlerResult))
+
+newApiMultipartRequest :: MultipartStorage stored -> MultipartLimits -> Wai.Request -> IO (ApiMultipartRequest stored)
+newApiMultipartRequest storage limits request = do
+  consumedReference <- IORef.newIORef False
+  pure
+    ApiMultipartRequest
+      { consumeApiMultipartRequest = \onPart -> do
+          alreadyConsumed <- IORef.atomicModifyIORef' consumedReference (\consumed -> (True, consumed))
+          if alreadyConsumed
+            then pure (Left ApiMultipartRequestAlreadyConsumed)
+            else do
+              result <- withMultipartRequestBodyWithStorage storage limits request onPart
+              pure $
+                case result of
+                  Left consumeError -> Left (ApiMultipartRequestFailed consumeError)
+                  Right () -> Right ()
+      }
 
 contentType :: Wai.Request -> Maybe Text
 contentType request =

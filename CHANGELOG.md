@@ -31,6 +31,10 @@
    field is rejected before a later file part is ever spooled to disk, and carrying no
    `data-harch-action` attribute so the inline capture kernel never intercepts it. `TestCore.Browser`
    gained `setInputFiles` to drive that form's file input from an E2E scenario.
+7. Added `ApiMultipartRequestBody` to the typed API endpoint declaration. It supplies a handler with a
+   single-use scoped multipart consumer backed by an explicitly selected storage adapter and
+   `MultipartLimits`; duplicate consumption and parser failures remain typed outcomes, and uploads retain
+   their existing promote-or-discard lifecycle.
 
 ## 0.1.1.0
 
