@@ -329,6 +329,13 @@ application-selected storage adapter and `MultipartLimits`, preserving both dupl
 and the multipart parser's typed failure. Additional streaming codec shapes and multipart storage policy
 remain AC/AD follow-up work.
 
+For a standalone WAI composition, `apiRouteEndpointAt` adds the endpoint's path to that same typed
+declaration and `SomeApiRouteEndpoint` permits a heterogeneous table. `apiRouteEndpointMiddleware`
+then derives `404` fall-through, `405` plus `Allow`, `HEAD`, and synthesized `OPTIONS` directly from
+that table while invoking the declaration's own handler and single body consumer. This is the typed
+replacement for the legacy target-plus-handler middleware; the legacy helper remains only for existing
+applications while their endpoint declarations are migrated.
+
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
 **Decision: extend the shared `RouteCodec`/`RouteDefinition` and server-response boundary (option 1),
