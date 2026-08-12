@@ -44,6 +44,7 @@ module HarchWeb.Api
     parseApiField,
     queryField,
     headerField,
+    cookieField,
     requiredField,
     optionalField,
     fieldWithDefault,

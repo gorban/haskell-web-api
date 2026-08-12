@@ -2,6 +2,9 @@
 
 ## 0.1.2.0
 
+* Added `cookieField` to `HarchWeb.Api`'s accumulating `RequestCodec`. It extracts case-sensitive cookie
+  names from every `Cookie` header, ignores malformed fragments, and reports repeated names as a typed
+  duplicate-field error rather than selecting an arbitrary value.
 * Extended the shared-route `apiRouteEndpoint` boundary with typed response values and declared pure
   representation encoders. It now negotiates a request's RFC 9110 `Accept` header, emits the selected
   `Content-Type`, preserves endpoint status and headers, merges `Vary: Accept` for alternate encodings,
@@ -15,8 +18,8 @@
   (`404`/`405`+`Allow`/`HEAD`/`OPTIONS` handling — `OPTIONS` is synthesized as `204 No Content` with an
   `Allow` header for any path with a declared endpoint, without running a handler or implementing CORS;
   an application composes its own CORS middleware in front if it needs preflight support), an
-  accumulating-error `RequestCodec` for query and
-  header fields (with `apiRequestDataFromWaiRequest` to extract them from a real WAI request),
+  accumulating-error `RequestCodec` for query, header, and cookie fields (with
+  `apiRequestDataFromWaiRequest` to extract them from a real WAI request),
   `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
   `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`413`/`400` outcomes),
   `ResponseCodec` helpers for JSON/text/bytes bodies, RFC 9110 `Accept` header negotiation (quality

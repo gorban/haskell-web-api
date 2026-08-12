@@ -313,7 +313,7 @@ success, rejection, or an exception.
 
 `apiEndpointMiddleware` remains an additive compatibility helper; it is not the final route dispatcher.
 New routes should use `apiRouteEndpoint` and place `apiRouteDefinition` in the application's
-`RouteDefinition` table. That declaration names one method, typed query/header decoder, either no body
+`RouteDefinition` table. That declaration names one method, typed query/header/cookie decoder, either no body
 or exactly one bounded buffered body decoder, a domain-failure interpreter, and the response renderer.
 The shared server dispatcher supplies the real WAI request only after it has selected the route and
 enforced the table's method policy, so API declarations cannot create competing 404/405/`Allow`/`HEAD`/
@@ -339,8 +339,10 @@ request-scoped WAI stream retain normal response security, diagnostics, and obse
 delivered portion adds `apiRouteEndpoint`/`apiRouteDefinition`: typed API fields and one bounded buffered
 body consumer now run inside that same route table and response interpreter. Typed response values now use
 declarative JSON, text, byte, or custom encoders with RFC 9110 `Accept` selection and `Vary: Accept`.
-A closed route-family registry, cookie/form fields, response media-range parameter matching, and streaming
-codecs remain AC steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
+`RequestCodec` now also decodes case-sensitive cookie fields; malformed cookie fragments are ignored and
+repeated names produce the same typed duplicate-field error as query and header fields. A closed route-family
+registry, small URL-encoded form fields, response media-range parameter matching, and streaming codecs remain
+AC steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
 follow AD; an API route may select it but does not change its lifecycle policy.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make

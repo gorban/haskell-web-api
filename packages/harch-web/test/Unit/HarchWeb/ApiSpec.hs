@@ -225,18 +225,34 @@ spec =
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData
                 { apiRequestQueryParameters = [("q", "hello")],
-                  apiRequestHeaders = [(apiHeaderName "x-custom", "value")]
+                  apiRequestHeaders = [(apiHeaderName "x-custom", "value")],
+                  apiRequestCookies = []
                 }
 
       it "decodes a flag-style query parameter with no value as empty rather than dropping it" $
         let request = Wai.defaultRequest {Wai.queryString = [("flag", Nothing)]}
          in apiRequestDataFromWaiRequest request
-              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("flag", "")], apiRequestHeaders = []}
+              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("flag", "")], apiRequestHeaders = [], apiRequestCookies = []}
 
       it "decodes invalid UTF-8 in a query value leniently rather than failing" $
         let request = Wai.defaultRequest {Wai.queryString = [("q", Just "bad\xFF")]}
          in apiRequestDataFromWaiRequest request
-              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = []}
+              `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = [], apiRequestCookies = []}
+
+      it "extracts case-sensitive cookie pairs from every Cookie header" $
+        let request =
+              Wai.defaultRequest
+                { Wai.requestHeaders =
+                    [ ("Cookie", "session=first; theme=dark"),
+                      ("cOoKiE", "session=second; malformed; bad name=ignored; Empty=")
+                    ]
+                }
+         in apiRequestDataFromWaiRequest request
+              `shouldBe` ApiRequestData
+                { apiRequestQueryParameters = [],
+                  apiRequestHeaders = [(apiHeaderName "cookie", "session=first; theme=dark"), (apiHeaderName "cookie", "session=second; malformed; bad name=ignored; Empty=")],
+                  apiRequestCookies = [("session", "first"), ("theme", "dark"), ("session", "second"), ("Empty", "")]
+                }
 
     describe "apiRouteDefinition" $ do
       let requiredQuery = requiredField (queryField "q" apiTextValue)
@@ -511,7 +527,8 @@ spec =
       let sampleRequestData =
             ApiRequestData
               { apiRequestQueryParameters = [("q", "hello"), ("dup", "one"), ("dup", "two")],
-                apiRequestHeaders = [(apiHeaderName "X-Token", "secret"), (apiHeaderName "X-Bad", "")]
+                apiRequestHeaders = [(apiHeaderName "X-Token", "secret"), (apiHeaderName "X-Bad", "")],
+                apiRequestCookies = [("session", "opaque"), ("repeat", "first"), ("repeat", "second")]
               }
 
       it "decodes a required, present field from its declared source" $
@@ -521,6 +538,16 @@ spec =
       it "decodes a required header field" $
         runRequestCodec (requiredField (headerField (apiHeaderName "X-Token") apiTextValue)) sampleRequestData
           `shouldBe` ([], Just "secret")
+
+      it "decodes a required case-sensitive cookie field" $
+        expectAll
+          ( (runRequestCodec (requiredField (cookieField "session" apiTextValue)) sampleRequestData `shouldBe` ([], Just "opaque"))
+              :| [ runRequestCodec (requiredField (cookieField "SESSION" apiTextValue)) sampleRequestData
+                     `shouldBe` ([MissingApiField ApiCookieSource "SESSION"], Nothing),
+                   runRequestCodec (requiredField (cookieField "repeat" apiTextValue)) sampleRequestData
+                     `shouldBe` ([DuplicateApiField ApiCookieSource "repeat"], Nothing)
+                 ]
+          )
 
       it "canonicalizes header names for equality and diagnostics" $
         let declaredName = apiHeaderName "X-Token"
@@ -589,11 +616,12 @@ spec =
                      )
 
       it "derives comparable, printable representations for request codec types" $
-        let sources = [ApiQuerySource, ApiHeaderSource]
+        let sources = [ApiQuerySource, ApiHeaderSource, ApiCookieSource]
             parseErrors =
               [ MissingApiField ApiQuerySource "q",
                 DuplicateApiField ApiHeaderSource "h",
-                InvalidApiField ApiQuerySource "q"
+                InvalidApiField ApiQuerySource "q",
+                MissingApiField ApiCookieSource "session"
               ]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- sources, right <- sources] `shouldBe` length sources)
