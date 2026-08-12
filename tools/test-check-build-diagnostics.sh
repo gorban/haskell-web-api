@@ -10,9 +10,13 @@ trap 'rm -rf "$fixture_directory"' EXIT
 expect_success() {
   local description="$1"
   local fixture="$2"
+  local diagnostic_output
 
-  if ! "$diagnostic_gate" "$fixture"; then
-    printf 'diagnostic gate unexpectedly rejected %s\n' "$description" >&2
+  if diagnostic_output="$("$diagnostic_gate" "$fixture" 2>&1)"; then
+    printf 'PASS: accepts %s\n' "$description"
+  else
+    printf 'FAIL: diagnostic gate unexpectedly rejected %s\n' "$description" >&2
+    printf '%s\n' "$diagnostic_output" >&2
     exit 1
   fi
 }
@@ -20,10 +24,14 @@ expect_success() {
 expect_failure() {
   local description="$1"
   local fixture="$2"
+  local diagnostic_output
 
-  if "$diagnostic_gate" "$fixture"; then
-    printf 'diagnostic gate unexpectedly accepted %s\n' "$description" >&2
+  if diagnostic_output="$("$diagnostic_gate" "$fixture" 2>&1)"; then
+    printf 'FAIL: diagnostic gate unexpectedly accepted %s\n' "$description" >&2
+    printf '%s\n' "$diagnostic_output" >&2
     exit 1
+  else
+    printf 'PASS: rejects %s\n' "$description"
   fi
 }
 
