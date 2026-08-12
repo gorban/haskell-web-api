@@ -46,10 +46,10 @@ Before pushing, run the same checks that CI runs from the repository root. Ensur
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
+./tools/run-optimized-build-check.sh
 ./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh
 ./tools/check-vscode-ormolu-formatter.sh
-cabal build all -O2 --ghc-options=-Werror
 cabal test all -O2 --test-options="--skip Unit"
 ```
 
@@ -57,10 +57,12 @@ Before the formatting checks, run `.github/scripts/install-formatting-tools.sh` 
 local tools are not known to be the CI-pinned versions; it installs the exact `cabal-gild`, HLint,
 and Ormolu toolchain used by CI.
 
-The coverage wrapper cleans and rebuilds all packages, runs Unit tests package by package, requires
-100% coverage in every project report and the complete multi-package report, and rejects actionable
-compiler or linker warnings. It records the two documented external GHC diagnostics without
-masking them; see `docs/build-diagnostics.md`. Do not run another Cabal command while it is active.
+The optimized-build wrapper first tests the warning classifier, then rejects actionable compiler or
+linker warnings before the longer coverage run. The coverage wrapper cleans and rebuilds all
+packages, runs Unit tests package by package, requires 100% coverage in every project report and
+the complete multi-package report, and applies the same diagnostic gate. They record the two
+documented external GHC diagnostics without masking them; see `docs/build-diagnostics.md`. Do not
+run another Cabal command while either wrapper is active.
 
 Treat its process exit status as a hard pre-push gate: it must be zero. Both the red
 `Per-project reports found with <100% coverage` section and the red `Aggregate coverage report

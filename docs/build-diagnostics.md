@@ -1,8 +1,9 @@
 # Build diagnostics
 
-The coverage build is a diagnostic boundary, not merely a test run. Use
-`tools/run-code-coverage-check.sh` locally; CI applies the same warning classifier immediately
-after its coverage command and before formatting or integration work.
+The optimized build and coverage build are diagnostic boundaries, not merely test runs. Use
+`tools/run-optimized-build-check.sh` followed by `tools/run-code-coverage-check.sh` locally. CI
+runs the optimized diagnostic gate before the long coverage command, then applies the same warning
+classifier to coverage output before formatting or integration work.
 
 ## Fatal diagnostics
 

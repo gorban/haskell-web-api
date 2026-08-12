@@ -132,8 +132,14 @@ jobs:
         run: |
           cabal run haskell-web-api-db -- migrate-and-seed
 
-      - name: Run tests with coverage
+      - name: Run optimized build diagnostic gate
         if: steps.seed_postgres.outcome == 'success'
+        id: optimized_build
+        run: |
+          tools/run-optimized-build-check.sh
+
+      - name: Run tests with coverage
+        if: steps.optimized_build.outcome == 'success'
         id: coverage
         shell: bash
         run: |
@@ -143,7 +149,6 @@ jobs:
           # Exercise the coverage script's failure contract before spending the
           # full coverage run on a change that could silently weaken the gate.
           tools/test-generate-code-coverage.sh
-          tools/test-check-build-diagnostics.sh
 
           # Capture coverage's exit code so the diagnostic classifier can inspect
           # the complete build output before either quality gate fails the job.
@@ -257,7 +262,6 @@ jobs:
         if: steps.check_coverage_result.outcome == 'success'
         id: run_tests_skip_unit
         run: |
-          cabal build all -O2 --ghc-options=-Werror
           cabal test all -O2 --test-options="--skip Unit"
 
       - name: Upload Playwright failure artifacts
