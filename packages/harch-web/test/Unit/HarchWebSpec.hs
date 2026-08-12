@@ -773,10 +773,21 @@ spec = do
         readRequestBodyUpTo
           3
           (Wai.defaultRequest {Wai.requestHeaders = [(Http.hContentLength, "4")]})
+      malformedDeclaredLengthResult <-
+        readRequestBodyUpTo
+          3
+          (Wai.defaultRequest {Wai.requestHeaders = [(Http.hContentLength, "4bytes")]})
+      negativeLimitResult <- readRequestBodyUpTo (-1) Wai.defaultRequest
       expectAll
         ( (successfulResult `shouldBe` Right "abc")
             :| [ oversizedResult `shouldBe` Left RequestBodyLimitExceeded,
-                 declaredOversizedResult `shouldBe` Left RequestBodyLimitExceeded
+                 declaredOversizedResult `shouldBe` Left RequestBodyLimitExceeded,
+                 malformedDeclaredLengthResult `shouldBe` Right "",
+                 negativeLimitResult `shouldBe` Left RequestBodyLimitExceeded,
+                 RequestBodyLimitExceeded == RequestBodyLimitExceeded `shouldBe` True,
+                 RequestBodyLimitExceeded /= RequestBodyLimitExceeded `shouldBe` False,
+                 length (show RequestBodyLimitExceeded) `shouldSatisfy` (> 0),
+                 length (showList [RequestBodyLimitExceeded] "") `shouldSatisfy` (> 0)
                ]
         )
 
@@ -789,6 +800,29 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication limitedApplication) (Wai.defaultRequest {Wai.rawPathInfo = "/long"})
       Wai.responseStatus response `shouldBe` Http.status414
+
+    it "maps every rejected request-head budget to its public HTTP status" $ do
+      let applicationFor limits = sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestHeadLimits = limits})
+          requestFor rawPath headers rawQuery = Wai.defaultRequest {Wai.rawPathInfo = rawPath, Wai.requestHeaders = headers, Wai.rawQueryString = rawQuery}
+          cases =
+            [ (unboundedRequestHeadLimits {requestTargetByteLimit = requestByteLimit 4}, requestFor "/long" [] "", Http.status414),
+              (unboundedRequestHeadLimits, requestFor "\255" [] "", Http.status400),
+              (unboundedRequestHeadLimits {requestHeaderCountLimit = mkRequestHeaderCountLimit 1}, requestFor "/ok" [("A", "1"), ("B", "2")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestHeaderByteLimit = requestByteLimit 4}, requestFor "/ok" [("Header", "value")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestHeaderValueByteLimit = requestByteLimit 3}, requestFor "/ok" [("A", "1234")] "", Http.status431),
+              (unboundedRequestHeadLimits {requestPathSegmentCountLimit = requestItemCountLimit 1}, requestFor "/one/two" [] "", Http.status414),
+              (unboundedRequestHeadLimits {requestPathSegmentByteLimit = requestByteLimit 2}, requestFor "/long" [] "", Http.status414),
+              (unboundedRequestHeadLimits {requestQueryFieldCountLimit = requestItemCountLimit 1}, requestFor "/ok" [] "?one&two", Http.status414),
+              (unboundedRequestHeadLimits {requestQueryFieldByteLimit = requestByteLimit 3}, requestFor "/ok" [] "?long", Http.status414)
+            ]
+      responses <- traverse (\(limits, request, _) -> performWaiRequest (toWaiApplication (applicationFor limits)) request) cases
+      responseBodies <- traverse readResponseBody responses
+      expectAll
+        ( (map Wai.responseStatus responses `shouldBe` map (\(_, _, expectedStatus) -> expectedStatus) cases)
+            :| ( map (\response -> lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8") responses
+                  <> map (`shouldBe` "Request metadata was rejected.") responseBodies
+               )
+        )
 
   describe "HarchWeb.Action" $ do
     it "prints codec paths and methods from the same declarations used for parsing and form markup" $ do
@@ -1898,6 +1932,19 @@ spec = do
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
         `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
 
+    it "renders a direct route with WAI's empty request rather than ambient transport state" $ do
+      observedRequest <- newIORef Nothing
+      let applicationWithRequestProbe =
+            sampleApplication
+              { renderRequestResponse = \request _ -> do
+                  writeIORef observedRequest (Just request)
+                  pure (BodyResponse (ResponseBody 200 "text/plain" "probe" [] []))
+              }
+      renderResponse applicationWithRequestProbe (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
+        `shouldReturn` BodyResponse (ResponseBody 200 "text/plain" "probe" [] [])
+      capturedRequest <- readIORef observedRequest
+      fmap Wai.rawPathInfo capturedRequest `shouldBe` Just ""
+
   describe "matchRoute" $ do
     it "returns parsed routes for supported paths" $
       matchRoute sampleCodec defaultContext "/known"
@@ -2250,16 +2297,44 @@ spec = do
 
     it "bounds client-action form fields before decoding" $ do
       let fields fieldCount = LazyByteString.fromStrict (ByteString.intercalate "&" (replicate fieldCount "field=value"))
-      fmap length (parseClientActionFields (fields 128)) `shouldBe` Right 128
-      either (const (-1)) length (parseClientActionFields (fields 129)) `shouldBe` -1
+      expectAll
+        ( (either (const (-1)) length (parseClientActionFields "") `shouldBe` 0)
+            :| [ either (const []) id (parseClientActionFields "name=Ada+Lovelace&empty") `shouldBe` [("name", "Ada Lovelace"), ("empty", "")],
+                 either (const (-1)) length (parseClientActionFields (fields 128)) `shouldBe` 128,
+                 either (const (-1)) length (parseClientActionFields (fields 129)) `shouldBe` -1
+               ]
+        )
+
+    it "rejects an oversized client-action body before URL decoding" $ do
+      oversizedBodyReference <- newIORef (LazyByteString.fromStrict (ByteString.replicate 65537 97))
+      oversizedBody <- readIORef oversizedBodyReference
+      case parseClientActionFields oversizedBody of
+        Left protocolError -> protocolError `seq` pure ()
+        Right _fields -> expectationFailure "expected the client-action body limit to reject before decoding"
+
+    it "recognizes only the explicit client-action protocol header" $ do
+      let ordinaryRequest = waiRequest ["known"]
+          disabledActionRequest = ordinaryRequest {Wai.requestHeaders = [("X-Harch-Action", "0")]}
+          enabledActionRequest = ordinaryRequest {Wai.requestHeaders = [("X-Other", "value"), ("X-Harch-Action", "1")]}
+      expectAll
+        ( (isClientActionRequest ordinaryRequest `shouldBe` False)
+            :| [ isClientActionRequest disabledActionRequest `shouldBe` False,
+                 isClientActionRequest enabledActionRequest `shouldBe` True
+               ]
+        )
 
     it "rejects oversized or cross-origin client actions before application dispatch" $ do
       oversizedChunks <- newIORef [ByteString.replicate 65537 97]
       tooManyFieldsChunks <- newIORef [ByteString.intercalate "&" (replicate 129 "field")]
       crossOriginChunks <- newIORef ["email=ada%40example.test"]
       invalidContentTypeChunks <- newIORef ["email=ada%40example.test"]
+      missingContentTypeChunks <- newIORef ["email=ada%40example.test"]
       missingCsrfChunks <- newIORef ["email=ada%40example.test"]
       invalidHostChunks <- newIORef ["email=ada%40example.test"]
+      invalidOriginChunks <- newIORef ["email=ada%40example.test"]
+      invalidCookieChunks <- newIORef ["email=ada%40example.test"]
+      missingCookieChunks <- newIORef ["email=ada%40example.test"]
+      parameterizedContentTypeChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token"]
       missingOriginAndHostChunks <- newIORef ["email=ada%40example.test"]
       let requestWith bodyChunks headers =
             Wai.setRequestBodyChunks
@@ -2274,16 +2349,104 @@ spec = do
       tooManyFieldsResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith tooManyFieldsChunks validHeaders)
       crossOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith crossOriginChunks (init validHeaders <> [("Origin", "https://evil.example")]))
       invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
+      missingContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingContentTypeChunks [("X-Harch-Action", "1"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
       invalidHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "\255"), ("Origin", "http://example.test")])
+      invalidOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidOriginChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "\255")])
+      invalidCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidCookieChunks (validHeaders <> [("Cookie", "harch-csrf=\255")]))
+      missingCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCookieChunks validHeaders)
+      parameterizedContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith parameterizedContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded; charset=utf-8"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")])
       missingOriginAndHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingOriginAndHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")])
+      rejectedBodies <-
+        traverse
+          readResponseBody
+          [ oversizedResponse,
+            tooManyFieldsResponse,
+            crossOriginResponse,
+            invalidContentTypeResponse,
+            missingCsrfResponse,
+            invalidHostResponse,
+            invalidOriginResponse,
+            invalidCookieResponse,
+            missingCookieResponse,
+            missingOriginAndHostResponse
+          ]
       Wai.responseStatus oversizedResponse `shouldBe` Http.status413
       Wai.responseStatus tooManyFieldsResponse `shouldBe` Http.status413
       Wai.responseStatus crossOriginResponse `shouldBe` Http.status403
       Wai.responseStatus invalidContentTypeResponse `shouldBe` Http.status415
+      Wai.responseStatus missingContentTypeResponse `shouldBe` Http.status415
       Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403
       Wai.responseStatus invalidHostResponse `shouldBe` Http.status403
+      Wai.responseStatus invalidOriginResponse `shouldBe` Http.status403
+      Wai.responseStatus invalidCookieResponse `shouldBe` Http.status403
+      Wai.responseStatus missingCookieResponse `shouldBe` Http.status403
+      Wai.responseStatus parameterizedContentTypeResponse `shouldBe` Http.status404
       Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
+      rejectedBodies `shouldBe` replicate 10 "{\"patches\":[],\"focusId\":null}"
+
+    it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
+      receivedAction <- newIORef Nothing
+      actionBodyChunks <- newIORef ["intent=save&_harch_csrf=csrf-token"]
+      let metadataApplication :: Application TestRoute Text TestContext
+          metadataApplication =
+            sampleApplication
+              { decodeClientAction = \payload ->
+                  ( case
+                      ( clientActionMethod payload,
+                        clientActionFields payload,
+                        clientActionCsrfToken payload,
+                        clientActionIdempotencyKey payload
+                      ) of
+                    ("POST", [("intent", "save"), ("_harch_csrf", "csrf-token")], Just "csrf-token", Just "idempotency-1") -> DecodedClientAction "save"
+                    _ -> UnrecognizedClientAction
+                  ),
+                handleClientAction = \decodedActionRequest -> do
+                  writeIORef receivedAction (Just decodedActionRequest)
+                  pure (Just (ClientActionResponse 204 [] Nothing [] [] []))
+              }
+          actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "harch-csrf=csrf-token"),
+                        ("Idempotency-Key", "idempotency-1")
+                      ]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication metadataApplication) actionRequest
+      capturedAction <- readIORef receivedAction
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status204)
+            :| [ fmap clientAction capturedAction `shouldBe` Just "save",
+                 fmap clientActionRequestIdempotencyKey capturedAction `shouldBe` Just (Just "idempotency-1")
+               ]
+        )
+
+    it "preserves WAI transport input for not-found and synthesized HEAD route dispatch" $ do
+      routedRequests <- newIORef []
+      let recordingApplication =
+            sampleApplication
+              { renderRequestResponse = \request routeRequest -> do
+                  atomicModifyIORef' routedRequests (\requests -> (requests <> [(Wai.requestMethod request, requestRoute routeRequest)], ()))
+                  pure (BodyResponse (ResponseBody 200 "text/plain" "recorded" [] []))
+              }
+          requestFor requestMethodValue path = Wai.defaultRequest {Wai.requestMethod = requestMethodValue, Wai.rawPathInfo = path}
+      notFoundResponse <- performWaiRequest (toWaiApplication recordingApplication) (requestFor "GET" "/missing")
+      headResponse <- performWaiRequest (toWaiApplication recordingApplication) (requestFor "HEAD" "/known")
+      routed <- readIORef routedRequests
+      expectAll
+        ( (Wai.responseStatus notFoundResponse `shouldBe` Http.status200)
+            :| [ Wai.responseStatus headResponse `shouldBe` Http.status200,
+                 routed `shouldBe` [("GET", MissingRoute), ("HEAD", KnownRoute)]
+               ]
+        )
 
     it "serializes client-action metadata, multiple patches, and every JSON escape" $ do
       let escapedText = "quote\" slash\\ backspace\b formfeed\f newline\n carriage\r tab\t unicode ☃"
@@ -2331,6 +2494,7 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json; charset=utf-8")
 
     it "maps codec unknown, method, malformed, and domain action outcomes to safe protocol responses" $ do
+      loggedActionFailures <- newIORef []
       let actionApplication =
             sampleApplication
               { decodeClientAction = Action.decodeAction testActionCodec,
@@ -2346,8 +2510,9 @@ spec = do
                                 clientActionObservabilityAttributes = [],
                                 clientActionLogEntries = []
                               }
-                        )
-                    )
+                      )
+                    ),
+                reportApplicationLog = \entry -> modifyIORef' loggedActionFailures (<> [entry])
               }
           requestFor methodValue path bodyChunks =
             Wai.setRequestBodyChunks
@@ -2374,8 +2539,10 @@ spec = do
       Wai.responseStatus unknownResponse `shouldBe` Http.status404
       Wai.responseStatus wrongMethodResponse `shouldBe` Http.status405
       lookup "Allow" (Wai.responseHeaders wrongMethodResponse) `shouldBe` Just "POST, GET"
+      readResponseBody wrongMethodResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
       Wai.responseStatus malformedResponse `shouldBe` Http.status400
       readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      fmap (any (Text.isInfixOf "client action decode failure: malformed")) (readIORef loggedActionFailures) `shouldReturn` True
       Wai.responseStatus domainResponse `shouldBe` Http.status422
 
     it "renders typed redirects with the location header and standard response metadata" $ do
@@ -2404,6 +2571,14 @@ spec = do
           renderedResponse = ProtocolResponseResult protocolResponse :: Response TestRoute TestContext
           protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
           diagnostics = responseDiagnostics renderedResponse
+          changedProtocolResponse =
+            ProtocolResponse
+              { protocolResponseStatus = Http.status200,
+                protocolResponseHeaders = [(Http.hContentType, "application/example")],
+                protocolResponseBody = ProtocolResponseBytes "changed",
+                protocolResponseObservabilityAttributes = [],
+                protocolResponseLogEntries = []
+              }
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
       body <- readResponseBody response
       expectAll
@@ -2414,7 +2589,15 @@ spec = do
                  diagnosticObservabilityAttributes diagnostics `shouldBe` [Observability.ObservabilityAttribute "example.outcome" (Observability.TextAttribute "created")],
                  diagnosticLogEntries diagnostics `shouldBe` ["example response"],
                  responseStatusCode protocolApplication renderedResponse `shouldBe` 201,
-                 responseKind renderedResponse `shouldBe` Observability.BodyResponseKind
+                 responseKind renderedResponse `shouldBe` Observability.BodyResponseKind,
+                 protocolResponse /= changedProtocolResponse `shouldBe` True,
+                 show renderedResponse `shouldSatisfy` isInfixOf "ProtocolResponseResult (ProtocolResponse",
+                 showsPrec 11 renderedResponse "" `shouldSatisfy` isInfixOf "(ProtocolResponseResult (ProtocolResponse",
+                 show protocolResponse `shouldSatisfy` isInfixOf "ProtocolResponseBytes",
+                 showsPrec 11 protocolResponse "" `shouldSatisfy` isInfixOf "(ProtocolResponse",
+                 show protocolResponse `shouldSatisfy` isInfixOf "application/example",
+                 length (show protocolResponse) `shouldSatisfy` (> 0),
+                 length (showList [protocolResponse] "") `shouldSatisfy` (> 0)
                ]
         )
 
@@ -2448,10 +2631,39 @@ spec = do
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
       expectAll
         ( (lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/octet-stream")
-            :| [ readResponseBody response `shouldReturn` "first-second",
+            :| [ Wai.responseStatus response `shouldBe` Http.status200,
+                 readResponseBody response `shouldReturn` "first-second",
                  renderedResponse `shouldBe` renderedResponse,
                  renderedResponse `shouldNotBe` strictResponse,
                  show renderedResponse `shouldSatisfy` isInfixOf "ProtocolResponseStream <stream>"
+               ]
+        )
+
+    it "compares and prints every non-page response form without observing stream identity" $ do
+      eventSource <- serverSentEventSourceFromList []
+      sameEventSource <- serverSentEventSourceFromList [ServerSentEvent Nothing Nothing "later"]
+      otherEventSource <- serverSentEventSourceFromList []
+      let responseBodyValue = ResponseBody 200 "text/plain" "ok" [] []
+          otherResponseBodyValue = ResponseBody 500 "text/plain" "failed" [] []
+          actionResponse = ClientActionResponse 200 [] Nothing [] [] []
+          otherActionResponse = ClientActionResponse 422 [] (Just "email") [] [] []
+          eventResponse = EventStreamResponse responseBodyValue eventSource :: Response TestRoute TestContext
+          sameEventResponse = EventStreamResponse responseBodyValue sameEventSource
+          otherEventResponse = EventStreamResponse otherResponseBodyValue otherEventSource
+          actionBodyResponse = ClientActionBodyResponse actionResponse :: Response TestRoute TestContext
+          otherActionBodyResponse = ClientActionBodyResponse otherActionResponse
+          protocolResponse = ProtocolResponseResult (ProtocolResponse Http.status200 [] (ProtocolResponseBytes "ok") [] []) :: Response TestRoute TestContext
+          otherProtocolResponse = ProtocolResponseResult (ProtocolResponse Http.status500 [] (ProtocolResponseBytes "failed") [] [])
+      expectAll
+        ( (actionBodyResponse /= otherActionBodyResponse `shouldBe` True)
+            :| [ eventResponse == sameEventResponse `shouldBe` True,
+                 eventResponse /= otherEventResponse `shouldBe` True,
+                 protocolResponse /= otherProtocolResponse `shouldBe` True,
+                 show [actionBodyResponse, eventResponse, protocolResponse] `shouldSatisfy` isInfixOf "EventStreamResponse",
+                 show eventResponse `shouldSatisfy` isInfixOf "<event-source>",
+                 show protocolResponse `shouldSatisfy` isInfixOf "ProtocolResponseResult",
+                 show (ProtocolResponse Http.status200 [(Http.hContentType, "application/example")] (ProtocolResponseBytes "ok") [] [])
+                   `shouldBe` "ProtocolResponse (Status {statusCode = 200, statusMessage = \"OK\"}) [(\"Content-Type\",\"application/example\")] \"ProtocolResponseBytes \\\"ok\\\"\""
                ]
         )
 
@@ -2508,6 +2720,7 @@ spec = do
       let policy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders response)))
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422
       Text.isInfixOf "script-src 'self' 'nonce-" policy `shouldBe` True
+      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldSatisfy` maybe False (ByteString.isPrefixOf "harch-csrf=")
       responseBody <- readResponseBody response
       Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
 
@@ -2581,6 +2794,11 @@ spec = do
         ( (Wai.responseStatus response `shouldBe` Http.status404)
             :| [lookup Http.hAllow (Wai.responseHeaders response) `shouldBe` Nothing]
         )
+
+    it "decodes an invalid request method leniently before route matching" $ do
+      let malformedMethodRequest = (waiRequest ["known"]) {Wai.requestMethod = "\xFF"}
+      response <- performWaiRequest (toWaiApplication sampleApplication) malformedMethodRequest
+      Wai.responseStatus response `shouldBe` Http.status405
 
     it "returns 405 with a derived Allow header when a known route rejects the method" $ do
       let knownDeleteRequest = (waiRequest ["known"]) {Wai.requestMethod = "DELETE"}

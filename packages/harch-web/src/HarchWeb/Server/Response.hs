@@ -84,12 +84,14 @@ equalProtocolBodies left right =
 instance Show ProtocolResponse where
   showsPrec precedence response =
     showParen (precedence > 10) $
-      showString "ProtocolResponse "
-        . showsPrec 11 (protocolResponseStatus response)
-        . showChar ' '
-        . showsPrec 11 (protocolResponseHeaders response)
-        . showChar ' '
-        . showsPrec 11 (protocolResponseBodySummary (protocolResponseBody response))
+      showString
+        ( "ProtocolResponse "
+            <> showsPrec 11 (protocolResponseStatus response) ""
+            <> " "
+            <> shows (protocolResponseHeaders response) ""
+            <> " "
+            <> shows (protocolResponseBodySummary (protocolResponseBody response)) ""
+        )
 
 protocolResponseBodySummary :: ProtocolResponseBody -> String
 protocolResponseBodySummary responseBodyValue =

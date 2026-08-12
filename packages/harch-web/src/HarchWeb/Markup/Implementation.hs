@@ -264,5 +264,5 @@ regionFrameworkAttributes (Internal.RegionId identifier) =
   ]
 
 isReservedRegionAttribute :: Attribute -> Bool
-isReservedRegionAttribute (Internal.Attribute attributeName _) =
-  attributeName == AttributeName "id" || attributeName == AttributeName "data-harch-region"
+isReservedRegionAttribute (Internal.Attribute (AttributeName attributeName) _) =
+  attributeName == "id" || attributeName == "data-harch-region"

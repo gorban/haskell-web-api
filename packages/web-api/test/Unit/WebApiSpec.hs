@@ -1784,6 +1784,20 @@ spec = do
                   }
             }
 
+    it "names each invalid request-limit setting in its configuration error" $
+      expectAll
+        ( ( parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_TARGET_MAX_BYTES", "not-a-number")]
+              `shouldBe` Left (InvalidConfigValue "REQUEST_TARGET_MAX_BYTES" "not-a-number")
+          )
+            :| [ parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_NETWORK_TIMEOUT_SECONDS", "not-a-number")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_NETWORK_TIMEOUT_SECONDS" "not-a-number"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_HEADER_MAX_COUNT", "not-a-number")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_HEADER_MAX_COUNT" "not-a-number"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_PATH_SEGMENT_MAX_COUNT", "not-a-number")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_PATH_SEGMENT_MAX_COUNT" "not-a-number")
+               ]
+        )
+
     it "parses CORS and response security policy overrides" $
       fmap
         requestPolicy
@@ -8106,6 +8120,8 @@ spec = do
         `shouldBe` "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"
       renderPageBody (RegistrationPage RegisterAccountTarget emptyRegistrationForm)
         `shouldSatisfy` Text.isInfixOf "data-page=\"registration\""
+      resendTargetReference <- newIORef UpdateProfileTarget
+      resendTarget <- readIORef resendTargetReference
       let pendingProfile =
             renderPageBody
               ( ProfilePage
@@ -8115,7 +8131,7 @@ spec = do
                       "person@example.test"
                       (Just "person_01")
                       (Just "Person Example")
-                      UpdateProfileTarget
+                      resendTarget
                       "Resend verification email"
                       (CallToAction "Sign out" LogoutRoute "/logout")
                   )

@@ -10,7 +10,7 @@
 4. Replaced destructive client-action queue draining with retained, control-local capture ownership and
    visible pending/recoverable/cancelled states; native action submission is now an explicit capability.
 5. Added `HarchWeb.Api`: low-level `ApiEndpoint` compatibility matching plus a shared-route
-   `apiRouteEndpoint` declaration with typed query/header/cookie request values, one declared body consumer, typed response
+   `apiRouteEndpoint` declaration with typed query/header/cookie/form request values, one declared body consumer, typed response
    encoders, RFC 9110 `Accept` selection, `Vary: Accept`, and `406` for incompatible representations;
    request/response codecs, `Content-Type`-selected request-body decoding, RFC 9110 `Accept` negotiation,
    and `apiEndpointMiddleware`, an opt-in `Wai.Middleware` an application wraps around its own

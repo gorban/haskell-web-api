@@ -2,6 +2,11 @@
 
 ## 0.1.2.0
 
+* Added bounded `application/x-www-form-urlencoded` request support: `urlEncodedFormBodyDecoder` preserves
+  field order and duplicates, enforces an application-declared field-count cap, and rejects malformed
+  percent escapes and invalid UTF-8. `ApiUrlEncodedFormRequestBody` declares it as an endpoint's sole body
+  consumer; `formField` then reuses the accumulating typed field codec alongside query, header, and cookie
+  declarations after decoding succeeds.
 * Added `cookieField` to `HarchWeb.Api`'s accumulating `RequestCodec`. It extracts case-sensitive cookie
   names from every `Cookie` header, ignores malformed fragments, and reports repeated names as a typed
   duplicate-field error rather than selecting an arbitrary value.
@@ -21,7 +26,8 @@
   accumulating-error `RequestCodec` for query, header, and cookie fields (with
   `apiRequestDataFromWaiRequest` to extract them from a real WAI request),
   `Content-Type`-selected buffered request-body decoding (`selectApiBodyDecoder`, with
-  `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`413`/`400` outcomes),
+  `jsonBodyDecoder`/`textBodyDecoder`/`bytesBodyDecoder` built-ins and `415`/`400` outcomes; the
+  endpoint body reader supplies the distinct `413` outcome),
   `ResponseCodec` helpers for JSON/text/bytes bodies, RFC 9110 `Accept` header negotiation (quality
   weights, wildcards, specificity, `q=0`, and `406`), `respondApiMatch` to render an `ApiMatchResult`
   into a transport-agnostic `ApiHttpResponse` (status, headers, and an optional body, omitted for a

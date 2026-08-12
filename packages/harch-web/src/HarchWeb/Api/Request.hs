@@ -17,10 +17,13 @@ module HarchWeb.Api.Request
     queryField,
     headerField,
     cookieField,
+    formField,
     requiredField,
     optionalField,
     fieldWithDefault,
     runRequestCodec,
+    runApiFormCodec,
+    apiRequestDataWithForm,
   )
 where
 
@@ -33,13 +36,15 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word8)
+import HarchWeb.Api.Response (ApiForm, apiFormFields)
 import Network.Wai qualified as Wai
 
 data ApiRequestData = ApiRequestData
   { apiRequestQueryParameters :: [(Text, Text)],
     apiRequestHeaders :: [(ApiHeaderName, Text)],
     -- | Cookie names are case-sensitive, unlike HTTP header names.
-    apiRequestCookies :: [(Text, Text)]
+    apiRequestCookies :: [(Text, Text)],
+    apiRequestFormFields :: [(Text, Text)]
   }
   deriving (Eq, Show)
 
@@ -55,7 +60,8 @@ apiRequestDataFromWaiRequest request =
         | (name, value) <- Wai.requestHeaders request
         ],
       apiRequestCookies =
-        concatMap requestCookies (Wai.requestHeaders request)
+        concatMap requestCookies (Wai.requestHeaders request),
+      apiRequestFormFields = []
     }
 
 requestCookies :: (CaseInsensitive.CI ByteString, ByteString) -> [(Text, Text)]
@@ -94,6 +100,7 @@ data ApiRequestSource
   = ApiQuerySource
   | ApiHeaderSource
   | ApiCookieSource
+  | ApiFormSource
   deriving (Eq, Show)
 
 data ApiRequestParseError
@@ -131,12 +138,26 @@ requestCodec decode = Compose (Compose . decode)
 runRequestCodec :: RequestCodec value -> ApiRequestData -> ([ApiRequestParseError], Maybe value)
 runRequestCodec codec requestData = getCompose (getCompose codec requestData)
 
+-- | Run a field codec against the fields decoded from one bounded form body.
+-- The caller owns that single body-consumption declaration.
+runApiFormCodec :: RequestCodec value -> ApiForm -> ([ApiRequestParseError], Maybe value)
+runApiFormCodec codec formValue =
+  runRequestCodec codec (ApiRequestData [] [] [] (apiFormFields formValue))
+
+-- | Add fields from a successfully decoded form to the original request data.
+-- This preserves query, header, and cookie declarations when an endpoint
+-- declares the form as its single body consumer.
+apiRequestDataWithForm :: ApiForm -> ApiRequestData -> ApiRequestData
+apiRequestDataWithForm formValue requestData =
+  requestData {apiRequestFormFields = apiFormFields formValue}
+
 sourceFields :: ApiRequestSource -> ApiRequestData -> [(Text, Text)]
 sourceFields source requestData =
   case source of
     ApiQuerySource -> apiRequestQueryParameters requestData
     ApiHeaderSource -> [(apiHeaderNameText name, value) | (name, value) <- apiRequestHeaders requestData]
     ApiCookieSource -> apiRequestCookies requestData
+    ApiFormSource -> apiRequestFormFields requestData
 
 requestField :: ApiRequestSource -> Text -> ApiFieldValue value -> RequestField value
 requestField source fieldName valueDecoder =
@@ -160,6 +181,10 @@ headerField name = requestField ApiHeaderSource (apiHeaderNameText name)
 -- parse error rather than selecting an arbitrary value.
 cookieField :: Text -> ApiFieldValue value -> RequestField value
 cookieField = requestField ApiCookieSource
+
+-- | Declare a field from one decoded URL-encoded form body.
+formField :: Text -> ApiFieldValue value -> RequestField value
+formField = requestField ApiFormSource
 
 requiredField :: RequestField value -> RequestCodec value
 requiredField (RequestField decode) = requestCodec decode

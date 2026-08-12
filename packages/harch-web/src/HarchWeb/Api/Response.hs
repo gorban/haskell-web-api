@@ -9,6 +9,9 @@ module HarchWeb.Api.Response
     jsonBodyDecoder,
     textBodyDecoder,
     bytesBodyDecoder,
+    ApiForm,
+    apiFormFields,
+    urlEncodedFormBodyDecoder,
     ApiResponse (..),
     apiResponse,
     ApiResponseEncoder (..),
@@ -23,6 +26,7 @@ module HarchWeb.Api.Response
 where
 
 import Data.Aeson (FromJSON, ToJSON)
+import Control.Monad (unless)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
@@ -30,8 +34,11 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word8)
 import HarchWeb.Api.MediaType
 import Network.HTTP.Types qualified as HttpTypes
+import Network.HTTP.Types.URI qualified as HttpUri
+import Numeric.Natural (Natural)
 
 -- | Decodes a fully-buffered request body declared for one @Content-Type@
 -- media type (ignoring its parameters, e.g. @charset@). A streaming body
@@ -50,7 +57,6 @@ data MissingContentTypePolicy
 
 data ApiBodyOutcome request
   = ApiUnsupportedMediaType [ApiMediaType]
-  | ApiBodyTooLarge
   | ApiMalformedBody
   | ApiDecodedBody request
   deriving (Eq, Show)
@@ -100,25 +106,23 @@ bytesResponseEncoder contentType =
     }
 
 -- | Select a declared decoder by the request's @Content-Type@ (ignoring its
--- parameters) and run it against an already-bounded body. Never reads more
--- of the body itself; the caller supplies @maxBodyBytes@ enforcement.
+-- parameters) and run it against an already-bounded body.  Byte-limit
+-- enforcement belongs to the body reader at the endpoint boundary, so this
+-- pure operation has just the media-type and parse failure alternatives.
 selectApiBodyDecoder ::
   MissingContentTypePolicy ->
-  Int ->
   [ApiBodyDecoder request] ->
   Maybe Text ->
   ByteString ->
   ApiBodyOutcome request
-selectApiBodyDecoder missingPolicy maxBodyBytes decoders maybeContentType bodyBytes
-  | ByteString.length bodyBytes > maxBodyBytes = ApiBodyTooLarge
-  | otherwise =
-      case resolvedMediaType of
-        Nothing -> ApiUnsupportedMediaType declaredMediaTypes
-        Just mediaType ->
-          case [decoder | decoder <- decoders, apiBodyDecoderMediaType decoder == mediaType] of
-            [] -> ApiUnsupportedMediaType declaredMediaTypes
-            decoder : _ ->
-              either (const ApiMalformedBody) ApiDecodedBody (apiBodyDecoderParse decoder bodyBytes)
+selectApiBodyDecoder missingPolicy decoders maybeContentType bodyBytes =
+  case resolvedMediaType of
+    Nothing -> ApiUnsupportedMediaType declaredMediaTypes
+    Just mediaType ->
+      case [decoder | decoder <- decoders, apiBodyDecoderMediaType decoder == mediaType] of
+        [] -> ApiUnsupportedMediaType declaredMediaTypes
+        decoder : _ ->
+          either (const ApiMalformedBody) ApiDecodedBody (apiBodyDecoderParse decoder bodyBytes)
   where
     declaredMediaTypes = map apiBodyDecoderMediaType decoders
     resolvedMediaType =
@@ -157,6 +161,57 @@ bytesBodyDecoder mediaType =
     { apiBodyDecoderMediaType = mediaType,
       apiBodyDecoderParse = Right
     }
+
+-- | A bounded, decoded @application/x-www-form-urlencoded@ body. The order
+-- and duplicates are retained so a typed field codec can reject ambiguity.
+newtype ApiForm = ApiForm [(Text, Text)]
+  deriving (Eq, Show)
+
+apiFormFields :: ApiForm -> [(Text, Text)]
+apiFormFields (ApiForm fields) = fields
+
+-- | Decode a small URL-encoded form with an explicit field-count bound.
+-- Byte limits remain owned by the enclosing 'ApiRequestBody' declaration.
+urlEncodedFormBodyDecoder :: Natural -> ApiBodyDecoder ApiForm
+urlEncodedFormBodyDecoder maximumFields =
+  ApiBodyDecoder
+    { apiBodyDecoderMediaType = urlEncodedFormMediaType,
+      apiBodyDecoderParse = parseForm
+    }
+  where
+    parseForm bodyBytes = do
+      validatePercentEscapes bodyBytes
+      let fields = HttpUri.parseQuery bodyBytes
+      if fromIntegral (length fields) > maximumFields
+        then Left "form contains more fields than declared"
+        else ApiForm <$> traverse decodeField fields
+    decodeField (name, maybeValue) =
+      (,) <$> decodeUtf8Field name <*> maybe (Right "") decodeUtf8Field maybeValue
+
+validatePercentEscapes :: ByteString -> Either Text ()
+validatePercentEscapes bytes =
+  unless (all (validPercentEscapeAt bytes) (ByteString.elemIndices 37 bytes)) invalidPercentEscapes
+
+invalidPercentEscapes :: Either Text ()
+invalidPercentEscapes = Left "form contains invalid percent encoding"
+
+validPercentEscapeAt :: ByteString -> Int -> Bool
+validPercentEscapeAt bytes percentIndex =
+  case ByteString.unpack (ByteString.take 2 (ByteString.drop (percentIndex + 1) bytes)) of
+    [firstDigit, secondDigit] -> isHexDigit firstDigit && isHexDigit secondDigit
+    _ -> False
+
+isHexDigit :: Word8 -> Bool
+isHexDigit byte =
+  (byte >= 48 && byte <= 57)
+    || (byte >= 65 && byte <= 70)
+    || (byte >= 97 && byte <= 102)
+
+decodeUtf8Field :: ByteString -> Either Text Text
+decodeUtf8Field bytes =
+  case TextEncoding.decodeUtf8' bytes of
+    Left _decodeError -> Left "form contains invalid UTF-8"
+    Right fieldValue -> Right fieldValue
 
 -- | A rendered API response body. Every built-in constructor defaults its
 -- status to @200@; callers can deliberately override it with a record update.

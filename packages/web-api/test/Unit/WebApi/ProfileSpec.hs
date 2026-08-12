@@ -216,7 +216,7 @@ spec =
                    `shouldBe` False,
                  (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
                    `shouldBe` True,
-                 renderPendingProfileRegion defaultRequestContext (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
+                 renderPendingProfileRegion defaultRequestContext UpdateProfileTarget (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
                    `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
                ]
         )

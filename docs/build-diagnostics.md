@@ -10,6 +10,20 @@ removes the GNU `ld.bfd` dynamic-closure-symbol warning rather than suppressing 
 `lld`; local developers must install an `ld.lld` executable before either wrapper starts Cabal. See
 the [setup guide](../SETUP.md#ghcup-prerequisites) for the Ubuntu and Fedora/Distrobox package lists.
 
+## Runtime coverage scope
+
+The coverage gate requires 100% expressions, alternatives, and top-level declarations from every
+package's executable runtime code. Its only exclusions are the exact internal Template Haskell
+modules `HarchWeb.Markup.Quasi`, `HarchWeb.Markup.Quasi.Lowering`, and
+`HarchWeb.Markup.Quasi.Parser`. GHC runs those while compiling a quasiquote, before the test process
+and its `.tix` file exist; standard HPC therefore cannot attribute that compiler-process execution to
+the test run. The quasiquoter remains covered by compile-time acceptance and rejection specs.
+
+This is not a general generated-code exemption: ordinary generated instances, application code,
+runtime error paths, and all other production modules remain in the gate. Add no module to this list
+without demonstrating that it executes exclusively in GHC's compiler process and documenting the
+corresponding compile-time acceptance test.
+
 ## Fatal diagnostics
 
 Any line containing `warning:` or `Warning:` is fatal unless it matches the exact documented

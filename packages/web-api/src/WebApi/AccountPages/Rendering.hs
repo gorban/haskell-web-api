@@ -184,14 +184,14 @@ loginRegion context locale form =
             ]
         ]
 
-renderPendingProfileRegion :: AppRequestContext -> PendingProfileForm -> Text
-renderPendingProfileRegion context form = HarchWeb.renderHtml (renderPendingProfileRegionHtml context form)
+renderPendingProfileRegion :: AppRequestContext -> AccountActionTarget -> PendingProfileForm -> Text
+renderPendingProfileRegion context target form = HarchWeb.renderHtml (renderPendingProfileRegionHtml context target form)
 
-renderPendingProfileRegionHtml :: AppRequestContext -> PendingProfileForm -> HarchWeb.Html
-renderPendingProfileRegionHtml context form = HarchWeb.regionHtml (pendingProfileRegion context form)
+renderPendingProfileRegionHtml :: AppRequestContext -> AccountActionTarget -> PendingProfileForm -> HarchWeb.Html
+renderPendingProfileRegionHtml context target form = HarchWeb.regionHtml (pendingProfileRegion context target form)
 
-pendingProfileRegion :: AppRequestContext -> PendingProfileForm -> HarchWeb.Region
-pendingProfileRegion context form =
+pendingProfileRegion :: AppRequestContext -> AccountActionTarget -> PendingProfileForm -> HarchWeb.Region
+pendingProfileRegion context target form =
   accountRegion
     "profile-region"
     [ renderMessage (pendingProfileFormMessage form) (pendingProfileFormIsError form),
@@ -202,7 +202,7 @@ pendingProfileRegion context form =
         [ Controls.actionForm
             accountActions
             context
-            UpdateProfileTarget
+            target
             Controls.defaultActionFormAttributes
             [hiddenInput "intent" "resend-verification", submitButton (pendingProfileFormResendLabel form)]
         ]

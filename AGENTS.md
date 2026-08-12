@@ -61,7 +61,10 @@ and Ormolu toolchain used by CI.
 The optimized-build wrapper first tests the warning classifier, then rejects actionable compiler or
 linker warnings before the longer coverage run. The coverage wrapper cleans and rebuilds all
 packages, runs Unit tests package by package, requires 100% coverage in every project report and
-the complete multi-package report, and applies the same diagnostic gate. They record only the
+the complete multi-package report, and applies the same diagnostic gate. Its runtime scope excludes
+only the exact three `HarchWeb.Markup.Quasi*` Template Haskell implementation modules: GHC executes
+them during compilation, before a test executable and its TIX exist. It does not exclude generated
+instances, ordinary runtime modules, error paths, or application code. They record only the
 documented GHC HPC diagnostic without masking it; see `docs/build-diagnostics.md`. Do not run
 another Cabal command while either wrapper is active.
 

@@ -37,7 +37,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import WebApi.Account (AccountProfile (..), AccountStoreError (..))
-import WebApi.AccountPages.Actions.Contract (AccountAction)
+import WebApi.AccountPages.Actions.Contract (AccountAction, AccountActionTarget (UpdateProfileTarget))
 import WebApi.AccountPages.Forms
 import WebApi.AccountPages.Rendering
 import WebApi.AppEffect
@@ -217,7 +217,7 @@ profileResponse :: AccountActionRequest -> Int -> PendingProfileForm -> HarchWeb
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
-      HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (HarchWeb.clientActionContext actionRequest) form),
+      HarchWeb.clientActionPatches = replaceRegionPatch (pendingProfileRegion (HarchWeb.clientActionContext actionRequest) UpdateProfileTarget form),
       HarchWeb.clientActionFocusId = Nothing,
       HarchWeb.clientActionHeaders = [],
       HarchWeb.clientActionObservabilityAttributes = [],

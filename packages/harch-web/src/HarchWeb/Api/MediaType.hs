@@ -8,6 +8,7 @@ module HarchWeb.Api.MediaType
     apiMediaTypeText,
     jsonMediaType,
     plainTextMediaType,
+    urlEncodedFormMediaType,
     htmlMediaType,
     ApiContentType,
     apiContentType,
@@ -23,6 +24,7 @@ where
 
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Text.Show (showListWith)
 
 -- | A validated bare @type\/subtype@ media type declared by application
 -- configuration. Header values remain raw 'Text' until parsing succeeds, so
@@ -46,6 +48,10 @@ jsonMediaType = ApiMediaType "application/json"
 plainTextMediaType :: ApiMediaType
 plainTextMediaType = ApiMediaType "text/plain"
 
+-- | The bare media type used by URL-encoded form request bodies.
+urlEncodedFormMediaType :: ApiMediaType
+urlEncodedFormMediaType = ApiMediaType "application/x-www-form-urlencoded"
+
 -- | The bare media type used by UTF-8 HTML responses.
 htmlMediaType :: ApiMediaType
 htmlMediaType = ApiMediaType "text/html"
@@ -54,12 +60,20 @@ htmlMediaType = ApiMediaType "text/html"
 -- constructor is private so a caller cannot accidentally put an unvalidated
 -- header value on an API response.
 data ApiContentType = ApiContentType ApiMediaType ApiContentTypeCharset
-  deriving (Eq, Show)
 
 data ApiContentTypeCharset
   = NoCharset
   | Utf8Charset
-  deriving (Eq, Show)
+
+instance Eq ApiContentType where
+  left == right = apiContentTypeText left == apiContentTypeText right
+  left /= right = not (left == right)
+
+instance Show ApiContentType where
+  showsPrec precedence contentType =
+    showParen (precedence > 10) $
+      showString "ApiContentType " . shows (apiContentTypeText contentType)
+  showList contentTypes = showListWith shows contentTypes
 
 -- | Use a declared media type without a charset parameter, appropriate for
 -- bytes whose encoding is application-defined or not textual.

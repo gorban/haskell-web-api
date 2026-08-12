@@ -10,14 +10,13 @@ module HarchWeb.Api.Negotiation
   )
 where
 
-import Data.Char (isAscii, isDigit)
+import Data.Char (digitToInt, isAscii, isDigit)
 import Data.List (foldl1')
 import Data.List.NonEmpty (NonEmpty)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Text.Read qualified as TextRead
 import HarchWeb.Api.MediaType (ApiMediaType, apiMediaTypeParts, parseMediaRange)
 
 data AcceptedRange = AcceptedRange
@@ -72,7 +71,7 @@ parseQuality :: Text -> Maybe Double
 parseQuality qualityText =
   case Text.splitOn "." qualityText of
     ["0"] -> Just 0.0
-    ["0", fraction] | validFraction fraction -> parseFraction fraction
+    ["0", fraction] | validFraction fraction -> Just (parseFraction fraction)
     ["1"] -> Just 1.0
     ["1", fraction] | validFraction fraction, Text.all (== '0') fraction -> Just 1.0
     _ -> Nothing
@@ -80,11 +79,16 @@ parseQuality qualityText =
 validFraction :: Text -> Bool
 validFraction fraction = Text.length fraction <= 3 && Text.all isAsciiDigit fraction
 
-parseFraction :: Text -> Maybe Double
+-- The caller establishes that this is at most three ASCII digits, so this
+-- conversion is total and does not need a partial numeric parser.
+parseFraction :: Text -> Double
 parseFraction fraction =
-  case TextRead.double ("0." <> fraction) of
-    Right (quality, "") -> Just quality
-    _ -> Nothing
+  let (numerator, width) =
+        Text.foldl'
+          (\(value, digitCount) digit -> (value * 10 + digitToInt digit, digitCount + 1))
+          (0 :: Int, 0 :: Int)
+          fraction
+   in fromIntegral numerator / (10 ^ width)
 
 isAsciiDigit :: Char -> Bool
 isAsciiDigit character = isAscii character && isDigit character

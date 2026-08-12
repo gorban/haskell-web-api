@@ -40,7 +40,6 @@ data ClientActionProtocolError
   | ClientActionCsrfRejected
   | ClientActionPayloadMalformed
   | ClientActionNotFound
-  deriving (Eq, Show)
 
 maxClientActionBodyBytes :: Int
 maxClientActionBodyBytes = 65536

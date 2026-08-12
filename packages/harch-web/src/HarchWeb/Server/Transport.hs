@@ -18,19 +18,11 @@ module HarchWeb.Server.Transport
     openLoopbackSocket,
     reloadTlsCredentialsIfChanged,
     socketPort,
-    startHttpRuntimeServers,
-    startHttpRuntimeServersWithRequestHeadLimits,
     startHttpRuntimeServersWithRequestTransportLimits,
-    startManualTlsRuntimeServer,
-    startManualTlsRuntimeServerWithRequestHeadLimits,
     startManualTlsRuntimeServerWithRequestTransportLimits,
     startManualTlsRuntimeServerWithStarter,
-    startManualTlsRuntimeServers,
-    startManualTlsRuntimeServersWithRequestHeadLimits,
     startManualTlsRuntimeServersWithRequestTransportLimits,
     startWarpRuntimeServerOnSocket,
-    startWarpServerOnSocket,
-    startWarpServerOnSocketWithRequestHeadLimits,
     startWarpServerOnSocketWithRequestTransportLimits,
     stopRuntimeServer,
     stopRuntimeServers,
@@ -54,8 +46,6 @@ import HarchWeb.Security
     requestByteLimitValue,
     requestTimeoutSecondsValue,
     socketAddressText,
-    unboundedRequestHeadLimits,
-    warpDefaultRequestTransportLimits,
   )
 import HarchWeb.Server.Config
 import HarchWeb.Server.Transport.Tls
@@ -83,16 +73,6 @@ data ActiveConnectionAddresses = ActiveConnectionAddresses
     activeConnectionAddresses :: IORef [(ThreadId, Socket.SockAddr)]
   }
 
-startHttpRuntimeServers :: [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
-startHttpRuntimeServers = startHttpRuntimeServersWithRequestHeadLimits unboundedRequestHeadLimits
-
--- | Start HTTP listeners with an application-selected request-head budget.
--- The legacy entry point remains unbounded so callers do not acquire a new
--- deployment policy accidentally.
-startHttpRuntimeServersWithRequestHeadLimits :: RequestHeadLimits -> [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
-startHttpRuntimeServersWithRequestHeadLimits requestHeadLimits =
-  startHttpRuntimeServersWithRequestTransportLimits requestHeadLimits warpDefaultRequestTransportLimits
-
 -- | Start HTTP listeners with all opt-in Warp request transport controls.
 startHttpRuntimeServersWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> [ListenerEndpoint] -> Wai.Application -> IO [RunningRuntimeServer]
 startHttpRuntimeServersWithRequestTransportLimits requestHeadLimits transportLimits endpoints waiApplication =
@@ -108,14 +88,6 @@ startHttpRuntimeServersWithRequestTransportLimits requestHeadLimits transportLim
                 `onException` stopRuntimeServers (runningServer : runningServers)
           )
             `onException` stopRuntimeServers runningServers
-
-startManualTlsRuntimeServers :: [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
-startManualTlsRuntimeServers = startManualTlsRuntimeServersWithRequestHeadLimits unboundedRequestHeadLimits
-
--- | Start manual-TLS listeners with the same head budget as HTTP listeners.
-startManualTlsRuntimeServersWithRequestHeadLimits :: RequestHeadLimits -> [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
-startManualTlsRuntimeServersWithRequestHeadLimits requestHeadLimits =
-  startManualTlsRuntimeServersWithRequestTransportLimits requestHeadLimits warpDefaultRequestTransportLimits
 
 -- | Start manual-TLS listeners with all opt-in Warp request transport controls.
 startManualTlsRuntimeServersWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> [ManualTlsBindPlan] -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO [RunningRuntimeServer]
@@ -144,13 +116,6 @@ startHttpRuntimeServer requestHeadLimits transportLimits endpoint waiApplication
         { runningRuntimeSocket = listeningSocket,
           runningRuntimeThreadId = serverThreadId
         }
-
-startManualTlsRuntimeServer :: ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServer = startManualTlsRuntimeServerWithRequestHeadLimits unboundedRequestHeadLimits
-
-startManualTlsRuntimeServerWithRequestHeadLimits :: RequestHeadLimits -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
-startManualTlsRuntimeServerWithRequestHeadLimits requestHeadLimits =
-  startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits warpDefaultRequestTransportLimits
 
 startManualTlsRuntimeServerWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> ManualTlsBindPlan -> Wai.Application -> (Observability.ConnectionObservability -> IO ()) -> IO RunningRuntimeServer
 startManualTlsRuntimeServerWithRequestTransportLimits requestHeadLimits transportLimits =
@@ -239,13 +204,6 @@ openListenerSocket endpoint = do
   pure listeningSocket
 
 data RuntimeServerReady = RuntimeServerReady
-
-startWarpServerOnSocket :: ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocket = startWarpServerOnSocketWithRequestHeadLimits unboundedRequestHeadLimits
-
-startWarpServerOnSocketWithRequestHeadLimits :: RequestHeadLimits -> ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
-startWarpServerOnSocketWithRequestHeadLimits requestHeadLimits =
-  startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits warpDefaultRequestTransportLimits
 
 startWarpServerOnSocketWithRequestTransportLimits :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId
 startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint listeningSocket waiApplication =

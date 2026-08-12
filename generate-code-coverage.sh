@@ -17,6 +17,27 @@ coverage_percentage_is_incomplete() {
   awk -v percentage="$percentage" 'BEGIN { exit !(percentage + 0 < 100) }'
 }
 
+# GHC executes these implementation modules only while compiling quasiquotes.
+# Their counters belong to the compiler process, not a test executable's TIX,
+# so an ordinary runtime HPC run cannot observe them. Keep this exact list
+# deliberately small: every ordinary runtime module, including generated
+# instances and error paths, remains in the 100% gate.
+runtime_coverage_filter_args() {
+  local package_version_dir="$1"
+  local package_name="$2"
+
+  runtime_coverage_args=("--include=${package_version_dir}-inplace:")
+  case "$package_name" in
+    harch-web)
+      runtime_coverage_args+=(
+        "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi"
+        "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.Lowering"
+        "--exclude=${package_version_dir}-inplace:HarchWeb.Markup.Quasi.Parser"
+      )
+      ;;
+  esac
+}
+
 coverage_gate_fixture() {
   local project_fraction="$1"
   local aggregate_percentage="$2"
@@ -31,6 +52,7 @@ coverage_gate_fixture() {
   if "$missing_coverage"; then
     return 1
   fi
+  return 0
 }
 
 if [ "${1:-}" = "--coverage-gate-fixture" ]; then
@@ -156,6 +178,13 @@ if [ ! -d "$temp_root" ]; then
 fi
 coverage_staging_dir="$temp_root/hpc"
 mkdir -p "$coverage_staging_dir"
+coverage_root="$(pwd)"
+
+coverage_source_args=()
+while IFS= read -r cabal_file; do
+  package_root="${cabal_file%/*}"
+  coverage_source_args+=("--srcdir=$coverage_root/${package_root#./}")
+done < <(find . -path './dist-newstyle' -prune -o -name '*.cabal' -type f -print | sort)
 
 project_local_path="cabal.project.local"
 project_local_backup=""
@@ -217,7 +246,7 @@ EOF
       pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$pkg_hpc_dir")")")")"
       coverage_hpc_args=()
       while IFS= read -r mix_dir; do
-        coverage_hpc_args+=("--hpcdir=$mix_dir")
+        coverage_hpc_args+=("--hpcdir=$coverage_root/$mix_dir")
       done < <(find dist-newstyle -type d -path '*/extra-compilation-artifacts/hpc/vanilla/mix' -print | sort -u)
 
       tix_file=$(find "$pkg_hpc_dir/tix" -type f -name '*.tix' -print | head -n1)
@@ -226,15 +255,9 @@ EOF
         exit 1
       fi
 
-      if ! package_coverage_report=$(hpc report "--include=${pkg_version_dir}-inplace:" "$tix_file" "${coverage_hpc_args[@]}"); then
+      runtime_coverage_filter_args "$pkg_version_dir" "$pkg"
+      if ! package_coverage_report=$(hpc report "${runtime_coverage_args[@]}" "$tix_file" "${coverage_hpc_args[@]}"); then
         printf 'Could not resolve every HPC module for coverage package %s.\n' "$pkg" >&2
-        exit 1
-      fi
-
-      if ! printf '%s\n' "$package_coverage_report" | grep -q '100% expressions used' \
-        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% alternatives used' \
-        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% top-level declarations used'; then
-        printf 'Authoritative coverage report for %s is incomplete:\n%s\n' "$pkg" "$package_coverage_report" >&2
         exit 1
       fi
 
@@ -242,6 +265,28 @@ EOF
       rm -rf "$dest"
       mkdir -p "$dest"
       cp -r "$pkg_hpc_dir"/. "$dest"/
+
+      rm -rf "$dest/html"
+      if ! hpc_markup_output=$(hpc markup --destdir="$dest/html" "${runtime_coverage_args[@]}" "${coverage_source_args[@]}" "$tix_file" "${coverage_hpc_args[@]}" 2>&1); then
+        printf 'Could not generate an authoritative HPC report for coverage package %s.\n' "$pkg" >&2
+        printf '%s\n' "$hpc_markup_output" >&2
+        exit 1
+      fi
+      printf 'Generated authoritative HPC report for %s.\n' "$pkg"
+
+      # Keep the report that the gate used even when this package is the
+      # first failure. Cabal's own package HTML can omit production MIX files,
+      # which would otherwise leave a misleading partial report beside it.
+      rm -rf "$pkg_hpc_dir"
+      mkdir -p "$pkg_hpc_dir"
+      cp -r "$dest"/. "$pkg_hpc_dir"/
+
+      if ! printf '%s\n' "$package_coverage_report" | grep -q '100% expressions used' \
+        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% alternatives used' \
+        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% top-level declarations used'; then
+        printf 'Authoritative coverage report for %s is incomplete:\n%s\n' "$pkg" "$package_coverage_report" >&2
+        exit 1
+      fi
 
       # The TIX also records the test-suite entry point. Keep its MIX files
       # beside the package report so aggregate reporting never has to search

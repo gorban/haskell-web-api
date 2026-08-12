@@ -8,6 +8,7 @@ import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as AesonEncoding
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (traverse_)
+import Data.IORef (newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import System.Directory (withCurrentDirectory)
@@ -138,6 +139,8 @@ spec = do
 
     it "encodes every semantic locator and role while exercising both applicative APIs" $
       withFakeRunner "normal" $ \config -> do
+        roleReference <- newIORef Textbox
+        runtimeRole <- readIORef roleReference
         let roles = [Button, Checkbox, Form, Heading, Link, List, ListItem, Navigation, Radio, Status, Textbox]
             locators =
               [ byRole Button,
@@ -161,7 +164,10 @@ spec = do
             scenarioValue = combineScenario (+) appliedScenario (pure 0) :: BrowserScenario Int
         expectAll
           ( (Aeson.toJSONList locators `shouldSatisfy` (not . null . show))
-              :| [ Aeson.omitField (byRole Button) `shouldBe` False,
+              :| [ show runtimeRole `shouldBe` "Textbox",
+                   showsPrec 0 runtimeRole "" `shouldBe` "Textbox",
+                   showList [runtimeRole] "" `shouldBe` "[Textbox]",
+                   Aeson.omitField (byRole Button) `shouldBe` False,
                    LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncoding (byRole Button))) `shouldSatisfy` (> 0),
                    LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncodingList locators)) `shouldSatisfy` (> 0)
                  ]

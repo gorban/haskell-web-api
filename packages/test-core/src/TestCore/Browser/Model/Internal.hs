@@ -49,7 +49,9 @@ data AriaRole
   | Radio
   | Status
   | Textbox
-  deriving (Show)
+
+instance Show AriaRole where
+  show = showAriaRole
 
 data Locator
   = RoleLocator AriaRole (Maybe Text)
@@ -98,7 +100,25 @@ instance ToJSON Locator where
   toEncodingList = AesonEncoding.value . Aeson.toJSONList
 
 renderAriaRole :: AriaRole -> Text
-renderAriaRole = Text.toLower . Text.pack . show
+renderAriaRole = Text.toLower . ariaRoleConstructorName
+
+showAriaRole :: AriaRole -> String
+showAriaRole = Text.unpack . ariaRoleConstructorName
+{-# NOINLINE showAriaRole #-}
+
+ariaRoleConstructorName :: AriaRole -> Text
+ariaRoleConstructorName = \case
+  Button -> "Button"
+  Checkbox -> "Checkbox"
+  Form -> "Form"
+  Heading -> "Heading"
+  Link -> "Link"
+  List -> "List"
+  ListItem -> "ListItem"
+  Navigation -> "Navigation"
+  Radio -> "Radio"
+  Status -> "Status"
+  Textbox -> "Textbox"
 
 byRole :: AriaRole -> Locator
 byRole role = RoleLocator role Nothing

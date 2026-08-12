@@ -390,7 +390,7 @@ buildRoutedRequestObservability routedRequestExecution executionTimings routeReq
       requestPath = routedRequestPath routedRequestExecution
    in maybe id Observability.withRequestTraceContext (requestTraceContext request) $
         Observability.buildRequestObservability
-          (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+          (requestMethodText request)
           (requestScheme requestPolicyConfig request)
           requestPath
           (renderRoute (routeCodec webApplication) routeRequest)

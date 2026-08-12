@@ -81,6 +81,24 @@ spec = do
               ]
       renderHtml quoted `shouldBe` renderHtml direct
 
+    it "supports opaque markup equality and diagnostics without exposing its representation" $ do
+      let firstHtml = element paragraphTag [dataAttribute "kind" "first"] [text "first"]
+          sameHtml = element paragraphTag [dataAttribute "kind" "first"] [text "first"]
+          otherHtml = element paragraphTag [dataAttribute "kind" "second"] [text "second"]
+          firstAttribute = dataAttribute "kind" "first"
+          otherAttribute = dataAttribute "kind" "second"
+      expectAll
+        ( (firstHtml == sameHtml `shouldBe` True)
+            :| [ firstHtml /= otherHtml `shouldBe` True,
+                 length (show firstHtml) `shouldSatisfy` (> 0),
+                 length (show [firstHtml]) `shouldSatisfy` (> 0),
+                 firstAttribute == firstAttribute `shouldBe` True,
+                 firstAttribute /= otherAttribute `shouldBe` True,
+                 length (show firstAttribute) `shouldSatisfy` (> 0),
+                 length (show [firstAttribute]) `shouldSatisfy` (> 0)
+               ]
+        )
+
     it "escapes literal and Text interpolation while composing Html interpolation safely" $ do
       let interpolatedText = "<reviewed>" :: Text.Text
           safeChild = element codeTag [] [text "safe"]
@@ -170,6 +188,70 @@ spec = do
         ( (Text.isInfixOf "href=\"https://example.test/?q=&quot;quoted&quot;&amp;x=&lt;value&gt;\"" renderedHtml `shouldBe` True)
             :| [ Text.isInfixOf "&lt;script&gt;alert(&#39;no&#39;)&lt;/script&gt;" renderedHtml `shouldBe` True,
                  Text.isInfixOf "<strong>reviewed</strong>" renderedHtml `shouldBe` True
+               ]
+        )
+
+    it "keeps the complete internal markup AST comparable and printable" $ do
+      let elementIdentifier = Markup.literalElementId "example"
+          regionIdentifier = Markup.mkRegionId elementIdentifier
+          attributeValue = Markup.dataAttribute "example" "value"
+          booleanValue = Markup.dataFlag "example"
+          trustedValue = Unsafe.unsafeTrustHtml "<em>trusted</em>"
+          otherElementIdentifier = Markup.literalElementId "other-example"
+          otherRegionIdentifier = Markup.mkRegionId otherElementIdentifier
+          otherTrustedValue = Unsafe.unsafeTrustHtml "<strong>other</strong>"
+          htmlValue =
+            Markup.fragment
+              [ Markup.element Markup.divTag [attributeValue] [Markup.text "child"],
+                Markup.voidElement Markup.inputTag [booleanValue],
+                Markup.text "plain",
+                Markup.trustedHtml trustedValue
+              ]
+          regionValue = Markup.region regionIdentifier Markup.sectionTag [attributeValue] [htmlValue]
+          patchValue = Markup.replaceRegion regionValue
+          otherHtmlValue = Markup.fragment [Markup.text "other", Markup.trustedHtml otherTrustedValue]
+          otherRegionValue = Markup.region otherRegionIdentifier Markup.divTag [booleanValue] [otherHtmlValue]
+          otherPatchValue = Markup.replaceRegion otherRegionValue
+          values =
+            [ show attributeValue,
+              show booleanValue,
+              show elementIdentifier,
+              show regionIdentifier,
+              show trustedValue,
+              show Markup.divTag,
+              show htmlValue,
+              show regionValue,
+              show patchValue
+            ]
+      expectAll
+        ( (attributeValue /= booleanValue `shouldBe` True)
+            :| [ htmlValue == htmlValue `shouldBe` True,
+                 htmlValue /= otherHtmlValue `shouldBe` True,
+                 regionValue == regionValue `shouldBe` True,
+                 regionValue /= otherRegionValue `shouldBe` True,
+                 patchValue == patchValue `shouldBe` True,
+                 patchValue /= otherPatchValue `shouldBe` True,
+                 show [attributeValue, booleanValue] `shouldSatisfy` (not . null),
+                 showList [attributeValue, booleanValue] "" `shouldSatisfy` (not . null),
+                 show [elementIdentifier, otherElementIdentifier] `shouldSatisfy` (not . null),
+                 elementIdentifier /= otherElementIdentifier `shouldBe` True,
+                 showList [elementIdentifier, otherElementIdentifier] "" `shouldSatisfy` (not . null),
+                 show [regionIdentifier, otherRegionIdentifier] `shouldSatisfy` (not . null),
+                 regionIdentifier /= otherRegionIdentifier `shouldBe` True,
+                 showList [regionIdentifier, otherRegionIdentifier] "" `shouldSatisfy` (not . null),
+                 show [trustedValue, otherTrustedValue] `shouldSatisfy` (not . null),
+                 trustedValue == trustedValue `shouldBe` True,
+                 trustedValue /= otherTrustedValue `shouldBe` True,
+                 showList [trustedValue, otherTrustedValue] "" `shouldSatisfy` (not . null),
+                 Markup.divTag /= Markup.sectionTag `shouldBe` True,
+                 showList [Markup.divTag, Markup.sectionTag] "" `shouldSatisfy` (not . null),
+                 show [htmlValue, otherHtmlValue] `shouldSatisfy` (not . null),
+                 showList [htmlValue, otherHtmlValue] "" `shouldSatisfy` (not . null),
+                 show [regionValue, otherRegionValue] `shouldSatisfy` (not . null),
+                 showList [regionValue, otherRegionValue] "" `shouldSatisfy` (not . null),
+                 show [patchValue, otherPatchValue] `shouldSatisfy` (not . null),
+                 showList [patchValue, otherPatchValue] "" `shouldSatisfy` (not . null),
+                 all (not . null) values `shouldBe` True
                ]
         )
 

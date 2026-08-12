@@ -27,14 +27,18 @@ import Data.Text qualified as Text
 newtype Html = Html
   { htmlNodes :: [Node]
   }
-  deriving (Eq, Show)
+
+instance Eq Html where
+  left == right = renderHtml left == renderHtml right
+
+instance Show Html where
+  show = show . renderHtml
 
 data Node
   = ElementNode Tag [Attribute] [Node]
   | VoidElementNode Tag [Attribute]
   | TextNode Text
   | TrustedNode TrustedHtml
-  deriving (Eq, Show)
 
 newtype Tag = Tag
   { tagText :: Text
@@ -42,12 +46,17 @@ newtype Tag = Tag
   deriving (Eq, Show)
 
 data Attribute = Attribute AttributeName (Maybe Text)
-  deriving (Eq, Show)
+
+instance Eq Attribute where
+  Attribute (AttributeName leftName) leftValue == Attribute (AttributeName rightName) rightValue =
+    leftName == rightName && leftValue == rightValue
+
+instance Show Attribute where
+  show (Attribute (AttributeName name) value) = "Attribute " <> show name <> " " <> show value
 
 newtype AttributeName = AttributeName
   { attributeNameText :: Text
   }
-  deriving (Eq, Show)
 
 newtype ElementId = ElementId
   { elementIdText :: Text

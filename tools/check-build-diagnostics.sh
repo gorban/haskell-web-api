@@ -26,11 +26,16 @@ is_documented_hpc_deprecation_warning() {
 }
 
 diagnostic_failure=false
+hpc_deprecation_count=0
+hpc_deprecation_summary=''
 mapfile -t lines < "$build_log"
 for ((index = 0; index < ${#lines[@]}; index += 1)); do
   line="${lines[index]}"
   if is_documented_hpc_deprecation_warning "$index" lines; then
-    printf 'Documented external GHC HPC deprecation warning: %s\n' "$line" >&2
+    hpc_deprecation_count=$((hpc_deprecation_count + 1))
+    if [ -z "$hpc_deprecation_summary" ]; then
+      hpc_deprecation_summary="${lines[index + 1]}"
+    fi
     index=$((index + 4))
     continue
   fi
@@ -42,6 +47,10 @@ for ((index = 0; index < ${#lines[@]}; index += 1)); do
       ;;
   esac
 done
+
+if [ "$hpc_deprecation_count" -gt 0 ]; then
+  printf 'x%d Documented external GHC HPC deprecation warning: %s\n' "$hpc_deprecation_count" "$hpc_deprecation_summary" >&2
+fi
 
 if "$diagnostic_failure"; then
   printf '%s\n' 'Actionable build warnings found.' >&2

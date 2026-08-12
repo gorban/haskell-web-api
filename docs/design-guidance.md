@@ -279,9 +279,9 @@ independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than 
 matching `HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`
 a `RequestCodec` runs against from a real WAI request. `selectApiBodyDecoder` selects a declared, fully-buffered
 request-body decoder (`jsonBodyDecoder`, `textBodyDecoder`, `bytesBodyDecoder`, or an application-defined
-`ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively),
-enforces a byte limit before decoding, and distinguishes an unsupported media type (`415`), an oversized
-body (`413`), and a malformed body (`400`) from a successful decode; `MissingContentTypePolicy` lets each
+`ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively), and
+distinguishes an unsupported media type (`415`) and a malformed body (`400`) from a successful decode. The
+endpoint's bounded body reader owns the separate oversized-body (`413`) outcome; `MissingContentTypePolicy` lets each
 endpoint decide whether a missing header is rejected or resolved to a declared default.
 `selectRepresentation` negotiates a response media type from a server-preference-ordered list and an
 optional `Accept` header per RFC 9110 §12.5.1 (bounded three-decimal quality values, wildcards,
@@ -340,9 +340,13 @@ delivered portion adds `apiRouteEndpoint`/`apiRouteDefinition`: typed API fields
 body consumer now run inside that same route table and response interpreter. Typed response values now use
 declarative JSON, text, byte, or custom encoders with RFC 9110 `Accept` selection and `Vary: Accept`.
 `RequestCodec` now also decodes case-sensitive cookie fields; malformed cookie fragments are ignored and
-repeated names produce the same typed duplicate-field error as query and header fields. A closed route-family
-registry, small URL-encoded form fields, response media-range parameter matching, and streaming codecs remain
-AC steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
+repeated names produce the same typed duplicate-field error as query and header fields. A declared bounded
+`urlEncodedFormBodyDecoder` decodes one `application/x-www-form-urlencoded` body with a field-count cap;
+`ApiUrlEncodedFormRequestBody` makes that form decoder an endpoint's one body consumer; it adds its fields
+to query/header/cookie request data before the same accumulating `RequestCodec` runs through `formField`.
+This preserves parse failure separately from field validation. A closed route-family registry, response
+media-range parameter matching, and streaming codecs remain AC steps. Multipart remains a separate
+body-consumer capability: its storage adapter and staged ownership
 follow AD; an API route may select it but does not change its lifecycle policy.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make

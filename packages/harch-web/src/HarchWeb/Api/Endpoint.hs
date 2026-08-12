@@ -51,6 +51,7 @@ import HarchWeb.Server.Response
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
+import Numeric.Natural (Natural)
 
 -- | Methods an 'ApiEndpoint' can declare. @HEAD@ is synthesized from @GET@
 -- and @OPTIONS@ from the declared method table for a matched path.
@@ -108,9 +109,10 @@ data ApiEndpointRequest fields body = ApiEndpointRequest
     apiEndpointRequestBody :: body
   }
 
--- | An endpoint either declares no body consumer or one bounded buffered
--- decoder. Streaming codecs (including multipart) will use a separate
--- constructor once their storage lifecycle boundary is complete.
+-- | An endpoint either declares no body consumer, one bounded buffered
+-- decoder, or a bounded URL-encoded form whose fields join the request codec.
+-- Streaming codecs (including multipart) will use a separate constructor once
+-- their storage lifecycle boundary is complete.
 data ApiRequestBody body where
   ApiNoRequestBody :: ApiRequestBody ()
   ApiBufferedRequestBody ::
@@ -119,6 +121,11 @@ data ApiRequestBody body where
       apiRequestBodyDecoders :: [ApiBodyDecoder body]
     } ->
     ApiRequestBody body
+  ApiUrlEncodedFormRequestBody ::
+    MissingContentTypePolicy ->
+    Int ->
+    Natural ->
+    ApiRequestBody ApiForm
 
 apiRouteEndpoint ::
   ApiMethod ->
@@ -143,23 +150,41 @@ apiRouteDefinition endpoint =
 
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (HarchWeb.Response route context)
 runApiRouteEndpoint endpoint request =
-  case runRequestCodec (apiRouteEndpointFields endpoint) (apiRequestDataFromWaiRequest request) of
-    ([], Just decodedFields) -> decodeBody decodedFields (apiRouteEndpointBody endpoint)
-    _ -> pure (apiFailureResponse HttpTypes.status400 "API request fields were rejected.")
+  decodeBody (apiRouteEndpointBody endpoint)
   where
-    decodeBody decodedFields requestBody =
+    requestData = apiRequestDataFromWaiRequest request
+
+    decodeBody requestBody =
       case requestBody of
-        ApiNoRequestBody -> runHandler decodedFields ()
+        ApiNoRequestBody -> decodeInitialFields (`runHandler` ())
         ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders -> do
-          bodyResult <- readRequestBodyUpTo maximumBytes request
-          case bodyResult of
-            Left RequestBodyLimitExceeded -> pure (apiFailureResponse HttpTypes.status413 "API request body exceeds its declared limit.")
-            Right lazyBody ->
-              case selectApiBodyDecoder missingContentTypePolicy maximumBytes decoders (contentType request) (LazyByteString.toStrict lazyBody) of
-                ApiUnsupportedMediaType _ -> pure (apiFailureResponse HttpTypes.status415 "API request body has an unsupported media type.")
-                ApiBodyTooLarge -> pure (apiFailureResponse HttpTypes.status413 "API request body exceeds its declared limit.")
-                ApiMalformedBody -> pure (apiFailureResponse HttpTypes.status400 "API request body is malformed.")
-                ApiDecodedBody decodedBody -> runHandler decodedFields decodedBody
+          decodeInitialFields (decodeBufferedBody missingContentTypePolicy maximumBytes decoders . runHandler)
+        ApiUrlEncodedFormRequestBody missingContentTypePolicy maximumBytes maximumFields ->
+          decodeBufferedBody
+            missingContentTypePolicy
+            maximumBytes
+            [urlEncodedFormBodyDecoder maximumFields]
+            (\decodedForm -> decodeFormFields decodedForm (apiRequestDataWithForm decodedForm requestData))
+
+    decodeInitialFields onDecodedFields =
+      case runRequestCodec (apiRouteEndpointFields endpoint) requestData of
+        ([], Just decodedFields) -> onDecodedFields decodedFields
+        _ -> pure (apiFailureResponse HttpTypes.status400 "API request fields were rejected.")
+
+    decodeFormFields decodedForm fieldsData =
+      case runRequestCodec (apiRouteEndpointFields endpoint) fieldsData of
+        ([], Just decodedFields) -> runHandler decodedFields decodedForm
+        _ -> pure (apiFailureResponse HttpTypes.status400 "API request fields were rejected.")
+
+    decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
+      bodyResult <- readRequestBodyUpTo maximumBytes request
+      case bodyResult of
+        Left RequestBodyLimitExceeded -> pure (apiFailureResponse HttpTypes.status413 "API request body exceeds its declared limit.")
+        Right lazyBody ->
+          case selectApiBodyDecoder missingContentTypePolicy decoders (contentType request) (LazyByteString.toStrict lazyBody) of
+            ApiUnsupportedMediaType _ -> pure (apiFailureResponse HttpTypes.status415 "API request body has an unsupported media type.")
+            ApiMalformedBody -> pure (apiFailureResponse HttpTypes.status400 "API request body is malformed.")
+            ApiDecodedBody decodedBody -> onDecodedBody decodedBody
 
     runHandler decodedFields decodedBody = do
       handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
@@ -348,13 +373,14 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
     ApiMethodNotAllowed declaredMethodsValue ->
       respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
     ApiRouteMatched target -> do
-      body <- runTarget request target
-      respond (apiHttpResponseToWaiResponse (renderedApiResponse body))
+      renderedResponse <- runRenderedTarget target
+      respond (apiHttpResponseToWaiResponse renderedResponse)
     ApiRouteMatchedHead target -> do
-      body <- runTarget request target
-      respond (apiHttpResponseToWaiResponse ((renderedApiResponse body) {apiHttpResponseBody = Nothing}))
+      renderedResponse <- runRenderedTarget target
+      respond (apiHttpResponseToWaiResponse (renderedResponse {apiHttpResponseBody = Nothing}))
     ApiRouteOptions declaredMethodsValue ->
       respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
   where
     requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.requestMethod request)
     requestPathText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.rawPathInfo request)
+    runRenderedTarget target = renderedApiResponse <$> runTarget request target

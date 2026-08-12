@@ -96,15 +96,14 @@ handleGreetingTarget :: Wai.Request -> GreetingTarget -> IO ApiResponseBody
 handleGreetingTarget request ReadGreeting =
   pure (renderGreeting request (greetingFor "World"))
 handleGreetingTarget request SubmitGreeting = do
-  bodyResult <- readRequestBodyUpTo maxGreetingBodyReadBytes request
+  bodyResult <- readRequestBodyUpTo maxGreetingBodyBytes request
   pure $
     case bodyResult of
       Left RequestBodyLimitExceeded -> apiTextResponse "request body too large"
       Right bodyBytes ->
-        case selectApiBodyDecoder RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder] contentTypeHeaderText (LazyByteString.toStrict bodyBytes) of
+        case selectApiBodyDecoder RejectMissingContentType [greetingRequestBodyDecoder] contentTypeHeaderText (LazyByteString.toStrict bodyBytes) of
           ApiDecodedBody greetingRequest -> renderGreeting request (greetingFor (requestedName greetingRequest))
           ApiUnsupportedMediaType _ -> apiTextResponse "unsupported media type; send application/json"
-          ApiBodyTooLarge -> apiTextResponse "request body too large"
           ApiMalformedBody -> apiTextResponse "malformed JSON body"
   where
     contentTypeHeaderText = requestHeaderText HttpTypes.hContentType request
@@ -128,9 +127,3 @@ requestHeaderText headerName request =
 
 maxGreetingBodyBytes :: Int
 maxGreetingBodyBytes = 16 * 1024
-
--- | Keep one extra byte while reading so 'selectApiBodyDecoder' can return
--- its typed 'ApiBodyTooLarge' outcome at the declared boundary. Any larger
--- streamed body is still rejected by 'readRequestBodyUpTo' as it arrives.
-maxGreetingBodyReadBytes :: Int
-maxGreetingBodyReadBytes = maxGreetingBodyBytes + 1
