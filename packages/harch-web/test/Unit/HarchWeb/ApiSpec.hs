@@ -379,8 +379,9 @@ spec =
         let formEndpoint =
               apiRouteEndpoint
                 ApiPost
-                ( (,) <$> requiredField (queryField "source" apiTextValue)
-                      <*> requiredField (formField "name" apiTextValue)
+                ( (,)
+                    <$> requiredField (queryField "source" apiTextValue)
+                    <*> requiredField (formField "name" apiTextValue)
                 )
                 (ApiUrlEncodedFormRequestBody RejectMissingContentType 64 2)
                 (textResponseEncoder :| [])
@@ -806,7 +807,7 @@ spec =
       it "validates and normalizes an application-declared media type" $
         expectAll
           ( (apiMediaType " Application/JSON " `shouldBe` Just (testMediaType "application/json"))
-            :| [ apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
+              :| [ apiMediaTypeText (testMediaType "application/json") `shouldBe` "application/json",
                    apiMediaTypeText jsonMediaType `shouldBe` "application/json",
                    apiMediaTypeText plainTextMediaType `shouldBe` "text/plain",
                    apiMediaTypeText htmlMediaType `shouldBe` "text/html",

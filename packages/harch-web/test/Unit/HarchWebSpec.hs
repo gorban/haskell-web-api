@@ -820,7 +820,7 @@ spec = do
       expectAll
         ( (map Wai.responseStatus responses `shouldBe` map (\(_, _, expectedStatus) -> expectedStatus) cases)
             :| ( map (\response -> lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8") responses
-                  <> map (`shouldBe` "Request metadata was rejected.") responseBodies
+                   <> map (`shouldBe` "Request metadata was rejected.") responseBodies
                )
         )
 
@@ -2392,14 +2392,13 @@ spec = do
           metadataApplication =
             sampleApplication
               { decodeClientAction = \payload ->
-                  ( case
-                      ( clientActionMethod payload,
-                        clientActionFields payload,
-                        clientActionCsrfToken payload,
-                        clientActionIdempotencyKey payload
-                      ) of
-                    ("POST", [("intent", "save"), ("_harch_csrf", "csrf-token")], Just "csrf-token", Just "idempotency-1") -> DecodedClientAction "save"
-                    _ -> UnrecognizedClientAction
+                  ( case ( clientActionMethod payload,
+                           clientActionFields payload,
+                           clientActionCsrfToken payload,
+                           clientActionIdempotencyKey payload
+                         ) of
+                      ("POST", [("intent", "save"), ("_harch_csrf", "csrf-token")], Just "csrf-token", Just "idempotency-1") -> DecodedClientAction "save"
+                      _ -> UnrecognizedClientAction
                   ),
                 handleClientAction = \decodedActionRequest -> do
                   writeIORef receivedAction (Just decodedActionRequest)
@@ -2510,7 +2509,7 @@ spec = do
                                 clientActionObservabilityAttributes = [],
                                 clientActionLogEntries = []
                               }
-                      )
+                        )
                     ),
                 reportApplicationLog = \entry -> modifyIORef' loggedActionFailures (<> [entry])
               }
