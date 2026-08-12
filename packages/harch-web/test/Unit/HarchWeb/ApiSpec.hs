@@ -2,6 +2,7 @@
 
 module Unit.HarchWeb.ApiSpec (spec) where
 
+import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
@@ -10,8 +11,11 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb qualified
 import HarchWeb.Api
-import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..))
+import HarchWeb.Routing (RouteRequest (..))
+import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
+import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -62,6 +66,40 @@ readResponseBody response = do
 
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
+
+requestWithBody :: HttpTypes.RequestHeaders -> [ByteString.ByteString] -> IO Wai.Request
+requestWithBody headers chunks = do
+  chunksReference <- newIORef chunks
+  pure
+    ( Wai.setRequestBodyChunks
+        (atomicModifyIORef' chunksReference takeNextChunk)
+        (Wai.defaultRequest {Wai.requestHeaders = headers})
+    )
+
+takeNextChunk :: [ByteString.ByteString] -> ([ByteString.ByteString], ByteString.ByteString)
+takeNextChunk remainingChunks =
+  case remainingChunks of
+    [] -> ([], "")
+    nextChunk : laterChunks -> (laterChunks, nextChunk)
+
+apiRouteResponseStatus :: Response route context -> HttpTypes.Status
+apiRouteResponseStatus response =
+  case response of
+    ProtocolResponseResult protocolResponse -> protocolResponseStatus protocolResponse
+    _ -> error "expected API route to render a protocol response"
+
+apiRouteResponseBody :: Response route context -> ByteString.ByteString
+apiRouteResponseBody response =
+  case response of
+    ProtocolResponseResult protocolResponse ->
+      case protocolResponseBody protocolResponse of
+        ProtocolResponseBytes bodyBytes -> bodyBytes
+        ProtocolResponseStream _ -> error "expected API route to render strict protocol bytes"
+    _ -> error "expected API route to render a protocol response"
+
+runApiRoute :: ApiRouteEndpoint fields body domainFailure -> Wai.Request -> IO (Response () ())
+runApiRoute endpoint request =
+  routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
 
 spec :: Spec
 spec =
@@ -193,6 +231,84 @@ spec =
         let request = Wai.defaultRequest {Wai.queryString = [("q", Just "bad\xFF")]}
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = []}
+
+    describe "apiRouteDefinition" $ do
+      let requiredQuery = requiredField (queryField "q" apiTextValue)
+          successfulEndpoint =
+            apiRouteEndpoint
+              ApiPost
+              requiredQuery
+              ApiNoRequestBody
+              (pure . Right . apiTextResponse . apiEndpointRequestFields)
+              (\() -> apiTextResponse "unreachable")
+          domainFailureEndpoint =
+            apiRouteEndpoint
+              ApiGet
+              (pure ())
+              ApiNoRequestBody
+              (const (pure (Left ())))
+              (\() -> (apiTextResponse "domain failure") {apiResponseStatus = HttpTypes.status422})
+
+      it "declares its one method in the shared route table" $
+        expectAll
+          ( (routeMethods (apiRouteDefinition successfulEndpoint) `shouldBe` [HarchWeb.RoutePost])
+              :| [ routeMethods (apiRouteDefinition domainFailureEndpoint) `shouldBe` [HarchWeb.RouteGet],
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPut (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RoutePut],
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiPatch (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RoutePatch],
+                   routeMethods (apiRouteDefinition (apiRouteEndpoint ApiDelete (pure ()) ApiNoRequestBody (const (pure (Right (apiTextResponse "")))) (\() -> apiTextResponse ""))) `shouldBe` [HarchWeb.RouteDelete]
+                 ]
+          )
+
+      it "rejects invalid fields before the handler and does not consume a body" $ do
+        chunksReference <- newIORef ["not consumed"]
+        let request = Wai.setRequestBodyChunks (atomicModifyIORef' chunksReference takeNextChunk) Wai.defaultRequest
+        response <- runApiRoute successfulEndpoint request
+        remainingChunks <- readIORef chunksReference
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
+              :| [ apiRouteResponseBody response `shouldBe` "API request fields were rejected.",
+                   remainingChunks `shouldBe` ["not consumed"]
+                 ]
+          )
+
+      it "runs a no-body endpoint after typed field decoding" $ do
+        response <- runApiRoute successfulEndpoint (Wai.defaultRequest {Wai.queryString = [("q", Just "accepted")]})
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [apiRouteResponseBody response `shouldBe` "accepted"]
+          )
+
+      it "interprets expected domain failures at the endpoint boundary" $ do
+        response <- runApiRoute domainFailureEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status422)
+              :| [apiRouteResponseBody response `shouldBe` "domain failure"]
+          )
+
+      it "maps bounded buffered-body failures without invoking the handler" $ do
+        let bufferedEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiBufferedRequestBody RejectMissingContentType 4 [textBodyDecoder])
+                (pure . Right . apiTextResponse . apiEndpointRequestBody)
+                (\() -> apiTextResponse "unreachable")
+        oversizedRequest <- requestWithBody [("Content-Type", "text/plain")] ["123", "45"]
+        unsupportedRequest <- requestWithBody [("Content-Type", "application/json")] ["ok"]
+        malformedRequest <- requestWithBody [("Content-Type", "text/plain")] ["bad\xFF"]
+        acceptedRequest <- requestWithBody [("Content-Type", "text/plain")] ["ok"]
+        oversizedResponse <- runApiRoute bufferedEndpoint oversizedRequest
+        unsupportedResponse <- runApiRoute bufferedEndpoint unsupportedRequest
+        malformedResponse <- runApiRoute bufferedEndpoint malformedRequest
+        acceptedResponse <- runApiRoute bufferedEndpoint acceptedRequest
+        expectAll
+          ( (apiRouteResponseStatus oversizedResponse `shouldBe` HttpTypes.status413)
+              :| [ apiRouteResponseStatus unsupportedResponse `shouldBe` HttpTypes.status415,
+                   apiRouteResponseStatus malformedResponse `shouldBe` HttpTypes.status400,
+                   apiRouteResponseStatus acceptedResponse `shouldBe` HttpTypes.status200,
+                   apiRouteResponseBody acceptedResponse `shouldBe` "ok"
+                 ]
+          )
 
     describe "apiHttpResponseToWaiResponse" $ do
       it "renders a matched response's status, headers, and body" $ do

@@ -2,6 +2,7 @@
 module HarchWeb.Server.Application
   ( Application (..),
     application,
+    renderResponse,
     middlewareResultContext,
     runRequestMiddlewarePipeline,
   )
@@ -33,7 +34,7 @@ data Application route action context = Application
     applicationRequestPolicy :: RequestPolicyConfig,
     applicationRequestMiddleware :: [RequestMiddleware context],
     routeCodec :: RouteCodec route context,
-    renderResponse :: RouteRequest route context -> IO (Response route context),
+    renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
     handleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     pageShell :: Page route context -> Document route,
@@ -44,6 +45,12 @@ data Application route action context = Application
 
 application :: Application route action context -> Application route action context
 application = id
+
+-- | Render a route directly with an empty request. The server uses
+-- 'renderRequestResponse' so an endpoint route can own the real request's
+-- decoding and body consumption without a second WAI dispatcher.
+renderResponse :: Application route action context -> RouteRequest route context -> IO (Response route context)
+renderResponse webApplication = renderRequestResponse webApplication Wai.defaultRequest
 
 middlewareResultContext :: MiddlewareResult context -> context
 middlewareResultContext middlewareResult =

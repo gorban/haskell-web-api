@@ -51,7 +51,7 @@ data RouteDefinition route context = RouteDefinition
     -- declaration into the shared route codec, making the site table the
     -- authoritative source for ordinary page and protocol dispatch alike.
     routeMethods :: [HarchWeb.RouteMethod],
-    routeResponse :: RouteRequest route context -> IO (Response route context)
+    routeResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context)
   }
 
 data Site route action context = Site
@@ -114,7 +114,7 @@ pageRoute navigationLabel renderPage =
   RouteDefinition
     { routeNavigationLabel = navigationLabel,
       routeMethods = [HarchWeb.RouteGet],
-      routeResponse = fmap PageResponse . renderPage
+      routeResponse = \_ -> fmap PageResponse . renderPage
     }
 
 buildSiteApplication :: (Eq route) => Site route action context -> Application route action context
@@ -129,7 +129,7 @@ buildSiteApplication site =
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,
         routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = routeMethods . siteRouteDefinition site},
-        renderResponse = renderSiteResponse site,
+        renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
@@ -138,10 +138,11 @@ buildSiteApplication site =
         reportApplicationLog = siteReportApplicationLog site
       }
 
-renderSiteResponse :: Site route action context -> RouteRequest route context -> IO (Response route context)
-renderSiteResponse site routeRequest =
+renderSiteResponse :: Site route action context -> Wai.Request -> RouteRequest route context -> IO (Response route context)
+renderSiteResponse site request routeRequest =
   routeResponse
     (siteRouteDefinition site (HarchWeb.requestRoute routeRequest))
+    request
     routeRequest
 
 renderSitePageShell :: (Eq route) => Site route action context -> Page route context -> Document route

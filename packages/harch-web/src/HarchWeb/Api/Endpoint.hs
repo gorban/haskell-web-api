@@ -1,3 +1,4 @@
+{-# LANGUAGE GADTs #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Method-aware endpoint matching and WAI dispatch.
@@ -5,9 +6,14 @@ module HarchWeb.Api.Endpoint
   ( ApiMethod (..),
     ApiPath,
     ApiEndpoint,
+    ApiRouteEndpoint,
+    ApiEndpointRequest (..),
+    ApiRequestBody (..),
     ApiMatchResult (..),
     apiMethodText,
     apiEndpoint,
+    apiRouteEndpoint,
+    apiRouteDefinition,
     apiEndpointTarget,
     at,
     matchApiEndpoints,
@@ -15,6 +21,7 @@ module HarchWeb.Api.Endpoint
     ApiHttpResponse (..),
     respondApiMatch,
     apiHttpResponseToProtocolResponse,
+    apiResponseBodyToProtocolResponse,
     apiHttpResponseToWaiResponse,
     apiEndpointMiddleware,
   )
@@ -30,12 +37,16 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import HarchWeb qualified
 import HarchWeb.Api.MediaType (apiContentTypeText)
+import HarchWeb.Api.Request
 import HarchWeb.Api.Response
+import HarchWeb.Server.RequestBody
 import HarchWeb.Server.Response
   ( ProtocolResponse (..),
     ProtocolResponseBody (..),
   )
+import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
@@ -73,6 +84,107 @@ data ApiEndpoint target = ApiEndpoint
 
 apiEndpoint :: target -> ApiMethod -> ApiPath -> ApiEndpoint target
 apiEndpoint = ApiEndpoint
+
+-- | One typed endpoint declaration for use in the application's shared route
+-- table. It owns field decoding, exactly one declared body consumer, domain
+-- failure interpretation, and the response representation. Path matching and
+-- method policy remain owned by 'HarchWeb.Routing.RouteCodec'.
+data ApiRouteEndpoint fields body domainFailure where
+  ApiRouteEndpoint ::
+    { apiRouteEndpointMethod :: ApiMethod,
+      apiRouteEndpointFields :: RequestCodec fields,
+      apiRouteEndpointBody :: ApiRequestBody body,
+      apiRouteEndpointHandler :: ApiEndpointRequest fields body -> IO (Either domainFailure ApiResponseBody),
+      apiRouteEndpointFailureResponse :: domainFailure -> ApiResponseBody
+    } ->
+    ApiRouteEndpoint fields body domainFailure
+
+-- | Cohesive decoded input supplied to an endpoint handler.
+data ApiEndpointRequest fields body = ApiEndpointRequest
+  { apiEndpointRequestFields :: fields,
+    apiEndpointRequestBody :: body
+  }
+
+-- | An endpoint either declares no body consumer or one bounded buffered
+-- decoder. Streaming codecs (including multipart) will use a separate
+-- constructor once their storage lifecycle boundary is complete.
+data ApiRequestBody body where
+  ApiNoRequestBody :: ApiRequestBody ()
+  ApiBufferedRequestBody ::
+    { apiRequestBodyMissingContentTypePolicy :: MissingContentTypePolicy,
+      apiRequestBodyMaximumBytes :: Int,
+      apiRequestBodyDecoders :: [ApiBodyDecoder body]
+    } ->
+    ApiRequestBody body
+
+apiRouteEndpoint ::
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure ApiResponseBody)) ->
+  (domainFailure -> ApiResponseBody) ->
+  ApiRouteEndpoint fields body domainFailure
+apiRouteEndpoint = ApiRouteEndpoint
+
+-- | Convert a declaration into one entry in a 'RouteDefinition' table. The
+-- server has already selected the route and method before this runs, so it
+-- cannot produce a competing 404/405/HEAD/OPTIONS policy.
+apiRouteDefinition :: ApiRouteEndpoint fields body domainFailure -> RouteDefinition route context
+apiRouteDefinition endpoint =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
+      routeResponse = \request _ -> runApiRouteEndpoint endpoint request
+    }
+
+runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure -> Wai.Request -> IO (HarchWeb.Response route context)
+runApiRouteEndpoint endpoint request =
+  case runRequestCodec (apiRouteEndpointFields endpoint) (apiRequestDataFromWaiRequest request) of
+    ([], Just decodedFields) -> decodeBody decodedFields (apiRouteEndpointBody endpoint)
+    _ -> pure (apiFailureResponse HttpTypes.status400 "API request fields were rejected.")
+  where
+    decodeBody decodedFields requestBody =
+      case requestBody of
+        ApiNoRequestBody -> runHandler decodedFields ()
+        ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders -> do
+          bodyResult <- readRequestBodyUpTo maximumBytes request
+          case bodyResult of
+            Left RequestBodyLimitExceeded -> pure (apiFailureResponse HttpTypes.status413 "API request body exceeds its declared limit.")
+            Right lazyBody ->
+              case selectApiBodyDecoder missingContentTypePolicy maximumBytes decoders (contentType request) (LazyByteString.toStrict lazyBody) of
+                ApiUnsupportedMediaType _ -> pure (apiFailureResponse HttpTypes.status415 "API request body has an unsupported media type.")
+                ApiBodyTooLarge -> pure (apiFailureResponse HttpTypes.status413 "API request body exceeds its declared limit.")
+                ApiMalformedBody -> pure (apiFailureResponse HttpTypes.status400 "API request body is malformed.")
+                ApiDecodedBody decodedBody -> runHandler decodedFields decodedBody
+
+    runHandler decodedFields decodedBody = do
+      handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
+      pure $
+        case handlerResult of
+          Left domainFailure -> apiResponseBodyToResponse (apiRouteEndpointFailureResponse endpoint domainFailure)
+          Right responseBody -> apiResponseBodyToResponse responseBody
+
+contentType :: Wai.Request -> Maybe Text
+contentType request =
+  case [value | (name, value) <- apiRequestHeaders (apiRequestDataFromWaiRequest request), name == apiHeaderName "content-type"] of
+    [value] -> Just value
+    _ -> Nothing
+
+apiFailureResponse :: HttpTypes.Status -> Text -> HarchWeb.Response route context
+apiFailureResponse status bodyText =
+  apiResponseBodyToResponse ((apiTextResponse bodyText) {apiResponseStatus = status})
+
+apiResponseBodyToResponse :: ApiResponseBody -> HarchWeb.Response route context
+apiResponseBodyToResponse = HarchWeb.ProtocolResponseResult . apiResponseBodyToProtocolResponse
+
+toRouteMethod :: ApiMethod -> HarchWeb.RouteMethod
+toRouteMethod apiMethod =
+  case apiMethod of
+    ApiGet -> HarchWeb.RouteGet
+    ApiPost -> HarchWeb.RoutePost
+    ApiPut -> HarchWeb.RoutePut
+    ApiPatch -> HarchWeb.RoutePatch
+    ApiDelete -> HarchWeb.RouteDelete
 
 data ApiMatchResult target
   = NoApiRouteMatch
@@ -173,6 +285,11 @@ apiHttpResponseToProtocolResponse httpResponse =
       protocolResponseObservabilityAttributes = [],
       protocolResponseLogEntries = []
     }
+
+-- | Render one API response body through the shared protocol response
+-- boundary, retaining the selected status and representation Content-Type.
+apiResponseBodyToProtocolResponse :: ApiResponseBody -> ProtocolResponse
+apiResponseBodyToProtocolResponse = apiHttpResponseToProtocolResponse . renderedApiResponse
 
 -- | A WAI middleware an application opts into by wrapping its own application.
 -- It owns only the paths it matches and leaves every other request unchanged.

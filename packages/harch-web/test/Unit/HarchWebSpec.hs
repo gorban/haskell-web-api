@@ -277,7 +277,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       applicationRequestPolicy = requestPolicyConfig,
       applicationRequestMiddleware = [],
       routeCodec = sampleCodec,
-      renderResponse = pure . renderSampleResponse,
+      renderRequestResponse = \_ -> pure . renderSampleResponse,
       decodeClientAction = DecodedClientAction . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
@@ -494,7 +494,7 @@ rootPathApplication =
       applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
       applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
-      renderResponse = pure . PageResponse . samplePage,
+      renderRequestResponse = \_ -> pure . PageResponse . samplePage,
       decodeClientAction = DecodedClientAction . clientActionPath,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
@@ -785,7 +785,7 @@ spec = do
           limitedApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestHeadLimits = limits}))
               { applicationRequestMiddleware = [RequestMiddleware (\_ _ -> expectationFailure "request-head gate should run first" >> pure (ContinueMiddleware defaultContext))],
-                renderResponse = \_ -> expectationFailure "request-head gate should run first" >> pure (renderSampleResponse (RouteRequest DataRoute defaultContext))
+                renderRequestResponse = \_ _ -> expectationFailure "request-head gate should run first" >> pure (renderSampleResponse (RouteRequest DataRoute defaultContext))
               }
       response <- performWaiRequest (toWaiApplication limitedApplication) (Wai.defaultRequest {Wai.rawPathInfo = "/long"})
       Wai.responseStatus response `shouldBe` Http.status414
@@ -2103,7 +2103,7 @@ spec = do
           ]
       let eventApplication =
             sampleApplication
-              { renderResponse = \request ->
+              { renderRequestResponse = \_ request ->
                   case requestRoute request of
                     EventStreamRoute -> pure (eventStreamResponse eventSource)
                     _ -> pure (renderSampleResponse request)
@@ -2119,7 +2119,7 @@ spec = do
         `shouldReturn` "event: page-update\nid: 1\ndata: first\n\nid: 2\ndata: second\n\n"
 
       emptyEventSource <- serverSentEventSourceFromList []
-      let emptyEventApplication = eventApplication {renderResponse = \_ -> pure (eventStreamResponse emptyEventSource)}
+      let emptyEventApplication = eventApplication {renderRequestResponse = \_ _ -> pure (eventStreamResponse emptyEventSource)}
       emptyResponse <- performWaiRequest (toWaiApplication emptyEventApplication) (waiRequest ["events"])
       readResponseBody emptyResponse `shouldReturn` ""
 
@@ -2380,7 +2380,7 @@ spec = do
 
     it "renders typed redirects with the location header and standard response metadata" $ do
       let typedRedirect = redirectResponse 302 "/spaces" :: Response TestRoute TestContext
-          redirectApplication = sampleApplication {renderResponse = const (pure typedRedirect)}
+          redirectApplication = sampleApplication {renderRequestResponse = \_ _ -> pure typedRedirect}
           diagnostics = responseDiagnostics typedRedirect
       diagnosticObservabilityAttributes diagnostics `shouldBe` []
       diagnosticLogEntries diagnostics `shouldBe` []
@@ -2402,7 +2402,7 @@ spec = do
                 protocolResponseLogEntries = ["example response"]
               }
           renderedResponse = ProtocolResponseResult protocolResponse :: Response TestRoute TestContext
-          protocolApplication = sampleApplication {renderResponse = const (pure renderedResponse)}
+          protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
           diagnostics = responseDiagnostics renderedResponse
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
       body <- readResponseBody response
@@ -2434,7 +2434,7 @@ spec = do
                   protocolResponseLogEntries = []
                 } ::
               Response TestRoute TestContext
-          protocolApplication = sampleApplication {renderResponse = const (pure renderedResponse)}
+          protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
           strictResponse =
             ProtocolResponseResult
               ProtocolResponse
@@ -2497,7 +2497,7 @@ spec = do
               }
           metadataApplication =
             sampleApplication
-              { renderResponse = pure . PageResponseWithMetadata metadata . samplePage,
+              { renderRequestResponse = \_ -> pure . PageResponseWithMetadata metadata . samplePage,
                 pageShell =
                   \page ->
                     (pageShell sampleApplication page)
@@ -2633,7 +2633,7 @@ spec = do
     it "redirects insecure requests to HTTPS before rendering the application response" $ do
       let redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
-              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}))
+              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext}))
               }
           redirectRequest =
             (waiRequest ["data"])
@@ -2847,7 +2847,7 @@ spec = do
               }
           redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))
-              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
               }
@@ -2895,7 +2895,7 @@ spec = do
               }
           redirectingApplication =
             (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))
-              { renderResponse = \_ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
+              { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue])
               }
@@ -3255,8 +3255,8 @@ spec = do
               }
           diagnosticApplication =
             trustedForwardedApplication
-              { renderResponse =
-                  \_ ->
+              { renderRequestResponse =
+                  \_ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -3351,8 +3351,8 @@ spec = do
               }
           diagnosticApplication =
             trustedForwardedApplication
-              { renderResponse =
-                  \_ ->
+              { renderRequestResponse =
+                  \_ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -3558,8 +3558,8 @@ spec = do
               }
           diagnosticApplication =
             trustedForwardedApplication
-              { renderResponse =
-                  \_ ->
+              { renderRequestResponse =
+                  \_ _ ->
                     pure $
                       BodyResponse
                         ResponseBody
@@ -3613,17 +3613,18 @@ spec = do
               }
           diagnosticApplication =
             sampleApplication
-              { renderResponse =
-                  pure
-                    . PageResponseWithMetadata
-                      ResponseBody
-                        { responseStatus = 500,
-                          responseContentType = "text/html; charset=utf-8",
-                          responseBody = "",
-                          responseObservabilityAttributes = [failureAttribute],
-                          responseLogEntries = ["Sample page failure log"]
-                        }
-                    . samplePage,
+              { renderRequestResponse =
+                  \_ ->
+                    pure
+                      . PageResponseWithMetadata
+                        ResponseBody
+                          { responseStatus = 500,
+                            responseContentType = "text/html; charset=utf-8",
+                            responseBody = "",
+                            responseObservabilityAttributes = [failureAttribute],
+                            responseLogEntries = ["Sample page failure log"]
+                          }
+                      . samplePage,
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
                 reportApplicationLog = \logEntry ->
@@ -3680,8 +3681,8 @@ spec = do
             sampleApplication
               { applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
                 requestContextFromRequest = sampleRequestContextFromRequest True,
-                renderResponse =
-                  \request ->
+                renderRequestResponse =
+                  \_ request ->
                     pure $
                       case (requestRoute request, requestLanguage (requestContext request), testContextPathPrefix (requestContext request)) of
                         (KnownRoute, "es", _) ->

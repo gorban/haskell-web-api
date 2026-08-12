@@ -39,6 +39,7 @@ module HarchWeb.Server
     responseKind,
     responsePolicyHeaders,
     responseStatusCode,
+    renderResponse,
     reportEarlyRequestObservability,
     serverSentEventContentType,
     runRequestMiddlewarePipeline,

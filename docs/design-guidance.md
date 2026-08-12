@@ -259,7 +259,7 @@ proofs—delayed registration, cancellation, handler failure and non-settlement,
 controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
-### Low-level API transport helpers exist; the shared endpoint boundary does not yet
+### API transport helpers and the first shared endpoint boundary
 
 `HarchWeb.Api` declares a method-aware HTTP endpoint (`apiEndpoint target method (at "/path")`) and
 matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
@@ -311,9 +311,17 @@ finishes, before any later part (including a later file part) is read, so a call
 opaque scoped upload: promote it deliberately to take ownership, or leave it for automatic cleanup after
 success, rejection, or an exception.
 
-These are low-level transport helpers, not the framework's completed declarative endpoint boundary.
-`apiEndpointMiddleware` is additive WAI middleware and cannot prove that page, action, and API
-routes have one method/path owner. Applications must not treat it as the final route dispatcher.
+`apiEndpointMiddleware` remains an additive compatibility helper; it is not the final route dispatcher.
+New routes should use `apiRouteEndpoint` and place `apiRouteDefinition` in the application's
+`RouteDefinition` table. That declaration names one method, typed query/header decoder, either no body
+or exactly one bounded buffered body decoder, a domain-failure interpreter, and the response renderer.
+The shared server dispatcher supplies the real WAI request only after it has selected the route and
+enforced the table's method policy, so API declarations cannot create competing 404/405/`Allow`/`HEAD`/
+`OPTIONS` behaviour. Fields are validated before a body reader runs; rejected fields return a stable
+400 without consuming the body. A bounded buffered decoder maps oversized, unsupported-media, and
+malformed input to 413, 415, and 400 respectively, and passes expected domain failures through the
+endpoint's explicit interpreter. Streaming codecs and representation negotiation remain AC follow-up
+work; multipart storage and ownership remain AD work.
 
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
@@ -324,12 +332,12 @@ now declared on each `RouteDefinition`; `buildSiteApplication` installs those de
 shared `RouteCodec`, and the server derives 404, 405/`Allow`, `HEAD`, and `OPTIONS` there. That is the
 first delivered portion of the decision: an application wrapper can no longer change a site's ordinary
 method table. `ProtocolResponseResult` supplies the response half of that boundary: strict bytes or a
-request-scoped WAI stream retain normal response security, diagnostics, and observability. This still
-does /not/ provide typed API declarations, validate API headers, or make actions and APIs entries in one
-closed route registry; those are the next AC steps. The earlier standalone
-`HarchWeb.Api.Declarative` prototype is not a shipped endpoint system and must not be documented as one.
-Multipart remains a separate body-consumer capability: its storage adapter and staged ownership follow
-AD; an API route may select it but does not change its lifecycle policy.
+request-scoped WAI stream retain normal response security, diagnostics, and observability. The next
+delivered portion adds `apiRouteEndpoint`/`apiRouteDefinition`: typed API fields and one bounded buffered
+body consumer now run inside that same route table and response interpreter. A closed route-family
+registry, cookie/form fields, streaming codecs, and full response representation negotiation remain AC
+steps. Multipart remains a separate body-consumer capability: its storage adapter and staged ownership
+follow AD; an API route may select it but does not change its lifecycle policy.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
 `apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a

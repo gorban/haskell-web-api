@@ -34,6 +34,7 @@ import HarchWeb
     MiddlewareResult (..),
     ObservabilityConfig (..),
     RegionPatch,
+    RequestBodyReadFailure (..),
     RequestMiddleware (..),
     RequestPolicyConfig (..),
     ResponseBody (..),
@@ -47,7 +48,6 @@ import HarchWeb
     defaultStaticAssetContentTypes,
     eventStreamResponse,
     readRequestBodyUpTo,
-    RequestBodyReadFailure (..),
     replaceRegion,
     serverSentEventSourceFromList,
     unboundedRequestHeadLimits,
@@ -101,7 +101,7 @@ liveDataEventsRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = [RouteGet],
-      routeResponse = \_ -> do
+      routeResponse = \_ _ -> do
         eventSource <-
           serverSentEventSourceFromList
             [ServerSentEvent (Just "update") (Just "example-1") "The live update arrived."]

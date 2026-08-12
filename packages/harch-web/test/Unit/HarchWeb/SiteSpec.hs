@@ -191,6 +191,35 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/json"
       readResponseBody response `shouldReturn` "{\"status\":\"ok\"}"
 
+    it "passes the selected route's original WAI request to its response declaration" $ do
+      seenHeaderReference <- newIORef Nothing
+      let requestAwareSite =
+            sampleSite
+              { siteRouteDefinition = \case
+                  StatusApiRoute ->
+                    apiRouteDefinition
+                      { routeResponse = \endpointRequest _ -> do
+                          writeIORef seenHeaderReference (lookup "X-Endpoint-Probe" (Wai.requestHeaders endpointRequest))
+                          pure
+                            ( BodyResponse
+                                ResponseBody
+                                  { responseStatus = 200,
+                                    responseContentType = "application/json",
+                                    responseBody = "{\"status\":\"ok\"}",
+                                    responseObservabilityAttributes = [],
+                                    responseLogEntries = []
+                                  }
+                            )
+                      }
+                  otherRoute -> sampleRouteDefinition otherRoute
+              }
+          incomingRequest = (waiRequest ["api", "status"]) {Wai.requestHeaders = [("X-Endpoint-Probe", "received")]}
+      response <- performWaiRequest (toWaiApplication (buildSiteApplication requestAwareSite)) incomingRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [readIORef seenHeaderReference `shouldReturn` Just "received"]
+        )
+
     it "adds missing navigation shell markers and can disable the built-in runtime" $ do
       let bareShellSite =
             sampleSite
@@ -302,7 +331,7 @@ apiRouteDefinition =
     { routeNavigationLabel = Nothing,
       routeMethods = [HarchWeb.RouteGet],
       routeResponse =
-        \_ ->
+        \_ _ ->
           pure
             ( BodyResponse
                 ResponseBody

@@ -298,12 +298,12 @@ dispatchRoutedRequest
                                   ClientActionBodyResponse
                                   maybeActionResponse
                               )
-          else renderRouteDispatch webApplication routeDispatch
+          else renderRouteDispatch webApplication request routeDispatch
 
-renderRouteDispatch :: Application route action context -> RouteDispatch route context -> IO (Response route context)
-renderRouteDispatch webApplication routeDispatch =
+renderRouteDispatch :: Application route action context -> Wai.Request -> RouteDispatch route context -> IO (Response route context)
+renderRouteDispatch webApplication request routeDispatch =
   case routeDispatch of
-    RouteNotFound routeRequest -> renderResponse webApplication routeRequest
+    RouteNotFound routeRequest -> renderRequestResponse webApplication request routeRequest
     RouteMethodNotAllowed _ declaredMethods ->
       pure
         ( ProtocolResponseResult
@@ -315,8 +315,8 @@ renderRouteDispatch webApplication routeDispatch =
                 protocolResponseLogEntries = []
               }
         )
-    RouteMatched routeRequest -> renderResponse webApplication routeRequest
-    RouteMatchedHead routeRequest -> renderResponse webApplication routeRequest
+    RouteMatched routeRequest -> renderRequestResponse webApplication request routeRequest
+    RouteMatchedHead routeRequest -> renderRequestResponse webApplication request routeRequest
     RouteOptions _ declaredMethods ->
       pure
         ( ProtocolResponseResult

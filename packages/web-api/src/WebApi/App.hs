@@ -133,7 +133,7 @@ buildAppRouteDefinition config pageRepository accountWorkflow route =
     { Site.routeNavigationLabel = routeNavigationLabel route,
       Site.routeMethods = HarchWeb.routeMethods routeCodec route,
       Site.routeResponse =
-        selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
+        \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
     }
 
 routeNavigationLabel :: AppRoute -> Maybe Text.Text
