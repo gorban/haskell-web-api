@@ -165,6 +165,17 @@ if [ -f "$project_local_path" ]; then
   rm -f "$project_local_path"
 fi
 
+restore_project_local() {
+  if [ -n "$project_local_backup" ]; then
+    cp "$project_local_backup" "$project_local_path"
+  else
+    rm -f "$project_local_path"
+  fi
+  rm -rf "$temp_root"
+}
+
+trap restore_project_local EXIT
+
 # Run tests for each package not in the excluded list
 for pkg in $all_packages; do
   if ! printf '%s\n' "$excluded_packages" | grep -qxF "$pkg"; then
@@ -203,6 +214,30 @@ EOF
 
     pkg_hpc_dir=$(find dist-newstyle -path "*/$pkg-*/opt/hpc/vanilla" -type d -print | head -n1)
     if [ -n "$pkg_hpc_dir" ]; then
+      pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$pkg_hpc_dir")")")")"
+      coverage_hpc_args=()
+      while IFS= read -r mix_dir; do
+        coverage_hpc_args+=("--hpcdir=$mix_dir")
+      done < <(find dist-newstyle -type d -path '*/extra-compilation-artifacts/hpc/vanilla/mix' -print | sort -u)
+
+      tix_file=$(find "$pkg_hpc_dir/tix" -type f -name '*.tix' -print | head -n1)
+      if [ -z "$tix_file" ]; then
+        printf 'No TIX file was generated for coverage package %s.\n' "$pkg" >&2
+        exit 1
+      fi
+
+      if ! package_coverage_report=$(hpc report "--include=${pkg_version_dir}-inplace:" "$tix_file" "${coverage_hpc_args[@]}"); then
+        printf 'Could not resolve every HPC module for coverage package %s.\n' "$pkg" >&2
+        exit 1
+      fi
+
+      if ! printf '%s\n' "$package_coverage_report" | grep -q '100% expressions used' \
+        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% alternatives used' \
+        || ! printf '%s\n' "$package_coverage_report" | grep -q '100% top-level declarations used'; then
+        printf 'Authoritative coverage report for %s is incomplete:\n%s\n' "$pkg" "$package_coverage_report" >&2
+        exit 1
+      fi
+
       dest="$coverage_staging_dir/$pkg"
       rm -rf "$dest"
       mkdir -p "$dest"
@@ -367,7 +402,6 @@ for idx in "${!categories[@]}"; do
     aggregate_findings+=("${categories[$idx]} coverage ($covered/$total).")
   fi
 done
-rm -rf "$temp_root"
 echo "</body></html>" >> hpc_index.html
 printf '\n\e[32mMulti-package coverage report generated at %s/hpc_index.html\e[0m\n' "$(pwd)"
 open_generated_report "$(pwd)/hpc_index.html" || true
