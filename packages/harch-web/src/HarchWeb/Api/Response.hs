@@ -14,10 +14,12 @@ module HarchWeb.Api.Response
     urlEncodedFormBodyDecoder,
     ApiResponse (..),
     apiResponse,
+    ApiEncodedResponseBody (..),
     ApiResponseEncoder (..),
     jsonResponseEncoder,
     textResponseEncoder,
     bytesResponseEncoder,
+    streamingResponseEncoder,
     ApiResponseBody (..),
     apiJsonResponse,
     apiTextResponse,
@@ -38,6 +40,7 @@ import Data.Word (Word8)
 import HarchWeb.Api.MediaType
 import Network.HTTP.Types qualified as HttpTypes
 import Network.HTTP.Types.URI qualified as HttpUri
+import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)
 
 -- | Decodes a fully-buffered request body declared for one @Content-Type@
@@ -78,31 +81,48 @@ apiResponse responseValue =
       apiEndpointResponseValue = responseValue
     }
 
+-- | A response encoder either produces strict bytes or a request-scoped WAI
+-- stream. The latter deliberately cannot be converted into an application
+-- owned lazy value, so it stays inside the server's protocol interpreter.
+data ApiEncodedResponseBody
+  = ApiEncodedResponseBytes ByteString
+  | ApiEncodedResponseStream Wai.StreamingBody
+
 -- | One declared way to render a typed API result.
 data ApiResponseEncoder response = ApiResponseEncoder
   { apiResponseEncoderContentType :: ApiContentType,
-    apiResponseEncoderEncode :: response -> ByteString
+    apiResponseEncoderEncode :: response -> ApiEncodedResponseBody
   }
 
 jsonResponseEncoder :: (ToJSON response) => ApiResponseEncoder response
 jsonResponseEncoder =
   ApiResponseEncoder
     { apiResponseEncoderContentType = jsonContentType,
-      apiResponseEncoderEncode = LazyByteString.toStrict . Aeson.encode
+      apiResponseEncoderEncode = ApiEncodedResponseBytes . LazyByteString.toStrict . Aeson.encode
     }
 
 textResponseEncoder :: ApiResponseEncoder Text
 textResponseEncoder =
   ApiResponseEncoder
     { apiResponseEncoderContentType = plainTextContentType,
-      apiResponseEncoderEncode = TextEncoding.encodeUtf8
+      apiResponseEncoderEncode = ApiEncodedResponseBytes . TextEncoding.encodeUtf8
     }
 
 bytesResponseEncoder :: ApiContentType -> ApiResponseEncoder ByteString
 bytesResponseEncoder contentType =
   ApiResponseEncoder
     { apiResponseEncoderContentType = contentType,
-      apiResponseEncoderEncode = id
+      apiResponseEncoderEncode = ApiEncodedResponseBytes
+    }
+
+-- | Declare a response encoder that writes only while WAI renders the active
+-- request. This is suitable for downloads, progressive encodings, and finite
+-- streams; use the separate SSE response capability for event subscriptions.
+streamingResponseEncoder :: ApiContentType -> (response -> Wai.StreamingBody) -> ApiResponseEncoder response
+streamingResponseEncoder contentType renderStream =
+  ApiResponseEncoder
+    { apiResponseEncoderContentType = contentType,
+      apiResponseEncoderEncode = ApiEncodedResponseStream . renderStream
     }
 
 -- | Select a declared decoder by the request's @Content-Type@ (ignoring its

@@ -346,8 +346,9 @@ repeated names produce the same typed duplicate-field error as query and header 
 to query/header/cookie request data before the same accumulating `RequestCodec` runs through `formField`.
 This preserves parse failure separately from field validation. Response `Accept` media parameters now match
 declared `Content-Type` parameters (including a quoted, case-insensitive UTF-8 charset); ranges after `q`
-are extensions and do not constrain matching. A closed route-family registry and streaming codecs remain
-AC steps. Multipart remains a separate
+are extensions and do not constrain matching. Typed response encoders may now emit strict bytes or a
+request-scoped WAI stream, preserving the existing server response boundary without materializing a lazy
+body. A closed route-family registry and streaming request codecs remain AC steps. Multipart remains a separate
 body-consumer capability: its storage adapter and staged ownership
 follow AD; an API route may select it but does not change its lifecycle policy.
 

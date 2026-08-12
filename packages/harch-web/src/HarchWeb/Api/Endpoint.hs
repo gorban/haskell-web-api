@@ -206,12 +206,13 @@ renderEndpointResult endpoint request responseValue =
   case selectContentTypeRepresentation declaredContentTypes (acceptHeader request) of
     NoAcceptableContentTypeRepresentation -> apiFailureResponse HttpTypes.status406 "API response has no acceptable representation."
     SelectedContentTypeRepresentation selectedContentType ->
-      apiResponseBodyToResponse
-        ApiResponseBody
-          { apiResponseStatus = apiEndpointResponseStatus responseValue,
-            apiResponseContentType = apiResponseEncoderContentType selectedEncoder,
-            apiResponseHeaders = endpointResponseHeaders endpoint responseValue,
-            apiResponseBodyBytes = apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)
+      HarchWeb.ProtocolResponseResult
+        ProtocolResponse
+          { protocolResponseStatus = apiEndpointResponseStatus responseValue,
+            protocolResponseHeaders = endpointProtocolResponseHeaders endpoint responseValue selectedEncoder,
+            protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)),
+            protocolResponseObservabilityAttributes = [],
+            protocolResponseLogEntries = []
           }
       where
         selectedEncoder = responseEncoderFor selectedContentType (apiRouteEndpointEncoders endpoint)
@@ -230,6 +231,19 @@ endpointResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -
 endpointResponseHeaders endpoint responseValue
   | length (apiRouteEndpointEncoders endpoint) > 1 = addVaryAccept (apiEndpointResponseHeaders responseValue)
   | otherwise = apiEndpointResponseHeaders responseValue
+
+endpointProtocolResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -> ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
+endpointProtocolResponseHeaders endpoint responseValue encoder =
+  ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))
+    : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value)
+      | (name, value) <- endpointResponseHeaders endpoint responseValue
+      ]
+
+protocolResponseBodyFor :: ApiEncodedResponseBody -> ProtocolResponseBody
+protocolResponseBodyFor encodedBody =
+  case encodedBody of
+    ApiEncodedResponseBytes bytes -> ProtocolResponseBytes bytes
+    ApiEncodedResponseStream stream -> ProtocolResponseStream stream
 
 addVaryAccept :: [(Text, Text)] -> [(Text, Text)]
 addVaryAccept headers =

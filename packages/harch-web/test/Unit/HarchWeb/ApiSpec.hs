@@ -104,6 +104,21 @@ apiRouteResponseHeaders response =
     ProtocolResponseResult protocolResponse -> protocolResponseHeaders protocolResponse
     _ -> error "expected API route to render a protocol response"
 
+apiRouteResponseStream :: Response route context -> Wai.StreamingBody
+apiRouteResponseStream response =
+  case response of
+    ProtocolResponseResult protocolResponse ->
+      case protocolResponseBody protocolResponse of
+        ProtocolResponseBytes _ -> error "expected API route to render a protocol stream"
+        ProtocolResponseStream stream -> stream
+    _ -> error "expected API route to render a protocol response"
+
+strictEncodedResponseBytes :: ApiEncodedResponseBody -> ByteString.ByteString
+strictEncodedResponseBytes encodedResponse =
+  case encodedResponse of
+    ApiEncodedResponseBytes bodyBytes -> bodyBytes
+    ApiEncodedResponseStream _ -> error "expected a strict encoded response"
+
 runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO (Response () ())
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
@@ -543,6 +558,42 @@ spec =
           ( (lookup "Content-Type" (apiRouteResponseHeaders utf8Response) `shouldBe` Just "text/plain; charset=utf-8")
               :| [ apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
                    apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                 ]
+          )
+
+      it "keeps a selected streaming encoder request-scoped until it is rendered" $ do
+        executionReference <- newIORef False
+        flushReference <- newIORef (0 :: Int)
+        chunksReference <- newIORef []
+        let streamBody write flush = do
+              write (Builder.byteString "first")
+              flush
+              atomicModifyIORef' flushReference (\flushes -> (flushes + 1, ()))
+              write (Builder.byteString "second")
+              writeIORef executionReference True
+            streamingEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (streamingResponseEncoder plainTextContentType id :| [])
+                (\_ -> pure (Right (apiResponse streamBody)))
+                (\() -> apiResponse streamBody)
+        response <- runApiRoute streamingEndpoint Wai.defaultRequest
+        executedBeforeRendering <- readIORef executionReference
+        apiRouteResponseStream
+          response
+          (\builder -> atomicModifyIORef' chunksReference (\chunks -> (chunks <> [Builder.toLazyByteString builder], ())))
+          (pure ())
+        chunks <- readIORef chunksReference
+        flushes <- readIORef flushReference
+        executedAfterRendering <- readIORef executionReference
+        expectAll
+          ( (executedBeforeRendering `shouldBe` False)
+              :| [ LazyByteString.toStrict (LazyByteString.concat chunks) `shouldBe` "firstsecond",
+                   flushes `shouldBe` 1,
+                   executedAfterRendering `shouldBe` True,
+                   lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
                  ]
           )
 
@@ -998,9 +1049,9 @@ spec =
               ( (apiEndpointResponseStatus responseValue `shouldBe` HttpTypes.status200)
                   :| [ apiEndpointResponseHeaders responseValue `shouldBe` [],
                        apiEndpointResponseValue responseValue `shouldBe` ("hello" :: Text),
-                       apiResponseEncoderEncode jsonResponseEncoder ("hello" :: Text) `shouldBe` "\"hello\"",
-                       apiResponseEncoderEncode textResponseEncoder "hello" `shouldBe` "hello",
-                       apiResponseEncoderEncode (bytesResponseEncoder svgContentType) "<svg/>" `shouldBe` "<svg/>",
+                       strictEncodedResponseBytes (apiResponseEncoderEncode jsonResponseEncoder ("hello" :: Text)) `shouldBe` "\"hello\"",
+                       strictEncodedResponseBytes (apiResponseEncoderEncode textResponseEncoder "hello") `shouldBe` "hello",
+                       strictEncodedResponseBytes (apiResponseEncoderEncode (bytesResponseEncoder svgContentType) "<svg/>") `shouldBe` "<svg/>",
                        apiContentTypeMediaType svgContentType `shouldBe` testMediaType "image/svg+xml",
                        apiContentType (testMediaType "application/json") /= jsonContentType `shouldBe` True,
                        length (show (apiContentType (testMediaType "application/json"))) `shouldSatisfy` (> 0),

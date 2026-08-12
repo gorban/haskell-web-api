@@ -43,6 +43,8 @@
 7. Established the intended PR scope for `HarchWeb` as tracked in `TASKS.md`: pure SSR route/page/layout/config seams first, then a thin server adapter, then effect-backed data access and a tiny progressive-enhancement navigation runtime.
 8. Made typed API response negotiation parameter-aware: an `Accept` media parameter now selects only a
    declared compatible `Content-Type`, while parameters after `q` remain RFC 9110 accept extensions.
+9. Added `streamingResponseEncoder` for typed API endpoints. Its WAI stream remains request-scoped and
+   passes through the shared protocol response interpreter without materializing a lazy response body.
 
 ## 0.1.0.1
 
