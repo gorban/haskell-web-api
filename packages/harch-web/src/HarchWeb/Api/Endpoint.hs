@@ -38,8 +38,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb qualified
-import HarchWeb.Api.MediaType (ApiMediaType, apiContentTypeText)
-import HarchWeb.Api.MediaType qualified as MediaType
+import HarchWeb.Api.MediaType (ApiContentType, apiContentTypeText)
 import HarchWeb.Api.Negotiation
 import HarchWeb.Api.Request
 import HarchWeb.Api.Response
@@ -204,9 +203,9 @@ acceptHeader request =
 
 renderEndpointResult :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> ApiResponse response -> HarchWeb.Response route context
 renderEndpointResult endpoint request responseValue =
-  case selectRepresentation declaredMediaTypes (acceptHeader request) of
-    NoAcceptableRepresentation -> apiFailureResponse HttpTypes.status406 "API response has no acceptable representation."
-    SelectedRepresentation selectedMediaType ->
+  case selectContentTypeRepresentation declaredContentTypes (acceptHeader request) of
+    NoAcceptableContentTypeRepresentation -> apiFailureResponse HttpTypes.status406 "API response has no acceptable representation."
+    SelectedContentTypeRepresentation selectedContentType ->
       apiResponseBodyToResponse
         ApiResponseBody
           { apiResponseStatus = apiEndpointResponseStatus responseValue,
@@ -215,16 +214,16 @@ renderEndpointResult endpoint request responseValue =
             apiResponseBodyBytes = apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)
           }
       where
-        selectedEncoder = responseEncoderFor selectedMediaType (apiRouteEndpointEncoders endpoint)
+        selectedEncoder = responseEncoderFor selectedContentType (apiRouteEndpointEncoders endpoint)
   where
-    declaredMediaTypes = MediaType.apiContentTypeMediaType . apiResponseEncoderContentType <$> apiRouteEndpointEncoders endpoint
+    declaredContentTypes = apiResponseEncoderContentType <$> apiRouteEndpointEncoders endpoint
 
-responseEncoderFor :: ApiMediaType -> NonEmpty (ApiResponseEncoder response) -> ApiResponseEncoder response
-responseEncoderFor selectedMediaType encoders =
+responseEncoderFor :: ApiContentType -> NonEmpty (ApiResponseEncoder response) -> ApiResponseEncoder response
+responseEncoderFor selectedContentType encoders =
   foldr preferEncoder (NonEmpty.head encoders) (NonEmpty.tail encoders)
   where
     preferEncoder candidate fallback
-      | MediaType.apiContentTypeMediaType (apiResponseEncoderContentType candidate) == selectedMediaType = candidate
+      | apiResponseEncoderContentType candidate == selectedContentType = candidate
       | otherwise = fallback
 
 endpointResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -> ApiResponse response -> [(Text, Text)]

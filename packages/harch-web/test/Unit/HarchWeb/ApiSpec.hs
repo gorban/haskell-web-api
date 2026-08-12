@@ -525,6 +525,27 @@ spec =
                  ]
           )
 
+      it "selects the encoder whose declared Content-Type satisfies Accept parameters" $ do
+        let plainMediaType = testMediaType "text/plain"
+            parameterAwareEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                ( bytesResponseEncoder (apiContentType plainMediaType)
+                    :| [bytesResponseEncoder (apiUtf8ContentType plainMediaType)]
+                )
+                (\_ -> pure (Right (apiResponse "parameter-aware")))
+                (\() -> apiResponse "unreachable")
+        utf8Response <- runApiRoute parameterAwareEndpoint (Wai.defaultRequest {Wai.requestHeaders = [("Accept", "text/plain; charset=UTF-8")]})
+        unacceptableResponse <- runApiRoute parameterAwareEndpoint (Wai.defaultRequest {Wai.requestHeaders = [("Accept", "text/plain; charset=us-ascii")]})
+        expectAll
+          ( (lookup "Content-Type" (apiRouteResponseHeaders utf8Response) `shouldBe` Just "text/plain; charset=utf-8")
+              :| [ apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
+                   apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                 ]
+          )
+
     describe "apiHttpResponseToWaiResponse" $ do
       it "renders a matched response's status, headers, and body" $ do
         let waiResponse = apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain")] (Just (apiTextResponse "hello")))
@@ -1033,6 +1054,40 @@ spec =
       it "matches the full wildcard" $
         selectRepresentation jsonAndText (Just "*/*") `shouldBe` SelectedRepresentation (testMediaType "application/json")
 
+      it "does not claim a bare media type satisfies an Accept media parameter" $
+        selectRepresentation jsonAndText (Just "text/plain; charset=utf-8")
+          `shouldBe` NoAcceptableRepresentation
+
+      it "matches an Accept media parameter against a declared response Content-Type" $
+        let plainMediaType = testMediaType "text/plain"
+            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
+         in selectContentTypeRepresentation textContentTypes (Just "text/plain; charset=\"UTF-8\"")
+              `shouldBe` SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
+
+      it "lets a more parameterized Accept range override an otherwise identical range" $
+        let plainMediaType = testMediaType "text/plain"
+            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
+         in selectContentTypeRepresentation textContentTypes (Just "text/plain;q=0.1, text/plain;charset=utf-8;q=0.9")
+              `shouldBe` SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
+
+      it "matches parameterized wildcard ranges against declared Content-Types" $
+        let plainMediaType = testMediaType "text/plain"
+            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
+            expected = SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
+         in expectAll
+              ( (selectContentTypeRepresentation textContentTypes (Just "*/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9") `shouldBe` expected)
+                  :| [ selectContentTypeRepresentation textContentTypes (Just "text/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9") `shouldBe` expected,
+                       selectContentTypeRepresentation textContentTypes (Just "*/*;charset=utf-8, */*;charset=utf-8;charset=utf-8") `shouldBe` expected,
+                       selectContentTypeRepresentation textContentTypes (Just "text/*;charset=utf-8, text/*;charset=utf-8;charset=utf-8") `shouldBe` expected
+                     ]
+              )
+
+      it "does not let an Accept extension after q constrain Content-Type matching" $
+        let plainMediaType = testMediaType "text/plain"
+            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
+         in selectContentTypeRepresentation textContentTypes (Just "text/plain; q=0.5; charset=us-ascii")
+              `shouldBe` SelectedContentTypeRepresentation (apiContentType plainMediaType)
+
       it "lets a more specific range's q=0 exclude a representation despite a permissive wildcard" $
         selectRepresentation jsonAndText (Just "*/*;q=1, application/json;q=0")
           `shouldBe` SelectedRepresentation (testMediaType "text/plain")
@@ -1071,6 +1126,10 @@ spec =
                  ]
           )
 
+      it "retains normalized media parameters before q and ignores extensions after it" $
+        parseAcceptHeader "text/plain; charset=\"UTF-8\";q=0.5;level=1"
+          `shouldBe` [AcceptedRange "text" "plain" [("charset", "utf-8")] 0.5]
+
       it "drops a malformed quality value and malformed media range" $
         expectAll
           ( (parseAcceptHeader "text/plain;q=nope" `shouldBe` [])
@@ -1088,14 +1147,19 @@ spec =
           )
 
       it "derives comparable, printable representations for negotiation types" $
-        let ranges = parseAcceptHeader "text/plain;q=0.5;level=1, application/json"
+        let plainMediaType = testMediaType "text/plain"
+            ranges = parseAcceptHeader "text/plain;q=0.5;level=1, application/json"
             results = [NoAcceptableRepresentation, SelectedRepresentation (testMediaType "application/json")]
+            contentTypeResults = [NoAcceptableContentTypeRepresentation, SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)]
          in expectAll
               ( (sum [fromEnum (left == right) | left <- ranges, right <- ranges] `shouldBe` length ranges)
                   :| [ sum [fromEnum (left /= right) | left <- ranges, right <- ranges] `shouldBe` length ranges * (length ranges - 1),
                        sum [length (show rangeValue) + length (showList [rangeValue] "") | rangeValue <- ranges] `shouldSatisfy` (> 0),
                        sum [fromEnum (left == right) | left <- results, right <- results] `shouldBe` length results,
                        sum [fromEnum (left /= right) | left <- results, right <- results] `shouldBe` length results * (length results - 1),
-                       sum [length (show resultValue) + length (showList [resultValue] "") | resultValue <- results] `shouldSatisfy` (> 0)
+                       sum [length (show resultValue) + length (showList [resultValue] "") | resultValue <- results] `shouldSatisfy` (> 0),
+                       sum [fromEnum (left == right) | left <- contentTypeResults, right <- contentTypeResults] `shouldBe` length contentTypeResults,
+                       sum [fromEnum (left /= right) | left <- contentTypeResults, right <- contentTypeResults] `shouldBe` length contentTypeResults * (length contentTypeResults - 1),
+                       sum [length (show resultValue) + length (showList [resultValue] "") | resultValue <- contentTypeResults] `shouldSatisfy` (> 0)
                      ]
               )

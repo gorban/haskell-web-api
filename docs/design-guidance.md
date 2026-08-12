@@ -344,8 +344,10 @@ repeated names produce the same typed duplicate-field error as query and header 
 `urlEncodedFormBodyDecoder` decodes one `application/x-www-form-urlencoded` body with a field-count cap;
 `ApiUrlEncodedFormRequestBody` makes that form decoder an endpoint's one body consumer; it adds its fields
 to query/header/cookie request data before the same accumulating `RequestCodec` runs through `formField`.
-This preserves parse failure separately from field validation. A closed route-family registry, response
-media-range parameter matching, and streaming codecs remain AC steps. Multipart remains a separate
+This preserves parse failure separately from field validation. Response `Accept` media parameters now match
+declared `Content-Type` parameters (including a quoted, case-insensitive UTF-8 charset); ranges after `q`
+are extensions and do not constrain matching. A closed route-family registry and streaming codecs remain
+AC steps. Multipart remains a separate
 body-consumer capability: its storage adapter and staged ownership
 follow AD; an API route may select it but does not change its lifecycle policy.
 

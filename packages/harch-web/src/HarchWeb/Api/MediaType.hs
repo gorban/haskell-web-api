@@ -13,6 +13,7 @@ module HarchWeb.Api.MediaType
     ApiContentType,
     apiContentType,
     apiContentTypeMediaType,
+    apiContentTypeParameters,
     apiUtf8ContentType,
     apiContentTypeText,
     jsonContentType,
@@ -83,6 +84,15 @@ apiContentType mediaType = ApiContentType mediaType NoCharset
 -- | Recover the validated media type from a declared response content type.
 apiContentTypeMediaType :: ApiContentType -> ApiMediaType
 apiContentTypeMediaType (ApiContentType mediaType _) = mediaType
+
+-- | The media parameters emitted with a declared response content type.
+-- Parameter names and the built-in charset value are normalized to lowercase,
+-- matching HTTP's case-insensitive charset token semantics.
+apiContentTypeParameters :: ApiContentType -> [(Text, Text)]
+apiContentTypeParameters (ApiContentType _ charset) =
+  case charset of
+    NoCharset -> []
+    Utf8Charset -> [("charset", "utf-8")]
 
 -- | Declare that a textual response is encoded as UTF-8.
 apiUtf8ContentType :: ApiMediaType -> ApiContentType

@@ -63,6 +63,7 @@ module HarchWeb.Api
     ApiContentType,
     apiContentType,
     apiContentTypeMediaType,
+    apiContentTypeParameters,
     apiUtf8ContentType,
     apiContentTypeText,
     jsonContentType,
@@ -88,8 +89,10 @@ module HarchWeb.Api
     apiBytesResponse,
     AcceptedRange (..),
     ApiNegotiationResult (..),
+    ApiContentTypeNegotiationResult (..),
     parseAcceptHeader,
     selectRepresentation,
+    selectContentTypeRepresentation,
   )
 where
 

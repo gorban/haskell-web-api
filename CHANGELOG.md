@@ -41,6 +41,8 @@
 5. Documented the new package layout in the root README and expanded local debugger/setup guidance for running package test suites and spec preprocessors from editor tooling.
 6. Cleaned related repository metadata while landing the new framework boundary, including `core` package terminology updates, `hspec-expectations-match` extra-source-file cleanup, and repository-wide changelog heading normalization without inline dates.
 7. Established the intended PR scope for `HarchWeb` as tracked in `TASKS.md`: pure SSR route/page/layout/config seams first, then a thin server adapter, then effect-backed data access and a tiny progressive-enhancement navigation runtime.
+8. Made typed API response negotiation parameter-aware: an `Accept` media parameter now selects only a
+   declared compatible `Content-Type`, while parameters after `q` remain RFC 9110 accept extensions.
 
 ## 0.1.0.1
 
