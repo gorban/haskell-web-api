@@ -666,12 +666,18 @@ spec =
               :| [apiRouteResponseBody response `shouldBe` "multipart media type rejected"]
           )
 
-      it "derives comparable, printable multipart request errors" $
+      it "derives comparable, printable multipart request errors" $ do
+        errorReference <- newIORef ApiMultipartRequestAlreadyConsumed
+        alreadyConsumed <- readIORef errorReference
+        writeIORef errorReference (ApiMultipartRequestFailed MultipartInvalidContentType)
+        invalidContentType <- readIORef errorReference
         expectAll
-          ( (ApiMultipartRequestAlreadyConsumed `shouldBe` ApiMultipartRequestAlreadyConsumed)
-              :| [ ApiMultipartRequestFailed MultipartInvalidContentType `shouldBe` ApiMultipartRequestFailed MultipartInvalidContentType,
-                   show ApiMultipartRequestAlreadyConsumed `shouldBe` "ApiMultipartRequestAlreadyConsumed",
-                   show (ApiMultipartRequestFailed MultipartInvalidContentType) `shouldBe` "ApiMultipartRequestFailed MultipartInvalidContentType"
+          ( (alreadyConsumed `shouldBe` ApiMultipartRequestAlreadyConsumed)
+              :| [ invalidContentType `shouldBe` ApiMultipartRequestFailed MultipartInvalidContentType,
+                   alreadyConsumed `shouldNotBe` invalidContentType,
+                   show alreadyConsumed `shouldBe` "ApiMultipartRequestAlreadyConsumed",
+                   show invalidContentType `shouldBe` "ApiMultipartRequestFailed MultipartInvalidContentType",
+                   showList [alreadyConsumed, invalidContentType] "" `shouldBe` "[ApiMultipartRequestAlreadyConsumed,ApiMultipartRequestFailed MultipartInvalidContentType]"
                  ]
           )
 
