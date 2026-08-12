@@ -100,8 +100,12 @@ apiRouteResponseBody response =
 
 apiRouteResponseHeaders :: Response route context -> HttpTypes.ResponseHeaders
 apiRouteResponseHeaders response =
+  protocolResponseHeaders (apiRouteProtocolResponse response)
+
+apiRouteProtocolResponse :: Response route context -> ProtocolResponse
+apiRouteProtocolResponse response =
   case response of
-    ProtocolResponseResult protocolResponse -> protocolResponseHeaders protocolResponse
+    ProtocolResponseResult protocolResponse -> protocolResponse
     _ -> error "expected API route to render a protocol response"
 
 apiRouteResponseStream :: Response route context -> Wai.StreamingBody
@@ -593,7 +597,9 @@ spec =
               :| [ LazyByteString.toStrict (LazyByteString.concat chunks) `shouldBe` "firstsecond",
                    flushes `shouldBe` 1,
                    executedAfterRendering `shouldBe` True,
-                   lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
+                   lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8",
+                   protocolResponseObservabilityAttributes (apiRouteProtocolResponse response) `shouldBe` [],
+                   protocolResponseLogEntries (apiRouteProtocolResponse response) `shouldBe` []
                  ]
           )
 
