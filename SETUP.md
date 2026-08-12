@@ -17,7 +17,7 @@ Commands to install prerequisites in Ubuntu. Also tested in WSL2 on Windows:
 ```bash
 sudo apt update
 sudo apt upgrade -y
-sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libpq-dev pkg-config zlib1g-dev git dos2unix
+sudo apt install -y build-essential curl libffi-dev libffi8 libgmp-dev libgmp10 libncurses-dev libpq-dev pkg-config zlib1g-dev git dos2unix lld
 ```
 
 These Ubuntu packages already include the development libraries needed by the optional Haskell Debugger:
@@ -48,7 +48,7 @@ box you can handle that explicitly with `distrobox-host-exec sudo podman` when n
 Example Distrobox container definition, e.g. save as `distrobox.ini`:
 ```ini
 [haskellbox]
-additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix podman-remote postgresql17 postgresql17-private-devel postgresql17-server-devel nodejs python3-pip"
+additional_packages="gcc gcc-c++ gmp gmp-devel make ncurses ncurses-compat-libs ncurses-devel zlib-ng-compat-devel xz perl git vim-enhanced dos2unix lld podman-remote postgresql17 postgresql17-private-devel postgresql17-server-devel nodejs python3-pip"
 image="registry.fedoraproject.org/fedora:latest"
 root=false
 additional_flags="--env GIT_CONFIG_GLOBAL=/var/tmp/distrobox-git/gitconfig"
@@ -67,7 +67,8 @@ init_hooks="ln -sf /usr/bin/podman-remote /usr/local/bin/podman 2>/dev/null || t
   built-in `vimdiff` tool inside the container, and `postgresql17` keeps a PostgreSQL 17 `psql` CLI
   available without a separate install step. `postgresql17-private-devel` and `postgresql17-server-devel`
   are also needed on current Fedora to provide a working `pg_config` and the `libpq` development link used
-  by local source builds; `nodejs` is required by the browser-harness e2e spec.
+  by local source builds; `nodejs` is required by the browser-harness e2e spec; and `lld` provides
+  `ld.lld`, required by the optimized and coverage diagnostic build wrappers.
 - The web-api project setup also tries to start missing prerequisites like PostgreSQL and Jaeger with
   `docker` or `podman`, so the example container definition also includes `podman-remote`, a socket
   symlink for it, and a symlink for the `podman` binary, so that the container can control host containers
@@ -1303,6 +1304,7 @@ haskell-language-server-wrapper --version
 stack --version
 hspec-discover --help
 node --version
+ld.lld --version
 pg_config --version
 podman info --format 'rootless={{.Host.Security.Rootless}} socket={{.Host.RemoteSocket.Path}}'
 test -S /var/run/docker.sock && echo docker-socket-bridge-ready

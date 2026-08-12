@@ -7,7 +7,8 @@ classifier to coverage output before formatting or integration work.
 
 Both commands require LLVM `ld.lld` and pass `-fuse-ld=lld` to GHC's native linker invocation. This
 removes the GNU `ld.bfd` dynamic-closure-symbol warning rather than suppressing it. CI installs
-`lld`; local developers must install an `ld.lld` executable before either wrapper starts Cabal.
+`lld`; local developers must install an `ld.lld` executable before either wrapper starts Cabal. See
+the [setup guide](../SETUP.md#ghcup-prerequisites) for the Ubuntu and Fedora/Distrobox package lists.
 
 ## Fatal diagnostics
 
