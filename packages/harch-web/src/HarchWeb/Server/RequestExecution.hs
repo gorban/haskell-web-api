@@ -11,16 +11,25 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
+import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word64)
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Document (NavigationRuntime)
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Routing (RouteCodec (..), RouteRequest (..), matchRoute, renderRoute)
+import HarchWeb.Routing
+  ( RouteCodec (..),
+    RouteDispatch (..),
+    RouteRequest (..),
+    matchRouteMethod,
+    renderRoute,
+    routeAllowHeaderValue,
+  )
 import HarchWeb.Security
   ( RequestHeadLimitFailure (..),
     RequestPolicyConfig (..),
@@ -180,10 +189,16 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   let requestContext = middlewareResultContext middlewareResult
       middlewareTiming = middlewareTimingEntry webApplication middlewareStartedAt middlewareCompletedAt
   routeMatchingStartedAt <- getMonotonicTimeNSec
-  let routeRequest = matchRoute (routeCodec webApplication) requestContext (waiRequestRouteTarget requestPolicyConfig request)
-  routeMatchedAt <- routeRequest `seq` getMonotonicTimeNSec
+  let routeDispatch =
+        matchRouteMethod
+          (routeCodec webApplication)
+          requestContext
+          (requestMethodText request)
+          (waiRequestRouteTarget requestPolicyConfig request)
+      routeRequest = routeDispatchRequest routeDispatch
+  routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
   renderStartedAt <- getMonotonicTimeNSec
-  response <- dispatchRoutedRequest routedRequestExecution routeRequest middlewareResult
+  response <- dispatchRoutedRequest routedRequestExecution routeDispatch middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
   runtimeNonce <- responseRuntimeNonce response
   let executionTimings =
@@ -196,7 +211,22 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
             requestRenderingStartedAt = renderStartedAt,
             requestResponseRenderedAt = responseRenderedAt
           }
-  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response
+  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest (isHeadDispatch routeDispatch) runtimeNonce response
+
+routeDispatchRequest :: RouteDispatch route context -> RouteRequest route context
+routeDispatchRequest routeDispatch =
+  case routeDispatch of
+    RouteNotFound routeRequest -> routeRequest
+    RouteMethodNotAllowed routeRequest _ -> routeRequest
+    RouteMatched routeRequest -> routeRequest
+    RouteMatchedHead routeRequest -> routeRequest
+    RouteOptions routeRequest _ -> routeRequest
+
+isHeadDispatch :: RouteDispatch route context -> Bool
+isHeadDispatch routeDispatch =
+  case routeDispatch of
+    RouteMatchedHead _ -> True
+    _ -> False
 
 middlewareTimingEntry :: Application route action context -> Word64 -> Word64 -> [(Text, Word64, Word64)]
 middlewareTimingEntry webApplication startedAt completedAt =
@@ -206,20 +236,19 @@ middlewareTimingEntry webApplication startedAt completedAt =
 
 dispatchRoutedRequest ::
   RoutedRequestExecution route action context ->
-  RouteRequest route context ->
+  RouteDispatch route context ->
   MiddlewareResult context ->
   IO (Response route context)
 dispatchRoutedRequest _ _ (HaltMiddleware _ responseBody) = pure (BodyResponse responseBody)
 dispatchRoutedRequest
   routedRequestExecution
-  routeRequest@RouteRequest
-    { requestContext = routedRequestContext
-    }
+  routeDispatch
   (ContinueMiddleware _) =
     let webApplication = routedRequestApplication routedRequestExecution
         request = routedRequestWaiRequest routedRequestExecution
         requestPath = routedRequestPath routedRequestExecution
         requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
+        RouteRequest {requestContext = routedRequestContext} = routeDispatchRequest routeDispatch
      in if isClientActionRequest request
           then do
             let expectedOrigin =
@@ -237,7 +266,7 @@ dispatchRoutedRequest
                       Right () -> do
                         let actionPayload =
                               ClientActionPayload
-                                { clientActionMethod = TextEncoding.decodeUtf8 (Wai.requestMethod request),
+                                { clientActionMethod = requestMethodText request,
                                   clientActionPath = requestPath,
                                   clientActionFields = actionFields,
                                   clientActionCsrfToken = lookup "_harch_csrf" actionFields,
@@ -269,7 +298,36 @@ dispatchRoutedRequest
                                   ClientActionBodyResponse
                                   maybeActionResponse
                               )
-          else renderResponse webApplication routeRequest
+          else renderRouteDispatch webApplication routeDispatch
+
+renderRouteDispatch :: Application route action context -> RouteDispatch route context -> IO (Response route context)
+renderRouteDispatch webApplication routeDispatch =
+  case routeDispatch of
+    RouteNotFound routeRequest -> renderResponse webApplication routeRequest
+    RouteMethodNotAllowed _ declaredMethods ->
+      pure
+        ( ProtocolResponseResult
+            ProtocolResponse
+              { protocolResponseStatus = Http.status405,
+                protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
+                protocolResponseBody = ProtocolResponseBytes ByteString.empty,
+                protocolResponseObservabilityAttributes = [],
+                protocolResponseLogEntries = []
+              }
+        )
+    RouteMatched routeRequest -> renderResponse webApplication routeRequest
+    RouteMatchedHead routeRequest -> renderResponse webApplication routeRequest
+    RouteOptions _ declaredMethods ->
+      pure
+        ( ProtocolResponseResult
+            ProtocolResponse
+              { protocolResponseStatus = Http.status204,
+                protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
+                protocolResponseBody = ProtocolResponseBytes ByteString.empty,
+                protocolResponseObservabilityAttributes = [],
+                protocolResponseLogEntries = []
+              }
+        )
 
 requestIdempotencyKey :: Wai.Request -> Maybe ClientActionIdempotencyKey
 requestIdempotencyKey request =
@@ -289,10 +347,11 @@ finalizeRoutedResponse ::
   RoutedRequestExecution route action context ->
   RequestExecutionTimings ->
   RouteRequest route context ->
+  Bool ->
   Document.RuntimeNonce ->
   Response route context ->
   IO Wai.ResponseReceived
-finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runtimeNonce response = do
+finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omitResponseBody runtimeNonce response = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
       respond = routedRequestRespond routedRequestExecution
@@ -304,7 +363,17 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest runt
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
-      >> respond (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
+      >> respond
+        ( omitResponseBodyWhen
+            omitResponseBody
+            (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
+        )
+
+omitResponseBodyWhen :: Bool -> Wai.Response -> Wai.Response
+omitResponseBodyWhen omitResponseBody waiResponse =
+  if omitResponseBody
+    then Wai.responseStream (Wai.responseStatus waiResponse) (Wai.responseHeaders waiResponse) (\_write flush -> flush)
+    else waiResponse
 
 buildRoutedRequestObservability ::
   (Eq route) =>
@@ -361,6 +430,9 @@ intObservabilityAttribute name value =
       Observability.attributeValue = Observability.IntAttribute value
     }
 
+requestMethodText :: Wai.Request -> Text
+requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod
+
 reportEarlyRequestObservability ::
   (Eq route) =>
   Application route action context ->
@@ -375,7 +447,7 @@ reportEarlyRequestObservability webApplication request requestStartedAt requestC
       requestObservability =
         maybe id Observability.withRequestTraceContext (requestTraceContext request) $
           Observability.buildRequestObservability
-            (TextEncoding.decodeUtf8 (Wai.requestMethod request))
+            (requestMethodText request)
             (requestScheme requestPolicyConfig request)
             (waiRequestPath requestPolicyConfig request)
             routePath

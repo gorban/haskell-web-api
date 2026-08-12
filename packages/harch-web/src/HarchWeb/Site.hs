@@ -47,6 +47,10 @@ import Network.Wai qualified as Wai
 
 data RouteDefinition route context = RouteDefinition
   { routeNavigationLabel :: Maybe Text,
+    -- | The methods this route owns. 'buildSiteApplication' installs this
+    -- declaration into the shared route codec, making the site table the
+    -- authoritative source for ordinary page and protocol dispatch alike.
+    routeMethods :: [HarchWeb.RouteMethod],
     routeResponse :: RouteRequest route context -> IO (Response route context)
   }
 
@@ -109,6 +113,7 @@ pageRoute ::
 pageRoute navigationLabel renderPage =
   RouteDefinition
     { routeNavigationLabel = navigationLabel,
+      routeMethods = [HarchWeb.RouteGet],
       routeResponse = fmap PageResponse . renderPage
     }
 
@@ -123,7 +128,7 @@ buildSiteApplication site =
         applicationStaticAssets = siteStaticAssets site,
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,
-        routeCodec = siteRouteCodec site,
+        routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = routeMethods . siteRouteDefinition site},
         renderResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         handleClientAction = siteHandleClientAction site,

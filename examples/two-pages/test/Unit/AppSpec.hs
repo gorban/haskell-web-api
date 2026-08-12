@@ -24,6 +24,7 @@ import HarchWeb
   ( ClientActionPayload (..),
     ClientActionRequest (..),
     ListenerConfig (..),
+    RouteMethod (..),
     RouteRequest (..),
     appName,
     applicationStaticAssets,
@@ -61,6 +62,7 @@ import HarchWeb.Site
     siteRouteDefinition,
     siteStaticAssets,
   )
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -72,6 +74,8 @@ spec =
   describe "Unit.App" $ do
     describe "twoPageSite" $ do
       it "keeps the example site wiring small and explicit" $ do
+        let previewSlug =
+              maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
         exerciseGeneratedPageRouteInstances
         expectAll
           ( (siteName twoPageSite `shouldBe` "two-pages-example")
@@ -85,6 +89,16 @@ spec =
                      `shouldBe` Nothing,
                    routeNavigationLabel (siteRouteDefinition twoPageSite (Api LiveDataEvents))
                      `shouldBe` Nothing,
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Page HomePage))
+                     `shouldBe` [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Page PageNotFound))
+                     `shouldBe` [],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Api LiveDataEvents))
+                     `shouldBe` [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom (PreviewPage previewSlug)))
+                     `shouldBe` [RouteGet],
+                   Site.routeMethods (siteRouteDefinition twoPageSite (Custom NativeSubscriptionFallback))
+                     `shouldBe` [RouteGet, RoutePost],
                    staticAssetRoots (siteStaticAssets twoPageSite)
                      `shouldBe` [HarchWeb.StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}],
                    staticAssetContentTypes (siteStaticAssets twoPageSite) `shouldBe` defaultStaticAssetContentTypes,
@@ -178,6 +192,16 @@ spec =
                      `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()}) <$> mkPreviewSlug "summer-release",
                    parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
                    parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Page HomePage)
+                     `shouldBe` [RouteGet],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Page PageNotFound)
+                     `shouldBe` [],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Api LiveDataEvents)
+                     `shouldBe` [RouteGet],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom (PreviewPage previewSlug))
+                     `shouldBe` [RouteGet],
+                   HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionFallback)
+                     `shouldBe` [RouteGet, RoutePost],
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",

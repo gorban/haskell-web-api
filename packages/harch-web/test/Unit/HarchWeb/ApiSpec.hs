@@ -11,6 +11,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
+import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -221,6 +222,23 @@ spec =
 
       it "preserves the reason phrase of a supplied HTTP status" $
         HttpTypes.statusMessage (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status500 [] Nothing))) `shouldBe` "Internal Server Error"
+
+    describe "apiHttpResponseToProtocolResponse" $ do
+      it "preserves a matched response's status, headers, and strict protocol bytes" $
+        apiHttpResponseToProtocolResponse
+          (ApiHttpResponse HttpTypes.status201 [("Content-Type", "application/example"), ("X-Example", "present")] (Just (apiBytesResponse (apiContentType (testMediaType "application/example")) "\NUL\SOH\STX")))
+          `shouldBe` ProtocolResponse
+            { protocolResponseStatus = HttpTypes.status201,
+              protocolResponseHeaders = [("Content-Type", "application/example"), ("X-Example", "present")],
+              protocolResponseBody = ProtocolResponseBytes "\NUL\SOH\STX",
+              protocolResponseObservabilityAttributes = [],
+              protocolResponseLogEntries = []
+            }
+
+      it "uses an empty strict body for a protocol result without an API body" $
+        case protocolResponseBody (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status405 [("Allow", "GET, HEAD, OPTIONS")] Nothing)) of
+          ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
+          ProtocolResponseStream _ -> expectationFailure "expected a strict protocol body"
 
     describe "apiEndpointMiddleware" $ do
       let innerApplication :: Wai.Application

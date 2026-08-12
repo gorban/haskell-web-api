@@ -18,6 +18,8 @@ module HarchWeb.Server
     Response (..),
     ResponseBody (..),
     ResponseDiagnostics (..),
+    ProtocolResponse (..),
+    ProtocolResponseBody (..),
     ServerSentEvent (..),
     ServerSentEventSource (..),
     application,

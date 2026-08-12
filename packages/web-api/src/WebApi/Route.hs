@@ -195,8 +195,17 @@ routeCodec =
         HarchWeb.RouteRequest
           { HarchWeb.requestRoute = NotFoundRoute,
             HarchWeb.requestContext = requestContext
-          }
+          },
+      HarchWeb.routeMethods = appRouteMethods
     }
+
+appRouteMethods :: AppRoute -> [HarchWeb.RouteMethod]
+appRouteMethods route =
+  case route of
+    Page PageNotFound -> []
+    Page _ -> [HarchWeb.RouteGet]
+    Api ApiNotFound -> []
+    Api _ -> [HarchWeb.RouteGet]
 
 parseRoute :: AppRequestContext -> Text -> Maybe (HarchWeb.RouteRequest AppRoute AppRequestContext)
 parseRoute requestContext target =

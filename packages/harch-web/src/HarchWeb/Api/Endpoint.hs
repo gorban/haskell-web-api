@@ -14,11 +14,13 @@ module HarchWeb.Api.Endpoint
     apiAllowHeaderValue,
     ApiHttpResponse (..),
     respondApiMatch,
+    apiHttpResponseToProtocolResponse,
     apiHttpResponseToWaiResponse,
     apiEndpointMiddleware,
   )
 where
 
+import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.List (nub)
@@ -30,6 +32,10 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb.Api.MediaType (apiContentTypeText)
 import HarchWeb.Api.Response
+import HarchWeb.Server.Response
+  ( ProtocolResponse (..),
+    ProtocolResponseBody (..),
+  )
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 
@@ -153,6 +159,20 @@ apiHttpResponseToWaiResponse httpResponse =
     (apiHttpResponseStatus httpResponse)
     [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value) | (name, value) <- apiHttpResponseHeaders httpResponse]
     (maybe LazyByteString.empty (LazyByteString.fromStrict . apiResponseBodyBytes) (apiHttpResponseBody httpResponse))
+
+-- | Convert the legacy API match result into the shared server response
+-- primitive. A route-registry endpoint uses this conversion instead of the
+-- compatibility WAI middleware, so framework response policy, diagnostics,
+-- and observability still run once at the normal server boundary.
+apiHttpResponseToProtocolResponse :: ApiHttpResponse -> ProtocolResponse
+apiHttpResponseToProtocolResponse httpResponse =
+  ProtocolResponse
+    { protocolResponseStatus = apiHttpResponseStatus httpResponse,
+      protocolResponseHeaders = [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value) | (name, value) <- apiHttpResponseHeaders httpResponse],
+      protocolResponseBody = ProtocolResponseBytes (maybe ByteString.empty apiResponseBodyBytes (apiHttpResponseBody httpResponse)),
+      protocolResponseObservabilityAttributes = [],
+      protocolResponseLogEntries = []
+    }
 
 -- | A WAI middleware an application opts into by wrapping its own application.
 -- It owns only the paths it matches and leaves every other request unchanged.

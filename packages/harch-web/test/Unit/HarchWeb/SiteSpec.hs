@@ -1,4 +1,5 @@
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWeb.SiteSpec (spec) where
@@ -140,6 +141,8 @@ spec = do
           expectationFailure "expected a page response for the home route"
         ClientActionBodyResponse _ ->
           expectationFailure "expected a page response for the home route"
+        ProtocolResponseResult _ ->
+          expectationFailure "expected a page response for the home route"
 
     it "renders the configured not-found page through the shared shell with a 404 status" $ do
       response <- performWaiRequest (toWaiApplication (buildSiteApplication sampleSite)) (waiRequest ["missing"])
@@ -147,6 +150,22 @@ spec = do
       responseBody <- readResponseBody response
       Text.isInfixOf "<h1>Not Found</h1>" responseBody `shouldBe` True
       Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
+
+    it "takes method ownership from route definitions rather than a codec shadow table" $ do
+      let conflictingCodec =
+            (siteRouteCodec sampleSite)
+              { HarchWeb.routeMethods = const [HarchWeb.RouteDelete]
+              }
+          application = buildSiteApplication (sampleSite {siteRouteCodec = conflictingCodec})
+          deleteHomeRequest = (waiRequest []) {Wai.requestMethod = "DELETE"}
+      getResponse <- performWaiRequest (toWaiApplication application) (waiRequest [])
+      deleteResponse <- performWaiRequest (toWaiApplication application) deleteHomeRequest
+      expectAll
+        ( (Wai.responseStatus getResponse `shouldBe` Http.status200)
+            :| [ Wai.responseStatus deleteResponse `shouldBe` Http.status405,
+                 lookup Http.hAllow (Wai.responseHeaders deleteResponse) `shouldBe` Just "GET, HEAD, OPTIONS"
+               ]
+        )
 
     it "binds each full HTML response to a fresh CSP nonce before body controls parse" $ do
       let application = buildSiteApplication sampleSite
@@ -281,6 +300,7 @@ apiRouteDefinition :: RouteDefinition SampleRoute SampleContext
 apiRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMethods = [HarchWeb.RouteGet],
       routeResponse =
         \_ ->
           pure
@@ -297,15 +317,18 @@ apiRouteDefinition =
 
 notFoundRouteDefinition :: RouteDefinition SampleRoute SampleContext
 notFoundRouteDefinition =
-  Site.pageRoute Nothing $ \routeRequest ->
-    pure
-      Page
-        { pageTitle = "Not Found",
-          pageRoute = NotFoundRoute,
-          pageContext = requestContext routeRequest,
-          pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Not Found</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),
-          pageBootstrapHooks = []
-        }
+  ( Site.pageRoute Nothing $ \routeRequest ->
+      pure
+        Page
+          { pageTitle = "Not Found",
+            pageRoute = NotFoundRoute,
+            pageContext = requestContext routeRequest,
+            pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml ("<h1>Not Found</h1><p><a href=\"" <> renderRouteHref (requestContext routeRequest) HomeRoute <> "\">Return home</a></p>")),
+            pageBootstrapHooks = []
+          }
+  )
+    { Site.routeMethods = []
+    }
 
 samplePageShell :: Page SampleRoute SampleContext -> PageShell SampleRoute SampleContext
 samplePageShell page =
@@ -345,7 +368,10 @@ sampleRouteCodec =
           "/api/status" -> Just RouteRequest {requestRoute = StatusApiRoute, requestContext = requestContextValue}
           _ -> Nothing,
       renderRoute = \routeRequest -> renderRouteHref (requestContext routeRequest) (requestRoute routeRequest),
-      notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue}
+      notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue},
+      routeMethods = \case
+        NotFoundRoute -> []
+        _ -> [HarchWeb.RouteGet]
     }
 
 renderRouteHref :: SampleContext -> SampleRoute -> Text

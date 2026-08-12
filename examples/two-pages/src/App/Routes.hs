@@ -29,6 +29,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb
   ( RouteCodec (..),
+    RouteMethod (..),
     RouteRequest (..),
   )
 import HarchWeb.Action
@@ -98,8 +99,18 @@ routeCodec =
                       <$> parsePageRoute normalizedPath,
       renderRoute = routeHref . requestRoute,
       notFoundRequest = \() ->
-        RouteRequest {requestRoute = Page PageNotFound, requestContext = ()}
+        RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
+      routeMethods = twoPageRouteMethods
     }
+
+twoPageRouteMethods :: TwoPageRoute -> [RouteMethod]
+twoPageRouteMethods route =
+  case route of
+    Page PageNotFound -> []
+    Page _ -> [RouteGet]
+    Api LiveDataEvents -> [RouteGet]
+    Custom (PreviewPage _) -> [RouteGet]
+    Custom NativeSubscriptionFallback -> [RouteGet, RoutePost]
 
 routeHref :: TwoPageRoute -> Text
 routeHref route =

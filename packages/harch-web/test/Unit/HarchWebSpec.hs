@@ -102,8 +102,18 @@ sampleCodec =
   RouteCodec
     { parseRoute = parseSampleRoute,
       renderRoute = renderSampleRoute,
-      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
+      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
+      routeMethods = sampleRouteMethods
     }
+
+sampleRouteMethods :: TestRoute -> [RouteMethod]
+sampleRouteMethods route =
+  case route of
+    MissingRoute -> []
+    KnownRoute -> [RouteGet]
+    QueryRoute _ -> [RouteGet]
+    DataRoute -> [RouteGet, RoutePost]
+    EventStreamRoute -> [RouteGet]
 
 parseSampleRoute :: TestContext -> Text -> Maybe (RouteRequest TestRoute TestContext)
 parseSampleRoute routeContext path
@@ -507,7 +517,8 @@ rootPathCodec =
           DataRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/data"
           EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
           MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
-      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext}
+      notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
+      routeMethods = sampleRouteMethods
     }
 
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext
@@ -2381,6 +2392,69 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8"
       readResponseBody response `shouldReturn` ""
 
+    it "renders strict protocol bytes through the shared response interpreter" $ do
+      let protocolResponse =
+            ProtocolResponse
+              { protocolResponseStatus = Http.status201,
+                protocolResponseHeaders = [(Http.hContentType, "application/example"), ("X-Example", "present")],
+                protocolResponseBody = ProtocolResponseBytes "\NUL\SOH\STX",
+                protocolResponseObservabilityAttributes = [Observability.ObservabilityAttribute "example.outcome" (Observability.TextAttribute "created")],
+                protocolResponseLogEntries = ["example response"]
+              }
+          renderedResponse = ProtocolResponseResult protocolResponse :: Response TestRoute TestContext
+          protocolApplication = sampleApplication {renderResponse = const (pure renderedResponse)}
+          diagnostics = responseDiagnostics renderedResponse
+      response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
+      body <- readResponseBody response
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status201)
+            :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/example",
+                 lookup "X-Example" (Wai.responseHeaders response) `shouldBe` Just "present",
+                 body `shouldBe` "\NUL\SOH\STX",
+                 diagnosticObservabilityAttributes diagnostics `shouldBe` [Observability.ObservabilityAttribute "example.outcome" (Observability.TextAttribute "created")],
+                 diagnosticLogEntries diagnostics `shouldBe` ["example response"],
+                 responseStatusCode protocolApplication renderedResponse `shouldBe` 201,
+                 responseKind renderedResponse `shouldBe` Observability.BodyResponseKind
+               ]
+        )
+
+    it "streams protocol bytes without materializing them as response text" $ do
+      let streamBody write flush = do
+            _ <- write (Builder.byteString "first-")
+            _ <- flush
+            _ <- write (Builder.byteString "second")
+            pure ()
+          renderedResponse =
+            ProtocolResponseResult
+              ProtocolResponse
+                { protocolResponseStatus = Http.status200,
+                  protocolResponseHeaders = [(Http.hContentType, "application/octet-stream")],
+                  protocolResponseBody = ProtocolResponseStream streamBody,
+                  protocolResponseObservabilityAttributes = [],
+                  protocolResponseLogEntries = []
+                } ::
+              Response TestRoute TestContext
+          protocolApplication = sampleApplication {renderResponse = const (pure renderedResponse)}
+          strictResponse =
+            ProtocolResponseResult
+              ProtocolResponse
+                { protocolResponseStatus = Http.status200,
+                  protocolResponseHeaders = [(Http.hContentType, "application/octet-stream")],
+                  protocolResponseBody = ProtocolResponseBytes "first-second",
+                  protocolResponseObservabilityAttributes = [],
+                  protocolResponseLogEntries = []
+                } ::
+              Response TestRoute TestContext
+      response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
+      expectAll
+        ( (lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "application/octet-stream")
+            :| [ readResponseBody response `shouldReturn` "first-second",
+                 renderedResponse `shouldBe` renderedResponse,
+                 renderedResponse `shouldNotBe` strictResponse,
+                 show renderedResponse `shouldSatisfy` isInfixOf "ProtocolResponseStream <stream>"
+               ]
+        )
+
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =
             sampleApplication
@@ -2499,6 +2573,44 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       responseBody <- readResponseBody response
       Text.isInfixOf "<h1>Missing</h1>" responseBody `shouldBe` True
+
+    it "keeps an unknown method-path pair as a 404" $ do
+      let missingDeleteRequest = (waiRequest ["missing"]) {Wai.requestMethod = "DELETE"}
+      response <- performWaiRequest (toWaiApplication sampleApplication) missingDeleteRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status404)
+            :| [lookup Http.hAllow (Wai.responseHeaders response) `shouldBe` Nothing]
+        )
+
+    it "returns 405 with a derived Allow header when a known route rejects the method" $ do
+      let knownDeleteRequest = (waiRequest ["known"]) {Wai.requestMethod = "DELETE"}
+      response <- performWaiRequest (toWaiApplication sampleApplication) knownDeleteRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status405)
+            :| [ lookup Http.hAllow (Wai.responseHeaders response) `shouldBe` Just "GET, HEAD, OPTIONS",
+                 readResponseBody response `shouldReturn` ""
+               ]
+        )
+
+    it "derives HEAD from GET while preserving the ordinary response headers" $ do
+      let knownHeadRequest = (waiRequest ["known"]) {Wai.requestMethod = "HEAD"}
+      response <- performWaiRequest (toWaiApplication sampleApplication) knownHeadRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status200)
+            :| [ lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8",
+                 readResponseBody response `shouldReturn` ""
+               ]
+        )
+
+    it "synthesizes OPTIONS from a matched route declaration" $ do
+      let dataOptionsRequest = (waiRequest ["data"]) {Wai.requestMethod = "OPTIONS"}
+      response <- performWaiRequest (toWaiApplication sampleApplication) dataOptionsRequest
+      expectAll
+        ( (Wai.responseStatus response `shouldBe` Http.status204)
+            :| [ lookup Http.hAllow (Wai.responseHeaders response) `shouldBe` Just "GET, POST, HEAD, OPTIONS",
+                 readResponseBody response `shouldReturn` ""
+               ]
+        )
 
     it "preserves body-response status, content type, and body" $ do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["data"])
@@ -2882,7 +2994,7 @@ spec = do
                   ]
               }
       response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) preflightRequest
-      Wai.responseStatus response `shouldBe` Http.status202
+      Wai.responseStatus response `shouldBe` Http.status204
       lookup "Access-Control-Allow-Origin" (Wai.responseHeaders response) `shouldBe` Just "https://client.example.com"
       lookup "Access-Control-Allow-Methods" (Wai.responseHeaders response) `shouldBe` Nothing
       lookup "Access-Control-Allow-Headers" (Wai.responseHeaders response) `shouldBe` Nothing

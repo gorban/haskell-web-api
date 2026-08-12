@@ -49,6 +49,7 @@ responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
         RedirectResponse _ _ -> Nothing
         ClientActionBodyResponse _ -> Nothing
         EventStreamResponse _ _ -> Nothing
+        ProtocolResponseResult _ -> Nothing
     )
 
 responseRuntimeNonce :: Response route context -> IO Document.RuntimeNonce
@@ -60,6 +61,7 @@ responseRuntimeNonce response =
     RedirectResponse _ _ -> pure $! Document.RuntimeNonce ""
     ClientActionBodyResponse _ -> pure $! Document.RuntimeNonce ""
     EventStreamResponse _ _ -> pure $! Document.RuntimeNonce ""
+    ProtocolResponseResult _ -> pure $! Document.RuntimeNonce ""
 
 redirectResponse :: Int -> Text -> Response route context
 redirectResponse status =
@@ -84,6 +86,10 @@ responseDiagnostics response =
         (clientActionObservabilityAttributes actionResponse)
         (clientActionLogEntries actionResponse)
     EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
+    ProtocolResponseResult protocolResponse ->
+      ResponseDiagnostics
+        (protocolResponseObservabilityAttributes protocolResponse)
+        (protocolResponseLogEntries protocolResponse)
 
 responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
 responseBodyDiagnostics responseBodyValue =
@@ -101,6 +107,7 @@ responseStatusCode webApplication response =
     RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
     ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
     EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
+    ProtocolResponseResult protocolResponse -> Http.statusCode (protocolResponseStatus protocolResponse)
 
 responseKind :: Response route context -> Observability.ResponseKind
 responseKind response =
@@ -111,6 +118,7 @@ responseKind response =
     RedirectResponse _ _ -> Observability.BodyResponseKind
     ClientActionBodyResponse _ -> Observability.BodyResponseKind
     EventStreamResponse _ _ -> Observability.BodyResponseKind
+    ProtocolResponseResult _ -> Observability.BodyResponseKind
 
 toWaiResponse ::
   (Eq route) =>
@@ -138,6 +146,7 @@ toWaiResponse additionalHeaders runtimeNonce webApplication response =
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
+    ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
 
 pageResponseHeaders :: Http.ResponseHeaders -> Document.RuntimeNonce -> Http.ResponseHeaders
 pageResponseHeaders additionalHeaders runtimeNonce =
@@ -152,6 +161,20 @@ toWaiBodyResponse additionalHeaders responseBodyValue =
     (Http.mkStatus (responseStatus responseBodyValue) mempty)
     (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
     (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
+
+toWaiProtocolResponse :: Http.ResponseHeaders -> ProtocolResponse -> Wai.Response
+toWaiProtocolResponse additionalHeaders protocolResponse =
+  case protocolResponseBody protocolResponse of
+    ProtocolResponseBytes bodyBytes ->
+      Wai.responseLBS
+        (protocolResponseStatus protocolResponse)
+        (additionalHeaders <> protocolResponseHeaders protocolResponse)
+        (LazyByteString.fromStrict bodyBytes)
+    ProtocolResponseStream streamBody ->
+      Wai.responseStream
+        (protocolResponseStatus protocolResponse)
+        (additionalHeaders <> protocolResponseHeaders protocolResponse)
+        streamBody
 
 toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
 toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =

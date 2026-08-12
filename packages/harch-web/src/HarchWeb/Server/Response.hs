@@ -13,11 +13,14 @@ module HarchWeb.Server.Response
     Response (..),
     ResponseBody (..),
     ResponseDiagnostics (..),
+    ProtocolResponse (..),
+    ProtocolResponseBody (..),
     ServerSentEvent (..),
     ServerSentEventSource (..),
   )
 where
 
+import Data.ByteString (ByteString)
 import Data.Text (Text)
 import HarchWeb.Action
   ( ClientActionDecodeResult (..),
@@ -38,6 +41,61 @@ data ResponseBody = ResponseBody
     responseLogEntries :: [Text]
   }
   deriving (Eq, Show)
+
+-- | An HTTP response whose payload is already protocol bytes rather than
+-- document text. This is the shared server-boundary primitive for APIs,
+-- downloads, and application-defined representations: it still travels
+-- through response security headers, diagnostics, and observability.
+--
+-- Decision record (AC, 2026-08-12): this adds only the response half of the
+-- shared endpoint boundary. It does not introduce another dispatcher; the
+-- method-aware 'HarchWeb.Routing.RouteCodec'/'HarchWeb.Site.RouteDefinition'
+-- boundary remains responsible for one application-wide path/method owner.
+data ProtocolResponse = ProtocolResponse
+  { protocolResponseStatus :: Http.Status,
+    protocolResponseHeaders :: Http.ResponseHeaders,
+    protocolResponseBody :: ProtocolResponseBody,
+    protocolResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    protocolResponseLogEntries :: [Text]
+  }
+
+-- | A protocol response may be strict bytes or a one-shot WAI stream. A
+-- stream stays inside the server interpreter and cannot be mistaken for an
+-- application-owned lazy value that may outlive the request.
+data ProtocolResponseBody
+  = ProtocolResponseBytes ByteString
+  | ProtocolResponseStream Wai.StreamingBody
+
+instance Eq ProtocolResponse where
+  left == right =
+    protocolResponseStatus left == protocolResponseStatus right
+      && protocolResponseHeaders left == protocolResponseHeaders right
+      && equalProtocolBodies (protocolResponseBody left) (protocolResponseBody right)
+      && protocolResponseObservabilityAttributes left == protocolResponseObservabilityAttributes right
+      && protocolResponseLogEntries left == protocolResponseLogEntries right
+
+equalProtocolBodies :: ProtocolResponseBody -> ProtocolResponseBody -> Bool
+equalProtocolBodies left right =
+  case (left, right) of
+    (ProtocolResponseBytes leftBytes, ProtocolResponseBytes rightBytes) -> leftBytes == rightBytes
+    (ProtocolResponseStream _, ProtocolResponseStream _) -> True
+    _ -> False
+
+instance Show ProtocolResponse where
+  showsPrec precedence response =
+    showParen (precedence > 10) $
+      showString "ProtocolResponse "
+        . showsPrec 11 (protocolResponseStatus response)
+        . showChar ' '
+        . showsPrec 11 (protocolResponseHeaders response)
+        . showChar ' '
+        . showsPrec 11 (protocolResponseBodySummary (protocolResponseBody response))
+
+protocolResponseBodySummary :: ProtocolResponseBody -> String
+protocolResponseBodySummary responseBodyValue =
+  case responseBodyValue of
+    ProtocolResponseBytes bytes -> "ProtocolResponseBytes " <> show bytes
+    ProtocolResponseStream _ -> "ProtocolResponseStream <stream>"
 
 -- | One event in a server-sent event stream. Event names and identifiers are
 -- rendered as single protocol fields; embedded line breaks are discarded so a
@@ -106,6 +164,7 @@ data Response route context
   | RedirectResponse ResponseBody Text
   | ClientActionBodyResponse ClientActionResponse
   | EventStreamResponse ResponseBody ServerSentEventSource
+  | ProtocolResponseResult ProtocolResponse
 
 instance (Eq route, Eq context) => Eq (Response route context) where
   left == right =
@@ -116,6 +175,7 @@ instance (Eq route, Eq context) => Eq (Response route context) where
       (RedirectResponse leftBody leftLocation, RedirectResponse rightBody rightLocation) -> leftBody == rightBody && leftLocation == rightLocation
       (ClientActionBodyResponse leftAction, ClientActionBodyResponse rightAction) -> leftAction == rightAction
       (EventStreamResponse leftBody _, EventStreamResponse rightBody _) -> leftBody == rightBody
+      (ProtocolResponseResult leftResponse, ProtocolResponseResult rightResponse) -> leftResponse == rightResponse
       _ -> False
 
 instance (Show route, Show context) => Show (Response route context) where
@@ -127,3 +187,4 @@ instance (Show route, Show context) => Show (Response route context) where
       RedirectResponse responseBodyValue location -> showParen (precedence > 10) (showString "RedirectResponse " . showsPrec 11 responseBodyValue . showChar ' ' . shows location)
       ClientActionBodyResponse actionResponse -> showParen (precedence > 10) (showString "ClientActionBodyResponse " . showsPrec 11 actionResponse)
       EventStreamResponse responseBodyValue _ -> showParen (precedence > 10) (showString "EventStreamResponse " . showsPrec 11 responseBodyValue . showString " <event-source>")
+      ProtocolResponseResult protocolResponse -> showParen (precedence > 10) (showString "ProtocolResponseResult " . showsPrec 11 protocolResponse)

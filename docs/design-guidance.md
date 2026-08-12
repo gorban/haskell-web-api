@@ -259,7 +259,7 @@ proofs—delayed registration, cancellation, handler failure and non-settlement,
 controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
-### A declarative API endpoint library exists as an opt-in WAI middleware
+### Low-level API transport helpers exist; the shared endpoint boundary does not yet
 
 `HarchWeb.Api` declares a method-aware HTTP endpoint (`apiEndpoint target method (at "/path")`) and
 matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
@@ -311,11 +311,25 @@ finishes, before any later part (including a later file part) is read, so a call
 opaque scoped upload: promote it deliberately to take ownership, or leave it for automatic cleanup after
 success, rejection, or an exception.
 
-Both modules are implemented and fully unit-tested; `apiEndpointMiddleware` makes `ApiEndpoint` dispatch
-usable against a real WAI application today, opt-in and additive. Neither is the application's
-*default* dispatcher: continue routing real applications through the existing `RouteCodec`/`ApiRoute`
-pattern shown in the [custom API guide](../examples/custom-api/README.md) unless they explicitly opt
-into `apiEndpointMiddleware` for a declared set of paths.
+These are low-level transport helpers, not the framework's completed declarative endpoint boundary.
+`apiEndpointMiddleware` is additive WAI middleware and cannot prove that page, action, and API
+routes have one method/path owner. Applications must not treat it as the final route dispatcher.
+
+### Decision record — AC typed declarative endpoint boundary (2026-08-12)
+
+**Decision: extend the shared `RouteCodec`/`RouteDefinition` and server-response boundary (option 1),
+not a second WAI dispatcher.** The existing route codec owns application path dispatch, while its
+current shape lacked method-aware registration and a closed route-family registry. Method ownership is
+now declared on each `RouteDefinition`; `buildSiteApplication` installs those declarations into the
+shared `RouteCodec`, and the server derives 404, 405/`Allow`, `HEAD`, and `OPTIONS` there. That is the
+first delivered portion of the decision: an application wrapper can no longer change a site's ordinary
+method table. `ProtocolResponseResult` supplies the response half of that boundary: strict bytes or a
+request-scoped WAI stream retain normal response security, diagnostics, and observability. This still
+does /not/ provide typed API declarations, validate API headers, or make actions and APIs entries in one
+closed route registry; those are the next AC steps. The earlier standalone
+`HarchWeb.Api.Declarative` prototype is not a shipped endpoint system and must not be documented as one.
+Multipart remains a separate body-consumer capability: its storage adapter and staged ownership follow
+AD; an API route may select it but does not change its lifecycle policy.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
 `apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a
@@ -350,7 +364,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api` endpoint matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented, opt-in via WAI middleware | Wrap a `Wai.Application` with `apiEndpointMiddleware` to dispatch declared paths; it is not the default dispatcher, so keep routing everything else through `RouteCodec`/`ApiRoute`. |
+| `HarchWeb.Api` low-level matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented (partial — see AC) | These helpers are not the shared declarative endpoint boundary. AC must extend the method-aware `RouteCodec`/`RouteDefinition` registry and server response interpreter so pages, actions, and APIs have one path/method authority. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection, scoped cleanup, and promotion are explicit; parser-wide bounds and native-upload cleanup across every failure mode remain under AD. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

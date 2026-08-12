@@ -2,10 +2,10 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A CSRF-protected, JS-optional native file-upload form dispatched
--- through "HarchWeb.Api".'HarchWeb.Api.apiEndpointMiddleware'. This dedicated
--- example owns the raw, incremental request body a native @POST@ needs,
--- rather than coupling multipart-specific middleware to a general page app.
+-- | A CSRF-protected, JS-optional native file-upload form using the legacy
+-- low-level API middleware. This dedicated example owns the raw, incremental
+-- request body a native @POST@ needs. AC will move endpoint dispatch into the
+-- shared route registry; AD owns the upload-storage lifecycle policy.
 --
 -- CSRF policy: the form carries a single-use, server-held token rather than
 -- a double-submit cookie, so no framework change is needed to let a plain

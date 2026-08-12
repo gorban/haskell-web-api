@@ -1,9 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A small, compiled demonstration of "HarchWeb.Api": a negotiated GET
--- response (JSON or an application-defined media type), a JSON request
--- body, and a bounded streaming multipart upload, all dispatched through
--- 'apiEndpointMiddleware'. See ../../README.md.
+-- | A compiled demonstration of the legacy low-level 'HarchWeb.Api' helpers:
+-- negotiated JSON/custom-media responses, a JSON body, and a bounded
+-- multipart upload. It deliberately remains separate from the application's
+-- shared route table until AC supplies the method-aware RouteCodec/
+-- RouteDefinition endpoint boundary. See ../../README.md.
 module App.Api.Declarative
   ( GreetingTarget (..),
     GreetingRequest (..),
@@ -40,9 +41,9 @@ declarativeApiEndpoints =
     apiEndpoint UploadAvatar ApiPost (at "/api/avatar")
   ]
 
--- | An application opts into 'HarchWeb.Api' dispatch for just these three
--- paths by wrapping its own 'Wai.Application' with this middleware; every
--- other request reaches the wrapped application unchanged.
+-- | Compatibility composition only. This owns just the explicitly declared
+-- API paths and delegates every other request to the supplied application;
+-- it cannot establish whole-application path/method ownership.
 declarativeApiApplication :: Wai.Application -> Wai.Application
 declarativeApiApplication = apiEndpointMiddleware declarativeApiEndpoints handleGreetingTarget
 
@@ -73,9 +74,9 @@ encodeGreetingResponse greeting = Aeson.object ["greetingText" Aeson..= greeting
 greetingFor :: Text -> GreetingResponse
 greetingFor name = GreetingResponse ("Hello, " <> name <> "!")
 
--- | Negotiate between JSON (the framework/application default) and the
--- application-defined @text/x-greeting@ media type, declared only for this
--- endpoint.
+-- | Negotiates the two representations declared by this compatibility
+-- example. The shared endpoint boundary will own this declaration alongside
+-- path and method dispatch.
 renderGreeting :: Wai.Request -> GreetingResponse -> ApiResponseBody
 renderGreeting = renderGreetingWith (apiMediaType "text/x-greeting")
 

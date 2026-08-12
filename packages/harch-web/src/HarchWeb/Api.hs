@@ -1,6 +1,11 @@
--- | Declarative, method-aware HTTP API endpoints (see @TASKS.md@ item AB).
--- This compatibility facade re-exports focused modules for endpoint matching,
--- request extraction, buffered body decoding, and representation negotiation.
+-- | Low-level HTTP API matching, codecs, and response helpers.
+--
+-- This compatibility facade intentionally does /not/ define the application's
+-- route dispatcher. The AC design decision extends the shared
+-- 'HarchWeb.Routing.RouteCodec'/'HarchWeb.Site.RouteDefinition' boundary and
+-- the server response interpreter so pages, actions, and APIs have one
+-- method/path owner. See @docs/design-guidance.md@. The existing middleware is
+-- retained only as a compatibility helper while that boundary is completed.
 -- Streaming bodies such as multipart remain separate; see
 -- 'HarchWeb.Api.Multipart'.
 module HarchWeb.Api
@@ -16,6 +21,7 @@ module HarchWeb.Api
     apiAllowHeaderValue,
     ApiHttpResponse (..),
     respondApiMatch,
+    apiHttpResponseToProtocolResponse,
     apiHttpResponseToWaiResponse,
     apiEndpointMiddleware,
     ApiRequestData (..),

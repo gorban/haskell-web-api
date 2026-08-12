@@ -8470,6 +8470,7 @@ spec = do
       HarchWeb.renderRoute codec apiNotFoundRequest `shouldBe` renderRoutePath apiNotFoundRequest
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
+      HarchWeb.routeMethods codec NotFoundRoute `shouldBe` []
 
     it "stores the same response-selection behavior used by direct response tests" $ do
       expectedHomeResponse <- selectResponse defaultAppConfig homeRequest
@@ -8618,6 +8619,7 @@ spec = do
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
         HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
+        HarchWeb.ProtocolResponseResult _ -> expectationFailure "expected body response"
 
   describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
@@ -8655,6 +8657,7 @@ spec = do
         HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
         HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
         HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
+        HarchWeb.ProtocolResponseResult _ -> expectationFailure "expected body response"
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability
@@ -9005,6 +9008,8 @@ stripVolatileDatabaseTimingResponse response =
       HarchWeb.ClientActionBodyResponse actionResponse
     HarchWeb.EventStreamResponse responseBody eventSource ->
       HarchWeb.EventStreamResponse (stripVolatileDatabaseTimingResponseBody responseBody) eventSource
+    HarchWeb.ProtocolResponseResult protocolResponse ->
+      HarchWeb.ProtocolResponseResult protocolResponse
 
 stripVolatileDatabaseTimingResponseBody :: HarchWeb.ResponseBody -> HarchWeb.ResponseBody
 stripVolatileDatabaseTimingResponseBody responseBody =

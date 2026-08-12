@@ -37,6 +37,7 @@ import HarchWeb
     RequestMiddleware (..),
     RequestPolicyConfig (..),
     ResponseBody (..),
+    RouteMethod (..),
     ServerConfig (..),
     ServerSentEvent (..),
     StaticAssetRoot (..),
@@ -86,15 +87,20 @@ twoPageSite =
 routeDefinition :: TwoPageRoute -> RouteDefinition TwoPageRoute ()
 routeDefinition route =
   case route of
+    Page PageNotFound -> (pageRouteDefinition PageNotFound) {routeMethods = []}
     Page page -> pageRouteDefinition page
     Api LiveDataEvents -> liveDataEventsRouteDefinition
     Custom (PreviewPage previewSlug) -> previewPageDefinition previewSlug
-    Custom NativeSubscriptionFallback -> Site.pageRoute Nothing nativeSubscriptionFallbackPage
+    Custom NativeSubscriptionFallback ->
+      (Site.pageRoute Nothing nativeSubscriptionFallbackPage)
+        { routeMethods = [RouteGet, RoutePost]
+        }
 
 liveDataEventsRouteDefinition :: RouteDefinition TwoPageRoute ()
 liveDataEventsRouteDefinition =
   RouteDefinition
     { routeNavigationLabel = Nothing,
+      routeMethods = [RouteGet],
       routeResponse = \_ -> do
         eventSource <-
           serverSentEventSourceFromList
