@@ -251,7 +251,7 @@ spec = do
                  showList [regionValue, otherRegionValue] "" `shouldSatisfy` (not . null),
                  show [patchValue, otherPatchValue] `shouldSatisfy` (not . null),
                  showList [patchValue, otherPatchValue] "" `shouldSatisfy` (not . null),
-                 all (not . null) values `shouldBe` True
+                 not (any null values) `shouldBe` True
                ]
         )
 

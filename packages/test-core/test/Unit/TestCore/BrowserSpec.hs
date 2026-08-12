@@ -165,7 +165,7 @@ spec = do
         expectAll
           ( (Aeson.toJSONList locators `shouldSatisfy` (not . null . show))
               :| [ show runtimeRole `shouldBe` "Textbox",
-                   showsPrec 0 runtimeRole "" `shouldBe` "Textbox",
+                   shows runtimeRole "" `shouldBe` "Textbox",
                    showList [runtimeRole] "" `shouldBe` "[Textbox]",
                    Aeson.omitField (byRole Button) `shouldBe` False,
                    LazyByteString.length (AesonEncoding.encodingToLazyByteString (Aeson.toEncoding (byRole Button))) `shouldSatisfy` (> 0),

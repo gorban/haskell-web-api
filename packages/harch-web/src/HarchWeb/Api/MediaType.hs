@@ -73,7 +73,7 @@ instance Show ApiContentType where
   showsPrec precedence contentType =
     showParen (precedence > 10) $
       showString "ApiContentType " . shows (apiContentTypeText contentType)
-  showList contentTypes = showListWith shows contentTypes
+  showList = showListWith shows
 
 -- | Use a declared media type without a charset parameter, appropriate for
 -- bytes whose encoding is application-defined or not textual.

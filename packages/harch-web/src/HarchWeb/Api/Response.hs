@@ -25,8 +25,8 @@ module HarchWeb.Api.Response
   )
 where
 
-import Data.Aeson (FromJSON, ToJSON)
 import Control.Monad (unless)
+import Data.Aeson (FromJSON, ToJSON)
 import Data.Aeson qualified as Aeson
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString

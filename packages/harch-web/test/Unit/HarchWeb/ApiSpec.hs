@@ -903,10 +903,10 @@ spec =
                   :| [ orderedForm /= reversedForm `shouldBe` True,
                        orderedForm /= changedLastValueForm `shouldBe` True,
                        fmap show orderedForm `shouldSatisfy` \case
-                         Right renderedForm -> length renderedForm > 0
+                         Right renderedForm -> not (null renderedForm)
                          Left _parseError -> False,
                        fmap (\decodedForm -> showList [decodedForm] "") orderedForm `shouldSatisfy` \case
-                         Right renderedForms -> length renderedForms > 0
+                         Right renderedForms -> not (null renderedForms)
                          Left _parseError -> False
                      ]
               )

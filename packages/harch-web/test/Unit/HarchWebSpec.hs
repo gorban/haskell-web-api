@@ -2299,7 +2299,7 @@ spec = do
       let fields fieldCount = LazyByteString.fromStrict (ByteString.intercalate "&" (replicate fieldCount "field=value"))
       expectAll
         ( (either (const (-1)) length (parseClientActionFields "") `shouldBe` 0)
-            :| [ either (const []) id (parseClientActionFields "name=Ada+Lovelace&empty") `shouldBe` [("name", "Ada Lovelace"), ("empty", "")],
+            :| [ fromRight [] (parseClientActionFields "name=Ada+Lovelace&empty") `shouldBe` [("name", "Ada Lovelace"), ("empty", "")],
                  either (const (-1)) length (parseClientActionFields (fields 128)) `shouldBe` 128,
                  either (const (-1)) length (parseClientActionFields (fields 129)) `shouldBe` -1
                ]
