@@ -358,8 +358,8 @@ This preserves parse failure separately from field validation. Response `Accept`
 declared `Content-Type` parameters (including a quoted, case-insensitive UTF-8 charset); ranges after `q`
 are extensions and do not constrain matching. Typed response encoders may now emit strict bytes or a
 request-scoped WAI stream, preserving the existing server response boundary without materializing a lazy
-body. A closed route-family registry and additional streaming request codecs remain AC steps.
-`ApiMultipartRequestBody` now lets an API route select the existing scoped multipart consumer exactly once;
+body. Additional streaming request codecs remain an AC step; see below for the closed route-family
+registry. `ApiMultipartRequestBody` now lets an API route select the existing scoped multipart consumer exactly once;
 its storage adapter and staged ownership remain AD policy, so the endpoint does not create a new upload
 lifecycle or default to local files.
 
@@ -380,6 +380,42 @@ the module haddock in `examples/multipart-upload/src/App/MultipartUpload.hs` for
 proof that the submission is a hard navigation with zero capture-kernel mutation requests and exactly
 one deliberate in-memory upload discard either way.
 
+#### Follow-up decision — closed route-family registry (2026-08-12)
+
+**Decision: extend `HarchWeb.Routing.RouteCodec` with a generic two-family combinator (option 1
+again), rather than a third parallel dispatcher.** `apiRouteEndpointMiddleware` (above) still only
+owns the paths it matches and shares no 404/405/`Allow`/HEAD/OPTIONS authority with whatever
+`Wai.Application` it wraps — composing it around a `buildSiteApplication` output recreates the exact
+two-independent-dispatchers shape the "Extend an existing boundary" worked example in this
+document's decision framework warns against, just with `HarchWeb.Api`'s own middleware playing that
+role instead of an application-authored one. `HarchWeb.Routing.RouteFamily`/`combineRouteCodecs`
+closes that gap at the primitive level: `combineRouteCodecs` merges two `RouteCodec`s into one,
+trying the first family before the second (so an overlapping path deterministically belongs to the
+first, the same declaration-order precedence `matchRouteMethod` already applies within one family),
+and using the second/catch-all family's `notFoundRequest` as the combined not-found — nest it to
+combine more than two. `HarchWeb.Api.Endpoint.apiRouteEndpointFamilyCodec` adapts a
+`SomeApiRouteEndpoint` table into that shared `RouteCodec` family (route identity = the matched
+endpoint's declared `ApiPath`; `routeMethods` reports every method declared at that path so `HEAD`/
+`OPTIONS`/405 keep deriving from the one shared `HarchWeb.Routing` implementation, not a
+second copy), and `apiRouteEndpointFamilyDefinition` supplies the matching `RouteDefinition`,
+selecting the one endpoint whose declared method matches the real request via
+`matchedApiRouteEndpointOrDie` — reachable only by a framework wiring defect (an inconsistent
+endpoint table between the codec and the definition), not an ordinary request, since every
+request method `routeResponse` sees has already been validated against this same family's
+`routeMethods` by the shared dispatcher before `routeResponse` runs.
+
+This closes the primitive gap named in "A closed route-family registry ... remain AC steps" above,
+but no application has adopted it yet: `web-api`'s own `AppRoute = Page PageRoute | Api ApiRoute`
+still hand-writes its own combined path parsing/rendering instead of using `combineRouteCodecs`, its
+`/api/status`/`/api/second` routes dispatch through ad hoc `WebApi.Route`/`WebApi.Response` logic
+that does not call into `HarchWeb.Api.Endpoint` at all, and `examples/custom-api`'s
+`App.Api.Declarative` still uses the compatibility `apiEndpointMiddleware` (its module haddock says
+so explicitly). Migrating either onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`
+is unstarted follow-up work, tracked as part of AC in `TASKS.md`; until then,
+`apiRouteEndpointMiddleware`/`apiEndpointMiddleware` remain the only paths those two applications
+actually use, and the caution above about their shared-authority gap still applies to them in
+practice.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
@@ -396,7 +432,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api` low-level matching, codecs, negotiation, and `apiEndpointMiddleware` | Implemented (partial — see AC) | These helpers are not the shared declarative endpoint boundary. AC must extend the method-aware `RouteCodec`/`RouteDefinition` registry and server response interpreter so pages, actions, and APIs have one path/method authority. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints, closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | The route-family primitive is real and tested, but no application uses it yet: `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all, and `examples/custom-api` still uses the compatibility middleware. Migrating either application, and additional streaming *request* codecs, remain AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection, scoped cleanup, and promotion are explicit; parser-wide bounds and native-upload cleanup across every failure mode remain under AD. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

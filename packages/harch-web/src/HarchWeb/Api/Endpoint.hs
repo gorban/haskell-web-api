@@ -18,6 +18,9 @@ module HarchWeb.Api.Endpoint
     apiRouteEndpointAt,
     apiRouteEndpointPath,
     apiRouteDefinition,
+    apiRouteEndpointFamilyCodec,
+    apiRouteEndpointFamilyDefinition,
+    matchedApiRouteEndpointOrDie,
     at,
     ApiEndpoint,
     ApiMatchResult (..),
@@ -216,6 +219,68 @@ apiRouteDefinition endpoint =
       routeMethods = [toRouteMethod (apiRouteEndpointMethod endpoint)],
       routeResponse = \request _ -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
     }
+
+-- | Adapt a heterogeneous endpoint table into one route family whose route
+-- identity is a matched endpoint's declared 'ApiPath'. Combine the result
+-- with 'HarchWeb.combineRouteCodecs' alongside an application's other route
+-- families (its page routes, say) so the table becomes part of that one
+-- closed 'HarchWeb.RouteCodec' and 'HarchWeb.Site' — the framework's closed
+-- route-family registry for 'HarchWeb.Api' endpoints — instead of the
+-- separately composed 'apiRouteEndpointMiddleware', which owns only the
+-- paths it matches and shares no 404\/405\/'Allow'\/HEAD\/OPTIONS authority
+-- with whatever it wraps. Pair with 'apiRouteEndpointFamilyDefinition' for
+-- the matching 'RouteDefinition' selector. Migrating an application from
+-- 'apiRouteEndpointMiddleware' onto this pair is tracked follow-up work,
+-- not part of this primitive.
+apiRouteEndpointFamilyCodec :: [SomeApiRouteEndpoint] -> HarchWeb.RouteCodec ApiPath context
+apiRouteEndpointFamilyCodec endpoints =
+  HarchWeb.RouteCodec
+    { HarchWeb.parseRoute = \context requestPath ->
+        if any (endpointAtPath requestPath) endpoints
+          then Just (HarchWeb.RouteRequest (ApiPath requestPath) context)
+          else Nothing,
+      HarchWeb.renderRoute = apiPathText . HarchWeb.requestRoute,
+      HarchWeb.notFoundRequest = HarchWeb.RouteRequest (ApiPath Text.empty),
+      HarchWeb.routeMethods = \(ApiPath pathText) -> apiPathRouteMethods endpoints pathText
+    }
+
+apiPathText :: ApiPath -> Text
+apiPathText (ApiPath pathText) = pathText
+
+apiPathRouteMethods :: [SomeApiRouteEndpoint] -> Text -> [HarchWeb.RouteMethod]
+apiPathRouteMethods endpoints pathText =
+  maybe [] (map toRouteMethod . NonEmpty.toList . declaredMethods) (NonEmpty.nonEmpty (filter (endpointAtPath pathText) endpoints))
+
+-- | The 'RouteDefinition' for one path 'apiRouteEndpointFamilyCodec' owns.
+-- Give both the same endpoint table so their notion of which endpoints live
+-- at a path always agrees.
+apiRouteEndpointFamilyDefinition :: [SomeApiRouteEndpoint] -> ApiPath -> RouteDefinition ApiPath context
+apiRouteEndpointFamilyDefinition endpoints (ApiPath pathText) =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMethods = apiPathRouteMethods endpoints pathText,
+      routeResponse = \request _ ->
+        case matchedApiRouteEndpointOrDie endpoints pathText (requestMethodTextFromWai request) of
+          SomeApiRouteEndpoint endpoint -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
+    }
+
+-- | The one endpoint a path and method must resolve to, once
+-- 'HarchWeb.Routing' has already restricted dispatch to a request method
+-- this path's own 'routeMethods' declares (or @HEAD@ alongside a declared
+-- @GET@). Reaching either 'error' here means an application built this
+-- 'RouteDefinition' from a different endpoint table than the one it gave
+-- 'apiRouteEndpointFamilyCodec' for the same route family — a framework
+-- wiring defect, not an ordinary request outcome — so it fails loudly
+-- instead of silently dispatching to the wrong handler.
+matchedApiRouteEndpointOrDie :: [SomeApiRouteEndpoint] -> Text -> Text -> SomeApiRouteEndpoint
+matchedApiRouteEndpointOrDie endpoints requestPath requestMethod =
+  case NonEmpty.nonEmpty (filter (endpointAtPath requestPath) endpoints) of
+    Nothing -> error ("HarchWeb.Api.Endpoint: no endpoint declared at " <> Text.unpack requestPath)
+    Just pathEndpoints ->
+      case matchApiRouteMethod requestMethod pathEndpoints of
+        TypedApiRouteMatched endpoint -> endpoint
+        TypedApiRouteMatchedHead endpoint -> endpoint
+        _ -> error ("HarchWeb.Api.Endpoint: " <> Text.unpack requestMethod <> " is not declared at " <> Text.unpack requestPath)
 
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint request =
@@ -476,9 +541,15 @@ data ApiRouteMatch
 -- | Compose an endpoint table directly with a WAI application. Every matched
 -- path executes the typed declaration that owns its request and response
 -- contract; unrelated paths remain the responsibility of the inner app.
+requestMethodTextFromWai :: Wai.Request -> Text
+requestMethodTextFromWai = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod
+
+requestPathTextFromWai :: Wai.Request -> Text
+requestPathTextFromWai = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.rawPathInfo
+
 apiRouteEndpointMiddleware :: [SomeApiRouteEndpoint] -> Wai.Middleware
 apiRouteEndpointMiddleware endpoints innerApplication request respond =
-  case matchApiRouteEndpoints requestMethodText requestPathText endpoints of
+  case matchApiRouteEndpoints (requestMethodTextFromWai request) (requestPathTextFromWai request) endpoints of
     TypedApiRouteNoMatch -> innerApplication request respond
     TypedApiRouteMethodNotAllowed declaredMethodsValue ->
       respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
@@ -489,9 +560,6 @@ apiRouteEndpointMiddleware endpoints innerApplication request respond =
       respond (protocolResponseToWaiResponse (protocolResponse {protocolResponseBody = ProtocolResponseBytes ByteString.empty}))
     TypedApiRouteOptions declaredMethodsValue ->
       respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
-  where
-    requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.requestMethod request)
-    requestPathText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.rawPathInfo request)
 
 matchApiRouteEndpoints :: Text -> Text -> [SomeApiRouteEndpoint] -> ApiRouteMatch
 matchApiRouteEndpoints requestMethod requestPath endpoints =
@@ -540,7 +608,7 @@ protocolResponseToWaiResponse protocolResponse =
 -- and body decoding as well as path and method matching.
 apiEndpointMiddleware :: [ApiEndpoint target] -> (Wai.Request -> target -> IO ApiResponseBody) -> Wai.Middleware
 apiEndpointMiddleware endpoints runTarget innerApplication request respond =
-  case matchApiEndpoints requestMethodText requestPathText endpoints of
+  case matchApiEndpoints (requestMethodTextFromWai request) (requestPathTextFromWai request) endpoints of
     NoApiRouteMatch -> innerApplication request respond
     ApiMethodNotAllowed declaredMethodsValue -> respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
     ApiRouteMatched target -> runTarget request target >>= respond . apiHttpResponseToWaiResponse . legacyRenderedApiResponse
@@ -548,6 +616,3 @@ apiEndpointMiddleware endpoints runTarget innerApplication request respond =
       renderedResponse <- legacyRenderedApiResponse <$> runTarget request target
       respond (apiHttpResponseToWaiResponse (renderedResponse {apiHttpResponseBody = Nothing}))
     ApiRouteOptions declaredMethodsValue -> respond (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing))
-  where
-    requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.requestMethod request)
-    requestPathText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.rawPathInfo request)

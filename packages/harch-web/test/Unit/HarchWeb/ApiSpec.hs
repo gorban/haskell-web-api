@@ -2,10 +2,12 @@
 
 module Unit.HarchWeb.ApiSpec (spec) where
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
@@ -177,6 +179,10 @@ runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Reques
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
 
+runApiRouteEndpointGroup :: [SomeApiRouteEndpoint] -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
+runApiRouteEndpointGroup endpoints declaredPath request =
+  routeResponse (apiRouteEndpointFamilyDefinition endpoints declaredPath) request (RouteRequest declaredPath ())
+
 spec :: Spec
 spec =
   describe "HarchWeb.Api" $ do
@@ -298,6 +304,80 @@ spec =
         expectAll
           ( (Wai.responseStatus malformedMethodResponse `shouldBe` HttpTypes.status405)
               :| [Wai.responseStatus malformedPathResponse `shouldBe` HttpTypes.status404, malformedPathBody `shouldBe` "/api/\65533"]
+          )
+
+    describe "apiRouteEndpointFamilyCodec and apiRouteEndpointFamilyDefinition" $ do
+      it "parses a declared path into its ApiPath route identity" $
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointTable) () "/api/status"
+          `shouldBe` Just (RouteRequest (at "/api/status") ())
+
+      it "reports no match for an undeclared path" $
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointTable) () "/api/unknown" `shouldBe` Nothing
+
+      it "renders the route identity back to its declared path" $
+        HarchWeb.renderRoute (apiRouteEndpointFamilyCodec testEndpointTable) (RouteRequest (at "/api/status") ())
+          `shouldBe` "/api/status"
+
+      it "falls back to an empty path for the family's own not-found request" $
+        HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ())
+          `shouldBe` at ""
+
+      it "reports every declared method at a path, deduplicated" $
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
+          `shouldBe` [HarchWeb.RouteGet, HarchWeb.RoutePost]
+
+      it "reports no methods for a path with no declared endpoint" $
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/unknown") `shouldBe` []
+
+      it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
+        routeMethods (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status"))
+          `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
+
+      it "keeps the definition's navigation label unset like the single-endpoint adapter" $
+        routeNavigationLabel (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status")) `shouldBe` Nothing
+
+      it "runs the one endpoint matching the request's real method" $ do
+        getResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/status"})
+        postResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/status"})
+        expectAll
+          ( (apiRouteResponseBody getResponse `shouldBe` "ReadStatus")
+              :| [apiRouteResponseBody postResponse `shouldBe` "WriteStatus"]
+          )
+
+      it "resolves HEAD to the declared GET endpoint's handler, same as the shared dispatcher's HEAD synthesis" $ do
+        headResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
+        apiRouteResponseBody headResponse `shouldBe` "ReadStatus"
+
+      it "raises immediately when no endpoint is declared at the given path" $
+        evaluate (matchedApiRouteEndpointOrDie testEndpointTable "/api/missing" "GET" `seq` ())
+          `shouldThrow` \case
+            ErrorCall message -> "no endpoint declared at /api/missing" `isInfixOf` message
+
+      it "raises immediately when the given method is not declared at the given path" $
+        evaluate (matchedApiRouteEndpointOrDie testEndpointTable "/api/status" "DELETE" `seq` ())
+          `shouldThrow` \case
+            ErrorCall message -> "DELETE is not declared at /api/status" `isInfixOf` message
+
+      it "participates in one shared dispatch authority when combined with another route family" $ do
+        let pageCodec :: HarchWeb.RouteCodec Text ()
+            pageCodec =
+              HarchWeb.RouteCodec
+                { HarchWeb.parseRoute = \requestContextValue path -> if path == "/home" then Just (RouteRequest "home" requestContextValue) else Nothing,
+                  HarchWeb.renderRoute = const "/home",
+                  HarchWeb.notFoundRequest = RouteRequest "not-found",
+                  HarchWeb.routeMethods = const [HarchWeb.RouteGet]
+                }
+            combined = HarchWeb.combineRouteCodecs (apiRouteEndpointFamilyCodec testEndpointTable) pageCodec
+        expectAll
+          ( ( HarchWeb.matchRouteMethod combined () "GET" "/home"
+                `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyB "home") ())
+            )
+              :| [ HarchWeb.matchRouteMethod combined () "GET" "/api/status"
+                     `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()),
+                   HarchWeb.matchRouteMethod combined () "DELETE" "/api/status"
+                     `shouldBe` HarchWeb.RouteMethodNotAllowed (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()) (HarchWeb.RouteGet :| [HarchWeb.RoutePost]),
+                   HarchWeb.matchRouteMethod combined () "GET" "/missing" `shouldBe` HarchWeb.RouteNotFound (RouteRequest (HarchWeb.RouteFamilyB "not-found") ())
+                 ]
           )
 
     it "keeps a route-table endpoint's compatibility path explicit" $

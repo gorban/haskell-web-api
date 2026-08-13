@@ -1,15 +1,22 @@
 -- | Low-level HTTP API matching, codecs, and response helpers.
 --
--- This compatibility facade intentionally does /not/ define the application's
--- route dispatcher. The AC design decision extends the shared
+-- This facade does /not/ itself define the application's route dispatcher.
+-- The AC design decision extends the shared
 -- 'HarchWeb.Routing.RouteCodec'/'HarchWeb.Site.RouteDefinition' boundary and
 -- the server response interpreter so pages, actions, and APIs have one
--- method/path owner. See @docs/design-guidance.md@. The existing middleware is
--- retained only as a compatibility helper while that boundary is completed.
--- A typed endpoint may declare a scoped multipart request capability through
--- 'ApiMultipartRequestBody'; its storage adapter remains supplied by
--- 'HarchWeb.Api.Multipart'. Typed API response encoders can return a
--- request-scoped stream through 'streamingResponseEncoder'.
+-- method/path owner: 'apiRouteEndpointFamilyCodec' adapts a
+-- 'SomeApiRouteEndpoint' table into that shared 'HarchWeb.Routing.RouteCodec'
+-- family, for combination via 'HarchWeb.Routing.combineRouteCodecs' with an
+-- application's other route families, and 'apiRouteEndpointFamilyDefinition'
+-- supplies the matching 'HarchWeb.Site.RouteDefinition'. See
+-- @docs/design-guidance.md@. 'apiRouteEndpointMiddleware'/'apiEndpointMiddleware'
+-- remain compatibility helpers for an application not yet migrated onto that
+-- pair; wrapping one around a 'HarchWeb.Site.buildSiteApplication' output
+-- shares no 404\/405\/Allow\/HEAD\/OPTIONS authority with the site's own
+-- route table. A typed endpoint may declare a scoped multipart request
+-- capability through 'ApiMultipartRequestBody'; its storage adapter remains
+-- supplied by 'HarchWeb.Api.Multipart'. Typed API response encoders can
+-- return a request-scoped stream through 'streamingResponseEncoder'.
 module HarchWeb.Api
   ( ApiMethod (..),
     ApiPath,
@@ -28,6 +35,9 @@ module HarchWeb.Api
     apiRouteEndpointAt,
     apiRouteEndpointPath,
     apiRouteDefinition,
+    apiRouteEndpointFamilyCodec,
+    apiRouteEndpointFamilyDefinition,
+    matchedApiRouteEndpointOrDie,
     apiEndpointTarget,
     at,
     matchApiEndpoints,
