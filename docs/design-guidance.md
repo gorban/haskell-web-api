@@ -593,6 +593,38 @@ still applies verbatim, but is no longer required work now that the module-healt
 satisfied: a `.Family` split remains available as a future readability improvement, not a follow-up this
 document tracks as owed.
 
+### Follow-up decision — AC's web-api gap is a single-dispatcher extension, not a family (2026-08-13)
+
+**Decision: extend `web-api`'s existing single `AppRoute`/`routeCodec` dispatcher via
+`HarchWeb.Api.Endpoint`'s per-route `apiRouteDefinition`, not `combineRouteCodecs`/`RouteFamily`.**
+Investigated before writing any code, per this document's own "extend an existing boundary before
+adding a parallel one" rule: `examples/custom-api` and `examples/multipart-upload` both had two
+genuinely separate codecs (an API family plus a catch-all/page family) that needed one combined
+not-found/dispatch authority, which is exactly what `combineRouteCodecs` is for. `web-api`'s
+`AppRoute = Page PageRoute | Api ApiRoute` (`WebApi/Route.hs`) is already one closed sum type behind
+one `routeCodec`/`Site.simpleSite` call — pages and APIs were never two competing codecs there, so
+wrapping it in a family combinator would rename an existing guarantee rather than add one, at the
+cost of rippling through `AppRoute`'s pervasive use in navigation, `PageLink`, `RouteMetadata`, and
+roughly 600 `WebApiSpec.hs` assertions. `apiRouteDefinition` (`HarchWeb.Api.Endpoint`, distinct from
+the family pair) is deliberately built for this shape instead: its Haddock already documents "the
+server has already selected the route and method before this runs," i.e. compose one typed endpoint
+into an *existing* dispatch table's per-route slot.
+
+That investigation also surfaced a real, narrow missing-capability gap: `apiRouteDefinition`'s
+`routeResponse = \request _ -> ...` discards the `RouteRequest route context` argument
+`RouteDefinition`'s own signature already provides, and `ApiRouteEndpoint`'s handler
+(`ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))`) has no
+parameter to receive it even if it weren't discarded — so an endpoint composed this way cannot see
+anything the route's own codec already parsed (here, `web-api`'s locale, derived from a URL prefix,
+not from any query/header/cookie field `HarchWeb.Api.Request`'s `RequestCodec` can decode). Per the
+missing-capability protocol this is option 1 (small, general, squarely within
+`HarchWeb.Api.Endpoint`'s own area) — but per this document's ban on speculative/unused abstractions,
+adding that context-threading primitive without landing its first real consumer in the same change
+would itself be the anti-pattern this document warns against. Not implemented in this pass; recorded
+here so the next attempt lands the primitive and its `web-api` consumer together, as one task-sized,
+fully-tested change against `web-api`'s complete existing suite — not as two separate risks. See the
+AC entry in `TASKS.md` for the full investigation.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
