@@ -625,6 +625,48 @@ here so the next attempt lands the primitive and its `web-api` consumer together
 fully-tested change against `web-api`'s complete existing suite — not as two separate risks. See the
 AC entry in `TASKS.md` for the full investigation.
 
+### Follow-up decision — AF: concurrent-in-flight-request admission gate (2026-08-13)
+
+**Decision: an opt-in, non-blocking WAI-level admission gate shared by every real listener,
+including the local test harness — not a Warp setting, since none exists.** Investigated first:
+Warp 3.4.12 (the pinned version) has no concurrent-request or connection-count setting of its own,
+matching the same kind of documented limitation this document's AF header-count precedent already
+established for Warp's header handling — so this could not be "add the missing Warp option" and had
+to be a framework-level admission gate instead. Built as `HarchWeb.Server.RequestExecution.concurrencyLimitedMiddleware ::
+Maybe RequestConcurrencyLimit -> Wai.Middleware -> IO Wai.Middleware`, composed around the same
+`Wai.Middleware` seam `runServerWithWaiMiddleware` already exposes, so it sits in front of an
+application's own middleware rather than displacing it. Admission is immediate accept-or-reject (a
+non-blocking counting `IORef`, not a `QSem` queue): a caller beyond the limit gets a stable `503`
+before route parsing, middleware, observability, or body reads, matching the existing request-head
+gate's contract rather than making the caller wait for a slot — a queueing gate would change the
+task's own resource-protection intent into a hidden latency amplifier under load. A held slot is
+released via `finally`, covering the request's whole lifetime including a streamed response, on
+ordinary completion or any exception.
+
+A real mid-implementation catch worth recording: the gate initially lived only in
+`HarchWeb.Server.Runtime`, and its first real-socket test (via `HarchWeb.Server.LocalTest.withLocalTestServer`)
+deadlocked, because `withLocalTestServer` builds its own local Warp listener directly from
+`toWaiApplication` and never went through `Runtime.hs` at all — the configured limit had zero effect,
+so both a slow first request and a second concurrent one were admitted, and the second's handler
+blocked on the same release signal the test itself was waiting to trigger. This is exactly the kind
+of gap the "extend an existing boundary" worked example warns about in miniature: two composition
+paths (`Runtime.hs`'s real listener, `LocalTest.hs`'s test listener) had each grown their own way of
+applying `RequestPolicyConfig`, and a new field only reached one of them by construction. Fixed by
+moving the gate into the shared `RequestExecution` module both already import, so a real-socket test
+against the local harness now observes the identical admission behaviour a deployed runtime would.
+
+A second coverage catch, smaller but worth naming precisely since it cost real time to isolate: a
+plain `deriving (Eq, Show)` on `RequestConcurrencyLimit` (a `newtype` wrapping `Int`, structurally
+identical to sibling types like `RequestByteLimit` that derive `Eq` without issue) left its `Eq`
+instance's own "declaration used" box unticked under the coverage gate even when tests called `==`/`/=`
+on it directly and other tests exercised its `Show`. `HarchWeb.Security` already has an established,
+working answer to exactly this newtype-`Eq`-under-HPC gap: `RequestItemCountLimit` derives only `Show`
+and hand-writes `instance Eq RequestItemCountLimit where RequestItemCountLimit left == RequestItemCountLimit right = left == right`.
+Matching that precedent (rather than re-investigating why derived `Eq` sometimes doesn't tick) resolved
+it once the test also called `==`/`/=` as a direct boolean expression rather than routing the
+comparison through `shouldBe`/`shouldNotBe`'s polymorphic `Eq a =>` dictionary — restructuring the
+code to match a working precedent, not forcing a tick.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

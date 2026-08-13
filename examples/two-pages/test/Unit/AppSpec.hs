@@ -40,6 +40,7 @@ import HarchWeb
     parseRoute,
     redirectHttpToHttps,
     renderRoute,
+    requestConcurrencyLimit,
     requestPolicy,
     requestTransportLimits,
     responseSecurityHeaders,
@@ -108,6 +109,7 @@ spec =
                    strictTransportSecurity (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    trustForwardedHeaders (siteRequestPolicy twoPageSite) `shouldBe` False,
                    requestTransportLimits (siteRequestPolicy twoPageSite) `shouldBe` warpDefaultRequestTransportLimits,
+                   requestConcurrencyLimit (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    corsPolicy (siteRequestPolicy twoPageSite) `shouldBe` defaultCorsPolicyConfig,
                    responseSecurityHeaders (siteRequestPolicy twoPageSite) `shouldBe` defaultResponseSecurityHeadersConfig
                  ]
@@ -134,6 +136,7 @@ spec =
                    strictTransportSecurity (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    trustForwardedHeaders (requestPolicy twoPageServerConfig) `shouldBe` False,
                    requestTransportLimits (requestPolicy twoPageServerConfig) `shouldBe` warpDefaultRequestTransportLimits,
+                   requestConcurrencyLimit (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    corsPolicy (requestPolicy twoPageServerConfig) `shouldBe` defaultCorsPolicyConfig,
                    responseSecurityHeaders (requestPolicy twoPageServerConfig) `shouldBe` defaultResponseSecurityHeadersConfig,
                    tracingExporter (observability twoPageServerConfig) `shouldBe` Nothing,

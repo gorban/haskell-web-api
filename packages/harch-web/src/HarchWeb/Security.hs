@@ -4,6 +4,7 @@
 module HarchWeb.Security
   ( CorsPolicyConfig (..),
     RequestByteLimit,
+    RequestConcurrencyLimit,
     RequestHeadLimitFailure (..),
     RequestHeadLimits (..),
     RequestHeaderCountLimit,
@@ -25,7 +26,9 @@ module HarchWeb.Security
     requestContextObservabilityAttributes,
     requestByteLimit,
     requestByteLimitValue,
+    mkRequestConcurrencyLimit,
     mkRequestHeaderCountLimit,
+    requestConcurrencyLimitValue,
     requestItemCountLimit,
     requestTimeoutSeconds,
     requestTimeoutSecondsValue,
@@ -144,6 +147,7 @@ data RequestPolicyConfig = RequestPolicyConfig
     trustForwardedHeaders :: Bool,
     requestHeadLimits :: RequestHeadLimits,
     requestTransportLimits :: RequestTransportLimits,
+    requestConcurrencyLimit :: Maybe RequestConcurrencyLimit,
     corsPolicy :: CorsPolicyConfig,
     responseSecurityHeaders :: ResponseSecurityHeadersConfig
   }
@@ -176,6 +180,25 @@ requestTimeoutSeconds seconds
 
 requestTimeoutSecondsValue :: RequestTimeoutSeconds -> Int
 requestTimeoutSecondsValue (RequestTimeoutSeconds seconds) = seconds
+
+-- | A positive bound on the number of requests the runtime admits at once
+-- across every listener. Construct it with 'mkRequestConcurrencyLimit' so a
+-- non-positive configuration — which would either admit nothing or carry no
+-- meaning — cannot enter the request boundary. Absence preserves the
+-- framework's established unbounded behaviour.
+newtype RequestConcurrencyLimit = RequestConcurrencyLimit Int
+  deriving (Show)
+
+instance Eq RequestConcurrencyLimit where
+  RequestConcurrencyLimit left == RequestConcurrencyLimit right = left == right
+
+mkRequestConcurrencyLimit :: Int -> Maybe RequestConcurrencyLimit
+mkRequestConcurrencyLimit admittedCount
+  | admittedCount > 0 = Just (RequestConcurrencyLimit admittedCount)
+  | otherwise = Nothing
+
+requestConcurrencyLimitValue :: RequestConcurrencyLimit -> Int
+requestConcurrencyLimitValue (RequestConcurrencyLimit admittedCount) = admittedCount
 
 -- | A non-negative bound on the number of request header fields.
 newtype RequestHeaderCountLimit = RequestHeaderCountLimit Int

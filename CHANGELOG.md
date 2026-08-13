@@ -67,6 +67,11 @@
     `apiHttpResponseToWaiResponse`/`apiAllowHeaderValue` (unused once both middlewares were gone).
     `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` (composed into a `HarchWeb.Site.Site`)
     is now the only supported way to dispatch a typed API endpoint table.
+14. Added an opt-in concurrent-in-flight-request admission gate. A request beyond the configured limit
+    receives an immediate `503` before route parsing, middleware, observability, or body reads, instead
+    of queueing; the runtime's established unbounded default (a worker per accepted connection, with no
+    admission control) is unchanged unless a limit is configured. `web-api` wires it from
+    `REQUEST_MAX_CONCURRENT`.
 
 ## 0.1.0.1
 

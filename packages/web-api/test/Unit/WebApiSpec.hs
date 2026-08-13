@@ -970,6 +970,7 @@ spec = do
                   trustForwardedHeaders = False,
                   requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                   requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                  requestConcurrencyLimit = Nothing,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 },
@@ -1102,6 +1103,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1447,6 +1449,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1672,6 +1675,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1702,6 +1706,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1728,6 +1733,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1761,7 +1767,8 @@ spec = do
               ("REQUEST_QUERY_FIELD_MAX_COUNT", "16"),
               ("REQUEST_QUERY_FIELD_MAX_BYTES", "256"),
               ("REQUEST_NETWORK_TIMEOUT_SECONDS", "12"),
-              ("REQUEST_SLOWLORIS_MAX_BYTES", "512")
+              ("REQUEST_SLOWLORIS_MAX_BYTES", "512"),
+              ("REQUEST_MAX_CONCURRENT", "64")
             ]
         )
         `shouldBe` Right
@@ -1781,7 +1788,8 @@ spec = do
                 HarchWeb.RequestTransportLimits
                   { HarchWeb.requestNetworkTimeout = HarchWeb.requestTimeoutSeconds 12,
                     HarchWeb.requestSlowlorisByteLimit = HarchWeb.requestByteLimit 512
-                  }
+                  },
+              requestConcurrencyLimit = HarchWeb.mkRequestConcurrencyLimit 64
             }
 
     it "names each invalid request-limit setting in its configuration error" $
@@ -1794,7 +1802,11 @@ spec = do
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_HEADER_MAX_COUNT", "not-a-number")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_HEADER_MAX_COUNT" "not-a-number"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_PATH_SEGMENT_MAX_COUNT", "not-a-number")]
-                   `shouldBe` Left (InvalidConfigValue "REQUEST_PATH_SEGMENT_MAX_COUNT" "not-a-number")
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_PATH_SEGMENT_MAX_COUNT" "not-a-number"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_MAX_CONCURRENT", "not-a-number")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_MAX_CONCURRENT" "not-a-number"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_MAX_CONCURRENT", "0")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_MAX_CONCURRENT" "0")
                ]
         )
 
@@ -1887,6 +1899,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }
@@ -1963,6 +1976,7 @@ spec = do
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
+                    requestConcurrencyLimit = Nothing,
                     corsPolicy = defaultCorsPolicyConfig,
                     responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                   }

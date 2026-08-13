@@ -80,6 +80,7 @@ spec = do
                  siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` "",
                  HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.requestTransportLimits (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.warpDefaultRequestTransportLimits,
+                 HarchWeb.requestConcurrencyLimit (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig,
                  length (siteRequestMiddleware sampleSite) `shouldBe` 0
                ]

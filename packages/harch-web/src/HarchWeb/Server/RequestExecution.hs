@@ -2,18 +2,21 @@
 
 -- | Typed request execution and the public WAI adapter.
 module HarchWeb.Server.RequestExecution
-  ( navigationRuntimeResponse,
+  ( concurrencyLimitedMiddleware,
+    navigationRuntimeResponse,
     reportEarlyRequestObservability,
     runEarlyRequestStages,
     toWaiApplication,
   )
 where
 
+import Control.Exception (finally)
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
@@ -31,13 +34,15 @@ import HarchWeb.Routing
     routeAllowHeaderValue,
   )
 import HarchWeb.Security
-  ( RequestHeadLimitFailure (..),
+  ( RequestConcurrencyLimit,
+    RequestHeadLimitFailure (..),
     RequestPolicyConfig (..),
     applyRequestPathPrefix,
     corsPreflightResponse,
     externalRequestPath,
     httpsRedirectResponse,
     prependRequestLogContext,
+    requestConcurrencyLimitValue,
     requestContextObservabilityAttributes,
     requestLogContextFields,
     requestPathPrefix,
@@ -124,6 +129,64 @@ toWaiApplication webApplication request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
     Right () -> toValidatedWaiApplication webApplication request respond
+
+-- | Compose an opt-in concurrent-in-flight-request gate in front of a
+-- caller-supplied middleware. 'Nothing' preserves the framework's
+-- established unbounded behaviour: the runtime forks a worker per accepted
+-- connection with no admission control of its own, matching Warp 3.4.12's
+-- own lack of a concurrent-request or connection-count setting. Every
+-- caller that renders a real listener — 'HarchWeb.Server.Runtime' and
+-- 'HarchWeb.Server.LocalTest' alike — builds this gate from the same
+-- 'RequestPolicyConfig' field, so a real-socket test against a local
+-- listener observes the same admission behaviour a deployed runtime would.
+concurrencyLimitedMiddleware :: Maybe RequestConcurrencyLimit -> Wai.Middleware -> IO Wai.Middleware
+concurrencyLimitedMiddleware maybeLimit waiMiddleware =
+  case maybeLimit of
+    Nothing -> pure waiMiddleware
+    Just limit -> do
+      gate <- newRequestConcurrencyGate limit
+      pure (concurrencyGateMiddleware gate . waiMiddleware)
+
+data RequestConcurrencyGate = RequestConcurrencyGate
+  { concurrencyGateLimit :: Int,
+    concurrencyGateInFlight :: IORef Int
+  }
+
+newRequestConcurrencyGate :: RequestConcurrencyLimit -> IO RequestConcurrencyGate
+newRequestConcurrencyGate limit =
+  RequestConcurrencyGate (requestConcurrencyLimitValue limit) <$> newIORef 0
+
+-- | Admit at most the configured number of requests at once, across every
+-- listener sharing this gate. Admission is a non-blocking, immediate
+-- accept-or-reject rather than a queue: an exceeded gate returns a stable
+-- '503' before route parsing, middleware, observability, or body reads,
+-- rather than making a caller wait for a slot. A slot is held for the
+-- request's whole lifetime, including a streamed response, and always
+-- released — on ordinary completion or any exception.
+concurrencyGateMiddleware :: RequestConcurrencyGate -> Wai.Middleware
+concurrencyGateMiddleware gate app request respond = do
+  admitted <- acquireConcurrencySlot gate
+  if admitted
+    then app request respond `finally` releaseConcurrencySlot gate
+    else respond concurrencyLimitResponse
+
+acquireConcurrencySlot :: RequestConcurrencyGate -> IO Bool
+acquireConcurrencySlot gate =
+  atomicModifyIORef' (concurrencyGateInFlight gate) $ \inFlight ->
+    if inFlight < concurrencyGateLimit gate
+      then (inFlight + 1, True)
+      else (inFlight, False)
+
+releaseConcurrencySlot :: RequestConcurrencyGate -> IO ()
+releaseConcurrencySlot gate =
+  atomicModifyIORef' (concurrencyGateInFlight gate) (\inFlight -> (inFlight - 1, ()))
+
+concurrencyLimitResponse :: Wai.Response
+concurrencyLimitResponse =
+  Wai.responseLBS
+    Http.status503
+    [(Http.hContentType, "text/plain; charset=utf-8")]
+    "Too many concurrent requests."
 
 -- | Only valid, budgeted request heads reach the ordinary request pipeline.
 -- This keeps malformed target bytes and oversized metadata out of route

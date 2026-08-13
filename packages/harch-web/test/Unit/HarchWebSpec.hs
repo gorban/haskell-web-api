@@ -255,6 +255,7 @@ defaultRequestPolicy =
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
       requestTransportLimits = warpDefaultRequestTransportLimits,
+      requestConcurrencyLimit = Nothing,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
@@ -679,6 +680,7 @@ spec = do
           itemCountLimitValue = fromMaybe (error "expected request item count limit") itemCountLimit
           differentItemCountLimitValue = fromMaybe (error "expected distinct request item count limit") differentItemCountLimit
           timeoutSecondsValue = fromMaybe (error "expected request timeout") timeoutSeconds
+          concurrencyLimitValue = fromMaybe (error "expected request concurrency limit") (mkRequestConcurrencyLimit 4)
           boundedHeadLimits =
             unboundedRequestHeadLimits
               { requestTargetByteLimit = byteLimit,
@@ -733,6 +735,14 @@ spec = do
                  length (show boundedHeadLimits) + length (showList [boundedHeadLimits] "")
                    `shouldSatisfy` (> 0),
                  length (show failure) + length (showList [failure] "")
+                   `shouldSatisfy` (> 0),
+                 mkRequestConcurrencyLimit 0 `shouldBe` Nothing,
+                 mkRequestConcurrencyLimit (-1) `shouldBe` Nothing,
+                 requestConcurrencyLimitValue <$> mkRequestConcurrencyLimit 4 `shouldBe` Just 4,
+                 (concurrencyLimitValue == concurrencyLimitValue) `shouldBe` True,
+                 (concurrencyLimitValue /= fromMaybe (error "expected distinct concurrency limit") (mkRequestConcurrencyLimit 5))
+                   `shouldBe` True,
+                 length (show concurrencyLimitValue) + length (showList [concurrencyLimitValue] "")
                    `shouldSatisfy` (> 0)
                ]
         )
@@ -1240,6 +1250,7 @@ spec = do
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -1356,6 +1367,7 @@ spec = do
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
                 corsPolicy = corsPolicyConfig,
                 responseSecurityHeaders = responseSecurityHeadersConfig
               }
@@ -1367,6 +1379,7 @@ spec = do
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
                 corsPolicy =
                   defaultCorsPolicyConfig
                     { corsAllowedOrigins = ["https://app.example.com"]
@@ -3003,6 +3016,7 @@ spec = do
                 trustForwardedHeaders = True,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -3035,6 +3049,7 @@ spec = do
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
                 corsPolicy = defaultCorsPolicyConfig,
                 responseSecurityHeaders = defaultResponseSecurityHeadersConfig
               }
@@ -4323,6 +4338,7 @@ spec = do
                   trustForwardedHeaders = True,
                   requestHeadLimits = unboundedRequestHeadLimits,
                   requestTransportLimits = warpDefaultRequestTransportLimits,
+                  requestConcurrencyLimit = Nothing,
                   corsPolicy = defaultCorsPolicyConfig,
                   responseSecurityHeaders = defaultResponseSecurityHeadersConfig
                 }
@@ -7262,6 +7278,38 @@ spec = do
         Socket.close clientSocket
         socketResult `shouldBe` (Right ByteString.empty :: Either IOError ByteString.ByteString)
 
+    it "admits at most the configured concurrent requests, returns 503 for the rest, and releases the slot when a request finishes" $ do
+      releaseSignal <- newEmptyMVar
+      admittedCount <- newIORef (0 :: Int)
+      let baseApplication = sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {requestConcurrencyLimit = mkRequestConcurrencyLimit 1})
+          slowApplication =
+            baseApplication
+              { renderRequestResponse = \request routeRequest ->
+                  case requestRoute routeRequest of
+                    KnownRoute -> do
+                      atomicModifyIORef' admittedCount (\count -> (count + 1, ()))
+                      readMVar releaseSignal
+                      renderRequestResponse baseApplication request routeRequest
+                    _ -> renderRequestResponse baseApplication request routeRequest
+              }
+      withLocalTestServer slowApplication $ \localTestServer -> do
+        firstResponseSignal <- newEmptyMVar
+        _ <-
+          forkIO $
+            readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+              >>= putMVar firstResponseSignal
+        waitUntilIORefEquals admittedCount 1
+        secondResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        putMVar releaseSignal ()
+        firstResponseBytes <- readMVar firstResponseSignal
+        thirdResponseBytes <- readRawLoopbackHttpResponse (localServerPort localTestServer) "GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+        expectAll
+          ( (secondResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "503")
+              :| [ firstResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200",
+                   thirdResponseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "200"
+                 ]
+          )
+
   describe "withLocalTestServerForApplication" $ do
     it "serves an already-built Wai.Application over a real loopback HTTP listener" $
       let markedWaiApplication request respond =
@@ -7327,6 +7375,15 @@ readLoopbackHttpResponseBytesWithHostResult port hostHeader path =
         (Left . displayException)
         Right
         (responseResult :: Either IOError ByteString.ByteString)
+
+-- | Poll until an 'IORef' reaches an expected value, for synchronizing with
+-- a concurrently forked request handler without a fixed 'threadDelay' guess.
+waitUntilIORefEquals :: (Eq a) => IORef a -> a -> IO ()
+waitUntilIORefEquals valueRef expectedValue = do
+  currentValue <- readIORef valueRef
+  if currentValue == expectedValue
+    then pure ()
+    else threadDelay 1000 >> waitUntilIORefEquals valueRef expectedValue
 
 readRawLoopbackHttpResponse :: Int -> ByteString.ByteString -> IO ByteString.ByteString
 readRawLoopbackHttpResponse port requestBytes =

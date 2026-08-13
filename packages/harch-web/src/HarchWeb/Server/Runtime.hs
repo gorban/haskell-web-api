@@ -21,10 +21,10 @@ import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits, requestTransportLimits)
+import HarchWeb.Security (RequestPolicyConfig, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
-import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
+import HarchWeb.Server.RequestExecution (concurrencyLimitedMiddleware, reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.Transport
   ( startHttpRuntimeServersWithRequestTransportLimits,
     startManualTlsRuntimeServersWithRequestTransportLimits,
@@ -77,9 +77,10 @@ runServerWithStartupPlan ::
 runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
   let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
   challengeStore <- AcmeChallengeStore <$> newMVar []
-  let runtimeApplication = toRuntimeWaiApplication waiMiddleware challengeStore webApplication
+  let runtimeRequestPolicy = requestPolicy (toServerConfig config)
+  concurrencyGatedMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit runtimeRequestPolicy) waiMiddleware
+  let runtimeApplication = toRuntimeWaiApplication concurrencyGatedMiddleware challengeStore webApplication
       connectionReporter = reportConnectionObservability webApplication
-      runtimeRequestPolicy = requestPolicy (toServerConfig config)
       runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
       runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
   connectionReporter `seq`

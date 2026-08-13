@@ -66,6 +66,7 @@ The smaller `two-pages-example` has its own fixed local configuration and does n
 | `REQUEST_QUERY_FIELD_MAX_BYTES` | Optional maximum bytes in one raw query-field slot before query parsing. | unset (unbounded) |
 | `REQUEST_NETWORK_TIMEOUT_SECONDS` | Optional Warp network-progress timeout. `0` disables Warp's timer; choose a positive value for slow-request containment. | unset (Warp default: 30 seconds) |
 | `REQUEST_SLOWLORIS_MAX_BYTES` | Optional number of bytes that must arrive before Warp treats a connection as making progress for its timeout timer. | unset (Warp default: 2048 bytes) |
+| `REQUEST_MAX_CONCURRENT` | Optional maximum number of requests admitted at once across every listener (HTTP, manual TLS, ACME-managed TLS). A request beyond the limit receives `503` before route parsing, middleware, observability, or body reads. | unset (unbounded; relies on Warp/OS defaults) |
 | `REDIRECT_HTTP_TO_HTTPS` | Boolean HTTP redirect policy. If unset with both HTTP and HTTPS listeners, redirects default on. | listener-aware |
 | `HSTS_MAX_AGE_SECONDS` | `Strict-Transport-Security` max-age for effective HTTPS. | unset |
 | `HSTS_INCLUDE_SUBDOMAINS` | Add HSTS `includeSubDomains`; requires max-age. | `false` |
@@ -130,6 +131,29 @@ controls, not application body budgets. They apply consistently to HTTP, manual 
 ACME-managed TLS listeners. Leaving either unset deliberately retains the installed Warp default;
 set both only after measuring legitimate slow clients and proxy behavior. A timeout closes the
 connection rather than producing an application response.
+
+`REQUEST_MAX_CONCURRENT` bounds concurrent in-flight requests, not connections: it is a WAI-level
+admission gate shared across every listener, acquired before route parsing, middleware,
+observability, or body reads and released only once the response finishes, so a slow handler or a
+large streamed response correctly keeps its slot occupied for its whole duration. Warp 3.4.12 (the
+pinned version) has no built-in concurrent-request or connection-count setting of its own — this is
+a real, documented limitation, not an oversight — so leaving `REQUEST_MAX_CONCURRENT` unset means the
+runtime forks an unbounded worker per accepted connection, relying entirely on Warp's and the
+listening socket's own accept-queue behavior and the OS/container's process and memory limits.
+Choose a value from real load testing against the deployment's actual per-request memory and CPU
+cost; an admission-gate rejection is a `503`, cheap for the server to produce, in contrast to the
+uncontained memory growth an unbounded worker count risks under sustained load.
+
+Response bodies are buffered in memory by this framework's design: `ResponseBody`'s `responseBody`
+is an ordinary `Text` value, and every non-streaming response path (`ResponseRendering.hs`) renders
+it through `Wai.responseLBS` from a fully-realized value before any bytes are sent — only the SSE and
+explicit `ProtocolResponseStream` paths stream incrementally. There is no framework-level response
+size cap, and none of the framework's own response construction paths build an in-memory value whose
+size scales with an attacker-controlled *count* (as opposed to ordinary handler-supplied content).
+The framework does not amplify a bounded request into an unbounded response on its own; an endpoint
+handler that builds a response proportional to request-derived data (a page size, a repeat count, a
+list length pulled from a query parameter) owns bounding that construction itself, the same way it
+owns every other domain-specific validation.
 
 Container memory limits are last-resort containment only: a cgroup OOM kills every in-flight request
 in that container. They should be observed in deployment drills, but are not a substitute for request

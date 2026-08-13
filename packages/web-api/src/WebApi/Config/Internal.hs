@@ -81,6 +81,7 @@ import HarchWeb
     ObservabilityConfig (..),
     OtlpExporter (..),
     RequestByteLimit,
+    RequestConcurrencyLimit,
     RequestHeadLimits (..),
     RequestHeaderCountLimit,
     RequestItemCountLimit,
@@ -101,6 +102,7 @@ import HarchWeb
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
     firstCertbotDomain,
+    mkRequestConcurrencyLimit,
     mkRequestHeaderCountLimit,
     requestByteLimit,
     requestItemCountLimit,
@@ -318,6 +320,7 @@ defaultAppConfig =
             trustForwardedHeaders = False,
             requestHeadLimits = unboundedRequestHeadLimits,
             requestTransportLimits = warpDefaultRequestTransportLimits,
+            requestConcurrencyLimit = Nothing,
             corsPolicy = defaultCorsPolicyConfig,
             responseSecurityHeaders = defaultResponseSecurityHeadersConfig
           },
@@ -709,6 +712,7 @@ parseRequestPolicyConfigP parsedListeners =
     <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
     <*> parseRequestHeadLimitsP
     <*> parseRequestTransportLimitsP
+    <*> parseOptionalRequestConcurrencyLimitP "REQUEST_MAX_CONCURRENT"
     <*> parseCorsPolicyConfigP
     <*> parseResponseSecurityHeadersConfigP
 
@@ -745,6 +749,12 @@ parseOptionalRequestTimeoutSecondsP key = do
   maybeValue <- optionalConfigValueP key
   parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
   pure (parsedValue >>= requestTimeoutSeconds)
+
+parseOptionalRequestConcurrencyLimitP :: Text -> ConfigParser (Maybe RequestConcurrencyLimit)
+parseOptionalRequestConcurrencyLimitP key = do
+  maybeValue <- optionalConfigValueP key
+  parsedValue <- liftEitherP (traverse (parsePositiveInt key) maybeValue)
+  pure (parsedValue >>= mkRequestConcurrencyLimit)
 
 parseOptionalRequestHeaderCountLimitP :: Text -> ConfigParser (Maybe RequestHeaderCountLimit)
 parseOptionalRequestHeaderCountLimitP key = do

@@ -2,6 +2,18 @@
 
 ## 0.1.2.0
 
+* Added an opt-in, non-blocking concurrent-in-flight-request admission gate:
+  `RequestConcurrencyLimit`/`mkRequestConcurrencyLimit` (`HarchWeb.Security`) and
+  `HarchWeb.Server.RequestExecution.concurrencyLimitedMiddleware`, composed around the same
+  `Wai.Middleware` seam `runServerWithWaiMiddleware` already exposes and shared by both
+  `HarchWeb.Server.Runtime`'s real listeners and `HarchWeb.Server.LocalTest.withLocalTestServer`, so a
+  real-socket test observes the same admission behaviour a deployed runtime would. A request beyond the
+  configured `RequestPolicyConfig`'s `requestConcurrencyLimit` gets an immediate `503` before route
+  parsing, middleware, observability, or body reads; a held slot is always released — on ordinary
+  completion or any exception — for the request's whole lifetime, including a streamed response.
+  `Nothing`/absence preserves the framework's established unbounded behaviour: Warp 3.4.12 has no
+  concurrent-request or connection-count setting of its own, so the runtime forks a worker per accepted
+  connection with no admission control unless a limit is configured.
 * **Breaking:** removed the legacy `ApiEndpoint`/`apiEndpoint`/`apiEndpointTarget`/`ApiMatchResult`/
   `matchApiEndpoints`/`respondApiMatch`/`apiEndpointMiddleware` compatibility table and the intermediate
   `apiRouteEndpointMiddleware` typed-WAI-middleware composition, along with `apiHttpResponseToWaiResponse`
