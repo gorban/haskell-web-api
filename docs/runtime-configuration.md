@@ -111,11 +111,19 @@ application limit.
 
 Warp rejects an over-limit header block before it builds a WAI request (its parser response is `400`).
 Once WAI has constructed a request, Harch rejects an over-limit target with `414` and count or
-individual header-value limits with `431`, without reflecting request data. Endpoint body budgets are
-separate because JSON, form, streaming, and multipart endpoints have different valid sizes. The
-framework's client-action reader remains capped at 64 KiB, and the native subscription example uses an
-explicit 8 KiB incremental body reader; multipart limits and storage ownership are being completed
-under the tracked multipart task.
+individual header-value limits with `431`, without reflecting request data. Warp 3.4.12 (the pinned
+version) has exactly one header-related transport setting, `setMaxTotalHeaderLength` (wired here as
+`requestHeaderByteLimit`, always at least Warp's own 50 KiB default even when unconfigured): it caps
+cumulative header bytes before allocation, but Warp has no setting that bounds header *count* or an
+individual header's byte size on its own — those can only be rejected after WAI has already built the
+request, by the `431` gate above. This is a real, tested residual exposure rather than an oversight:
+many small headers that stay under the total-byte cap reach the WAI layer intact, where the
+count-aware gate is what rejects them (see the real-socket test proving this ordering in
+`HarchWebSpec.hs`). Endpoint body budgets are separate because JSON, form, streaming, and multipart
+endpoints have different valid sizes. The framework's client-action reader remains capped at 64 KiB,
+and the native subscription example uses an explicit 8 KiB incremental body reader; multipart body,
+field, and file bounds — including independent field-count and file-count limits — are enforced by
+`HarchWeb.Api.Multipart`'s `MultipartLimits`.
 
 `REQUEST_NETWORK_TIMEOUT_SECONDS` and `REQUEST_SLOWLORIS_MAX_BYTES` are listener-level network
 controls, not application body budgets. They apply consistently to HTTP, manual TLS, and

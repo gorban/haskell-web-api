@@ -7222,6 +7222,24 @@ spec = do
         -- count and individual-value limits it can inspect.
         responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "400 Bad Request"
 
+    it "lets Warp's always-on total-header-length cap admit many small headers, leaving the WAI count gate to reject them with 431" $ do
+      let limitedApplication =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              (defaultRequestPolicy {requestHeadLimits = unboundedRequestHeadLimits {requestHeaderCountLimit = mkRequestHeaderCountLimit 3}})
+          fiveSmallHeaders = ByteStringChar8.concat ["X-Small" <> ByteStringChar8.pack (show headerIndex) <> ": v\r\n" | headerIndex <- [1 .. 5 :: Int]]
+      withLocalTestServer limitedApplication $ \localTestServer -> do
+        responseBytes <-
+          readRawLoopbackHttpResponse
+            (localServerPort localTestServer)
+            ("GET /known HTTP/1.1\r\nHost: 127.0.0.1\r\n" <> fiveSmallHeaders <> "\r\n")
+        -- Five short headers stay far under Warp's always-on 50 KiB total
+        -- header allocation cap (Warp 3.4.12 has no header-count or
+        -- per-value setting; see docs/runtime-configuration.md), so Warp
+        -- itself constructs the WAI request; only the count-aware WAI gate
+        -- can reject it, with 431.
+        responseBytes `shouldSatisfy` ByteStringChar8.isInfixOf "431"
+
     it "closes an incomplete request that makes no configured network progress" $ do
       let limitedApplication =
             sampleApplicationWithConfig
