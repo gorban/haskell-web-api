@@ -6,9 +6,10 @@ module App.App
   )
 where
 
-import App.MultipartUpload (NativeUploadState, handleNativeUpload, nativeUploadEndpoints, newNativeUploadState)
-import HarchWeb.Api qualified as Api
-import Network.HTTP.Types qualified as Http
+import App.MultipartUpload (NativeUploadState, nativeUploadEndpoints, newNativeUploadState)
+import HarchWeb qualified
+import HarchWeb.Api (ApiPath, apiRouteEndpointFamilyCodec, apiRouteEndpointFamilyDefinition)
+import HarchWeb.Site qualified as Site
 import Network.Wai qualified as Wai
 
 -- | Build the complete WAI application once per running server so the
@@ -18,7 +19,30 @@ newMultipartUploadApplication = multipartUploadApplication <$> newNativeUploadSt
 
 multipartUploadApplication :: NativeUploadState -> Wai.Application
 multipartUploadApplication state =
-  Api.apiEndpointMiddleware nativeUploadEndpoints (handleNativeUpload state) notFoundApplication
+  HarchWeb.toWaiApplication (Site.buildSiteApplication (multipartUploadSite state))
 
-notFoundApplication :: Wai.Application
-notFoundApplication _request respond = respond (Wai.responseLBS Http.status404 [] "Not found")
+multipartUploadSite :: NativeUploadState -> Site.Site ApiPath () ()
+multipartUploadSite state =
+  Site.simpleSite
+    "multipart-upload-example"
+    ()
+    (apiRouteEndpointFamilyCodec endpoints)
+    (const multipartUploadUnusedPageShell)
+    []
+    (apiRouteEndpointFamilyDefinition endpoints)
+  where
+    endpoints = nativeUploadEndpoints state
+
+-- | No declared endpoint ever renders a 'HarchWeb.Page', so no route
+-- reaches this shell; it exists only to satisfy 'Site.simpleSite's type.
+multipartUploadUnusedPageShell :: HarchWeb.PageShell ApiPath ()
+multipartUploadUnusedPageShell =
+  HarchWeb.PageShell
+    { HarchWeb.shellBodyAttributes = [],
+      HarchWeb.shellNavigationAttributes = [],
+      HarchWeb.shellNavigationItems = [],
+      HarchWeb.shellMainId = "main",
+      HarchWeb.shellMainAttributes = [],
+      HarchWeb.shellStylesheets = [],
+      HarchWeb.shellRuntimeDescriptors = []
+    }

@@ -378,13 +378,17 @@ local files.
 `apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a
 bare `Wai.Application` in a unit test: `runServer` and `withLocalTestServer` are now defined as the `id`
 middleware case of each. [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload`
-page (`App.MultipartUpload`) is the compiled, tested demonstration of the whole native-upload slice: a plain
-`<form enctype="multipart/form-data">` with no `data-harch-action` attribute (so the inline capture
-kernel's `form[data-harch-action="true"]` selector never matches it and the browser submits it
-natively, with or without JavaScript), a single-use server-held CSRF token embedded as a hidden field
-(chosen over a double-submit cookie because nothing in this framework version lets a plain page response
-set a `Set-Cookie` header), and `withMultipartRequestBodyWith` validating that field via its
-per-part callback — before any later part, including the file part, is read — so a request whose file
+page (`App.MultipartUpload`) is the compiled, tested demonstration of the whole native-upload slice —
+migrated 2026-08-13 onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`, the second
+application (after `examples/custom-api`) off the legacy `apiEndpointMiddleware`, so its own
+`RouteDefinition` now owns 404/405/HEAD/OPTIONS for the whole example rather than falling through to a
+hand-written `Wai.Application`: a plain `<form enctype="multipart/form-data">` with no `data-harch-action`
+attribute (so the inline capture kernel's `form[data-harch-action="true"]` selector never matches it and
+the browser submits it natively, with or without JavaScript), a single-use server-held CSRF token
+embedded as a hidden field (chosen over a double-submit cookie because nothing in this framework version
+lets a plain page response set a `Set-Cookie` header), and `withApiMultipartRequest` — the typed
+endpoint's scoped consumer over the same declared `ApiMultipartRequestBody` — validating that field via
+its per-part callback — before any later part, including the file part, is read — so a request whose file
 part follows an invalid or absent CSRF field is rejected before that file reaches storage. See
 the module haddock in `examples/multipart-upload/src/App/MultipartUpload.hs` for the full policy, and
 `examples/multipart-upload/test/E2E/MultipartUploadSpec.hs`'s two native-upload scenarios (scripts enabled and disabled) for the real-browser
@@ -491,6 +495,38 @@ no encoder). This closes the specific capability gap named above; migrating `web
 `/api/second` onto the typed endpoint boundary remains separate, larger follow-up work (it also needs
 the family-registry migration itself, not just this capability).
 
+### Follow-up decision — multipart-upload migration and a genuinely dead legacy surface (2026-08-13)
+
+**`examples/multipart-upload`'s `App.MultipartUpload`/`App.App` are migrated onto the same
+`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` pair as custom-api**, following the
+custom-api decision record above rather than a new one: `nativeUploadEndpoints` became a
+`NativeUploadState -> [SomeApiRouteEndpoint]` function (state is captured per-endpoint-declaration
+instead of threaded separately into a shared handler), its two declarations use
+`ApiNoRequestBody`/`ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits`, and its
+CSRF-gated per-part multipart callback is unchanged except for calling the endpoint's own
+`withApiMultipartRequest` scoped consumer instead of `withMultipartRequestBodyWithStorage` directly —
+the same underlying scanner and storage adapter either way. `App.App`'s `multipartUploadApplication ::
+NativeUploadState -> Wai.Application` keeps its exact public signature (both the Unit and real-browser
+E2E suites call it directly), now built via `simpleSite` + `buildSiteApplication` + `toWaiApplication`
+instead of `apiEndpointMiddleware` wrapping a hand-written `notFoundApplication`. All 14 Unit tests and
+both real-browser E2E scenarios passed unchanged except one: a request to an undeclared path now
+receives the framework's standard response security headers (CSP, `X-Content-Type-Options`, etc.) on
+its `404`, because it now renders through the same `Site`/`toWaiApplication` pipeline as every other
+response instead of a bespoke fallback `Wai.Application` that never applied them — a genuine
+correctness improvement the migration exposed, not a regression to work around.
+
+This closes the prerequisite the AK entry in `TASKS.md` named: with both example applications off
+`apiEndpointMiddleware`, and neither ever having used the intermediate `apiRouteEndpointMiddleware`
+either, `HarchWeb.Api.Endpoint`'s legacy `ApiEndpoint`/`apiEndpointMiddleware` surface and its
+`apiRouteEndpointMiddleware` typed-WAI-middleware composition function are both now unreferenced by any
+application in the repo — only `HarchWeb.Api`'s own facade re-export and `HarchWeb.Api.Endpoint`'s own
+`ApiSpec.hs` tests still call them. Per this document's "Treat this framework as a versioned foundation"
+posture, that makes deleting both a legitimate breaking change rather than something requiring a
+migration path — but actually doing so (auditing exactly what can be deleted versus what
+`matchedApiRouteEndpointOrDie` still shares, updating both export lists, deleting the now-pointless
+dedicated tests, and updating every doc that still describes the compatibility helpers as current) is
+real follow-up work of its own, tracked under AK, not completed as part of this migration.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
@@ -507,7 +543,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` is migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. No application in the repo still calls the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware`; only `HarchWeb.Api`'s own facade and tests reference them, making their removal a real but unstarted follow-up (see AK). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

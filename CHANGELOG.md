@@ -58,6 +58,10 @@
     so a typed endpoint handler can attach private diagnostics to its rendered protocol response, the
     same capability `ResponseBody` already gives page routes. Both default to empty and have no
     encoder, so they cannot leak into a response body.
+12. Migrated `examples/multipart-upload`'s `App.MultipartUpload`/`App.App` onto the typed
+    `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` pair, replacing `apiEndpointMiddleware`.
+    No application in the repository still uses the legacy `ApiEndpoint`/`apiEndpointMiddleware` or
+    `apiRouteEndpointMiddleware` compatibility helpers.
 
 ## 0.1.0.1
 

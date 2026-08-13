@@ -23,7 +23,7 @@ import TestCore.CustomAssertions (expectAll)
 spec :: Spec
 spec =
   describe "Unit.App.MultipartUpload" $ do
-    it "builds the standalone application once and keeps unrelated paths outside the upload endpoint" $ do
+    it "renders the shared endpoint table's own 404 for a path it does not own, with the same response security headers as every other route" $ do
       application <- newMultipartUploadApplication
       uploadResponse <- performWaiRequest application getRequest
       missingResponse <- performWaiRequest application (Wai.defaultRequest {Wai.rawPathInfo = "/missing"})
@@ -31,8 +31,8 @@ spec =
       expectAll
         ( (Wai.responseStatus uploadResponse `shouldBe` HttpTypes.status200)
             :| [ Wai.responseStatus missingResponse `shouldBe` HttpTypes.status404,
-                 Wai.responseHeaders missingResponse `shouldBe` [],
-                 missingBody `shouldBe` "Not found"
+                 lookup "Content-Security-Policy" (Wai.responseHeaders missingResponse) `shouldSatisfy` (/= Nothing),
+                 missingBody `shouldBe` ""
                ]
         )
 

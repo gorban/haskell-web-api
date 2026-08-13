@@ -1,18 +1,17 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | A CSRF-protected, JS-optional native file-upload form using the legacy
--- low-level API middleware. This dedicated example owns the raw, incremental
--- request body a native @POST@ needs. AC will move endpoint dispatch into the
--- shared route registry; AD owns the upload-storage lifecycle policy.
+-- | A CSRF-protected, JS-optional native file-upload form using the typed
+-- endpoint boundary (see 'HarchWeb.Api.Endpoint's route-family registry).
+-- This dedicated example owns the raw, incremental request body a native
+-- @POST@ needs. AD owns the upload-storage lifecycle policy.
 --
 -- CSRF policy: the form carries a single-use, server-held token rather than
 -- a double-submit cookie, so no framework change is needed to let a plain
 -- page response set a cookie header. 'NativeUploadState' holds at most one
 -- outstanding token; issuing a fresh one (every @GET@) invalidates any
--- earlier, unsubmitted one. 'withMultipartRequestBodyWith' validates the
--- CSRF field via its per-part callback -- which runs as soon as that field's
+-- earlier, unsubmitted one. 'withApiMultipartRequest' validates the CSRF
+-- field via its per-part callback -- which runs as soon as that field's
 -- part finishes, before any later part is read -- so a request whose file
 -- part follows an invalid or absent CSRF field is rejected before that
 -- file reaches the in-memory adapter. The CSRF field must still appear before the
@@ -27,7 +26,6 @@
 module App.MultipartUpload
   ( NativeUploadState,
     NativeUploadTarget (..),
-    handleNativeUpload,
     nativeUploadDiscardCount,
     nativeUploadEndpoints,
     nativeUploadPath,
@@ -35,36 +33,42 @@ module App.MultipartUpload
   )
 where
 
-import Control.Monad (void)
+import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
-  ( ApiEndpoint,
+  ( ApiEndpointRequest (..),
     ApiMethod (ApiGet, ApiPost),
-    ApiResponseBody,
-    apiBytesResponse,
-    apiEndpoint,
-    apiResponseStatus,
+    ApiMultipartRequest,
+    ApiMultipartRequestError (..),
+    ApiRequestBody (..),
+    ApiResponse (..),
+    ApiResponseEncoder,
+    ApiRouteEndpoint,
+    SomeApiRouteEndpoint (..),
+    apiResponse,
+    apiRouteEndpointAt,
     apiUtf8ContentType,
     at,
+    bytesResponseEncoder,
     htmlMediaType,
+    withApiMultipartRequest,
   )
 import HarchWeb.Api.Multipart
-  ( MultipartConsumeError (..),
-    MultipartLimits,
+  ( InMemoryUpload,
+    MultipartConsumeError (..),
     MultipartScopedPart (..),
     defaultMultipartLimits,
     discardMultipartUpload,
     inMemoryMultipartStorage,
-    withMultipartRequestBodyWithStorage,
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
 import Network.HTTP.Types qualified as HttpTypes
-import Network.Wai qualified as Wai
 
 data NativeUploadTarget
   = ShowUploadForm
@@ -96,17 +100,40 @@ nativeUploadDiscardCount = readIORef . nativeUploadDiscardCountReference
 nativeUploadPath :: Text
 nativeUploadPath = "/native-upload"
 
-nativeUploadEndpoints :: [ApiEndpoint NativeUploadTarget]
-nativeUploadEndpoints =
-  [ apiEndpoint ShowUploadForm ApiGet (at nativeUploadPath),
-    apiEndpoint SubmitUpload ApiPost (at nativeUploadPath)
+-- | Declared once per running server so the single-use CSRF state is shared
+-- by its form GET and POST requests; composed via
+-- 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition'
+-- rather than the compatibility 'HarchWeb.Api.apiEndpointMiddleware'.
+nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint]
+nativeUploadEndpoints state =
+  [ SomeApiRouteEndpoint (showUploadFormEndpoint state),
+    SomeApiRouteEndpoint (submitUploadEndpoint state)
   ]
 
-handleNativeUpload :: NativeUploadState -> Wai.Request -> NativeUploadTarget -> IO ApiResponseBody
-handleNativeUpload state _request ShowUploadForm =
-  issueUploadToken state >>= renderUploadFormPage
-handleNativeUpload state request SubmitUpload =
-  handleUploadSubmission state request
+htmlResponseEncoders :: NonEmpty (ApiResponseEncoder ByteString.ByteString)
+htmlResponseEncoders = bytesResponseEncoder (apiUtf8ContentType htmlMediaType) :| []
+
+showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () () () ByteString.ByteString
+showUploadFormEndpoint state =
+  apiRouteEndpointAt
+    ApiGet
+    (at nativeUploadPath)
+    (pure ())
+    ApiNoRequestBody
+    htmlResponseEncoders
+    (\_endpointRequest -> Right <$> (issueUploadToken state >>= renderUploadFormPage))
+    (const (apiResponse ByteString.empty))
+
+submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) () ByteString.ByteString
+submitUploadEndpoint state =
+  apiRouteEndpointAt
+    ApiPost
+    (at nativeUploadPath)
+    (pure ())
+    (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
+    htmlResponseEncoders
+    (\endpointRequest -> Right <$> handleUploadSubmission state (apiEndpointRequestBody endpointRequest))
+    (const (apiResponse ByteString.empty))
 
 issueUploadToken :: NativeUploadState -> IO CsrfToken
 issueUploadToken state = do
@@ -126,9 +153,9 @@ claimUploadToken state suppliedTokenText =
             (Nothing, True)
       _ -> (maybeOutstandingToken, False)
 
-handleUploadSubmission :: NativeUploadState -> Wai.Request -> IO ApiResponseBody
-handleUploadSubmission state request = do
-  outcome <- consumeUpload state defaultMultipartLimits request
+handleUploadSubmission :: NativeUploadState -> ApiMultipartRequest InMemoryUpload -> IO (ApiResponse ByteString.ByteString)
+handleUploadSubmission state multipartRequestBody = do
+  outcome <- consumeUpload state multipartRequestBody
   case outcome of
     UploadAccepted filename byteCount -> successPage filename byteCount
     UploadCsrfRejected -> errorPage HttpTypes.status403 "Your upload form had expired. Go back and try again."
@@ -144,28 +171,27 @@ data UploadOutcome
   | UploadMissingFile
   | UploadRejected MultipartConsumeError
 
--- | Drives 'withMultipartRequestBodyWithStorage' with the explicitly chosen
--- bounded in-memory adapter and a callback that rejects
--- the whole body -- before any later part, including a later file part, is
--- read -- unless a valid, unexpired CSRF field already arrived. A file
--- part's bytes are only ever considered "accepted" once this callback
--- returns 'Right' for it. The built-in adapter retains such bytes in memory
--- only for this request; this example explicitly discards accepted uploads.
--- An application that needs durable ownership must promote an upload through
--- its selected storage adapter instead.
+-- | Drives the endpoint's already-opened scoped multipart consumer with a
+-- callback that rejects the whole body -- before any later part, including a
+-- later file part, is read -- unless a valid, unexpired CSRF field already
+-- arrived. A file part's bytes are only ever considered "accepted" once this
+-- callback returns 'Right' for it. The built-in adapter retains such bytes in
+-- memory only for this request; this example explicitly discards accepted
+-- uploads. An application that needs durable ownership must promote an
+-- upload through its selected storage adapter instead.
 --
 -- The `$!` applications below (on already-WHNF constructor arguments like
 -- 'MultipartMalformedBody') exist so HPC ticks each on every invocation
 -- instead of treating it as a once-shared reference; they have no runtime
 -- effect.
 {-# ANN consumeUpload ("HLint: ignore Redundant $!" :: String) #-}
-consumeUpload :: NativeUploadState -> MultipartLimits -> Wai.Request -> IO UploadOutcome
-consumeUpload state limits request = do
+consumeUpload :: NativeUploadState -> ApiMultipartRequest InMemoryUpload -> IO UploadOutcome
+consumeUpload state multipartRequestBody = do
   csrfValidatedReference <- newIORef False
   acceptedReference <- newIORef Nothing
   csrfRejectedReference <- newIORef False
   consumeResult <-
-    withMultipartRequestBodyWithStorage inMemoryMultipartStorage limits request $ \case
+    withApiMultipartRequest multipartRequestBody $ \case
       MultipartScopedFieldPart "_harch_csrf" suppliedTokenText -> do
         claimed <- claimUploadToken state suppliedTokenText
         if claimed
@@ -176,21 +202,26 @@ consumeUpload state limits request = do
         if csrfValidated
           then do
             discardMultipartUpload upload
-            void (atomicModifyIORef' (nativeUploadDiscardCountReference state) (\count -> (count + 1, ())))
+            atomicModifyIORef' (nativeUploadDiscardCountReference state) (\count -> (count + 1, ()))
             Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
           else do
-            void (atomicModifyIORef' csrfRejectedReference (const (True, ())))
+            atomicModifyIORef' csrfRejectedReference (const (True, ()))
             pure (Left $! MultipartMalformedBody)
       MultipartScopedFieldPart _ _ -> pure (Right ())
   case consumeResult of
-    Left multipartError -> do
+    Left (ApiMultipartRequestFailed multipartError) -> do
       csrfRejected <- atomicModifyIORef' csrfRejectedReference (\rejected -> (rejected, rejected))
       pure (if csrfRejected then UploadCsrfRejected else UploadRejected $! multipartError)
+    -- Unreachable: this handler calls 'withApiMultipartRequest' exactly once
+    -- per request. Treated the same as a rejected body rather than crashing,
+    -- since a caller-observable duplicate-consumption bug should still fail
+    -- the request safely.
+    Left ApiMultipartRequestAlreadyConsumed -> pure (UploadRejected MultipartMalformedBody)
     Right () -> do
       maybeAccepted <- atomicModifyIORef' acceptedReference (\accepted -> (accepted, accepted))
       pure (fromMaybe UploadMissingFile maybeAccepted)
 
-successPage :: Text -> Int -> IO ApiResponseBody
+successPage :: Text -> Int -> IO (ApiResponse ByteString.ByteString)
 successPage filename byteCount =
   renderNativeUploadPage
     HttpTypes.status200
@@ -206,7 +237,7 @@ successPage filename byteCount =
         ]
     )
 
-errorPage :: HttpTypes.Status -> Text -> IO ApiResponseBody
+errorPage :: HttpTypes.Status -> Text -> IO (ApiResponse ByteString.ByteString)
 errorPage statusCode message =
   renderNativeUploadPage
     statusCode
@@ -223,7 +254,7 @@ errorPage statusCode message =
         ]
     )
 
-renderUploadFormPage :: CsrfToken -> IO ApiResponseBody
+renderUploadFormPage :: CsrfToken -> IO (ApiResponse ByteString.ByteString)
 renderUploadFormPage csrfToken =
   renderNativeUploadPage HttpTypes.status200 "Upload a file" (uploadFormBody csrfToken)
 
@@ -249,7 +280,7 @@ uploadFormBody csrfToken =
 -- on every invocation instead of treating the closed literal as a once-shared
 -- reference; it has no runtime effect.
 {-# ANN renderNativeUploadPage ("HLint: ignore Redundant $!" :: String) #-}
-renderNativeUploadPage :: HttpTypes.Status -> Text -> Markup.Html -> IO ApiResponseBody
+renderNativeUploadPage :: HttpTypes.Status -> Text -> Markup.Html -> IO (ApiResponse ByteString.ByteString)
 renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
   let renderedHtml =
         "<!doctype html><html><head><title>"
@@ -257,4 +288,4 @@ renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
           <> "</title></head><body><main id=\"app-main\">"
           <> Markup.renderHtml pageBodyHtml
           <> "</main></body></html>"
-  pure ((apiBytesResponse $! apiUtf8ContentType $! htmlMediaType) (TextEncoding.encodeUtf8 renderedHtml)) {apiResponseStatus = statusCode}
+  pure ((apiResponse $! TextEncoding.encodeUtf8 renderedHtml) {apiEndpointResponseStatus = statusCode})
