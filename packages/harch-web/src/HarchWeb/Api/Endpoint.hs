@@ -271,14 +271,25 @@ apiPathRouteMethods endpoints pathText =
 -- | The 'RouteDefinition' for one path 'apiRouteEndpointFamilyCodec' owns.
 -- Give both the same endpoint table so their notion of which endpoints live
 -- at a path always agrees.
+--
+-- A path with no declared endpoint renders an ordinary API @404@ rather than
+-- calling 'matchedApiRouteEndpointOrDie': 'apiRouteEndpointFamilyCodec's own
+-- @notFoundRequest@ deliberately resolves to such a path (see its Haddock),
+-- so an application using this family standalone — not combined with a
+-- catch-all family via 'HarchWeb.combineRouteCodecs' whose own not-found
+-- route would otherwise absorb this case — reaches this branch on every
+-- ordinary unmatched request, not only on a wiring defect.
 apiRouteEndpointFamilyDefinition :: [SomeApiRouteEndpoint] -> ApiPath -> RouteDefinition ApiPath context
 apiRouteEndpointFamilyDefinition endpoints (ApiPath pathText) =
   RouteDefinition
     { routeNavigationLabel = Nothing,
       routeMethods = apiPathRouteMethods endpoints pathText,
       routeResponse = \request _ ->
-        case matchedApiRouteEndpointOrDie endpoints pathText (requestMethodTextFromWai request) of
-          SomeApiRouteEndpoint endpoint -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
+        case filter (endpointAtPath pathText) endpoints of
+          [] -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse apiNotFoundHttpResponse))
+          _ : _ ->
+            case matchedApiRouteEndpointOrDie endpoints pathText (requestMethodTextFromWai request) of
+              SomeApiRouteEndpoint endpoint -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
     }
 
 -- | The one endpoint a path and method must resolve to, once
@@ -505,10 +516,15 @@ data ApiHttpResponse = ApiHttpResponse
   }
   deriving (Eq, Show)
 
+-- | Shared by every legacy or family-registry path that renders a bare
+-- API @404@ with no body or headers.
+apiNotFoundHttpResponse :: ApiHttpResponse
+apiNotFoundHttpResponse = ApiHttpResponse HttpTypes.status404 [] Nothing
+
 respondApiMatch :: (target -> ApiResponseBody) -> ApiMatchResult target -> ApiHttpResponse
 respondApiMatch renderTarget matchResult =
   case matchResult of
-    NoApiRouteMatch -> ApiHttpResponse HttpTypes.status404 [] Nothing
+    NoApiRouteMatch -> apiNotFoundHttpResponse
     ApiMethodNotAllowed declaredMethodsValue -> ApiHttpResponse HttpTypes.status405 [("Allow", apiAllowHeaderValue declaredMethodsValue)] Nothing
     ApiRouteMatched target -> legacyRenderedApiResponse (renderTarget target)
     ApiRouteMatchedHead target -> (legacyRenderedApiResponse (renderTarget target)) {apiHttpResponseBody = Nothing}

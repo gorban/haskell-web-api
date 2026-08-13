@@ -13,7 +13,7 @@ These are Cabal packages with executable source and tests.
 | [two-pages](two-pages/README.md) | Complete SSR pages, generated page routes, typed components, an `ActionCodec` shared by typed forms and dispatch, immediate form capture, enhanced navigation, patches, and SSE. | `cabal run two-pages-example` |
 | [multipart-upload](multipart-upload/README.md) | A CSRF-protected native multipart form with bounded in-memory storage, explicit upload ownership, and scripts-enabled/scripts-disabled browser proof. | `cabal run multipart-upload-example` |
 | [custom-db-adapter](custom-db-adapter/README.md) | A typed, non-PostgreSQL effect interpreter with focused tests. | `cabal test custom-db-adapter-tests` |
-| [custom-api](custom-api/README.md) | A method-aware `HarchWeb.Api` endpoint table (negotiated JSON/custom-media-type response, a JSON request body, a multipart upload) dispatched via `apiEndpointMiddleware`. | `cabal test custom-api-tests` |
+| [custom-api](custom-api/README.md) | A method-aware `HarchWeb.Api` endpoint table (negotiated JSON/custom-media-type response, a JSON request body, a multipart upload) composed into a `Wai.Application` through the closed route-family registry. | `cabal test custom-api-tests` |
 
 ## Implemented guides
 

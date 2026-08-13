@@ -334,6 +334,14 @@ spec =
         HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ())
           `shouldBe` at ""
 
+      it "renders the family's own not-found route as an ordinary 404 instead of raising, when used standalone with no catch-all family" $ do
+        notFoundResponse <-
+          runApiRouteEndpointGroup
+            testEndpointTable
+            (HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ()))
+            (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/unknown"})
+        apiRouteResponseStatus notFoundResponse `shouldBe` HttpTypes.status404
+
       it "reports every declared method at a path, deduplicated" $
         HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
           `shouldBe` [HarchWeb.RouteGet, HarchWeb.RoutePost]

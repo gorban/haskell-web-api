@@ -10,17 +10,13 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import HarchWeb.Api (ApiResponseBody (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
 
-fallbackApplication :: Wai.Application
-fallbackApplication _ respond = respond (Wai.responseLBS HttpTypes.status404 [] "not found")
-
 application :: Wai.Application
-application = declarativeApiApplication fallbackApplication
+application = declarativeApiApplication
 
 performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
 performWaiRequest webApplication request = do
@@ -60,11 +56,6 @@ jsonRequestChunks requestMethod requestPath bodyChunks = do
 main :: IO ()
 main = hspec $ describe "Unit.App.Api.Declarative" $ do
   describe "GET /api/greeting" $ do
-    it "fails closed when its application-defined representation is invalid" $
-      let response = renderGreetingWith Nothing Wai.defaultRequest (GreetingResponse "Hello, World!")
-       in (apiResponseStatus response, apiResponseBodyBytes response)
-            `shouldBe` (HttpTypes.status500, "API representation configuration is invalid")
-
     it "renders JSON by default" $ do
       response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/greeting"}
       body <- readResponseBody response
@@ -82,7 +73,7 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "GREETING Hello, World!"
 
-    it "ignores an invalid UTF-8 Accept header" $ do
+    it "leniently decodes an invalid UTF-8 Accept header instead of treating it as absent, so it matches no declared representation" $ do
       response <-
         performWaiRequest
           application
@@ -91,8 +82,18 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
               Wai.rawPathInfo = "/api/greeting",
               Wai.requestHeaders = [(HttpTypes.hAccept, "\255")]
             }
-      body <- readResponseBody response
-      (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, World!" :: Text)])
+      Wai.responseStatus response `shouldBe` HttpTypes.status406
+
+    it "rejects an explicit Accept header that excludes every declared representation" $ do
+      response <-
+        performWaiRequest
+          application
+          Wai.defaultRequest
+            { Wai.requestMethod = "GET",
+              Wai.rawPathInfo = "/api/greeting",
+              Wai.requestHeaders = [(HttpTypes.hAccept, "text/plain")]
+            }
+      Wai.responseStatus response `shouldBe` HttpTypes.status406
 
   describe "POST /api/greeting" $ do
     it "decodes a JSON body and greets the requested name" $ do
@@ -106,32 +107,27 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
         performWaiRequest
           application
           Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/greeting"}
-      body <- readResponseBody response
-      body `shouldBe` "unsupported media type; send application/json"
+      Wai.responseStatus response `shouldBe` HttpTypes.status415
 
     it "reports an unsupported media type for invalid UTF-8 Content-Type" $ do
       request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
       response <- performWaiRequest application (request {Wai.requestHeaders = [(HttpTypes.hContentType, "\255")]})
-      body <- readResponseBody response
-      body `shouldBe` "unsupported media type; send application/json"
+      Wai.responseStatus response `shouldBe` HttpTypes.status415
 
     it "reports a malformed body for invalid JSON" $ do
       request <- jsonRequest "POST" "/api/greeting" "not json"
       response <- performWaiRequest application request
-      body <- readResponseBody response
-      body `shouldBe` "malformed JSON body"
+      Wai.responseStatus response `shouldBe` HttpTypes.status400
 
     it "reports an oversized body without decoding it" $ do
       request <- jsonRequest "POST" "/api/greeting" (ByteString.replicate 20000 65)
       response <- performWaiRequest application request
-      body <- readResponseBody response
-      body `shouldBe` "request body too large"
+      Wai.responseStatus response `shouldBe` HttpTypes.status413
 
     it "rejects a chunked body when the next chunk exceeds its byte budget" $ do
       request <- jsonRequestChunks "POST" "/api/greeting" [ByteString.replicate (16 * 1024) 65, "B"]
       response <- performWaiRequest application request
-      body <- readResponseBody response
-      body `shouldBe` "request body too large"
+      Wai.responseStatus response `shouldBe` HttpTypes.status413
 
   describe "POST /api/avatar" $ do
     let boundaryToken = "EXAMPLE-BOUNDARY" :: ByteString.ByteString
@@ -173,8 +169,15 @@ main = hspec $ describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       body `shouldBe` "invalid multipart body"
 
-  describe "a path no declared endpoint owns" $
-    it "falls through to the wrapped application" $ do
+  describe "a path no declared endpoint owns" $ do
+    it "renders the shared endpoint table's own 404, since the table is the sole path/method authority" $ do
       response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/unrelated"}
+      Wai.responseStatus response `shouldBe` HttpTypes.status404
+
+  describe "DELETE /api/greeting" $
+    it "reports 405 with the declared methods in Allow" $ do
+      response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "DELETE", Wai.rawPathInfo = "/api/greeting"}
       body <- readResponseBody response
-      body `shouldBe` "not found"
+      Wai.responseStatus response `shouldBe` HttpTypes.status405
+      lookup "Allow" (Wai.responseHeaders response) `shouldBe` Just "GET, POST, HEAD, OPTIONS"
+      body `shouldBe` ""

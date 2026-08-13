@@ -408,24 +408,68 @@ combine more than two. `HarchWeb.Api.Endpoint.apiRouteEndpointFamilyCodec` adapt
 `SomeApiRouteEndpoint` table into that shared `RouteCodec` family (route identity = the matched
 endpoint's declared `ApiPath`; `routeMethods` reports every method declared at that path so `HEAD`/
 `OPTIONS`/405 keep deriving from the one shared `HarchWeb.Routing` implementation, not a
-second copy), and `apiRouteEndpointFamilyDefinition` supplies the matching `RouteDefinition`,
-selecting the one endpoint whose declared method matches the real request via
-`matchedApiRouteEndpointOrDie` — reachable only by a framework wiring defect (an inconsistent
-endpoint table between the codec and the definition), not an ordinary request, since every
-request method `routeResponse` sees has already been validated against this same family's
+second copy), and `apiRouteEndpointFamilyDefinition` supplies the matching `RouteDefinition`. When
+its path has a declared endpoint, it selects the one whose declared method matches the real request
+via `matchedApiRouteEndpointOrDie` — reachable only by a framework wiring defect there (an
+inconsistent endpoint table between the codec and the definition), since every request method
+`routeResponse` sees for a *declared* path has already been validated against this same family's
 `routeMethods` by the shared dispatcher before `routeResponse` runs.
 
-This closes the primitive gap named in "A closed route-family registry ... remain AC steps" above,
-but no application has adopted it yet: `web-api`'s own `AppRoute = Page PageRoute | Api ApiRoute`
-still hand-writes its own combined path parsing/rendering instead of using `combineRouteCodecs`, its
-`/api/status`/`/api/second` routes dispatch through ad hoc `WebApi.Route`/`WebApi.Response` logic
-that does not call into `HarchWeb.Api.Endpoint` at all, and `examples/custom-api`'s
-`App.Api.Declarative` still uses the compatibility `apiEndpointMiddleware` (its module haddock says
-so explicitly). Migrating either onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`
-is unstarted follow-up work, tracked as part of AC in `TASKS.md`; until then,
-`apiRouteEndpointMiddleware`/`apiEndpointMiddleware` remain the only paths those two applications
-actually use, and the caution above about their shared-authority gap still applies to them in
-practice.
+This closes the primitive gap named in "A closed route-family registry ... remain AC steps" above.
+
+### Follow-up decision — standalone family not-found and the custom-api migration (2026-08-13)
+
+**Fix, not a new decision: `apiRouteEndpointFamilyDefinition` must not call
+`matchedApiRouteEndpointOrDie` for a path with no declared endpoint.** Migrating
+`examples/custom-api` onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` (below)
+surfaced a real defect the primitive's own tests never exercised: `apiRouteEndpointFamilyCodec`'s
+`notFoundRequest` resolves every unmatched path to the same synthetic `ApiPath ""` route, which has
+no declared endpoint, but `apiRouteEndpointFamilyDefinition`'s `routeResponse` unconditionally
+called `matchedApiRouteEndpointOrDie` for whatever path it was given — including that synthetic one
+— throwing an uncaught `error` instead of rendering a `404`. Every landed test combined the family
+with a catch-all second family via `combineRouteCodecs`, whose own not-found route absorbs the
+not-found case before `apiRouteEndpointFamilyDefinition` ever sees the synthetic path, which is why
+this went unnoticed until an application used the family **standalone** — precisely
+`examples/custom-api`'s shape, since it has no page family to combine with. `web-api`'s route ADT
+does not have this exposure even before any migration: its own `ApiNotFound`/`PageNotFound`
+constructors are real, declared members of its route table with their own `RouteDefinition`, not a
+codec-synthesized sentinel outside the table. Fixed by having `apiRouteEndpointFamilyDefinition`
+check for a declared endpoint at its given path first and render an ordinary API `404` directly when
+none exists, before ever calling `matchedApiRouteEndpointOrDie` — which keeps that function's
+existing "wiring defect" framing accurate for its remaining, narrower call site. A new Unit test
+drives `apiRouteEndpointFamilyDefinition`'s `routeResponse` on the codec's own `notFoundRequest`
+route end to end (not just the pure `RouteCodec` value) to keep this path covered.
+
+**`examples/custom-api`'s `App.Api.Declarative` is migrated.** It now declares its three endpoints as
+`SomeApiRouteEndpoint` values, composed through `apiRouteEndpointFamilyCodec`/
+`apiRouteEndpointFamilyDefinition` into an ordinary `HarchWeb.Site.Site` (via `simpleSite`), rather
+than the legacy `apiEndpoint`/`apiEndpointMiddleware` pair. Since this example has no page routes, its
+`Site` carries a `PageShell` that no declared route ever renders — an ordinary, if unusual, total
+value, not a workaround. The migration also dropped the module's former hand-rolled
+`selectRepresentation` call and its accompanying `Maybe ApiMediaType`-shaped defensive failure path
+for an "invalid configured representation": that state cannot arise once each `ApiResponseEncoder`'s
+content type is a fixed value declared once, rather than parsed from a `Text` literal at response
+time, so `apiRouteEndpointFamilyDefinition`'s own negotiation replaces it outright. The migration also
+surfaces one genuine, pre-existing behavior difference from the framework's typed request-data
+extraction (not introduced by this migration): an invalid-UTF-8 `Accept`/`Content-Type` header is
+leniently decoded (replacement characters), not treated as absent, matching how
+`apiRequestDataFromWaiRequest` already treats every other header/query value — so a garbled `Accept`
+now yields `406` rather than silently falling back to the default representation the way the
+example's old hand-written `Maybe`-based lookup did.
+
+`web-api`'s own `AppRoute = Page PageRoute | Api ApiRoute` still hand-writes its own combined path
+parsing/rendering instead of using `combineRouteCodecs`, and its `/api/status`/`/api/second` routes
+still dispatch through ad hoc `WebApi.Route`/`WebApi.Response` logic that does not call into
+`HarchWeb.Api.Endpoint` at all. This remains unstarted, and is now a materially larger lift than the
+custom-api migration was: `/api/second`'s database-failure path attaches specific observability
+attributes and a private log entry to its response (`WebApi.Response.renderApiResponseFromRouteDataWithOperations`),
+and the typed endpoint boundary's `ProtocolResponse` construction in
+`HarchWeb.Api.Endpoint.renderEndpointResult` currently hardcodes
+`protocolResponseObservabilityAttributes = []`/`protocolResponseLogEntries = []` with no way for a
+handler to attach either — a capability gap the typed boundary would need before this specific
+migration could preserve `web-api`'s existing DB-failure observability, not merely a bigger version of
+the same mechanical rewrite. Migrating `web-api` remains tracked as part of AC in `TASKS.md`; until
+then, its own hand-rolled dispatch is the only path it actually uses.
 
 ## Current capability and remaining design direction
 
@@ -443,7 +487,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | The route-family primitive and streaming request codec are real and tested, but no application uses the route-family registry yet: `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all, and `examples/custom-api` still uses the compatibility middleware. Migrating either application is the remaining AC follow-up work. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` is migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it additionally needs a way for a typed endpoint's response to carry observability attributes/log entries, which `HarchWeb.Api.Endpoint.renderEndpointResult` does not yet expose. Migrating `web-api` is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

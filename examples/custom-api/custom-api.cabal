@@ -1,7 +1,7 @@
 cabal-version: 3.14
 name: custom-api
 version: 0.1.0.0
-synopsis: A declarative HarchWeb.Api endpoint table dispatched via apiEndpointMiddleware
+synopsis: A declarative HarchWeb.Api endpoint table composed via the closed route-family registry
 license: BSD-2-Clause-Patent
 build-type: Simple
 extra-doc-files: README.md

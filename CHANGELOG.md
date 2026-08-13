@@ -49,6 +49,11 @@
    declared compatible `Content-Type`, while parameters after `q` remain RFC 9110 accept extensions.
 9. Added `streamingResponseEncoder` for typed API endpoints. Its WAI stream remains request-scoped and
    passes through the shared protocol response interpreter without materializing a lazy response body.
+10. Fixed `apiRouteEndpointFamilyDefinition` raising an uncaught error instead of rendering `404` for a
+    path no declared endpoint owns, when its route family is used standalone (not combined with a
+    catch-all family). Migrated `examples/custom-api`'s `App.Api.Declarative` onto the typed
+    `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` pair, replacing the legacy
+    `apiEndpoint`/`apiEndpointMiddleware` compatibility helpers.
 
 ## 0.1.0.1
 

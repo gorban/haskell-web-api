@@ -2,6 +2,11 @@
 
 ## 0.1.2.0
 
+* Fixed `apiRouteEndpointFamilyDefinition`'s `routeResponse` raising an uncaught `error` instead of
+  rendering an ordinary `404` for a path no declared endpoint owns, when its `apiRouteEndpointFamilyCodec`
+  route family is used standalone rather than combined with a catch-all family via
+  `HarchWeb.Routing.combineRouteCodecs`. `apiRouteEndpointFamilyCodec`'s own not-found route now renders
+  correctly instead of crashing every unmatched request.
 * Added bounded `application/x-www-form-urlencoded` request support: `urlEncodedFormBodyDecoder` preserves
   field order and duplicates, enforces an application-declared field-count cap, and rejects malformed
   percent escapes and invalid UTF-8. `ApiUrlEncodedFormRequestBody` declares it as an endpoint's sole body
