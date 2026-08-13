@@ -15,8 +15,14 @@
 -- shares no 404\/405\/Allow\/HEAD\/OPTIONS authority with the site's own
 -- route table. A typed endpoint may declare a scoped multipart request
 -- capability through 'ApiMultipartRequestBody'; its storage adapter remains
--- supplied by 'HarchWeb.Api.Multipart'. Typed API response encoders can
--- return a request-scoped stream through 'streamingResponseEncoder'.
+-- supplied by 'HarchWeb.Api.Multipart'. A typed endpoint may instead declare
+-- a bounded, incremental request stream through 'ApiStreamingRequestBody':
+-- the handler pulls one chunk at a time from the delivered 'ApiStreamingRequest'
+-- rather than the framework buffering the whole body, so its own memory use
+-- stays bounded regardless of body size; a chunk that would push the running
+-- total over the declared budget is reported as 'RequestBodyReadFailure'
+-- instead of retained. Typed API response encoders can return a
+-- request-scoped stream through 'streamingResponseEncoder'.
 module HarchWeb.Api
   ( ApiMethod (..),
     ApiPath,
@@ -25,6 +31,8 @@ module HarchWeb.Api
     SomeApiRouteEndpoint (..),
     ApiEndpointRequest (..),
     ApiRequestBody (..),
+    ApiStreamingRequest (..),
+    RequestBodyReadFailure (..),
     ApiMultipartRequest,
     ApiMultipartRequestError (..),
     withApiMultipartRequest,

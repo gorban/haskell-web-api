@@ -791,6 +791,51 @@ spec = do
                ]
         )
 
+    it "pulls request body chunks incrementally within a bound" $ do
+      chunksReference <- newIORef ["ab", "c"]
+      pullChunk <- newRequestBodyChunkReader 3 (Wai.setRequestBodyChunks (nextRequestBodyChunk chunksReference) Wai.defaultRequest)
+      firstChunk <- pullChunk
+      secondChunk <- pullChunk
+      endChunk <- pullChunk
+      repeatedEndChunk <- pullChunk
+      expectAll
+        ( (firstChunk `shouldBe` Right "ab")
+            :| [ secondChunk `shouldBe` Right "c",
+                 endChunk `shouldBe` Right "",
+                 repeatedEndChunk `shouldBe` Right ""
+               ]
+        )
+
+    it "rejects a streamed chunk that would push the running total over the bound, retaining only the prior chunk" $ do
+      chunksReference <- newIORef ["ab", "cd"]
+      pullChunk <- newRequestBodyChunkReader 3 (Wai.setRequestBodyChunks (nextRequestBodyChunk chunksReference) Wai.defaultRequest)
+      firstChunk <- pullChunk
+      secondChunk <- pullChunk
+      expectAll
+        ( (firstChunk `shouldBe` Right "ab")
+            :| [secondChunk `shouldBe` Left RequestBodyLimitExceeded]
+        )
+
+    it "rejects every pull once the declared Content-Length exceeds the bound, before reading" $ do
+      pullChunk <- newRequestBodyChunkReader 3 (Wai.defaultRequest {Wai.requestHeaders = [(Http.hContentLength, "4")]})
+      firstResult <- pullChunk
+      secondResult <- pullChunk
+      expectAll
+        ( (firstResult `shouldBe` Left RequestBodyLimitExceeded)
+            :| [secondResult `shouldBe` Left RequestBodyLimitExceeded]
+        )
+
+    it "treats a malformed declared Content-Length as unavailable rather than rejecting early" $ do
+      pullChunk <- newRequestBodyChunkReader 3 (Wai.defaultRequest {Wai.requestHeaders = [(Http.hContentLength, "4bytes")]})
+      result <- pullChunk
+      result `shouldBe` Right ""
+
+    it "rejects every non-empty streamed chunk against a negative bound" $ do
+      chunksReference <- newIORef ["a"]
+      pullChunk <- newRequestBodyChunkReader (-1) (Wai.setRequestBodyChunks (nextRequestBodyChunk chunksReference) Wai.defaultRequest)
+      result <- pullChunk
+      result `shouldBe` Left RequestBodyLimitExceeded
+
     it "rejects a configured request head before application routing or middleware" $ do
       let limits = unboundedRequestHeadLimits {requestTargetByteLimit = requestByteLimit 4}
           limitedApplication =

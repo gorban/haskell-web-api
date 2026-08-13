@@ -183,6 +183,18 @@ runApiRouteEndpointGroup :: [SomeApiRouteEndpoint] -> ApiPath -> Wai.Request -> 
 runApiRouteEndpointGroup endpoints declaredPath request =
   routeResponse (apiRouteEndpointFamilyDefinition endpoints declaredPath) request (RouteRequest declaredPath ())
 
+-- | Pull every chunk from a streaming request body one at a time,
+-- concatenating them, until the body ends or a pull reports the running
+-- total exceeded its declared budget.
+pullAllStreamingChunks :: ApiStreamingRequest -> ByteString.ByteString -> IO (Either () (ApiResponse Text))
+pullAllStreamingChunks streamingRequest accumulated = do
+  chunkResult <- pullApiStreamingRequestChunk streamingRequest
+  case chunkResult of
+    Left RequestBodyLimitExceeded -> pure (Left ())
+    Right chunk
+      | ByteString.null chunk -> pure (Right (apiResponse (TextEncoding.decodeUtf8 accumulated)))
+      | otherwise -> pullAllStreamingChunks streamingRequest (accumulated <> chunk)
+
 spec :: Spec
 spec =
   describe "HarchWeb.Api" $ do
@@ -850,6 +862,55 @@ spec =
                    show invalidContentType `shouldBe` "ApiMultipartRequestFailed MultipartInvalidContentType",
                    showList [alreadyConsumed, invalidContentType] "" `shouldBe` "[ApiMultipartRequestAlreadyConsumed,ApiMultipartRequestFailed MultipartInvalidContentType]"
                  ]
+          )
+
+      it "gives a streaming endpoint one chunk-at-a-time consumer instead of a buffered body" $ do
+        chunksReference <- newIORef ["ab", "cd", "e"]
+        let streamingEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiStreamingRequestBody 5)
+                (textResponseEncoder :| [])
+                (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
+                (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
+            request = Wai.setRequestBodyChunks (atomicModifyIORef' chunksReference takeNextChunk) Wai.defaultRequest
+        response <- runApiRoute streamingEndpoint request
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [apiRouteResponseBody response `shouldBe` "abcde"]
+          )
+
+      it "leaves a streamed chunk exceeding the declared budget typed for the endpoint handler" $ do
+        chunksReference <- newIORef ["ab", "cd", "ef"]
+        let streamingEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiStreamingRequestBody 5)
+                (textResponseEncoder :| [])
+                (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
+                (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
+            request = Wai.setRequestBodyChunks (atomicModifyIORef' chunksReference takeNextChunk) Wai.defaultRequest
+        response <- runApiRoute streamingEndpoint request
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status413)
+              :| [apiRouteResponseBody response `shouldBe` "stream too large"]
+          )
+
+      it "rejects a streamed body whose declared Content-Length already exceeds the budget, before any pull" $ do
+        let streamingEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiStreamingRequestBody 5)
+                (textResponseEncoder :| [])
+                (\endpointRequest -> pullAllStreamingChunks (apiEndpointRequestBody endpointRequest) "")
+                (const ((apiResponse "stream too large") {apiEndpointResponseStatus = HttpTypes.status413}))
+        response <- runApiRoute streamingEndpoint (Wai.defaultRequest {Wai.requestHeaders = [(HttpTypes.hContentLength, "6")]})
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status413)
+              :| [apiRouteResponseBody response `shouldBe` "stream too large"]
           )
 
     describe "apiHttpResponseToWaiResponse" $ do

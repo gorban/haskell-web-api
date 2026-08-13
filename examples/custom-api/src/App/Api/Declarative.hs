@@ -25,7 +25,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
 import HarchWeb.Api.Multipart
-import HarchWeb.Server (RequestBodyReadFailure (..), readRequestBodyUpTo)
+import HarchWeb.Server (readRequestBodyUpTo)
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 

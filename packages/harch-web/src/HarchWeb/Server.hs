@@ -33,6 +33,7 @@ module HarchWeb.Server
     redirectResponse,
     RequestBodyReadFailure (..),
     readRequestBodyUpTo,
+    newRequestBodyChunkReader,
     renderServerSentEvent,
     runEarlyRequestStages,
     responseDiagnostics,

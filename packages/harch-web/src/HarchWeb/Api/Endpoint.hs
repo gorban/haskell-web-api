@@ -10,6 +10,8 @@ module HarchWeb.Api.Endpoint
     SomeApiRouteEndpoint (..),
     ApiEndpointRequest (..),
     ApiRequestBody (..),
+    ApiStreamingRequest (..),
+    RequestBodyReadFailure (..),
     ApiMultipartRequest,
     ApiMultipartRequestError (..),
     withApiMultipartRequest,
@@ -163,10 +165,22 @@ withApiMultipartRequest ::
   IO (Either ApiMultipartRequestError ())
 withApiMultipartRequest = consumeApiMultipartRequest
 
+-- | One chunk pulled from a declared streaming request body, bounded the
+-- same way 'HarchWeb.Server.RequestBody.readRequestBodyUpTo' bounds a
+-- buffered one: each pull enforces the running-total budget instead of the
+-- framework retaining the body itself, so a handler that discards each
+-- chunk once it has used it keeps bounded memory regardless of body size.
+-- An empty chunk marks the end of the body. Calling it after the body ends
+-- keeps returning an empty chunk, matching 'Network.Wai.getRequestBodyChunk'.
+newtype ApiStreamingRequest = ApiStreamingRequest
+  { pullApiStreamingRequestChunk :: IO (Either RequestBodyReadFailure ByteString.ByteString)
+  }
+
 -- | An endpoint either declares no body consumer, one bounded buffered
--- decoder, or a bounded URL-encoded form whose fields join the request codec.
--- A multipart body remains scoped: its callback owns each completed part, and
--- must deliberately promote any file that needs to outlive the request.
+-- decoder, a bounded URL-encoded form whose fields join the request codec,
+-- a bounded incremental stream, or a scoped multipart consumer. A multipart
+-- body remains scoped: its callback owns each completed part, and must
+-- deliberately promote any file that needs to outlive the request.
 data ApiRequestBody body where
   ApiNoRequestBody :: ApiRequestBody ()
   ApiBufferedRequestBody ::
@@ -180,6 +194,9 @@ data ApiRequestBody body where
     Int ->
     Natural ->
     ApiRequestBody ApiForm
+  ApiStreamingRequestBody ::
+    Int ->
+    ApiRequestBody ApiStreamingRequest
   ApiMultipartRequestBody ::
     MultipartStorage stored ->
     MultipartLimits ->
@@ -299,10 +316,13 @@ runApiRouteEndpoint endpoint request =
             maximumBytes
             [urlEncodedFormBodyDecoder maximumFields]
             (\decodedForm -> decodeFormFields decodedForm (apiRequestDataWithForm decodedForm requestData))
-        ApiMultipartRequestBody storage limits ->
-          decodeInitialFields $ \decodedFields -> do
-            multipartRequest <- newApiMultipartRequest storage limits request
-            runHandler decodedFields multipartRequest
+        ApiStreamingRequestBody maximumBytes -> decodeInitialFieldsWithBody (newApiStreamingRequest maximumBytes request)
+        ApiMultipartRequestBody storage limits -> decodeInitialFieldsWithBody (newApiMultipartRequest storage limits request)
+
+    decodeInitialFieldsWithBody newBody =
+      decodeInitialFields $ \decodedFields -> do
+        bodyValue <- newBody
+        runHandler decodedFields bodyValue
 
     decodeInitialFields onDecodedFields =
       case runRequestCodec (apiRouteEndpointFields endpoint) requestData of
@@ -327,6 +347,10 @@ runApiRouteEndpoint endpoint request =
     runHandler decodedFields decodedBody = do
       handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
       pure (renderEndpointResult endpoint request (either (apiRouteEndpointFailureResponse endpoint) id handlerResult))
+
+newApiStreamingRequest :: Int -> Wai.Request -> IO ApiStreamingRequest
+newApiStreamingRequest maximumBytes request =
+  ApiStreamingRequest <$> newRequestBodyChunkReader maximumBytes request
 
 newApiMultipartRequest :: MultipartStorage stored -> MultipartLimits -> Wai.Request -> IO (ApiMultipartRequest stored)
 newApiMultipartRequest storage limits request = do
