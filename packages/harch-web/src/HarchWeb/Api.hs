@@ -9,24 +9,25 @@
 -- family, for combination via 'HarchWeb.Routing.combineRouteCodecs' with an
 -- application's other route families, and 'apiRouteEndpointFamilyDefinition'
 -- supplies the matching 'HarchWeb.Site.RouteDefinition'. See
--- @docs/design-guidance.md@. 'apiRouteEndpointMiddleware'/'apiEndpointMiddleware'
--- remain compatibility helpers for an application not yet migrated onto that
--- pair; wrapping one around a 'HarchWeb.Site.buildSiteApplication' output
--- shares no 404\/405\/Allow\/HEAD\/OPTIONS authority with the site's own
--- route table. A typed endpoint may declare a scoped multipart request
--- capability through 'ApiMultipartRequestBody'; its storage adapter remains
--- supplied by 'HarchWeb.Api.Multipart'. A typed endpoint may instead declare
--- a bounded, incremental request stream through 'ApiStreamingRequestBody':
--- the handler pulls one chunk at a time from the delivered 'ApiStreamingRequest'
--- rather than the framework buffering the whole body, so its own memory use
--- stays bounded regardless of body size; a chunk that would push the running
--- total over the declared budget is reported as 'RequestBodyReadFailure'
--- instead of retained. Typed API response encoders can return a
--- request-scoped stream through 'streamingResponseEncoder'.
+-- @docs/design-guidance.md@. This route-family pair is the only supported
+-- dispatch path: the legacy @ApiEndpoint@/@apiEndpointMiddleware@
+-- compatibility table and the intermediate @apiRouteEndpointMiddleware@
+-- typed-WAI-middleware composition were removed 2026-08-13 once every
+-- application in this repository had migrated onto the family registry (see
+-- the AK decision record). A typed endpoint may declare a scoped multipart
+-- request capability through 'ApiMultipartRequestBody'; its storage adapter
+-- remains supplied by 'HarchWeb.Api.Multipart'. A typed endpoint may instead
+-- declare a bounded, incremental request stream through
+-- 'ApiStreamingRequestBody': the handler pulls one chunk at a time from the
+-- delivered 'ApiStreamingRequest' rather than the framework buffering the
+-- whole body, so its own memory use stays bounded regardless of body size; a
+-- chunk that would push the running total over the declared budget is
+-- reported as 'RequestBodyReadFailure' instead of retained. Typed API
+-- response encoders can return a request-scoped stream through
+-- 'streamingResponseEncoder'.
 module HarchWeb.Api
   ( ApiMethod (..),
     ApiPath,
-    ApiEndpoint,
     ApiRouteEndpoint,
     SomeApiRouteEndpoint (..),
     ApiEndpointRequest (..),
@@ -36,9 +37,7 @@ module HarchWeb.Api
     ApiMultipartRequest,
     ApiMultipartRequestError (..),
     withApiMultipartRequest,
-    ApiMatchResult (..),
     apiMethodText,
-    apiEndpoint,
     apiRouteEndpoint,
     apiRouteEndpointAt,
     apiRouteEndpointPath,
@@ -46,17 +45,10 @@ module HarchWeb.Api
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     matchedApiRouteEndpointOrDie,
-    apiEndpointTarget,
     at,
-    matchApiEndpoints,
-    apiAllowHeaderValue,
     ApiHttpResponse (..),
-    respondApiMatch,
     apiHttpResponseToProtocolResponse,
     apiResponseBodyToProtocolResponse,
-    apiHttpResponseToWaiResponse,
-    apiRouteEndpointMiddleware,
-    apiEndpointMiddleware,
     ApiRequestData (..),
     apiRequestDataFromWaiRequest,
     ApiRequestSource (..),

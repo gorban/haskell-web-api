@@ -13,7 +13,6 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Text.Encoding.Error qualified as TextEncodingError
 import HarchWeb qualified
 import HarchWeb.Api
 import HarchWeb.Api.Multipart
@@ -28,7 +27,6 @@ import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Respon
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
-import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -38,28 +36,6 @@ testEndpointTable =
     SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/status") "WriteStatus"),
     SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/second") "ReadSecond"),
     SomeApiRouteEndpoint streamEndpoint
-  ]
-
-data TestTarget
-  = ReadStatus
-  | WriteStatus
-  | ReadSecond
-  deriving (Eq, Show)
-
-legacyTestEndpoints :: [ApiEndpoint TestTarget]
-legacyTestEndpoints =
-  [ apiEndpoint ReadStatus ApiGet (at "/api/status"),
-    apiEndpoint WriteStatus ApiPost (at "/api/status"),
-    apiEndpoint ReadSecond ApiGet (at "/api/second")
-  ]
-
-allSampleMatchResults :: [ApiMatchResult TestTarget]
-allSampleMatchResults =
-  [ NoApiRouteMatch,
-    ApiMethodNotAllowed (ApiGet :| [ApiPost]),
-    ApiRouteMatched ReadStatus,
-    ApiRouteMatchedHead ReadStatus,
-    ApiRouteOptions (ApiGet :| [ApiPost])
   ]
 
 testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () () () Text
@@ -85,38 +61,6 @@ streamEndpoint =
     (const (apiResponse ()))
   where
     streamResponse _ write flush = write (Builder.byteString "streamed") >> flush
-
-testEndpointApplication :: Wai.Application
-testEndpointApplication =
-  apiRouteEndpointMiddleware testEndpointTable $ \request respond ->
-    respond
-      ( Wai.responseLBS
-          HttpTypes.status404
-          []
-          ( LazyByteString.fromStrict
-              (TextEncoding.encodeUtf8 (TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.rawPathInfo request)))
-          )
-      )
-
--- | Invoke a WAI 'Wai.Application' and capture the 'Wai.Response' it
--- produces via the CPS-style 'Wai.Application' contract.
-performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
-performWaiRequest webApplication request = do
-  responseReference <- newIORef Nothing
-  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
-  maybeResponse <- readIORef responseReference
-  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
-
-readResponseBody :: Wai.Response -> IO Text
-readResponseBody response = do
-  let (_, _, withStreamingBody) = Wai.responseToStream response
-  chunksReference <- newIORef []
-  withStreamingBody $ \streamingBody ->
-    streamingBody
-      (\builder -> atomicModifyIORef' chunksReference (\chunks -> (chunks <> [Builder.toLazyByteString builder], ())))
-      (pure ())
-  chunks <- readIORef chunksReference
-  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (LazyByteString.concat chunks)))
 
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
@@ -199,126 +143,6 @@ pullAllStreamingChunks streamingRequest accumulated = do
 spec :: Spec
 spec =
   describe "HarchWeb.Api" $ do
-    describe "legacy API endpoint compatibility" $ do
-      it "matches every legacy route outcome" $
-        expectAll
-          ( (matchApiEndpoints "GET" "/api/unknown" legacyTestEndpoints `shouldBe` NoApiRouteMatch)
-              :| [ matchApiEndpoints "GET" "/api/status" legacyTestEndpoints `shouldBe` ApiRouteMatched ReadStatus,
-                   matchApiEndpoints "POST" "/api/status" legacyTestEndpoints `shouldBe` ApiRouteMatched WriteStatus,
-                   matchApiEndpoints "GET" "/api/second" legacyTestEndpoints `shouldBe` ApiRouteMatched ReadSecond,
-                   matchApiEndpoints "DELETE" "/api/status" legacyTestEndpoints `shouldBe` ApiMethodNotAllowed (ApiGet :| [ApiPost]),
-                   matchApiEndpoints "HEAD" "/api/status" legacyTestEndpoints `shouldBe` ApiRouteMatchedHead ReadStatus,
-                   matchApiEndpoints "HEAD" "/api/write-only" [apiEndpoint WriteStatus ApiPost (at "/api/write-only")]
-                     `shouldBe` ApiMethodNotAllowed (ApiPost :| []),
-                   matchApiEndpoints "OPTIONS" "/api/status" legacyTestEndpoints `shouldBe` ApiRouteOptions (ApiGet :| [ApiPost]),
-                   matchApiEndpoints "OPTIONS" "/api/unknown" legacyTestEndpoints `shouldBe` NoApiRouteMatch
-                 ]
-          )
-
-      it "retains comparable, printable legacy endpoint values" $
-        let methods = [ApiGet, ApiPost, ApiPut, ApiPatch, ApiDelete]
-            paths = [at "/x", at "/y"]
-         in expectAll
-              ( (sum [fromEnum (left == right) | left <- methods, right <- methods] `shouldBe` length methods)
-                  :| [ sum [fromEnum (left /= right) | left <- methods, right <- methods] `shouldBe` length methods * (length methods - 1),
-                       sum [length (show methodValue) + length (showList [methodValue] "") | methodValue <- methods] `shouldSatisfy` (> 0),
-                       sum [fromEnum (left == right) | left <- paths, right <- paths] `shouldBe` length paths,
-                       sum [fromEnum (left /= right) | left <- paths, right <- paths] `shouldBe` length paths * (length paths - 1),
-                       sum [length (show pathValue) + length (showList [pathValue] "") | pathValue <- paths] `shouldSatisfy` (> 0),
-                       sum [fromEnum (left == right) | left <- allSampleMatchResults, right <- allSampleMatchResults] `shouldBe` length allSampleMatchResults,
-                       sum [fromEnum (left /= right) | left <- allSampleMatchResults, right <- allSampleMatchResults] `shouldBe` length allSampleMatchResults * (length allSampleMatchResults - 1),
-                       sum [length (show matchResult) + length (showList [matchResult] "") | matchResult <- allSampleMatchResults] `shouldSatisfy` (> 0)
-                     ]
-              )
-
-      it "renders every legacy match outcome" $
-        let renderTarget target =
-              case target of
-                ReadStatus -> apiTextResponse "ReadStatus"
-                WriteStatus -> apiTextResponse "WriteStatus"
-                ReadSecond -> apiTextResponse "ReadSecond"
-            invalidBody = (apiTextResponse "invalid") {apiResponseStatus = HttpTypes.status422}
-         in expectAll
-              ( ( respondApiMatch renderTarget (ApiRouteMatched ReadStatus)
-                    `shouldBe` ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain; charset=utf-8")] (Just (apiTextResponse "ReadStatus"))
-                )
-                  :| [ respondApiMatch renderTarget (ApiRouteMatchedHead ReadStatus)
-                         `shouldBe` ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain; charset=utf-8")] Nothing,
-                       respondApiMatch renderTarget NoApiRouteMatch `shouldBe` ApiHttpResponse HttpTypes.status404 [] Nothing,
-                       respondApiMatch renderTarget (ApiMethodNotAllowed (ApiGet :| [ApiPost])) `shouldBe` ApiHttpResponse HttpTypes.status405 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing,
-                       respondApiMatch renderTarget (ApiRouteOptions (ApiGet :| [ApiPost])) `shouldBe` ApiHttpResponse HttpTypes.status204 [("Allow", "GET, POST, HEAD, OPTIONS")] Nothing,
-                       respondApiMatch (const invalidBody) (ApiRouteMatched ReadStatus)
-                         `shouldBe` ApiHttpResponse HttpTypes.status422 [("Content-Type", "text/plain; charset=utf-8")] (Just invalidBody)
-                     ]
-              )
-
-    describe "apiRouteEndpointMiddleware" $ do
-      it "falls through when no declared endpoint owns the path" $ do
-        response <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.rawPathInfo = "/api/unknown"})
-        body <- readResponseBody response
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status404)
-              :| [body `shouldBe` "/api/unknown"]
-          )
-
-      it "dispatches each endpoint's own typed handler" $ do
-        getResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/status"})
-        postResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/status"})
-        secondResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/second"})
-        getBody <- readResponseBody getResponse
-        postBody <- readResponseBody postResponse
-        secondBody <- readResponseBody secondResponse
-        expectAll
-          ( (getBody `shouldBe` "ReadStatus")
-              :| [postBody `shouldBe` "WriteStatus", secondBody `shouldBe` "ReadSecond"]
-          )
-
-      it "derives 405, HEAD, and OPTIONS from the endpoint table" $ do
-        methodResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "DELETE", Wai.rawPathInfo = "/api/status"})
-        headResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
-        optionsResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "OPTIONS", Wai.rawPathInfo = "/api/status"})
-        methodBody <- readResponseBody methodResponse
-        headBody <- readResponseBody headResponse
-        optionsBody <- readResponseBody optionsResponse
-        expectAll
-          ( (Wai.responseStatus methodResponse `shouldBe` HttpTypes.status405)
-              :| [ lookup "Allow" (Wai.responseHeaders methodResponse) `shouldBe` Just "GET, POST, HEAD, OPTIONS",
-                   methodBody `shouldBe` "",
-                   Wai.responseStatus headResponse `shouldBe` HttpTypes.status200,
-                   lookup "Content-Type" (Wai.responseHeaders headResponse) `shouldBe` Just "text/plain; charset=utf-8",
-                   headBody `shouldBe` "",
-                   Wai.responseStatus optionsResponse `shouldBe` HttpTypes.status204,
-                   lookup "Allow" (Wai.responseHeaders optionsResponse) `shouldBe` Just "GET, POST, HEAD, OPTIONS",
-                   optionsBody `shouldBe` ""
-                 ]
-          )
-
-      it "retains the endpoint's streaming response while rendering the WAI response" $ do
-        response <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/stream"})
-        body <- readResponseBody response
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
-              :| [lookup "Content-Type" (Wai.responseHeaders response) `shouldBe` Just "text/plain; charset=utf-8", body `shouldBe` "streamed"]
-          )
-
-      it "rejects HEAD when the matching typed endpoint table has no GET route" $ do
-        let postOnlyTable = [SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/post-only") "WriteOnly")]
-            application = apiRouteEndpointMiddleware postOnlyTable testEndpointApplication
-        response <- performWaiRequest application (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status405)
-              :| [lookup "Allow" (Wai.responseHeaders response) `shouldBe` Just "POST, OPTIONS"]
-          )
-
-      it "handles malformed method and path bytes without crashing typed dispatch" $ do
-        malformedMethodResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
-        malformedPathResponse <- performWaiRequest testEndpointApplication (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/\xFF"})
-        malformedPathBody <- readResponseBody malformedPathResponse
-        expectAll
-          ( (Wai.responseStatus malformedMethodResponse `shouldBe` HttpTypes.status405)
-              :| [Wai.responseStatus malformedPathResponse `shouldBe` HttpTypes.status404, malformedPathBody `shouldBe` "/api/\65533"]
-          )
-
     describe "apiRouteEndpointFamilyCodec and apiRouteEndpointFamilyDefinition" $ do
       it "parses a declared path into its ApiPath route identity" $
         HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointTable) () "/api/status"
@@ -335,13 +159,18 @@ spec =
         HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ())
           `shouldBe` at ""
 
-      it "renders the family's own not-found route as an ordinary 404 instead of raising, when used standalone with no catch-all family" $ do
+      it "renders the family's own not-found route as an ordinary 404 with no headers or body, instead of raising, when used standalone with no catch-all family" $ do
         notFoundResponse <-
           runApiRouteEndpointGroup
             testEndpointTable
             (HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ()))
             (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/unknown"})
-        apiRouteResponseStatus notFoundResponse `shouldBe` HttpTypes.status404
+        expectAll
+          ( (apiRouteResponseStatus notFoundResponse `shouldBe` HttpTypes.status404)
+              :| [ apiRouteResponseHeaders notFoundResponse `shouldBe` [],
+                   apiRouteResponseBody notFoundResponse `shouldBe` ""
+                 ]
+          )
 
       it "reports every declared method at a path, deduplicated" $
         HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
@@ -378,6 +207,34 @@ spec =
         evaluate (matchedApiRouteEndpointOrDie testEndpointTable "/api/status" "DELETE" `seq` ())
           `shouldThrow` \case
             ErrorCall message -> "DELETE is not declared at /api/status" `isInfixOf` message
+
+      it "raises immediately when HEAD is requested for a path with no declared GET" $
+        let postOnlyTable = [SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/post-only") "WriteOnly")]
+         in runApiRouteEndpointGroup postOnlyTable (at "/api/post-only") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
+              `shouldThrow` \case
+                ErrorCall message -> "HEAD is not declared at /api/post-only" `isInfixOf` message
+
+      it "leniently decodes a malformed, non-UTF-8 request method before failing to match it to a declared endpoint" $
+        runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
+          `shouldThrow` \case
+            ErrorCall message -> "is not declared at /api/status" `isInfixOf` message
+
+      it "retains comparable, printable endpoint values" $
+        let methods = [ApiGet, ApiPost, ApiPut, ApiPatch, ApiDelete]
+            paths = [at "/x", at "/y"]
+            httpResponses = [ApiHttpResponse HttpTypes.status200 [] Nothing, ApiHttpResponse HttpTypes.status404 [] Nothing]
+         in expectAll
+              ( (sum [fromEnum (left == right) | left <- methods, right <- methods] `shouldBe` length methods)
+                  :| [ sum [fromEnum (left /= right) | left <- methods, right <- methods] `shouldBe` length methods * (length methods - 1),
+                       sum [length (show methodValue) + length (showList [methodValue] "") | methodValue <- methods] `shouldSatisfy` (> 0),
+                       sum [fromEnum (left == right) | left <- paths, right <- paths] `shouldBe` length paths,
+                       sum [fromEnum (left /= right) | left <- paths, right <- paths] `shouldBe` length paths * (length paths - 1),
+                       sum [length (show pathValue) + length (showList [pathValue] "") | pathValue <- paths] `shouldSatisfy` (> 0),
+                       sum [fromEnum (left == right) | left <- httpResponses, right <- httpResponses] `shouldBe` length httpResponses,
+                       sum [fromEnum (left /= right) | left <- httpResponses, right <- httpResponses] `shouldBe` length httpResponses * (length httpResponses - 1),
+                       sum [length (show responseValue) + length (showList [responseValue] "") | responseValue <- httpResponses] `shouldSatisfy` (> 0)
+                     ]
+              )
 
       it "participates in one shared dispatch authority when combined with another route family" $ do
         let pageCodec :: HarchWeb.RouteCodec Text ()
@@ -432,14 +289,6 @@ spec =
                  apiMethodText ApiPut `shouldBe` "PUT",
                  apiMethodText ApiPatch `shouldBe` "PATCH",
                  apiMethodText ApiDelete `shouldBe` "DELETE"
-               ]
-        )
-
-    it "renders Allow with synthesized HEAD only for GET and always OPTIONS" $
-      expectAll
-        ( (apiAllowHeaderValue (ApiGet :| [ApiPost]) `shouldBe` "GET, POST, HEAD, OPTIONS")
-            :| [ apiAllowHeaderValue (ApiPost :| []) `shouldBe` "POST, OPTIONS",
-                 apiAllowHeaderValue (ApiDelete :| [ApiPut]) `shouldBe` "DELETE, PUT, OPTIONS"
                ]
         )
 
@@ -951,35 +800,6 @@ spec =
               :| [apiRouteResponseBody response `shouldBe` "stream too large"]
           )
 
-    describe "apiHttpResponseToWaiResponse" $ do
-      it "renders a matched response's status, headers, and body" $ do
-        let waiResponse = apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status200 [("Content-Type", "text/plain")] (Just (apiTextResponse "hello")))
-        body <- readResponseBody waiResponse
-        expectAll
-          ( (Wai.responseStatus waiResponse `shouldBe` HttpTypes.status200)
-              :| [ Wai.responseHeaders waiResponse `shouldBe` [("Content-Type", "text/plain")],
-                   body `shouldBe` "hello"
-                 ]
-          )
-
-      it "renders 204, 400, 403, 404, 405, and 422 with their standard reason phrases" $
-        expectAll
-          ( (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status204 [] Nothing)) `shouldBe` HttpTypes.status204)
-              :| [ Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status400 [] Nothing)) `shouldBe` HttpTypes.status400,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status403 [] Nothing)) `shouldBe` HttpTypes.status403,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)) `shouldBe` HttpTypes.status404,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status405 [] Nothing)) `shouldBe` HttpTypes.status405,
-                   Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status422 [] Nothing)) `shouldBe` HttpTypes.status422
-                 ]
-          )
-
-      it "renders an empty body when no body is present" $ do
-        body <- readResponseBody (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status404 [] Nothing))
-        body `shouldBe` ""
-
-      it "preserves the reason phrase of a supplied HTTP status" $
-        HttpTypes.statusMessage (Wai.responseStatus (apiHttpResponseToWaiResponse (ApiHttpResponse HttpTypes.status500 [] Nothing))) `shouldBe` "Internal Server Error"
-
     describe "apiHttpResponseToProtocolResponse" $ do
       it "preserves a matched response's status, headers, and strict protocol bytes" $
         apiHttpResponseToProtocolResponse
@@ -996,117 +816,6 @@ spec =
         case protocolResponseBody (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status405 [("Allow", "GET, HEAD, OPTIONS")] Nothing)) of
           ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
           ProtocolResponseStream _ -> expectationFailure "expected a strict protocol body"
-
-    describe "apiEndpointMiddleware" $ do
-      let innerApplication :: Wai.Application
-          innerApplication request respond = respond (Wai.responseLBS HttpTypes.status200 [] (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.rawPathInfo request)))))
-          middleware = apiEndpointMiddleware legacyTestEndpoints (\_request target -> pure (renderTarget target))
-          waiRequestFor requestMethod requestPath =
-            Wai.defaultRequest {Wai.requestMethod = requestMethod, Wai.rawPathInfo = requestPath}
-          renderTarget target =
-            case target of
-              ReadStatus -> apiTextResponse "ReadStatus"
-              WriteStatus -> apiTextResponse "WriteStatus"
-              ReadSecond -> apiTextResponse "ReadSecond"
-
-      it "dispatches a matched request through the endpoint table rather than the inner application" $ do
-        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/api/status")
-        body <- readResponseBody response
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
-              :| [body `shouldBe` "ReadStatus"]
-          )
-
-      it "gives the matched target's handler the original request, not just the matched target" $ do
-        let echoHeaderMiddleware =
-              apiEndpointMiddleware
-                legacyTestEndpoints
-                (\request _target -> pure (apiTextResponse (TextEncoding.decodeUtf8 (fromMaybe "missing" (lookup "X-Probe" (Wai.requestHeaders request))))))
-            probeRequest = (waiRequestFor "GET" "/api/status") {Wai.requestHeaders = [("X-Probe", "seen")]}
-        response <- performWaiRequest (echoHeaderMiddleware innerApplication) probeRequest
-        body <- readResponseBody response
-        body `shouldBe` "seen"
-
-      it "renders 405 with Allow for a declared path with the wrong method" $ do
-        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "DELETE" "/api/status")
-        body <- readResponseBody response
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status405)
-              :| [ Wai.responseHeaders response `shouldBe` [("Allow", "GET, POST, HEAD, OPTIONS")],
-                   body `shouldBe` ""
-                 ]
-          )
-
-      it "omits the body for a HEAD match while keeping its status and headers" $ do
-        renderedTargets <- newIORef []
-        renderedPaths <- newIORef []
-        let recordingMiddleware =
-              apiEndpointMiddleware
-                legacyTestEndpoints
-                ( \request target -> do
-                    atomicModifyIORef' renderedTargets (\targets -> (targets <> [target], ()))
-                    atomicModifyIORef' renderedPaths (\paths -> (paths <> [Wai.rawPathInfo request], ()))
-                    pure (headRenderTarget target)
-                )
-            headRenderTarget target =
-              case target of
-                ReadStatus -> (apiTextResponse "handled") {apiResponseStatus = HttpTypes.status201}
-                WriteStatus -> (apiTextResponse "write") {apiResponseStatus = HttpTypes.status202}
-                ReadSecond -> (apiTextResponse "second") {apiResponseStatus = HttpTypes.status203}
-        response <- performWaiRequest (recordingMiddleware innerApplication) (waiRequestFor "HEAD" "/api/status")
-        body <- readResponseBody response
-        targets <- readIORef renderedTargets
-        paths <- readIORef renderedPaths
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status201)
-              :| [body `shouldBe` "", targets `shouldBe` [ReadStatus], paths `shouldBe` ["/api/status"]]
-          )
-
-      it "answers OPTIONS with 204, an Allow header, and no body without running any handler" $ do
-        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "OPTIONS" "/api/status")
-        body <- readResponseBody response
-        expectAll
-          ( (Wai.responseStatus response `shouldBe` HttpTypes.status204)
-              :| [ Wai.responseHeaders response `shouldBe` [("Allow", "GET, POST, HEAD, OPTIONS")],
-                   body `shouldBe` ""
-                 ]
-          )
-
-      it "falls through to the inner application for a path no endpoint declares" $ do
-        response <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/unrelated")
-        body <- readResponseBody response
-        body `shouldBe` "/unrelated"
-
-      it "handles malformed method and path bytes without crashing the middleware" $ do
-        malformedMethodResponse <- performWaiRequest (middleware innerApplication) (waiRequestFor "\xFF" "/api/status")
-        malformedPathResponse <- performWaiRequest (middleware innerApplication) (waiRequestFor "GET" "/api/\xFF")
-        malformedPathBody <- readResponseBody malformedPathResponse
-        expectAll
-          ( (Wai.responseStatus malformedMethodResponse `shouldBe` HttpTypes.status405)
-              :| [ Wai.responseStatus malformedPathResponse `shouldBe` HttpTypes.status200,
-                   malformedPathBody `shouldBe` "/api/\65533"
-                 ]
-          )
-
-      it "forwards a target's overridden status through to the real WAI response" $ do
-        let invalidMiddleware =
-              apiEndpointMiddleware
-                legacyTestEndpoints
-                (\_request _target -> pure (apiTextResponse "invalid") {apiResponseStatus = HttpTypes.status422})
-        response <- performWaiRequest (invalidMiddleware innerApplication) (waiRequestFor "GET" "/api/status")
-        Wai.responseStatus response `shouldBe` HttpTypes.status422
-
-      it "keeps legacy rendered responses comparable and printable" $
-        let responses =
-              [ ApiHttpResponse HttpTypes.status200 [] Nothing,
-                ApiHttpResponse HttpTypes.status201 [("X-Example", "present")] (Just (apiTextResponse "hello"))
-              ]
-         in expectAll
-              ( (sum [fromEnum (left == right) | left <- responses, right <- responses] `shouldBe` length responses)
-                  :| [ sum [fromEnum (left /= right) | left <- responses, right <- responses] `shouldBe` length responses * (length responses - 1),
-                       sum [length (show response) + length (showList [response] "") | response <- responses] `shouldSatisfy` (> 0)
-                     ]
-              )
 
     describe "RequestCodec" $ do
       let sampleRequestData =

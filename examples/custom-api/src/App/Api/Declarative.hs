@@ -8,7 +8,7 @@
 -- boundary this module used to wait on: 'declarativeApiEndpoints' is now
 -- composed through 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/
 -- 'apiRouteEndpointFamilyDefinition' into an ordinary 'HarchWeb.Site.Site',
--- rather than the legacy 'HarchWeb.Api.apiEndpoint'/'apiEndpointMiddleware'
+-- rather than the removed legacy @apiEndpoint@\/@apiEndpointMiddleware@
 -- pair this module previously used. Migrating this example is the AC
 -- follow-up named in @TASKS.md@; @web-api@'s own @\/api\/status@\/@\/api\/second@
 -- routes remain a separate, larger follow-up (they additionally need

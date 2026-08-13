@@ -36,9 +36,9 @@ cabal test custom-api-tests --test-show-details=direct
 ```
 
 `HarchWeb.Api.Endpoint` matches path and method independently, deriving `404`/`405 Method Not Allowed`
-+`Allow`/`HEAD`/`OPTIONS` from the declared endpoint table. `apiEndpointMiddleware`/
-`apiRouteEndpointMiddleware` remain available as additive compatibility helpers for an application not
-yet migrated onto the route-family registry — see
++`Allow`/`HEAD`/`OPTIONS` from the declared endpoint table. The compatibility `apiEndpointMiddleware`/
+`apiRouteEndpointMiddleware` helpers this example (and `examples/multipart-upload`) used before
+migrating were removed once no application in this repository depended on them any longer — see
 [design guidance](../../docs/design-guidance.md#follow-up-decision--standalone-family-not-found-and-the-custom-api-migration-2026-08-13)
 for the migration this example made and why `web-api` itself has not made the same move yet.
 

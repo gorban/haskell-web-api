@@ -259,21 +259,11 @@ proofs—delayed registration, cancellation, handler failure and non-settlement,
 controls, conditional leave warning, and safe/idempotent retry—in
 [two-pages](../examples/two-pages/test/E2E/AppSpec.hs).
 
-### API transport helpers and the first shared endpoint boundary
+### API transport helpers and the shared endpoint boundary
 
-`HarchWeb.Api` declares a method-aware HTTP endpoint (`apiEndpoint target method (at "/path")`) and
-matches a request against a table of them with `matchApiEndpoints`: an unmatched path is
-`NoApiRouteMatch` (`404`), a matched path with no accepting method is `ApiMethodNotAllowed` (`405`, with
-`apiAllowHeaderValue` rendering `Allow` from every declared method at that path plus the `HEAD`/`OPTIONS`
-it synthesizes), and a match is `ApiRouteMatched`/`ApiRouteMatchedHead`/`ApiRouteOptions`. `HEAD` is never
-declared directly — a matched `GET` endpoint answers it with the same target and no body — and neither is
-`OPTIONS`: any request method `OPTIONS` against a path with at least one declared endpoint synthesizes
-`ApiRouteOptions`, which `respondApiMatch`/`apiEndpointMiddleware` render as `204 No Content` with the same
-`Allow` header and no body, without running any endpoint's handler. `HarchWeb.Api` does not implement CORS:
-it never reads `Origin`/`Access-Control-Request-Method` and never emits an `Access-Control-*` header. An
-application that needs CORS preflight support composes its own middleware in front of
-`apiEndpointMiddleware` (typically intercepting `OPTIONS` itself before it reaches this table), keeping
-that policy application-owned rather than baked into every endpoint declaration. `RequestCodec` decodes query and
+`HarchWeb.Api`'s `apiRouteEndpoint`/`apiRouteEndpointAt` declare a typed endpoint: one method, a typed
+query/header/cookie decoder, either no body or exactly one bounded buffered/streaming/multipart body
+consumer, a domain-failure interpreter, and the response renderer. `RequestCodec` decodes query and
 header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
 independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
 matching `HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`
@@ -282,22 +272,21 @@ request-body decoder (`jsonBodyDecoder`, `textBodyDecoder`, `bytesBodyDecoder`, 
 `ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively), and
 distinguishes an unsupported media type (`415`) and a malformed body (`400`) from a successful decode. The
 endpoint's bounded body reader owns the separate oversized-body (`413`) outcome; `MissingContentTypePolicy` lets each
-endpoint decide whether a missing header is rejected or resolved to a declared default.
+endpoint decide whether a missing header is rejected or resolved to a declared default. `HarchWeb.Api`
+does not implement CORS: it never reads `Origin`/`Access-Control-Request-Method` and never emits an
+`Access-Control-*` header; an application that needs CORS preflight support composes its own handling in
+front of its route family, keeping that policy application-owned rather than baked into every endpoint
+declaration.
 `selectRepresentation` negotiates a response media type from a server-preference-ordered list and an
 optional `Accept` header per RFC 9110 §12.5.1 (bounded three-decimal quality values, wildcards,
-specificity precedence, `q=0` exclusion, and `406` when nothing is acceptable). `respondApiMatch` renders an `ApiMatchResult` into a
-transport-agnostic `ApiHttpResponse` (status, headers, optional body): `404`/`405`+`Allow` for the two
-non-matching outcomes, and the matched target's rendered status/`Content-Type` otherwise, with the body
-omitted for a `HEAD` match. A target's `ApiResponseBody` carries its own `apiResponseStatus`, defaulted
-to `200` by `apiJsonResponse`/`apiTextResponse`/`apiBytesResponse` and overridden with a record update
-for an ordinary typed non-200 outcome, e.g. `422` for input that decodes but fails semantic validation;
-`apiHttpStatus` has standard reason phrases for `200`, `204`, `400`, `403`, `404`, `405`, and `422`.
-`apiHttpResponseToWaiResponse` renders that into a real WAI `Response`, and
-`apiEndpointMiddleware` is the integration point: a `Wai.Middleware` an application opts into by wrapping
-its own `Wai.Application`, dispatching a request whose path matches a declared endpoint and falling
-through to the wrapped application for everything else. Adopting it is purely additive — it composes
-independently of whatever dispatcher (page routes, client actions, or anything else) the wrapped
-application already has, changing behavior only for paths explicitly declared as `ApiEndpoint`s.
+specificity precedence, `q=0` exclusion, and `406` when nothing is acceptable). Endpoint handlers return a
+typed `ApiResponse`; the declaration's non-empty `ApiResponseEncoder` list selects and encodes an
+acceptable representation, sends its `Content-Type`, preserves application status/headers/observability
+attributes/log entries, adds or merges `Vary: Accept` when alternatives exist, and returns 406 for an
+explicitly incompatible `Accept`. A target's `ApiResponseBody` (the lower-level, non-negotiated response
+shape) carries its own `apiResponseStatus`, defaulted to `200` by
+`apiJsonResponse`/`apiTextResponse`/`apiBytesResponse` and overridden with a record update for an ordinary
+typed non-200 outcome, e.g. `422` for input that decodes but fails semantic validation.
 
 `HarchWeb.Api.Multipart` adds a bounded, incremental RFC 7578 consumer: a pure boundary scanner
 (`newMultipartScanner`/`feedMultipartChunk`/`finishMultipartScanner`) that never retains more of a part's
@@ -309,32 +298,28 @@ bytes beyond `MultipartLimits`' max-file budget. A caller-supplied callback runs
 finishes, before any later part (including a later file part) is read, so a caller can reject the whole body
 — on an invalid CSRF field, say — before a later file reaches storage. File data is available only via an
 opaque scoped upload: promote it deliberately to take ownership, or leave it for automatic cleanup after
-success, rejection, or an exception.
+success, rejection, or an exception. `ApiMultipartRequestBody` is the typed endpoint's streaming multipart
+request capability: it gives the handler a one-shot scoped consumer (`withApiMultipartRequest`) backed by
+an application-selected storage adapter and `MultipartLimits`, preserving both duplicate-consumption
+rejection and the multipart parser's typed failure.
 
-`apiEndpointMiddleware` remains an additive compatibility helper; it is not the final route dispatcher.
-New routes should use `apiRouteEndpoint` and place `apiRouteDefinition` in the application's
-`RouteDefinition` table. That declaration names one method, typed query/header/cookie decoder, either no body
-or exactly one bounded buffered body decoder, a domain-failure interpreter, and the response renderer.
-The shared server dispatcher supplies the real WAI request only after it has selected the route and
-enforced the table's method policy, so API declarations cannot create competing 404/405/`Allow`/`HEAD`/
-`OPTIONS` behaviour. Fields are validated before a body reader runs; rejected fields return a stable
-400 without consuming the body. A bounded buffered decoder maps oversized, unsupported-media, and
-malformed input to 413, 415, and 400 respectively, and passes expected domain failures through the
-endpoint's explicit interpreter. Endpoint handlers return a typed `ApiResponse`; the declaration's
-non-empty `ApiResponseEncoder` list selects and encodes an acceptable representation, sends its
-`Content-Type`, preserves application status and headers, adds or merges `Vary: Accept` when alternatives
-exist, and returns 406 for an explicitly incompatible `Accept`. `ApiMultipartRequestBody` is the
-streaming multipart request capability: it gives the handler a one-shot scoped consumer backed by an
-application-selected storage adapter and `MultipartLimits`, preserving both duplicate-consumption rejection
-and the multipart parser's typed failure. Additional streaming codec shapes and multipart storage policy
-remain AC/AD follow-up work.
+`apiRouteDefinition` places one endpoint directly in an application's `RouteDefinition` table; for a
+heterogeneous endpoint table, `SomeApiRouteEndpoint` wraps declarations of different types and
+`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` adapt the whole table into one
+`HarchWeb.RouteCodec`/`RouteDefinition` route family (see the closed route-family registry below) — the
+shared server dispatcher supplies the real WAI request only after it has selected the route and enforced
+the table's method policy, so API declarations cannot create competing 404/405/`Allow`/`HEAD`/`OPTIONS`
+behaviour with any other route family in the same application. A bounded buffered decoder maps oversized,
+unsupported-media, and malformed input to 413, 415, and 400 respectively, and passes expected domain
+failures through the endpoint's explicit interpreter. Additional streaming codec shapes and multipart
+storage policy remain AC/AD follow-up work.
 
-For a standalone WAI composition, `apiRouteEndpointAt` adds the endpoint's path to that same typed
-declaration and `SomeApiRouteEndpoint` permits a heterogeneous table. `apiRouteEndpointMiddleware`
-then derives `404` fall-through, `405` plus `Allow`, `HEAD`, and synthesized `OPTIONS` directly from
-that table while invoking the declaration's own handler and single body consumer. This is the typed
-replacement for the legacy target-plus-handler middleware; the legacy helper remains only for existing
-applications while their endpoint declarations are migrated.
+**Historical note (2026-08-13):** this typed endpoint boundary previously coexisted with two now-removed
+compatibility layers: a legacy `ApiEndpoint`/`apiEndpointMiddleware` target-plus-handler table, and an
+intermediate `apiRouteEndpointMiddleware` that derived `404`/`405`/`Allow`/`HEAD`/`OPTIONS` from a typed
+`SomeApiRouteEndpoint` table composed as a standalone `Wai.Middleware` rather than through the route-family
+registry. Both were deleted once every application in this repository had migrated onto the family
+registry; see the AK decision record below for why that made deletion, not relocation, the right call.
 
 ### Decision record — AC typed declarative endpoint boundary (2026-08-12)
 
@@ -527,6 +512,87 @@ migration path — but actually doing so (auditing exactly what can be deleted v
 dedicated tests, and updating every doc that still describes the compatibility helpers as current) is
 real follow-up work of its own, tracked under AK, not completed as part of this migration.
 
+### Follow-up decision — AK: deleted the legacy compatibility surface (2026-08-13)
+
+**Decision: delete, not relocate — completing AK's investigated deletion candidate.** With both
+example applications migrated, a repository-wide audit confirmed no application code anywhere still
+called `ApiEndpoint`/`apiEndpoint`/`apiEndpointTarget`/`ApiMatchResult`/`matchApiEndpoints`/
+`matchLegacyMethod`/`legacyEndpointAtPath`/`legacyEndpointHasMethod`/`legacyDeclaredMethods`/
+`respondApiMatch`/`legacyRenderedApiResponse`/`apiEndpointMiddleware` (the legacy target-plus-handler
+table) or `apiRouteEndpointMiddleware`/`matchApiRouteEndpoints`/`protocolResponseToWaiResponse`/
+`requestPathTextFromWai` (the intermediate typed-WAI-middleware composition) — only `HarchWeb.Api`'s own
+facade re-export and `HarchWeb.Api.Endpoint`'s own dedicated `ApiSpec.hs` tests referenced them. Per
+this document's "Treat this framework as a versioned foundation" posture and the missing-capability
+protocol's option 1 (small, general, squarely within an area the framework already owns), this was a
+genuine deletion, not a `.Internal`-module relocation: all of the above were removed from
+`HarchWeb.Api.Endpoint` and `HarchWeb.Api`'s export list, along with their now-pointless dedicated tests
+(the "legacy API endpoint compatibility", "apiRouteEndpointMiddleware", "apiHttpResponseToWaiResponse",
+and "apiEndpointMiddleware" `describe` blocks in `ApiSpec.hs`, and the standalone `apiAllowHeaderValue`
+test, since that function had no other caller once both middlewares were gone). `apiHttpResponseToWaiResponse`
+and `apiAllowHeaderValue` were deleted too, once auditing confirmed their only remaining callers were the
+two removed middlewares. `ApiHttpResponse` and `apiHttpResponseToProtocolResponse` were kept: unlike the
+deleted functions, `apiRouteEndpointFamilyDefinition`'s own not-found rendering (the AC standalone-not-found
+fix above) depends on both.
+
+**Follow-up (same day): the deletion's own coverage run surfaced dead code the deletion itself created,
+not a testing gap.** Running the full CI-equivalent coverage gate against the deletion (rather than only
+`cabal build`/Unit tests, which had been the extent of verification up to that point) failed at 99%, not
+100%, isolated entirely to `HarchWeb.Api.Endpoint`. Per this document's ban on forcing a coverage tick with
+`$!`/`seq`/fake work, each gap was root-caused rather than papered over:
+
+- `ApiRouteMatch`'s `TypedApiRouteMethodNotAllowed`/`TypedApiRouteOptions` branches inside
+  `matchApiRouteMethod` were **genuinely dead**, not merely untested: `matchedApiRouteEndpointOrDie` is
+  their only consumer, and it already treats every non-`Matched`/`MatchedHead` outcome identically (an
+  `error` naming the wiring defect) — so distinguishing "method not allowed" from "OPTIONS" was complexity
+  with no surviving behavioral difference, left over from when the deleted legacy dispatcher rendered `405`
+  and `204`/`Allow` differently for the same `ApiRouteMatch` value. Fix: deleted `ApiRouteMatch` and
+  `matchApiRouteMethod` outright and inlined the one remaining match/HEAD-fallback/die decision directly
+  into `matchedApiRouteEndpointOrDie` — restructuring the code per this document's guidance, not adding a
+  test for a branch nothing can ever reach.
+- The remaining gap, after that restructuring, was three lazily-unforced sub-expressions, not a tooling
+  artifact: HPC's per-expression box for a `case` branch or function body ticks when that code path is
+  *entered*, but a lazy field inside it can still show as never executed if nothing downstream actually
+  demands its value. Comparing the coverage HTML's own tick markup (`<span class="istickedoff">…<span
+  class="nottickedoff">…</span>…</span>`) showed each surrounding branch genuinely ran, while only an inner
+  atom stayed dark: the not-found response's `[]` headers and `Nothing` body (the only not-found test asserted
+  the status, never forcing the other two `ProtocolResponse` fields), `TextEncodingError.lenientDecode`
+  passed to `decodeUtf8With` inside `requestMethodTextFromWai` (never forced because no test ever sent a
+  non-UTF-8 request method through the typed family dispatcher, so `decodeUtf8With`'s error-recovery callback
+  was never invoked), and `methodNotDeclared` inside `matchedApiRouteEndpointOrDie`'s `HEAD`-with-no-`GET`
+  fallback (never forced because no test sent `HEAD` to a path whose only declared endpoint was `POST`).
+  All three were real behavior the deleted "apiRouteEndpointMiddleware" test block had covered from the
+  other side (a WAI-level 404/405 assertion) before this migration's predecessor commit removed it — genuine
+  coverage losses, not tool quirks. Fix: three real tests, not forced ticks — extended the not-found test to
+  assert empty headers/body, and added dedicated tests for a malformed non-UTF-8 method and a `HEAD` request
+  against a `POST`-only table, each `shouldThrow` on `matchedApiRouteEndpointOrDie`'s own defensive `error`.
+- The same deleted "legacy API endpoint compatibility" test block had been the only place exercising
+  `ApiMethod` and `ApiPath`'s derived `Eq`/`Show` (including `showList`, the method a derived `Show`
+  instance also generates but which nothing else in the codebase calls) directly, comparing every pair of
+  sample values and calling `show`/`showList` on each; `ApiHttpResponse`'s derived `Eq` lost its only
+  exerciser the same way, from the deleted "renders every legacy match outcome" test. Fix: added "retains
+  comparable, printable endpoint values" (`ApiSpec.hs`), scoped to the three types that still exist,
+  verifying derived `Eq` agrees with itself and is irreflexive under `/=`, and that `show`/`showList` both
+  produce non-empty output — a legitimate assertion about derived-instance behavior, not one written only to
+  satisfy the coverage percentage.
+
+`HarchWeb.Api.Endpoint` shrank from 658 to 499 lines (41 declarations, 22 imports, 23 exports, fan-out 9,
+per `tools/haskell-quality-report.sh`) by the combined legacy-surface deletion and this coverage-driven
+dead-code removal. **This closes the AK module-health signal**: this document's module-health rule is a
+conjunction — a module must exceed 500 lines *and* (20 imports or 10 local dependencies/fan-out) to be
+flagged — and at 499 lines the module no longer exceeds the line threshold regardless of its 22 imports or
+fan-out of 9, both otherwise-unremarkable numbers for a module gating an entire typed API surface. Naming
+the margin honestly: 499 is one line under the threshold, not a wide margin, so a future addition to this
+module should re-run `tools/haskell-quality-report.sh` rather than assume the signal stays closed.
+Re-examining a `.Family` module split now that only one dispatch path remains (the earlier "shared by
+legacy and typed-middleware" obstacle is gone): the blocker AK's original investigation named independently
+of that sharing — `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`/
+`matchedApiRouteEndpointOrDie` and their supporting matchers (`endpointAtPath`, `endpointHasMethod`,
+`declaredMethods`) all need to pattern-match the `ApiPath` newtype's constructor, which
+`HarchWeb.Api.Endpoint`'s export list deliberately keeps private (`ApiPath` the type, not `ApiPath(..)`) —
+still applies verbatim, but is no longer required work now that the module-health metric itself is
+satisfied: a `.Family` split remains available as a future readability improvement, not a follow-up this
+document tracks as owed.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
@@ -543,7 +609,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. No application in the repo still calls the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware`; only `HarchWeb.Api`'s own facade and tests reference them, making their removal a real but unstarted follow-up (see AK). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. The now-unused compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` (and the legacy `ApiEndpoint` table) were deleted 2026-08-13 (see the AK decision record), which closed AK's module-health signal too (`HarchWeb.Api.Endpoint` is 499 lines). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

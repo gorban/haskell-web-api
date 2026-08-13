@@ -45,8 +45,8 @@ runServer = runServerWithWaiMiddleware id
 
 -- | Like 'runServer', but composes a caller-supplied 'Wai.Middleware' in
 -- front of the rendered application before it reaches any runtime listener,
--- e.g. 'HarchWeb.Api.apiEndpointMiddleware' handling declared paths ahead of
--- the typed 'Application'. ACME HTTP-01 challenge responses bypass the
+-- e.g. an application-authored middleware handling paths outside the typed
+-- 'Application' entirely. ACME HTTP-01 challenge responses bypass the
 -- middleware; every other request passes through it first.
 runServerWithWaiMiddleware ::
   (Eq route, HasServerConfig config) =>

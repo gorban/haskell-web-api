@@ -62,6 +62,11 @@
     `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` pair, replacing `apiEndpointMiddleware`.
     No application in the repository still uses the legacy `ApiEndpoint`/`apiEndpointMiddleware` or
     `apiRouteEndpointMiddleware` compatibility helpers.
+13. **Breaking:** deleted those now-unused legacy `ApiEndpoint`/`apiEndpointMiddleware`/
+    `apiRouteEndpointMiddleware` compatibility helpers from `harch-web` outright, along with
+    `apiHttpResponseToWaiResponse`/`apiAllowHeaderValue` (unused once both middlewares were gone).
+    `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` (composed into a `HarchWeb.Site.Site`)
+    is now the only supported way to dispatch a typed API endpoint table.
 
 ## 0.1.0.1
 

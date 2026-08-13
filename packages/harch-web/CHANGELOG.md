@@ -2,6 +2,13 @@
 
 ## 0.1.2.0
 
+* **Breaking:** removed the legacy `ApiEndpoint`/`apiEndpoint`/`apiEndpointTarget`/`ApiMatchResult`/
+  `matchApiEndpoints`/`respondApiMatch`/`apiEndpointMiddleware` compatibility table and the intermediate
+  `apiRouteEndpointMiddleware` typed-WAI-middleware composition, along with `apiHttpResponseToWaiResponse`
+  and `apiAllowHeaderValue` (both now unused once those middlewares were gone). Every application in
+  this repository was already migrated onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`
+  before this removal; applications that still relied on the deleted helpers should migrate onto that
+  pair, composed into a `HarchWeb.Site.Site` via `simpleSite`/`buildSiteApplication`/`toWaiApplication`.
 * Added `apiEndpointResponseObservabilityAttributes`/`apiEndpointResponseLogEntries` to `ApiResponse`.
   A typed endpoint handler can now attach private diagnostics (a failure code, a downstream error
   detail) to its rendered `ProtocolResponse`, matching the capability `HarchWeb.Server.Response.ResponseBody`

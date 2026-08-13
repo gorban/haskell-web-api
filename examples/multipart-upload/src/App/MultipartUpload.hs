@@ -103,7 +103,7 @@ nativeUploadPath = "/native-upload"
 -- | Declared once per running server so the single-use CSRF state is shared
 -- by its form GET and POST requests; composed via
 -- 'HarchWeb.Api.apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition'
--- rather than the compatibility 'HarchWeb.Api.apiEndpointMiddleware'.
+-- rather than the removed compatibility @apiEndpointMiddleware@.
 nativeUploadEndpoints :: NativeUploadState -> [SomeApiRouteEndpoint]
 nativeUploadEndpoints state =
   [ SomeApiRouteEndpoint (showUploadFormEndpoint state),
