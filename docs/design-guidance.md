@@ -358,10 +358,21 @@ This preserves parse failure separately from field validation. Response `Accept`
 declared `Content-Type` parameters (including a quoted, case-insensitive UTF-8 charset); ranges after `q`
 are extensions and do not constrain matching. Typed response encoders may now emit strict bytes or a
 request-scoped WAI stream, preserving the existing server response boundary without materializing a lazy
-body. Additional streaming request codecs remain an AC step; see below for the closed route-family
-registry. `ApiMultipartRequestBody` now lets an API route select the existing scoped multipart consumer exactly once;
-its storage adapter and staged ownership remain AD policy, so the endpoint does not create a new upload
-lifecycle or default to local files.
+body. `ApiStreamingRequestBody` declares the request-side counterpart: the delivered
+`ApiStreamingRequest` gives the handler one bounded chunk at a time via
+`HarchWeb.Server.RequestBody.newRequestBodyChunkReader`, which enforces the same running-total
+budget `readRequestBodyUpTo` enforces over a single buffered read, without the framework retaining
+the body itself — so the framework's own memory use stays bounded by the current chunk plus a byte
+count, not by body size. Unlike a buffered body's automatic 413, a pull that would exceed the
+budget reports `RequestBodyReadFailure` to the endpoint's own handler rather than the framework
+short-circuiting the response, since a true stream's limit violation can only be detected after the
+handler has already begun consuming earlier chunks — the framework cannot retroactively take over
+mid-handler the way it can reject before ever calling a buffered-body handler. This mirrors how a
+multipart parser failure already stays typed for the handler instead of becoming an automatic
+response. See below for the closed route-family registry. `ApiMultipartRequestBody` now lets an API
+route select the existing scoped multipart consumer exactly once; its storage adapter and staged
+ownership remain AD policy, so the endpoint does not create a new upload lifecycle or default to
+local files.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
 `apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a
@@ -432,7 +443,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints, closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | The route-family primitive is real and tested, but no application uses it yet: `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all, and `examples/custom-api` still uses the compatibility middleware. Migrating either application, and additional streaming *request* codecs, remain AC follow-up work. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | The route-family primitive and streaming request codec are real and tested, but no application uses the route-family registry yet: `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all, and `examples/custom-api` still uses the compatibility middleware. Migrating either application is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Durable storage selection, scoped cleanup, and promotion are explicit; parser-wide bounds and native-upload cleanup across every failure mode remain under AD. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
