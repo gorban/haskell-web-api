@@ -667,6 +667,36 @@ it once the test also called `==`/`/=` as a direct boolean expression rather tha
 comparison through `shouldBe`/`shouldNotBe`'s polymorphic `Eq a =>` dictionary — restructuring the
 code to match a working precedent, not forcing a tick.
 
+### Follow-up decision — AL: split `HarchWeb.Security.RequestLimits` out, not the rest (2026-08-13)
+
+**Decision: extract only the genuinely self-contained cluster; leave the coupled remainder unsplit.**
+`HarchWeb.Security` (763 lines, 48 exports) was over this document's 40-export module-health
+threshold, worsened marginally by AF's new `RequestConcurrencyLimit` exports. Unlike AK's earlier
+blocked "naive split" attempt (two dispatch paths shared private matching primitives with no clean
+boundary), this module's exports fall into four natural concern clusters: request limits, response
+security headers/CORS/CSP, request-context/observability, and path/redirect. Investigated with real
+call-graph tracing (not export-name grouping) before writing any code: the request-limits cluster
+(`RequestByteLimit`, `RequestConcurrencyLimit`, `RequestHeadLimits`, `RequestHeaderCountLimit`,
+`RequestItemCountLimit`, `RequestTimeoutSeconds`, `RequestTransportLimits`,
+`RequestHeadLimitFailure`, `validateRequestHead`, and their private helpers) never references
+`RequestPolicyConfig` or anything in the other three clusters — a genuinely closed subgraph. The
+other three clusters are not: response-header construction calls `requestScheme` (request-context),
+and path/redirect handling calls the private forwarded-header trust chain that also backs
+request-context extraction, so splitting those three apart would mean either widening an
+internal-only export surface or duplicating logic across the split — the same "relocation, not a
+genuine shrink" trap AK's investigation already named. Per this document's "extend an existing
+boundary" and missing-capability discipline, the correct move was extracting only the closed
+subgraph, not forcing a three-way split to hit a metric.
+
+Extracted `HarchWeb.Security.RequestLimits` as an `other-modules` entry (not independently
+importable — matching `HarchWeb.Api.Endpoint`'s precedent of an internal module re-exported by its
+public facade). `HarchWeb.Security` re-exports it wholesale via `module HarchWeb.Security.RequestLimits`
+in its own export list, so no existing consumer's import list changed at all — this is purely an
+internal reorganization, not a public API change, and needed no `CHANGELOG.md` entry for that reason.
+`HarchWeb.Security` is now 556 lines / 30 exports; `HarchWeb.Security.RequestLimits` is 243 lines / 19
+exports. Full CI-equivalent pipeline passed with zero test changes, since the moved code's behavior
+and existing coverage carried over unchanged.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
