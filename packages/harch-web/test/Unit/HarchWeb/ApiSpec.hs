@@ -800,6 +800,83 @@ spec =
               :| [apiRouteResponseBody response `shouldBe` "stream too large"]
           )
 
+    describe "apiRouteDefinitionWithContext" $ do
+      let contextAwareEndpointDefinition =
+            apiRouteDefinitionWithContext
+              ApiGet
+              (pure ())
+              ApiNoRequestBody
+              (textResponseEncoder :| [])
+              (\contextValue _endpointRequest -> pure (Right (apiResponse ("context:" <> contextValue))))
+              (\() -> apiResponse "unreachable")
+          failingContextAwareEndpointDefinition =
+            apiRouteDefinitionWithContext
+              ApiGet
+              (pure ())
+              ApiNoRequestBody
+              (textResponseEncoder :| [])
+              (const (const (pure (Left ()))))
+              (\() -> (apiResponse "context-aware domain failure") {apiEndpointResponseStatus = HttpTypes.status422})
+          runWithContext contextValue request =
+            routeResponse contextAwareEndpointDefinition request (RouteRequest () contextValue)
+
+      it "declares its endpoint's own method and no navigation label, unaffected by context" $
+        expectAll
+          ( (routeMethods contextAwareEndpointDefinition `shouldBe` [HarchWeb.RouteGet])
+              :| [routeNavigationLabel contextAwareEndpointDefinition `shouldBe` Nothing]
+          )
+
+      it "passes the route's own resolved context to the handler instead of the template endpoint's" $ do
+        firstResponse <- runWithContext "first" Wai.defaultRequest
+        secondResponse <- runWithContext "second" Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus firstResponse `shouldBe` HttpTypes.status200)
+              :| [ apiRouteResponseBody firstResponse `shouldBe` "context:first",
+                   apiRouteResponseBody secondResponse `shouldBe` "context:second"
+                 ]
+          )
+
+      it "interprets an expected domain failure at the endpoint boundary just like apiRouteDefinition" $ do
+        response <- routeResponse failingContextAwareEndpointDefinition Wai.defaultRequest (RouteRequest () ())
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status422)
+              :| [apiRouteResponseBody response `shouldBe` "context-aware domain failure"]
+          )
+
+    describe "apiRouteDefinitionWithContextNeverFailing" $ do
+      let neverFailingContextAwareEndpointDefinition =
+            apiRouteDefinitionWithContextNeverFailing
+              ApiPost
+              (requiredField (queryField "greeting" apiTextValue))
+              (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) 64 [textBodyDecoder])
+              (textResponseEncoder :| [])
+              ( \contextValue endpointRequest ->
+                  pure
+                    ( apiResponse
+                        (contextValue <> ":" <> apiEndpointRequestFields endpointRequest <> ":" <> apiEndpointRequestBody endpointRequest)
+                    )
+              )
+          runWithContext contextValue request =
+            routeResponse neverFailingContextAwareEndpointDefinition request (RouteRequest () contextValue)
+
+      it "declares its endpoint's own method and no navigation label, unaffected by context" $
+        expectAll
+          ( (routeMethods neverFailingContextAwareEndpointDefinition `shouldBe` [HarchWeb.RoutePost])
+              :| [routeNavigationLabel neverFailingContextAwareEndpointDefinition `shouldBe` Nothing]
+          )
+
+      it "passes the route's own resolved context and decoded fields and body straight to the handler's response, with no domain failure to interpret" $ do
+        firstRequest <- requestWithBody [] ["world"]
+        secondRequest <- requestWithBody [] ["there"]
+        firstResponse <- runWithContext "first" firstRequest {Wai.queryString = [("greeting", Just "hello")]}
+        secondResponse <- runWithContext "second" secondRequest {Wai.queryString = [("greeting", Just "hi")]}
+        expectAll
+          ( (apiRouteResponseStatus firstResponse `shouldBe` HttpTypes.status200)
+              :| [ apiRouteResponseBody firstResponse `shouldBe` "first:hello:world",
+                   apiRouteResponseBody secondResponse `shouldBe` "second:hi:there"
+                 ]
+          )
+
     describe "apiHttpResponseToProtocolResponse" $ do
       it "preserves a matched response's status, headers, and strict protocol bytes" $
         apiHttpResponseToProtocolResponse

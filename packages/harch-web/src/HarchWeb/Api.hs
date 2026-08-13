@@ -42,6 +42,8 @@ module HarchWeb.Api
     apiRouteEndpointAt,
     apiRouteEndpointPath,
     apiRouteDefinition,
+    apiRouteDefinitionWithContext,
+    apiRouteDefinitionWithContextNeverFailing,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     matchedApiRouteEndpointOrDie,

@@ -618,12 +618,70 @@ parameter to receive it even if it weren't discarded — so an endpoint composed
 anything the route's own codec already parsed (here, `web-api`'s locale, derived from a URL prefix,
 not from any query/header/cookie field `HarchWeb.Api.Request`'s `RequestCodec` can decode). Per the
 missing-capability protocol this is option 1 (small, general, squarely within
-`HarchWeb.Api.Endpoint`'s own area) — but per this document's ban on speculative/unused abstractions,
-adding that context-threading primitive without landing its first real consumer in the same change
-would itself be the anti-pattern this document warns against. Not implemented in this pass; recorded
-here so the next attempt lands the primitive and its `web-api` consumer together, as one task-sized,
-fully-tested change against `web-api`'s complete existing suite — not as two separate risks. See the
-AC entry in `TASKS.md` for the full investigation.
+`HarchWeb.Api.Endpoint`'s own area).
+
+**Implemented (2026-08-13): `apiRouteDefinitionWithContext` and its `web-api` consumers landed
+together.** `/api/status` and `/api/second` now dispatch through `HarchWeb.Api.Endpoint`'s typed
+endpoint boundary instead of `WebApi.Response`'s hand-rolled `ApiRoute` dispatch; `WebApi.App`
+special-cases only these two routes in `buildAppRouteDefinition`, leaving the old dispatch in place
+(unmodified in behavior, only newly exporting a few pure helpers for reuse) since it remains the
+genuine path for `Api ApiNotFound`. This shipped as the complete slice the earlier entry described —
+not a narrower one — but it took three implementation passes to reach a genuinely 100%-covered,
+non-fake-strictness state, each catching a different way "looks precise" code traps this repository's
+coverage gate rather than merely being undertested:
+
+1. **First design:** `apiRouteDefinitionWithContext` built a full `ApiRouteEndpoint` from a
+   "template" value with a placeholder handler field, overridden via record update before running it.
+   Since `ApiRouteEndpoint`'s fields are lazy, the placeholder was never forced — genuinely dead code,
+   not a testing gap. **Fix:** redesigned to call the endpoint's runtime dispatch logic
+   (`runApiRouteEndpointHandler`, itself extracted from `runApiRouteEndpoint`) directly with exactly
+   the pieces it needs, never constructing a placeholder-bearing value at all.
+
+2. **`Data.Void`/`absurd` for a handler that cannot fail:** `/api/status`'s handler always succeeds,
+   so its first cut modeled that with `Void`/`absurd` — the standard "make invalid states
+   unrepresentable" idiom. This type-checks and looks precise, but traps the coverage gate: `either`
+   never evaluates its first argument on a `Right`, so a handler that only ever returns `Right` never
+   forces the failure-response value, and when that value's type is `Void`, no test can force it any
+   other way either — no `Left` of type `Void` can ever be constructed. This is not a testing gap; the
+   expression is permanently unreachable by construction, in any module, no matter how the code is
+   phrased. **Fix:** added a second, narrower framework primitive,
+   `apiRouteDefinitionWithContextNeverFailing`, whose handler type has no `Either`/failure-response
+   parameter at all — so there is no unreachable expression to leave dead. Its runtime logic
+   (`runApiRouteEndpointHandlerNeverFailing`) shares the request-decoding half
+   (`runDecodedApiRequest`, extracted once, used by both) with the `Either`-based path, differing only
+   in how a decoded request becomes a final response.
+
+3. **CAF-sharing across separate top-level definitions:** even after (1) and (2), the coverage gate
+   still failed intermittently as different pieces landed, each time on a bare literal
+   (`[HarchWeb.RouteGet]`, `pure ()` for a no-fields `RequestCodec`) written identically in two
+   separate places (`WebApi.Route`'s `Page _`/`Api _` branches; `statusApiRouteDefinition` and
+   `secondApiRouteDefinition`'s field codecs). GHC shares such literals into one CAF, and only one of
+   the two call sites' HPC ticks ever fires even though both genuinely execute — the same pattern
+   already documented for `HarchWeb.Action` literals. `$!`/`seq` forcing (the technique that closed
+   that earlier case) does not generalize here: HLint correctly flags forcing an already-WHNF `()` or
+   list literal as redundant, so using it would trade one gate failure for another. **Fix:** removed
+   the duplication instead of forcing around it — factored the shared `pure ()` into one named,
+   exported `noApiRequestFields` binding used by both endpoints. One genuinely remaining case (the
+   *decoded* `()` value itself, produced by running that codec) was never forced by any test because
+   neither handler reads its decoded fields and `case ... of Just decodedFields -> ...` only forces
+   the `Just`, not its contents — closed with a direct Unit test that calls `runRequestCodec
+   noApiRequestFields ...` and asserts on the result, forcing it through `Eq`, matching this
+   codebase's other direct-`RequestCodec`-exercise tests rather than routing through the full endpoint
+   pipeline where nothing reads the value.
+
+Investigating the *last* apparent gap (`WebApi.Route`'s `Api _ -> [HarchWeb.RouteGet]`) surfaced a
+fourth, different lesson worth its own note: it looked like more CAF-sharing but wasn't.
+`HarchWeb.buildSiteApplication` overrides a `Site`'s route codec so its `routeMethods` derives from
+each route's *live* `RouteDefinition` (`routeMethods . siteRouteDefinition site`) rather than the
+codec's own declaration — and `buildAppRouteDefinition` now special-cases `StatusApiRoute`/
+`SecondApiRoute` before ever reaching the branch that would consult `WebApi.Route`'s own
+`routeMethods`. A test asserting on `HarchWeb.routeMethods (HarchWeb.routeCodec pureApplication) ...`
+for those two routes was therefore exercising a *different, coincidentally same-valued* code path,
+not `WebApi.Route`'s own declaration — no amount of restructuring the declaration itself could have
+fixed that. The fix was testing `WebApi.Route.routeCodec` directly, bypassing the application-level
+override, so the assertion exercises the declaration it actually names.
+
+See the AC entry in `TASKS.md` for the full investigation and final numbers.
 
 ### Follow-up decision — AF: concurrent-in-flight-request admission gate (2026-08-13)
 

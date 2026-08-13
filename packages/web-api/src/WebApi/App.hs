@@ -31,6 +31,7 @@ import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
 import WebApi.AccountPages (AccountAction, accountActions, handleAccountAction)
+import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.Shell (buildAppPageShellConfig)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
@@ -129,12 +130,16 @@ buildAppRouteDefinition ::
   AppRoute ->
   Site.RouteDefinition AppRoute AppRequestContext
 buildAppRouteDefinition config pageRepository accountWorkflow route =
-  Site.RouteDefinition
-    { Site.routeNavigationLabel = routeNavigationLabel route,
-      Site.routeMethods = HarchWeb.routeMethods routeCodec route,
-      Site.routeResponse =
-        \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
-    }
+  case route of
+    StatusApiRoute -> statusApiRouteDefinition
+    SecondApiRoute -> secondApiRouteDefinition pageRepository
+    _ ->
+      Site.RouteDefinition
+        { Site.routeNavigationLabel = routeNavigationLabel route,
+          Site.routeMethods = HarchWeb.routeMethods routeCodec route,
+          Site.routeResponse =
+            \_ -> selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow
+        }
 
 routeNavigationLabel :: AppRoute -> Maybe Text.Text
 routeNavigationLabel route = lookup route navigationLabels

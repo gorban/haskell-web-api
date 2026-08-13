@@ -36,6 +36,8 @@ module HarchWeb.Api.Endpoint
     apiRouteEndpointAt,
     apiRouteEndpointPath,
     apiRouteDefinition,
+    apiRouteDefinitionWithContext,
+    apiRouteDefinitionWithContextNeverFailing,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     matchedApiRouteEndpointOrDie,
@@ -232,6 +234,99 @@ apiRouteDefinition endpoint =
       routeResponse = \request _ -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
     }
 
+-- | Like 'apiRouteEndpoint' composed with 'apiRouteDefinition', but the
+-- handler additionally receives the route's own already-resolved
+-- @context@ (the same value an application's other 'RouteDefinition's
+-- already see via 'HarchWeb.requestContext') alongside the decoded
+-- fields\/body every handler already gets. Every other declaration (method,
+-- field decoding, body consumer, encoders, failure rendering) means exactly
+-- what it means for 'apiRouteEndpoint'; there is no path parameter here
+-- (unlike 'apiRouteEndpoint', which defaults to one via 'at') because
+-- dispatch runs 'runApiRouteEndpointHandler' directly rather than
+-- constructing an 'ApiRouteEndpoint' — see below for why.
+--
+-- Exists for a declared reason an application-specific handler sometimes
+-- has: data only available from the route's context, not from any
+-- query\/header\/cookie field a 'RequestCodec' can decode — e.g. a locale
+-- derived from a URL prefix during route parsing. Introduced 2026-08-13 as
+-- the AC decision record's small, general, context-threading primitive;
+-- see @docs/design-guidance.md@ for why this shape (a context-parameterized
+-- handler passed straight to the same runtime dispatch logic
+-- 'ApiRouteEndpoint' itself uses, rather than adding a @context@ type
+-- parameter to 'ApiRouteEndpoint', which would have rippled through every
+-- existing typed-endpoint declaration in this repository for a capability
+-- only one caller needs so far) is preferred. This function went through
+-- two earlier designs that each wrapped a full 'ApiRouteEndpoint' around
+-- the context-aware handler — first via a placeholder handler field
+-- overridden by record update, then via a fabricated @'at' ""@ path and a
+-- @method@ value duplicated only to satisfy the constructor — and this
+-- module's own coverage run caught both as genuinely dead: 'ApiRouteEndpoint's
+-- @path@\/@method@ fields are read only by the family-matching functions
+-- below, never by 'runApiRouteEndpointHandler', so constructing a full
+-- endpoint here only to run it once, one way, always left some field
+-- unread. Calling 'runApiRouteEndpointHandler' with exactly what it uses
+-- has no such field to leave dead.
+apiRouteDefinitionWithContext ::
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (context -> ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  RouteDefinition route context
+apiRouteDefinitionWithContext method fields body encoders contextAwareHandler failureResponse =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMethods = [toRouteMethod method],
+      routeResponse = \request routeRequest ->
+        HarchWeb.ProtocolResponseResult
+          <$> runApiRouteEndpointHandler
+            fields
+            body
+            encoders
+            (contextAwareHandler (HarchWeb.requestContext routeRequest))
+            failureResponse
+            request
+    }
+
+-- | Like 'apiRouteDefinitionWithContext', but for a handler that cannot
+-- produce a domain failure at all — no @Either@, no failure-response
+-- argument. Prefer this whenever a handler's own body always resolves to a
+-- response value, rather than reaching for 'apiRouteDefinitionWithContext'
+-- with @Data.Void.Void@ and @Data.Void.absurd@: that combination type-checks
+-- and looks precise, but is a trap under this repository's 100%-coverage
+-- gate. @either@ only evaluates its first argument on a @Left@, so a
+-- handler that only ever returns @Right@ never forces the failure-response
+-- value — and when that value's own type is @Void@, no test can force it
+-- differently, because no @Left@ of type @Void@ can ever be constructed
+-- either. That is not a testing gap an extra test can close; it is a
+-- permanently unreachable expression by construction, discovered while
+-- migrating @web-api@'s @\/api\/status@ onto 'apiRouteDefinitionWithContext'
+-- (see the AC decision record in @docs/design-guidance.md@). This sibling
+-- avoids the trap at its root: a handler type with no failure case has no
+-- failure-response parameter to leave dead, so there is nothing here for
+-- any test to reach and nothing to force.
+apiRouteDefinitionWithContextNeverFailing ::
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (context -> ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  RouteDefinition route context
+apiRouteDefinitionWithContextNeverFailing method fields body encoders contextAwareHandler =
+  RouteDefinition
+    { routeNavigationLabel = Nothing,
+      routeMethods = [toRouteMethod method],
+      routeResponse = \request routeRequest ->
+        HarchWeb.ProtocolResponseResult
+          <$> runApiRouteEndpointHandlerNeverFailing
+            fields
+            body
+            encoders
+            (contextAwareHandler (HarchWeb.requestContext routeRequest))
+            request
+    }
+
 -- | Adapt a heterogeneous endpoint table into one route family whose route
 -- identity is a matched endpoint's declared 'ApiPath'. Combine the result
 -- with 'HarchWeb.combineRouteCodecs' alongside an application's other route
@@ -305,16 +400,36 @@ matchedApiRouteEndpointOrDie endpoints requestPath requestMethod =
         methodNotDeclared = error ("HarchWeb.Api.Endpoint: " <> Text.unpack requestMethod <> " is not declared at " <> Text.unpack requestPath)
 
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
-runApiRouteEndpoint endpoint request =
-  decodeBody (apiRouteEndpointBody endpoint)
+runApiRouteEndpoint endpoint =
+  runApiRouteEndpointHandler
+    (apiRouteEndpointFields endpoint)
+    (apiRouteEndpointBody endpoint)
+    (apiRouteEndpointEncoders endpoint)
+    (apiRouteEndpointHandler endpoint)
+    (apiRouteEndpointFailureResponse endpoint)
+
+-- | The runtime dispatch 'ApiRouteEndpoint' declarations share: decode the
+-- declared body and fields, then hand both to a continuation that already
+-- knows how to turn them into a final response — whether that continuation
+-- interprets an 'Either' domain failure ('runApiRouteEndpointHandler') or
+-- has no failure case to interpret at all
+-- ('runApiRouteEndpointHandlerNeverFailing').
+runDecodedApiRequest ::
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  (fields -> body -> IO ProtocolResponse) ->
+  Wai.Request ->
+  IO ProtocolResponse
+runDecodedApiRequest fields body onDecoded request =
+  decodeBody body
   where
     requestData = apiRequestDataFromWaiRequest request
 
     decodeBody requestBody =
       case requestBody of
-        ApiNoRequestBody -> decodeInitialFields (`runHandler` ())
+        ApiNoRequestBody -> decodeInitialFields (`onDecoded` ())
         ApiBufferedRequestBody missingContentTypePolicy maximumBytes decoders -> do
-          decodeInitialFields (decodeBufferedBody missingContentTypePolicy maximumBytes decoders . runHandler)
+          decodeInitialFields (decodeBufferedBody missingContentTypePolicy maximumBytes decoders . onDecoded)
         ApiUrlEncodedFormRequestBody missingContentTypePolicy maximumBytes maximumFields ->
           decodeBufferedBody
             missingContentTypePolicy
@@ -327,16 +442,16 @@ runApiRouteEndpoint endpoint request =
     decodeInitialFieldsWithBody newBody =
       decodeInitialFields $ \decodedFields -> do
         bodyValue <- newBody
-        runHandler decodedFields bodyValue
+        onDecoded decodedFields bodyValue
 
     decodeInitialFields onDecodedFields =
-      case runRequestCodec (apiRouteEndpointFields endpoint) requestData of
+      case runRequestCodec fields requestData of
         ([], Just decodedFields) -> onDecodedFields decodedFields
         _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
 
     decodeFormFields decodedForm fieldsData =
-      case runRequestCodec (apiRouteEndpointFields endpoint) fieldsData of
-        ([], Just decodedFields) -> runHandler decodedFields decodedForm
+      case runRequestCodec fields fieldsData of
+        ([], Just decodedFields) -> onDecoded decodedFields decodedForm
         _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
 
     decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
@@ -349,9 +464,39 @@ runApiRouteEndpoint endpoint request =
             ApiMalformedBody -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request body is malformed.")
             ApiDecodedBody decodedBody -> onDecodedBody decodedBody
 
+-- | Takes exactly the pieces this needs rather than a full 'ApiRouteEndpoint'
+-- so a caller with no meaningful path\/method (like
+-- 'apiRouteDefinitionWithContext') has no unused field to construct.
+runApiRouteEndpointHandler ::
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  Wai.Request ->
+  IO ProtocolResponse
+runApiRouteEndpointHandler fields body encoders handler failureResponse request =
+  runDecodedApiRequest fields body runHandler request
+  where
     runHandler decodedFields decodedBody = do
-      handlerResult <- apiRouteEndpointHandler endpoint (ApiEndpointRequest decodedFields decodedBody)
-      pure (renderEndpointResult endpoint request (either (apiRouteEndpointFailureResponse endpoint) id handlerResult))
+      handlerResult <- handler (ApiEndpointRequest decodedFields decodedBody)
+      pure (renderEndpointResult encoders request (either failureResponse id handlerResult))
+
+-- | Like 'runApiRouteEndpointHandler', for a handler with no domain failure
+-- to interpret; see 'apiRouteDefinitionWithContextNeverFailing'.
+runApiRouteEndpointHandlerNeverFailing ::
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  Wai.Request ->
+  IO ProtocolResponse
+runApiRouteEndpointHandlerNeverFailing fields body encoders handler request =
+  runDecodedApiRequest fields body runHandler request
+  where
+    runHandler decodedFields decodedBody = do
+      responseValue <- handler (ApiEndpointRequest decodedFields decodedBody)
+      pure (renderEndpointResult encoders request responseValue)
 
 newApiStreamingRequest :: Int -> Wai.Request -> IO ApiStreamingRequest
 newApiStreamingRequest maximumBytes request =
@@ -386,22 +531,22 @@ acceptHeader request =
     [value] -> Just value
     _ -> Nothing
 
-renderEndpointResult :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> ApiResponse response -> ProtocolResponse
-renderEndpointResult endpoint request responseValue =
+renderEndpointResult :: NonEmpty (ApiResponseEncoder response) -> Wai.Request -> ApiResponse response -> ProtocolResponse
+renderEndpointResult encoders request responseValue =
   case selectContentTypeRepresentation declaredContentTypes (acceptHeader request) of
     NoAcceptableContentTypeRepresentation -> apiFailureProtocolResponse HttpTypes.status406 "API response has no acceptable representation."
     SelectedContentTypeRepresentation selectedContentType ->
       ProtocolResponse
         { protocolResponseStatus = apiEndpointResponseStatus responseValue,
-          protocolResponseHeaders = endpointProtocolResponseHeaders endpoint responseValue selectedEncoder,
+          protocolResponseHeaders = endpointProtocolResponseHeaders encoders responseValue selectedEncoder,
           protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)),
           protocolResponseObservabilityAttributes = apiEndpointResponseObservabilityAttributes responseValue,
           protocolResponseLogEntries = apiEndpointResponseLogEntries responseValue
         }
       where
-        selectedEncoder = responseEncoderFor selectedContentType (apiRouteEndpointEncoders endpoint)
+        selectedEncoder = responseEncoderFor selectedContentType encoders
   where
-    declaredContentTypes = apiResponseEncoderContentType <$> apiRouteEndpointEncoders endpoint
+    declaredContentTypes = apiResponseEncoderContentType <$> encoders
 
 responseEncoderFor :: ApiContentType -> NonEmpty (ApiResponseEncoder response) -> ApiResponseEncoder response
 responseEncoderFor selectedContentType encoders =
@@ -411,16 +556,16 @@ responseEncoderFor selectedContentType encoders =
       | apiResponseEncoderContentType candidate == selectedContentType = candidate
       | otherwise = fallback
 
-endpointResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -> ApiResponse response -> [(Text, Text)]
-endpointResponseHeaders endpoint responseValue
-  | length (apiRouteEndpointEncoders endpoint) > 1 = addVaryAccept (apiEndpointResponseHeaders responseValue)
+endpointResponseHeaders :: NonEmpty (ApiResponseEncoder response) -> ApiResponse response -> [(Text, Text)]
+endpointResponseHeaders encoders responseValue
+  | length encoders > 1 = addVaryAccept (apiEndpointResponseHeaders responseValue)
   | otherwise = apiEndpointResponseHeaders responseValue
 
-endpointProtocolResponseHeaders :: ApiRouteEndpoint fields body domainFailure response -> ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
-endpointProtocolResponseHeaders endpoint responseValue encoder =
+endpointProtocolResponseHeaders :: NonEmpty (ApiResponseEncoder response) -> ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
+endpointProtocolResponseHeaders encoders responseValue encoder =
   ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))
     : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value)
-      | (name, value) <- endpointResponseHeaders endpoint responseValue
+      | (name, value) <- endpointResponseHeaders encoders responseValue
       ]
 
 protocolResponseBodyFor :: ApiEncodedResponseBody -> ProtocolResponseBody

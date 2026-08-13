@@ -24,6 +24,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
+import HarchWeb.Api (apiRequestDataFromWaiRequest, runRequestCodec)
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
@@ -54,6 +55,7 @@ import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
+import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
@@ -334,6 +336,21 @@ apiNotFoundRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = ApiNotFoundRoute,
       HarchWeb.requestContext = defaultRequestContext
+    }
+
+-- | @\/api\/status@ and @\/api\/second@ dispatch through
+-- "HarchWeb.Api.Endpoint"'s typed boundary now, so a successful response is
+-- a 'HarchWeb.ProtocolResponseResult' wrapping this shape rather than the
+-- 'HarchWeb.BodyResponse' the shared page\/API selector still renders for
+-- every other route.
+expectedApiJsonProtocolResponse :: ByteString.ByteString -> HarchWeb.ProtocolResponse
+expectedApiJsonProtocolResponse jsonBody =
+  HarchWeb.ProtocolResponse
+    { HarchWeb.protocolResponseStatus = Http.status200,
+      HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json")],
+      HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes jsonBody,
+      HarchWeb.protocolResponseObservabilityAttributes = [],
+      HarchWeb.protocolResponseLogEntries = []
     }
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -2454,7 +2471,7 @@ spec = do
         HarchWeb.renderResponse
           runtimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
-          >>= (`shouldSatisfy` \case HarchWeb.BodyResponse _ -> True; _ -> False)
+          >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
         HarchWeb.reportConnectionObservability
           runtimeApplication
           (Observability.buildConnectionObservability "CONNECTION runtime-account-workflow-test" [])
@@ -8501,22 +8518,81 @@ spec = do
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
       HarchWeb.routeMethods codec NotFoundRoute `shouldBe` []
+      -- 'pureApplication's own codec (above) has its 'HarchWeb.routeMethods'
+      -- overridden by 'HarchWeb.buildSiteApplication' to derive from each
+      -- route's live 'HarchWeb.RouteDefinition' instead — which, for
+      -- 'StatusApiRoute'/'SecondApiRoute', is now 'WebApi.App's own
+      -- special-cased typed endpoint 'RouteDefinition', not this codec's
+      -- 'Api _' declaration. Test 'WebApi.Route.routeCodec' directly for
+      -- those two so this assertion exercises the declaration it names,
+      -- not a same-valued but different code path.
+      HarchWeb.routeMethods WebApi.Route.routeCodec ApiNotFoundRoute `shouldBe` []
+      HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` [HarchWeb.RouteGet]
 
     it "stores the same response-selection behavior used by direct response tests" $ do
       expectedHomeResponse <- selectResponse defaultAppConfig homeRequest
       expectedSecondResponse <- selectResponse defaultAppConfig secondRequest
       expectedSpacesResponse <- selectResponse defaultAppConfig spacesRequest
-      expectedApiStatusResponse <- selectResponse defaultAppConfig apiStatusRequest
-      expectedApiSecondResponse <- selectResponse defaultAppConfig apiSecondRequest
       expectedNotFoundResponse <- selectResponse defaultAppConfig notFoundRequest
       expectedApiNotFoundResponse <- selectResponse defaultAppConfig apiNotFoundRequest
       HarchWeb.renderResponse pureApplication homeRequest `shouldReturn` expectedHomeResponse
       HarchWeb.renderResponse pureApplication secondRequest `shouldReturn` expectedSecondResponse
       HarchWeb.renderResponse pureApplication spacesRequest `shouldReturn` expectedSpacesResponse
-      HarchWeb.renderResponse pureApplication apiStatusRequest `shouldReturn` expectedApiStatusResponse
-      HarchWeb.renderResponse pureApplication apiSecondRequest `shouldReturn` expectedApiSecondResponse
       HarchWeb.renderResponse pureApplication notFoundRequest `shouldReturn` expectedNotFoundResponse
       HarchWeb.renderResponse pureApplication apiNotFoundRequest `shouldReturn` expectedApiNotFoundResponse
+
+    it "dispatches /api/status and /api/second through the typed endpoint boundary, not the shared page/API selector" $ do
+      apiStatusResult <- HarchWeb.renderResponse pureApplication apiStatusRequest
+      apiSecondResult <- HarchWeb.renderResponse pureApplication apiSecondRequest
+      expectAll
+        ( (apiStatusResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"status\":\"ok\",\"locale\":\"en\"}"))
+            :| [apiSecondResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}")]
+        )
+
+    it "maps a database failure at /api/second's typed endpoint boundary into the same explicit API error diagnostics the shared page/API selector reports" $ do
+      let failingApplication =
+            buildAppWithDatabase
+              defaultAppConfig
+              ( buildSeededPageRepository
+                  DatabaseSeed
+                    { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                      spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
+                      englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                      spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
+                    }
+              )
+      apiSecondResult <- HarchWeb.renderResponse failingApplication apiSecondRequest
+      apiSecondResult
+        `shouldBe` HarchWeb.ProtocolResponseResult
+          HarchWeb.ProtocolResponse
+            { HarchWeb.protocolResponseStatus = Http.status503,
+              HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json")],
+              HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes "{\"error\":\"second-page-unavailable\"}",
+              HarchWeb.protocolResponseObservabilityAttributes =
+                [ Observability.ObservabilityAttribute
+                    { Observability.attributeName = "error.type",
+                      Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.failure.code",
+                      Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.route",
+                      Observability.attributeValue = Observability.TextAttribute "/second"
+                    },
+                  Observability.ObservabilityAttribute
+                    { Observability.attributeName = "app.surface",
+                      Observability.attributeValue = Observability.TextAttribute "api"
+                    }
+                ],
+              HarchWeb.protocolResponseLogEntries =
+                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
+            }
+
+    it "declares no fields for /api/status and /api/second, decoding an empty request to ()" $
+      runRequestCodec noApiRequestFields (apiRequestDataFromWaiRequest Wai.defaultRequest) `shouldBe` ([], Just ())
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["es", "second"])
@@ -8643,13 +8719,15 @@ spec = do
     it "can grow from page responses to API responses without changing route matching" $ do
       renderedResponse <- HarchWeb.renderResponse pureApplication apiSecondRequest
       case renderedResponse of
-        HarchWeb.BodyResponse body -> HarchWeb.responseBody body `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
-        HarchWeb.PageResponse _ -> expectationFailure "expected body response"
-        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
-        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
-        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
-        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
-        HarchWeb.ProtocolResponseResult _ -> expectationFailure "expected body response"
+        HarchWeb.ProtocolResponseResult protocolResponse ->
+          protocolResponseStrictBody protocolResponse
+            `shouldBe` "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}"
+        HarchWeb.PageResponse _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
 
   describe "buildRuntimeApp" $ do
     it "builds the runtime database effect from the environment config" $ do
@@ -8679,15 +8757,15 @@ spec = do
               runtimeEnvironmentConfig
       runtimeResponse <- HarchWeb.renderResponse runtimeApplication apiSecondRequest
       case runtimeResponse of
-        HarchWeb.BodyResponse body ->
-          HarchWeb.responseBody body
+        HarchWeb.ProtocolResponseResult protocolResponse ->
+          protocolResponseStrictBody protocolResponse
             `shouldBe` "{\"summary\":\"runtime:runtime_db:runtime_user\",\"highlights\":[\"configured-from-environment\"]}"
-        HarchWeb.PageResponse _ -> expectationFailure "expected body response"
-        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected body response"
-        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected body response"
-        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected body response"
-        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected body response"
-        HarchWeb.ProtocolResponseResult _ -> expectationFailure "expected body response"
+        HarchWeb.PageResponse _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.PageResponseWithMetadata _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.RedirectResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.ClientActionBodyResponse _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.EventStreamResponse _ _ -> expectationFailure "expected an API protocol response"
+        HarchWeb.BodyResponse _ -> expectationFailure "expected an API protocol response"
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability
@@ -9023,6 +9101,16 @@ spec = do
                   `shouldContain` "Failed to load app startup config: AppStartupConfigParseError (InvalidConfigValue \"LISTENER_0_PORT\" \"0\")"
               Right () ->
                 expectationFailure "expected run to fail on invalid runtime startup config"
+
+-- | 'HarchWeb.ProtocolResponseBody' has no 'Eq' instance of its own (its
+-- streaming variant cannot support one), so extract the strict bytes a
+-- typed endpoint's non-streaming response always carries instead of
+-- comparing the body value directly.
+protocolResponseStrictBody :: HarchWeb.ProtocolResponse -> ByteString.ByteString
+protocolResponseStrictBody protocolResponse =
+  case HarchWeb.protocolResponseBody protocolResponse of
+    HarchWeb.ProtocolResponseBytes bodyBytes -> bodyBytes
+    HarchWeb.ProtocolResponseStream _ -> error "expected a strict protocol response body"
 
 stripVolatileDatabaseTimingResponse :: HarchWeb.Response route context -> HarchWeb.Response route context
 stripVolatileDatabaseTimingResponse response =
