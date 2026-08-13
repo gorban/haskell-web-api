@@ -471,6 +471,26 @@ migration could preserve `web-api`'s existing DB-failure observability, not mere
 the same mechanical rewrite. Migrating `web-api` remains tracked as part of AC in `TASKS.md`; until
 then, its own hand-rolled dispatch is the only path it actually uses.
 
+### Follow-up decision — typed endpoint observability attributes and log entries (2026-08-13)
+
+**Decision: add the primitive to `ApiResponse` (option 1), the small-general-framework-owned choice
+from "When implementation hits a missing framework capability."** The gap identified just above —
+`HarchWeb.Api.Endpoint.renderEndpointResult` hardcoded `protocolResponseObservabilityAttributes = []`
+and `protocolResponseLogEntries = []`, so a typed endpoint handler had no way to attach either — is
+small, squarely within `HarchWeb.Api.Response`'s existing ownership of what an `ApiResponse` carries,
+and general: every typed endpoint that wants request-scoped diagnostics (a database failure code, a
+downstream timeout) needs the same capability `HarchWeb.Server.Response.ResponseBody` already gives
+page routes. `ApiResponse` gained `apiEndpointResponseObservabilityAttributes ::
+[Observability.ObservabilityAttribute]` and `apiEndpointResponseLogEntries :: [Text]`, defaulted to
+`[]` by the `apiResponse` smart constructor and overridden with a record update exactly like
+`apiEndpointResponseHeaders` already is; `renderEndpointResult` now forwards both onto the rendered
+`ProtocolResponse` instead of discarding them. Both fields are private diagnostics carried alongside
+the public response, never inside its encoded body — the same separation `ResponseBody` already
+enforces for pages, so a handler cannot accidentally leak them to a client by construction (they have
+no encoder). This closes the specific capability gap named above; migrating `web-api`'s
+`/api/second` onto the typed endpoint boundary remains separate, larger follow-up work (it also needs
+the family-registry migration itself, not just this capability).
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
@@ -487,7 +507,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` is migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it additionally needs a way for a typed endpoint's response to carry observability attributes/log entries, which `HarchWeb.Api.Endpoint.renderEndpointResult` does not yet expose. Migrating `web-api` is the remaining AC follow-up work. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies), closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`), and the compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` | Implemented (partial — see AC) | `examples/custom-api` is migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |

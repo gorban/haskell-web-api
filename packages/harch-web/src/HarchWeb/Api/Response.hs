@@ -38,6 +38,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
 import HarchWeb.Api.MediaType
+import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as HttpTypes
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -66,18 +67,29 @@ data ApiBodyOutcome request
 
 -- | A typed endpoint result before its representation is selected. Status and
 -- headers are application data; encoding remains declared by the endpoint.
+-- Observability attributes and log entries are private diagnostics carried
+-- alongside the public response rather than part of it: they reach the
+-- server's existing 'HarchWeb.Server.Response.ProtocolResponse' observability
+-- fields, never the response body, matching how a page's own
+-- 'HarchWeb.Server.Response.ResponseBody' already carries the same two
+-- fields for the non-API dispatch path.
 data ApiResponse response = ApiResponse
   { apiEndpointResponseStatus :: HttpTypes.Status,
     apiEndpointResponseHeaders :: [(Text, Text)],
+    apiEndpointResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    apiEndpointResponseLogEntries :: [Text],
     apiEndpointResponseValue :: response
   }
 
--- | Construct an ordinary successful API result without application headers.
+-- | Construct an ordinary successful API result without application headers
+-- or private diagnostics.
 apiResponse :: response -> ApiResponse response
 apiResponse responseValue =
   ApiResponse
     { apiEndpointResponseStatus = HttpTypes.status200,
       apiEndpointResponseHeaders = [],
+      apiEndpointResponseObservabilityAttributes = [],
+      apiEndpointResponseLogEntries = [],
       apiEndpointResponseValue = responseValue
     }
 

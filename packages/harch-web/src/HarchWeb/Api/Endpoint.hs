@@ -401,8 +401,8 @@ renderEndpointResult endpoint request responseValue =
         { protocolResponseStatus = apiEndpointResponseStatus responseValue,
           protocolResponseHeaders = endpointProtocolResponseHeaders endpoint responseValue selectedEncoder,
           protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)),
-          protocolResponseObservabilityAttributes = [],
-          protocolResponseLogEntries = []
+          protocolResponseObservabilityAttributes = apiEndpointResponseObservabilityAttributes responseValue,
+          protocolResponseLogEntries = apiEndpointResponseLogEntries responseValue
         }
       where
         selectedEncoder = responseEncoderFor selectedContentType (apiRouteEndpointEncoders endpoint)

@@ -54,6 +54,10 @@
     catch-all family). Migrated `examples/custom-api`'s `App.Api.Declarative` onto the typed
     `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` pair, replacing the legacy
     `apiEndpoint`/`apiEndpointMiddleware` compatibility helpers.
+11. Added `apiEndpointResponseObservabilityAttributes`/`apiEndpointResponseLogEntries` to `ApiResponse`,
+    so a typed endpoint handler can attach private diagnostics to its rendered protocol response, the
+    same capability `ResponseBody` already gives page routes. Both default to empty and have no
+    encoder, so they cannot leak into a response body.
 
 ## 0.1.0.1
 

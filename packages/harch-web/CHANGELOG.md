@@ -2,6 +2,12 @@
 
 ## 0.1.2.0
 
+* Added `apiEndpointResponseObservabilityAttributes`/`apiEndpointResponseLogEntries` to `ApiResponse`.
+  A typed endpoint handler can now attach private diagnostics (a failure code, a downstream error
+  detail) to its rendered `ProtocolResponse`, matching the capability `HarchWeb.Server.Response.ResponseBody`
+  already gives page routes. Both default to `[]` via `apiResponse` and are overridable by record
+  update like `apiEndpointResponseHeaders`; neither has a response encoder, so they cannot leak into
+  a response body.
 * Fixed `apiRouteEndpointFamilyDefinition`'s `routeResponse` raising an uncaught `error` instead of
   rendering an ordinary `404` for a path no declared endpoint owns, when its `apiRouteEndpointFamilyCodec`
   route family is used standalone rather than combined with a catch-all family via

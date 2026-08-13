@@ -22,6 +22,7 @@ import HarchWeb.Api.Multipart
     defaultMultipartLimits,
     inMemoryMultipartStorage,
   )
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
 import HarchWeb.Site (RouteDefinition (..))
@@ -703,6 +704,35 @@ spec =
                    lookup "Content-Type" (apiRouteResponseHeaders jsonResponse) `shouldBe` Just "application/json; charset=utf-8",
                    apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
                    apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                 ]
+          )
+
+      it "carries a handler's observability attributes and log entries onto the rendered protocol response, never the body" $ do
+        let diagnosticEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                ( \_ ->
+                    pure
+                      ( Right
+                          ( (apiResponse "hello")
+                              { apiEndpointResponseObservabilityAttributes =
+                                  [Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "example")],
+                                apiEndpointResponseLogEntries = ["diagnostic detail that must never reach the response body"]
+                              }
+                          )
+                      )
+                )
+                (\() -> apiResponse "unreachable")
+        response <- runApiRoute diagnosticEndpoint Wai.defaultRequest
+        expectAll
+          ( ( protocolResponseObservabilityAttributes (apiRouteProtocolResponse response)
+                `shouldBe` [Observability.ObservabilityAttribute "app.failure.code" (Observability.TextAttribute "example")]
+            )
+              :| [ protocolResponseLogEntries (apiRouteProtocolResponse response) `shouldBe` ["diagnostic detail that must never reach the response body"],
+                   apiRouteResponseBody response `shouldBe` "hello"
                  ]
           )
 
@@ -1390,6 +1420,8 @@ spec =
          in expectAll
               ( (apiEndpointResponseStatus responseValue `shouldBe` HttpTypes.status200)
                   :| [ apiEndpointResponseHeaders responseValue `shouldBe` [],
+                       apiEndpointResponseObservabilityAttributes responseValue `shouldBe` [],
+                       apiEndpointResponseLogEntries responseValue `shouldBe` [],
                        apiEndpointResponseValue responseValue `shouldBe` ("hello" :: Text),
                        strictEncodedResponseBytes (apiResponseEncoderEncode jsonResponseEncoder ("hello" :: Text)) `shouldBe` "\"hello\"",
                        strictEncodedResponseBytes (apiResponseEncoderEncode textResponseEncoder "hello") `shouldBe` "hello",
