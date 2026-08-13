@@ -603,6 +603,34 @@ spec =
                 <> "--\r\n"
          in shouldReject (runConsume testLimits [fourFieldParts]) MultipartTooManyParts
 
+      it "rejects a body that declares more fields than the configured field-count limit, independent of the file count" $
+        let twoFieldParts =
+              ByteString.concat
+                [ "--" <> boundaryToken <> "\r\nContent-Disposition: form-data; name=\"f" <> ByteString.singleton (toEnum (48 + n)) <> "\"\r\n\r\nv\r\n"
+                | n <- [1 .. 2 :: Int]
+                ]
+                <> "--"
+                <> boundaryToken
+                <> "--\r\n"
+         in shouldReject (runConsume (testLimits {multipartLimitsMaxFieldCount = 1}) [twoFieldParts]) MultipartTooManyFields
+
+      it "rejects a body that declares more files than the configured file-count limit, independent of the field count" $
+        let twoFileParts =
+              ByteString.concat
+                [ "--"
+                    <> boundaryToken
+                    <> "\r\nContent-Disposition: form-data; name=\"file"
+                    <> ByteString.singleton (toEnum (48 + n))
+                    <> "\"; filename=\"a"
+                    <> ByteString.singleton (toEnum (48 + n))
+                    <> ".txt\"\r\n\r\ncontent\r\n"
+                | n <- [1 .. 2 :: Int]
+                ]
+                <> "--"
+                <> boundaryToken
+                <> "--\r\n"
+         in shouldReject (runConsume (testLimits {multipartLimitsMaxFileCount = 1}) [twoFileParts]) MultipartTooManyFiles
+
       it "rejects a field value that grows past the configured limit" $
         let largeFieldBody =
               "--"
@@ -663,6 +691,8 @@ spec =
                 MultipartPreambleTooLarge,
                 MultipartPartHeadersTooLarge,
                 MultipartTooManyParts,
+                MultipartTooManyFields,
+                MultipartTooManyFiles,
                 MultipartMissingDisposition,
                 MultipartFieldTooLarge "f",
                 MultipartFileTooLarge "f",

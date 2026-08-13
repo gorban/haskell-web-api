@@ -75,20 +75,25 @@ decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDec
 -- | Bounds applied while consuming a multipart body: its total streamed byte
 -- count, how much preamble and each part's headers the parser may retain, how
 -- large a field value may grow before it is rejected, how large a staged file
--- upload may grow before it is rejected, and how many parts a single body may
--- declare.
+-- upload may grow before it is rejected, and how many parts, fields, and
+-- files a single body may declare. The field and file counts are each
+-- independently bounded (not merely implied by the combined part count) so
+-- an application can cap either kind of part on its own, e.g. a form with
+-- many small fields but at most one attachment.
 data MultipartLimits = MultipartLimits
   { multipartLimitsMaxBodyBytes :: Int,
     multipartLimitsMaxPreambleBytes :: Int,
     multipartLimitsMaxPartHeaderBytes :: Int,
     multipartLimitsMaxFieldBytes :: Int,
     multipartLimitsMaxFileBytes :: Int,
-    multipartLimitsMaxParts :: Int
+    multipartLimitsMaxParts :: Int,
+    multipartLimitsMaxFieldCount :: Int,
+    multipartLimitsMaxFileCount :: Int
   }
   deriving (Eq, Show)
 
 -- | 32 MiB body, 8 KiB preamble, 16 KiB per-part headers, 1 MiB field
--- values, 25 MiB file uploads, 100 parts.
+-- values, 25 MiB file uploads, 100 parts, 100 fields, 20 files.
 defaultMultipartLimits :: MultipartLimits
 defaultMultipartLimits =
   MultipartLimits
@@ -97,7 +102,9 @@ defaultMultipartLimits =
       multipartLimitsMaxPartHeaderBytes = 16 * 1024,
       multipartLimitsMaxFieldBytes = 1024 * 1024,
       multipartLimitsMaxFileBytes = 25 * 1024 * 1024,
-      multipartLimitsMaxParts = 100
+      multipartLimitsMaxParts = 100,
+      multipartLimitsMaxFieldCount = 100,
+      multipartLimitsMaxFileCount = 20
     }
 
 -- | One fully-consumed part: either a plain field's decoded value, kept in
@@ -141,6 +148,12 @@ data MultipartConsumeError
     MultipartPartHeadersTooLarge
   | -- | The body declared more parts than 'multipartLimitsMaxParts' allows.
     MultipartTooManyParts
+  | -- | The body declared more plain fields than 'multipartLimitsMaxFieldCount'
+    -- allows.
+    MultipartTooManyFields
+  | -- | The body declared more file parts than 'multipartLimitsMaxFileCount'
+    -- allows.
+    MultipartTooManyFiles
   | -- | A part had no @Content-Disposition@ header, or one without a @name@
     -- parameter.
     MultipartMissingDisposition
@@ -230,7 +243,7 @@ consumeMultipartBodyWithActive activeUploadReference storage limits boundary rea
                 boundary
             )
             Nothing
-            0
+            initialMultipartPartCounts
             0
         )
 
@@ -242,23 +255,43 @@ data MultipartConsumer stored = MultipartConsumer
     multipartConsumerOnPart :: MultipartPartWith stored -> IO (Either MultipartConsumeError ())
   }
 
+-- | How many parts, and how many of each kind, have completed so far. Kept
+-- as one record threaded through the driver rather than three separate
+-- accumulator parameters.
+data MultipartPartCounts = MultipartPartCounts
+  { multipartPartCountsTotal :: Int,
+    multipartPartCountsFields :: Int,
+    multipartPartCountsFiles :: Int
+  }
+
+initialMultipartPartCounts :: MultipartPartCounts
+initialMultipartPartCounts = MultipartPartCounts 0 0 0
+
+incrementMultipartPartCounts :: PartAccumulator stored -> MultipartPartCounts -> MultipartPartCounts
+incrementMultipartPartCounts accumulator counts =
+  case accumulator of
+    FieldAccumulator {} -> counts {multipartPartCountsTotal = nextTotal, multipartPartCountsFields = multipartPartCountsFields counts + 1}
+    FileAccumulator {} -> counts {multipartPartCountsTotal = nextTotal, multipartPartCountsFiles = multipartPartCountsFiles counts + 1}
+  where
+    nextTotal = multipartPartCountsTotal counts + 1
+
 data MultipartTransition stored
-  = ContinueMultipartConsumption (Maybe (PartAccumulator stored)) Int
+  = ContinueMultipartConsumption (Maybe (PartAccumulator stored)) MultipartPartCounts
   | FinishMultipartConsumption
 
 driveMultipartConsumer ::
   MultipartConsumer stored ->
   MultipartScanner ->
   Maybe (PartAccumulator stored) ->
-  Int ->
+  MultipartPartCounts ->
   Int ->
   ExceptT MultipartConsumeError IO ()
-driveMultipartConsumer consumer !scanner !currentPart !partCount !bodyBytesRead = do
+driveMultipartConsumer consumer !scanner !currentPart !partCounts !bodyBytesRead = do
   chunk <- liftIO (multipartConsumerReadChunk consumer)
   if ByteString.null chunk
     then case finishMultipartScanner scanner of
       [] -> throwError MultipartTruncatedBody
-      finalEvents -> consumeMultipartEvents consumer finalEvents scanner currentPart partCount bodyBytesRead True
+      finalEvents -> consumeMultipartEvents consumer finalEvents scanner currentPart partCounts bodyBytesRead True
     else do
       let chunkBytes = ByteString.length chunk
       when
@@ -269,28 +302,28 @@ driveMultipartConsumer consumer !scanner !currentPart !partCount !bodyBytesRead 
         )
         (throwError MultipartBodyTooLarge)
       let (events, scanner') = feedMultipartChunk scanner chunk
-      consumeMultipartEvents consumer events scanner' currentPart partCount (bodyBytesRead + chunkBytes) False
+      consumeMultipartEvents consumer events scanner' currentPart partCounts (bodyBytesRead + chunkBytes) False
 
 consumeMultipartEvents ::
   MultipartConsumer stored ->
   [MultipartEvent] ->
   MultipartScanner ->
   Maybe (PartAccumulator stored) ->
-  Int ->
+  MultipartPartCounts ->
   Int ->
   Bool ->
   ExceptT MultipartConsumeError IO ()
-consumeMultipartEvents consumer events !scanner !currentPart !partCount !bodyBytesRead atEof =
+consumeMultipartEvents consumer events !scanner !currentPart !partCounts !bodyBytesRead atEof =
   case events of
     []
       | atEof -> throwError MultipartTruncatedBody
-      | otherwise -> driveMultipartConsumer consumer scanner currentPart partCount bodyBytesRead
+      | otherwise -> driveMultipartConsumer consumer scanner currentPart partCounts bodyBytesRead
     event : rest -> do
-      transition <- applyMultipartEvent consumer event currentPart partCount
+      transition <- applyMultipartEvent consumer event currentPart partCounts
       case transition of
         FinishMultipartConsumption -> pure ()
-        ContinueMultipartConsumption nextPart nextPartCount ->
-          consumeMultipartEvents consumer rest scanner nextPart nextPartCount bodyBytesRead atEof
+        ContinueMultipartConsumption nextPart nextPartCounts ->
+          consumeMultipartEvents consumer rest scanner nextPart nextPartCounts bodyBytesRead atEof
 
 -- | Matched against the current accumulator, not just the event: the scanner
 -- never emits a body event without an unmatched 'MultipartPartStarted' open,
@@ -300,31 +333,31 @@ applyMultipartEvent ::
   MultipartConsumer stored ->
   MultipartEvent ->
   Maybe (PartAccumulator stored) ->
-  Int ->
+  MultipartPartCounts ->
   ExceptT MultipartConsumeError IO (MultipartTransition stored)
-applyMultipartEvent consumer event currentPart partCount =
+applyMultipartEvent consumer event currentPart partCounts =
   case (event, currentPart) of
     (MultipartPartStarted headerBlock, Nothing) -> do
       let limits = multipartConsumerLimits consumer
-      when (partCount >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
-      accumulator <- startMultipartPart consumer headerBlock
-      pure (ContinueMultipartConsumption (Just accumulator) (partCount + 1))
+      when (multipartPartCountsTotal partCounts >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
+      accumulator <- startMultipartPart consumer partCounts headerBlock
+      pure (ContinueMultipartConsumption (Just accumulator) (incrementMultipartPartCounts accumulator partCounts))
     (MultipartPartBodyChunk bodyBytes, Just accumulator) -> do
       accumulator' <- appendMultipartPartBytes consumer accumulator bodyBytes
-      pure (ContinueMultipartConsumption (Just accumulator') partCount)
+      pure (ContinueMultipartConsumption (Just accumulator') partCounts)
     (MultipartPartEnded, Just accumulator) -> do
       part <- liftIO (finalizeMultipartPart consumer accumulator)
       acceptance <- liftIO (multipartConsumerOnPart consumer part)
       case acceptance of
         Left rejectionError -> throwError rejectionError
-        Right () -> pure (ContinueMultipartConsumption Nothing partCount)
+        Right () -> pure (ContinueMultipartConsumption Nothing partCounts)
     (MultipartFinished, Nothing) -> pure FinishMultipartConsumption
     (MultipartPreambleLimitExceeded, _) -> throwError MultipartPreambleTooLarge
     (MultipartPartHeaderLimitExceeded, _) -> throwError MultipartPartHeadersTooLarge
     _ -> throwError MultipartMalformedBody
 
-startMultipartPart :: MultipartConsumer stored -> ByteString -> ExceptT MultipartConsumeError IO (PartAccumulator stored)
-startMultipartPart consumer headerBlock =
+startMultipartPart :: MultipartConsumer stored -> MultipartPartCounts -> ByteString -> ExceptT MultipartConsumeError IO (PartAccumulator stored)
+startMultipartPart consumer partCounts headerBlock =
   case parseMultipartFieldDisposition headerBlock of
     Nothing -> throwError MultipartMissingDisposition
     Just disposition ->
@@ -332,8 +365,15 @@ startMultipartPart consumer headerBlock =
         Nothing -> throwError MultipartMissingDisposition
         Just fieldName ->
           case multipartFieldFilename disposition of
-            Nothing -> pure (FieldAccumulator fieldName ByteString.empty)
+            Nothing -> do
+              when
+                (multipartPartCountsFields partCounts >= multipartLimitsMaxFieldCount (multipartConsumerLimits consumer))
+                (throwError MultipartTooManyFields)
+              pure (FieldAccumulator fieldName ByteString.empty)
             Just filename -> do
+              when
+                (multipartPartCountsFiles partCounts >= multipartLimitsMaxFileCount (multipartConsumerLimits consumer))
+                (throwError MultipartTooManyFiles)
               let storage = multipartConsumerStorage consumer
               stagedUpload <- liftIO (MultipartStorage.beginMultipartUpload storage $! filename)
               liftIO (IORef.writeIORef (multipartConsumerActiveUploadReference consumer) (Just stagedUpload))
