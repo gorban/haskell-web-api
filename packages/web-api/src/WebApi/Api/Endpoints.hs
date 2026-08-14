@@ -35,8 +35,8 @@ where
 
 import Data.Aeson.Encoding qualified as JsonEncoding
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Lazy qualified as LazyByteString
 import Data.List.NonEmpty (NonEmpty ((:|)))
-import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api
   ( ApiMethod (ApiGet),
     ApiRequestBody (ApiNoRequestBody),
@@ -67,7 +67,6 @@ import WebApi.Response
     diagnosticsLogEntries,
     diagnosticsObservabilityAttributes,
     jsonErrorBody,
-    jsonText,
     pageFailureDiagnostics,
     secondRouteApiBody,
     statusApiBody,
@@ -136,6 +135,9 @@ secondApiFailureResponse (SecondApiFailure databaseOperations databaseError) =
 
 -- | Render a JSON body through the same pure encoders "WebApi.Response"
 -- already uses for these two payloads, keeping the typed endpoint's bytes
--- identical to the pre-migration response.
+-- identical to the pre-migration response. Goes straight from the encoding
+-- to bytes rather than through 'WebApi.Response.jsonText' and back, since
+-- that 'Text' detour served no purpose here and added a partial
+-- 'TextEncoding.decodeUtf8' on a request path.
 jsonBytes :: JsonEncoding.Encoding -> ByteString.ByteString
-jsonBytes = TextEncoding.encodeUtf8 . jsonText
+jsonBytes = LazyByteString.toStrict . JsonEncoding.encodingToLazyByteString
