@@ -9,6 +9,7 @@ module WebApi.Postgres.Runtime
     buildRuntimePostgresPageRepository,
     buildRuntimePostgresPageRepositoryWithRunner,
     decodeRuntimeQueryValue,
+    libpqConnectionValue,
     renderRuntimeConnectionErrorMessage,
     renderRuntimeResultErrorMessage,
     runRuntimeRowsQuery,
@@ -244,9 +245,14 @@ runtimeConnectionString databaseConfig =
         "password=" <> libpqConnectionValue (databasePassword databaseConfig)
       ]
 
+-- | Quote a value for libpq's connection-string syntax. Backslashes must be
+-- escaped before quotes: escaping in the other order turns each escaped
+-- quote's backslash into two backslashes, leaving the quote unescaped and
+-- terminating the value early, so the remainder of a password or database
+-- name containing a quote would be parsed as further conninfo keywords.
 libpqConnectionValue :: Text -> Text
 libpqConnectionValue value =
-  "'" <> Text.replace "\\" "\\\\" (Text.replace "'" "\\'" value) <> "'"
+  "'" <> Text.replace "'" "\\'" (Text.replace "\\" "\\\\" value) <> "'"
 
 renderRuntimeConnectionError :: LibPQ.Connection -> IO Text
 renderRuntimeConnectionError connection = do

@@ -69,7 +69,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -423,6 +423,29 @@ postgresTestConfig =
       databaseUser = "web_api_app",
       databasePassword = "super-secret"
     }
+
+-- | An independently written decoder for libpq's single-quoted conninfo
+-- value syntax (a value is wrapped in @'...'@, and @\\\\@\/@\\'@ represent a
+-- literal backslash\/quote inside it), so the round-trip tests below prove
+-- 'libpqConnectionValue' against libpq's own escaping rule rather than
+-- against a restatement of its own implementation.
+unescapeLibpqConnectionValue :: Text -> Maybe Text
+unescapeLibpqConnectionValue quoted =
+  case Text.uncons quoted of
+    Just ('\'', rest) -> unescapeLibpqConnectionValueBody rest
+    _ -> Nothing
+
+unescapeLibpqConnectionValueBody :: Text -> Maybe Text
+unescapeLibpqConnectionValueBody remaining =
+  case Text.uncons remaining of
+    Nothing -> Nothing
+    Just ('\'', trailing) | Text.null trailing -> Just Text.empty
+    Just ('\'', _) -> Nothing
+    Just ('\\', afterBackslash) ->
+      case Text.uncons afterBackslash of
+        Just (escapedCharacter, rest) | escapedCharacter `elem` ['\\', '\''] -> Text.cons escapedCharacter <$> unescapeLibpqConnectionValueBody rest
+        _ -> Nothing
+    Just (character, rest) -> Text.cons character <$> unescapeLibpqConnectionValueBody rest
 
 testPasswordHashingPolicy :: Password.PasswordHashingPolicy
 testPasswordHashingPolicy =
@@ -4613,6 +4636,17 @@ spec = do
         `shouldBe` "libpq query failed"
       renderRuntimeResultErrorMessage (Just (ByteString.pack [32, 113, 117, 101, 114, 121, 255, 10]))
         `shouldBe` Text.pack ['q', 'u', 'e', 'r', 'y', '\xfffd']
+
+    it "quotes libpq connection-string values so a quote or backslash cannot terminate them early" $
+      expectAll
+        ( (unescapeLibpqConnectionValue (libpqConnectionValue "o'brien") `shouldBe` Just "o'brien")
+            :| [ unescapeLibpqConnectionValue (libpqConnectionValue "back\\slash") `shouldBe` Just "back\\slash",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "quote'then\\backslash") `shouldBe` Just "quote'then\\backslash",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "' sslmode=disable host=attacker") `shouldBe` Just "' sslmode=disable host=attacker",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "plain-password") `shouldBe` Just "plain-password",
+                 unescapeLibpqConnectionValue (libpqConnectionValue "") `shouldBe` Just ""
+               ]
+        )
 
     it "runs direct runtime libpq queries and surfaces malformed-row, syntax, and connection failures explicitly" $ do
       ensureDefaultPostgresAvailable
