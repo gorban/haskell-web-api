@@ -235,7 +235,7 @@ pendingProfileWorkflow =
           { saveAccountSession = \_ -> error "unexpected session save",
             loadAccountSession = \receivedSessionId ->
               pure (Right (if receivedSessionId == pendingProfileSessionId then Just pendingProfileSession else Nothing)),
-            invalidateAccountSession = \_ -> error "unexpected session invalidation"
+            invalidateAccountSession = \_ _ -> error "unexpected session invalidation"
           },
       accountWorkflowProfileStore =
         AccountProfileStore

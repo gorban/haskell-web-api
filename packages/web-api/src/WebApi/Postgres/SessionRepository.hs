@@ -60,9 +60,9 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
         (runQuery databaseConfig loadAccountSessionQuery [sessionIdText sessionToken])
         (decodeStoredSession sessionToken)
 
-    invalidateSession sessionToken =
+    invalidateSession sessionToken invalidatedAtNanoseconds =
       runSessionStoreQuery
-        (runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken])
+        (runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
         (decodeMatchingSessionId (sessionIdText sessionToken))
 
 runSessionStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either AccountSessionStoreError value) -> IO (Either AccountSessionStoreError value)
@@ -102,4 +102,4 @@ decodeStoredSession sessionToken rows =
 saveAccountSessionQuery, loadAccountSessionQuery, invalidateAccountSessionQuery :: Text
 saveAccountSessionQuery = "INSERT INTO web_api.account_sessions (session_id, account_id, csrf_token, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;"
 loadAccountSessionQuery = "SELECT account_id, csrf_token, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.account_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;"
-invalidateAccountSessionQuery = "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = issued_at_nanoseconds WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;"
+invalidateAccountSessionQuery = "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = $2 WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;"

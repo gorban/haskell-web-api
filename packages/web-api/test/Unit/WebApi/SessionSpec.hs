@@ -49,7 +49,7 @@ spec = do
           store = buildRuntimePostgresAccountSessionStoreWithRunner runner databaseConfig
       saveAccountSession store opaqueSession `shouldReturnEqual` Right True
       loadAccountSession store testSessionId `shouldReturnEqual` Right (Just opaqueSession)
-      invalidateAccountSession store testSessionId `shouldReturnEqual` Right True
+      invalidateAccountSession store testSessionId 300 `shouldReturnEqual` Right True
       recordedQueries <- reverse <$> readIORef queriesReference
       recordedQueries
         `shouldBe` [ ( "INSERT INTO web_api.account_sessions (session_id, account_id, csrf_token, issued_at_nanoseconds, expires_at_nanoseconds) VALUES ($1, $2, $3, $4, $5) ON CONFLICT (session_id) DO NOTHING RETURNING session_id;",
@@ -58,8 +58,8 @@ spec = do
                      ( "SELECT account_id, csrf_token, issued_at_nanoseconds::TEXT, expires_at_nanoseconds::TEXT FROM web_api.account_sessions WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL;",
                        [sessionIdValue]
                      ),
-                     ( "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = issued_at_nanoseconds WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;",
-                       [sessionIdValue]
+                     ( "UPDATE web_api.account_sessions SET invalidated_at_nanoseconds = $2 WHERE session_id = $1 AND invalidated_at_nanoseconds IS NULL RETURNING session_id;",
+                       [sessionIdValue, "300"]
                      )
                    ]
 
@@ -80,9 +80,9 @@ spec = do
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
       loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\_ _ _ -> pure (Right [["account_01", csrfTokenValue, "100"]])) databaseConfig) testSessionId
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
-      invalidateAccountSession unavailableStore testSessionId `shouldReturnEqual` Left AccountSessionStoreUnavailable
-      invalidateAccountSession declinedStore testSessionId `shouldReturnEqual` Right False
-      invalidateAccountSession wrongSessionStore testSessionId `shouldReturnEqual` Left AccountSessionStoreCorruptData
+      invalidateAccountSession unavailableStore testSessionId 300 `shouldReturnEqual` Left AccountSessionStoreUnavailable
+      invalidateAccountSession declinedStore testSessionId 300 `shouldReturnEqual` Right False
+      invalidateAccountSession wrongSessionStore testSessionId 300 `shouldReturnEqual` Left AccountSessionStoreCorruptData
       loadAccountSession (buildRuntimePostgresAccountSessionStoreWithRunner (\runnerDatabaseConfig _ _ -> evaluate (databaseHost runnerDatabaseConfig) >> pure (Right [["wrong", "shape"]])) databaseConfig) testSessionId
         `shouldReturnEqual` Left AccountSessionStoreCorruptData
 
@@ -96,9 +96,9 @@ spec = do
                     else pure (Left "unexpected query")
               )
               databaseConfig
-      invalidateAccountSession (store (Left "database unavailable")) testSessionId `shouldReturnEqual` Left AccountSessionStoreUnavailable
-      invalidateAccountSession (store (Right [])) testSessionId `shouldReturnEqual` Right False
-      invalidateAccountSession (store (Right [["other-session"]])) testSessionId `shouldReturnEqual` Left AccountSessionStoreCorruptData
+      invalidateAccountSession (store (Left "database unavailable")) testSessionId 300 `shouldReturnEqual` Left AccountSessionStoreUnavailable
+      invalidateAccountSession (store (Right [])) testSessionId 300 `shouldReturnEqual` Right False
+      invalidateAccountSession (store (Right [["other-session"]])) testSessionId 300 `shouldReturnEqual` Left AccountSessionStoreCorruptData
 
     it "executes the native libpq session adapter against a migrated PostgreSQL database" $ do
       ensureDefaultPostgresAvailable
@@ -119,7 +119,7 @@ spec = do
             AccountSessionStore
               { saveAccountSession = \session -> writeIORef savedSessionReference (Just session) >> pure (Right True),
                 loadAccountSession = \_ -> pure (Right Nothing),
-                invalidateAccountSession = \_ -> pure (Right False)
+                invalidateAccountSession = \_ _ -> pure (Right False)
               }
       issuedSessionResult <- issueAccountSession store accountId 100
       case issuedSessionResult of
@@ -139,7 +139,7 @@ spec = do
             AccountSessionStore
               { saveAccountSession = \_ -> pure result,
                 loadAccountSession = \_ -> pure (Right Nothing),
-                invalidateAccountSession = \_ -> pure (Right False)
+                invalidateAccountSession = \_ _ -> pure (Right False)
               }
       issueAccountSession (store (Left AccountSessionStoreUnavailable)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreUnavailable
       issueAccountSession (store (Right False)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreCorruptData

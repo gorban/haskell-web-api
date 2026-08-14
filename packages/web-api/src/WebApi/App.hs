@@ -405,7 +405,7 @@ unavailableAccountSessionStore =
   AccountSessionStore
     { saveAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
       loadAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
-      invalidateAccountSession = const (unavailableResult AccountSessionStoreUnavailable)
+      invalidateAccountSession = const (const (unavailableResult AccountSessionStoreUnavailable))
     }
 
 unavailableAccountProfileStore :: AccountProfileStore

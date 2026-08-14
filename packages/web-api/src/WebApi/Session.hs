@@ -30,7 +30,7 @@ data AccountSessionStoreError
 data AccountSessionStore = AccountSessionStore
   { saveAccountSession :: OpaqueSession AccountId -> IO (Either AccountSessionStoreError Bool),
     loadAccountSession :: SessionId -> IO (Either AccountSessionStoreError (Maybe (OpaqueSession AccountId))),
-    invalidateAccountSession :: SessionId -> IO (Either AccountSessionStoreError Bool)
+    invalidateAccountSession :: SessionId -> Word64 -> IO (Either AccountSessionStoreError Bool)
   }
 
 -- | Creates and persists a new opaque session. Its bearer and synchronizer

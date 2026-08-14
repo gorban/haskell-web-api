@@ -352,7 +352,7 @@ sessionStore result =
   AccountSessionStore
     { saveAccountSession = \_ -> pure (Right True),
       loadAccountSession = \sessionIdValue -> sessionIdValue `seq` pure result,
-      invalidateAccountSession = \_ -> pure (Right False)
+      invalidateAccountSession = \_ _ -> pure (Right False)
     }
 
 profileStore :: Either AccountStoreError (Maybe AccountProfile) -> AccountProfileStore

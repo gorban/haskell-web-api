@@ -21,6 +21,7 @@ import Data.Maybe (fromMaybe, isNothing, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
@@ -3665,7 +3666,7 @@ spec = do
               _ -> expectationFailure "expected unavailable account sessions"
       assertSessionUnavailable (saveAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
       assertSessionUnavailable (loadAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
-      assertSessionUnavailable (invalidateAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
+      assertSessionUnavailable (invalidateAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input") (error "unavailable session store must ignore input"))
       findAccountProfile (accountWorkflowProfileStore unavailableAccountWorkflow) accountId
         >>= \case
           Left (AccountStoreUnavailable "account profiles are not configured") -> pure ()
@@ -3805,6 +3806,10 @@ spec = do
     it "issues a cookie only after password and TOTP verification, and revokes it on logout" $ do
       savedSessionsReference <- newIORef []
       invalidatedSessionsReference <- newIORef []
+      -- Advances on every read, so logout's invalidation timestamp is
+      -- provably a fresh clock reading rather than one copied from the
+      -- session's own issued-at time.
+      clockReference <- newIORef (500 :: Word64)
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
           password = Password.mkPassword "correct horse battery staple"
@@ -3824,7 +3829,7 @@ spec = do
             AccountSessionStore
               { saveAccountSession = \session -> modifyIORef' savedSessionsReference (<> [session]) >> pure (Right True),
                 loadAccountSession = \_ -> pure (Right Nothing),
-                invalidateAccountSession = \session -> modifyIORef' invalidatedSessionsReference (<> [session]) >> pure (Right True)
+                invalidateAccountSession = \session invalidatedAt -> modifyIORef' invalidatedSessionsReference (<> [(session, invalidatedAt)]) >> pure (Right True)
               }
           workflow =
             unavailableAccountWorkflow
@@ -3832,7 +3837,7 @@ spec = do
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
-                accountWorkflowClock = pure 500,
+                accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
                 accountWorkflowTotpClock = pure 123456
               }
           loginRequest fields = typedAccountActionRequest "POST" "/login" fields defaultRequestContext
@@ -3863,7 +3868,19 @@ spec = do
           forceShowValue response `shouldBe` True
           HarchWeb.clientActionStatus response `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
-      readIORef invalidatedSessionsReference `shouldReturn` [Session.sessionId loggedInSession]
+      invalidatedSessions <- readIORef invalidatedSessionsReference
+      case invalidatedSessions of
+        [(invalidatedSessionId, invalidatedAt)] ->
+          expectAll
+            ( (invalidatedSessionId `shouldBe` Session.sessionId loggedInSession)
+                -- clockReference strictly advances, so a value read during
+                -- logout (after login already completed) can never equal
+                -- one read during login: this proves the invalidation
+                -- timestamp is a fresh clock reading, not the session's own
+                -- issued-at time copied across.
+                :| [invalidatedAt `shouldNotBe` Session.sessionIssuedAtNanoseconds loggedInSession]
+            )
+        _ -> expectationFailure "expected exactly one invalidated session"
 
     it "validates every login state and keeps logout revocation failures visible" $ do
       let accountId = requiredAccountId "account_02"
@@ -3892,7 +3909,7 @@ spec = do
                   AccountSessionStore
                     { saveAccountSession = \_ -> pure sessionSaveResult,
                       loadAccountSession = \_ -> pure (Right Nothing),
-                      invalidateAccountSession = \_ -> pure invalidationResult
+                      invalidateAccountSession = \_ _ -> pure invalidationResult
                     },
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
