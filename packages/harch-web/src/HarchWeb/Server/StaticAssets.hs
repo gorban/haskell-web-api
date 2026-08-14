@@ -107,13 +107,16 @@ normalizeStaticAssetRoutePrefix prefix =
 -- @\/@ segment (the absolute-path escape: 'System.FilePath.</>' discards its
 -- left operand when the right one is absolute), @.@/@..@ segments, and
 -- hidden (dotfile) segments in one predicate instead of three.
+--
+-- 'Text.splitOn' on a non-empty separator always returns a non-empty list
+-- (the empty-path case is a single-element list containing an empty
+-- segment), so there is no empty-list case to guard against here.
 sanitizeStaticAssetPath :: Text -> Maybe FilePath
 sanitizeStaticAssetPath relativeAssetPath =
-  case Text.splitOn "/" relativeAssetPath of
-    [] -> Nothing
-    segments
-      | all isSafeStaticAssetSegment segments -> Just (joinPath (map Text.unpack segments))
-      | otherwise -> Nothing
+  let segments = Text.splitOn "/" relativeAssetPath
+   in if all isSafeStaticAssetSegment segments
+        then Just (joinPath (map Text.unpack segments))
+        else Nothing
 
 isSafeStaticAssetSegment :: Text -> Bool
 isSafeStaticAssetSegment segment =
