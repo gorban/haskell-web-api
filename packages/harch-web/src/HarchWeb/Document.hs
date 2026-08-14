@@ -561,7 +561,7 @@ renderDocument = renderDocumentWithNonce (RuntimeNonce "development-render-nonce
 renderDocumentWithNonce :: RuntimeNonce -> Document route -> Text
 renderDocumentWithNonce runtimeNonce document =
   Text.concat
-    [ "<html><head><title>",
+    [ "<!DOCTYPE html><html><head><title>",
       renderHtml (text (documentTitle document)),
       "</title>",
       renderStylesheets (documentStylesheets document),

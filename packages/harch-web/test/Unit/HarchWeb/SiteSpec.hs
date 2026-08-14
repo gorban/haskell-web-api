@@ -241,7 +241,7 @@ spec = do
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
       PageResponse page <- HarchWeb.renderResponse siteApplication request
       HarchWeb.renderDocument (HarchWeb.pageShell siteApplication page)
-        `shouldBe` "<html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
+        `shouldBe` "<!DOCTYPE html><html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
 
     it "does not duplicate a runtime module already supplied by the app shell" $ do
       let duplicatedRuntimeSite =
