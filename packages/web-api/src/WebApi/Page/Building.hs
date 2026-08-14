@@ -90,9 +90,9 @@ buildPageModelFromRouteData routeRequest routeData =
     _ ->
       NotFoundPage
         NotFoundPageModel
-          { notFoundHeading = "Not Found",
-            notFoundSummary = "The requested page could not be found.",
-            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute "Return home"
+          { notFoundHeading = localizedText routeRequest "Not Found" "No encontrado",
+            notFoundSummary = localizedText routeRequest "The requested page could not be found." "No se pudo encontrar la pagina solicitada.",
+            notFoundPrimaryAction = buildCallToAction routeRequest HomeRoute (localizedText routeRequest "Return home" "Volver al inicio")
           }
 
 buildProfilePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> ProfileState -> ProfilePageModel
@@ -142,7 +142,7 @@ buildHomePageModel routeRequest homeRouteDataResult =
         Right homeRouteData ->
           HomePage
             HomePageModel
-              { homeHeading = "Home",
+              { homeHeading = localizedText routeRequest "Home" "Inicio",
                 homeSummary = homeRouteSummary homeRouteData,
                 homeErrorMessage = Nothing,
                 homePrimaryAction = browseSecond
@@ -150,9 +150,9 @@ buildHomePageModel routeRequest homeRouteDataResult =
         Left _ ->
           HomePage
             HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Home page content is temporarily unavailable.",
-                homeErrorMessage = Just "Could not load home page data.",
+              { homeHeading = localizedText routeRequest "Home" "Inicio",
+                homeSummary = localizedText routeRequest "Home page content is temporarily unavailable." "El contenido de la pagina de inicio no esta disponible temporalmente.",
+                homeErrorMessage = Just (localizedText routeRequest "Could not load home page data." "No se pudieron cargar los datos de la pagina de inicio."),
                 homePrimaryAction = browseSecond
               }
 
@@ -163,7 +163,7 @@ buildSecondPageModel routeRequest secondRouteDataResult =
         Right secondRouteData ->
           SecondPage
             SecondPageModel
-              { secondHeading = "Second",
+              { secondHeading = localizedText routeRequest "Second" "Segunda",
                 secondSummary = secondRouteSummary secondRouteData,
                 secondHighlights = secondRouteHighlights secondRouteData,
                 secondErrorMessage = Nothing,
@@ -172,10 +172,10 @@ buildSecondPageModel routeRequest secondRouteDataResult =
         Left _ ->
           SecondPage
             SecondPageModel
-              { secondHeading = "Second",
-                secondSummary = "Second page content is temporarily unavailable.",
+              { secondHeading = localizedText routeRequest "Second" "Segunda",
+                secondSummary = localizedText routeRequest "Second page content is temporarily unavailable." "El contenido de la segunda pagina no esta disponible temporalmente.",
                 secondHighlights = [],
-                secondErrorMessage = Just "Could not load second page data.",
+                secondErrorMessage = Just (localizedText routeRequest "Could not load second page data." "No se pudieron cargar los datos de la segunda pagina."),
                 secondPrimaryAction = returnHome
               }
 

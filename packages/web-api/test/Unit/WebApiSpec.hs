@@ -318,6 +318,9 @@ spanishApiSecondRequest =
 notFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 notFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = defaultRequestContext}
 
+spanishNotFoundRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
+spanishNotFoundRequest = HarchWeb.RouteRequest {HarchWeb.requestRoute = NotFoundRoute, HarchWeb.requestContext = spanishRequestContext}
+
 apiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 apiStatusRequest =
   HarchWeb.RouteRequest
@@ -7544,6 +7547,16 @@ spec = do
             HarchWeb.pageBootstrapHooks = []
           }
 
+    it "selects a Spanish not-found page model" $
+      renderPage defaultAppConfig spanishNotFoundRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Not Found",
+            HarchWeb.pageRoute = NotFoundRoute,
+            HarchWeb.pageContext = spanishRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">No encontrado</h1><p>No se pudo encontrar la pagina solicitada.</p><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = []
+          }
+
     it "renders selected route data without reloading it" $
       renderPageFromRouteData
         defaultAppConfig
@@ -8039,7 +8052,7 @@ spec = do
       buildPageModel spanishHomeRequest
         `shouldReturn` HomePage
           HomePageModel
-            { homeHeading = "Home",
+            { homeHeading = "Inicio",
               homeSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.",
               homeErrorMessage = Nothing,
               homePrimaryAction =
@@ -8054,7 +8067,7 @@ spec = do
       buildPageModel spanishSecondRequest
         `shouldReturn` SecondPage
           SecondPageModel
-            { secondHeading = "Second",
+            { secondHeading = "Segunda",
               secondSummary = "Second page content with stubbed data ready for future loaders.",
               secondHighlights = [],
               secondErrorMessage = Nothing,
@@ -8080,17 +8093,16 @@ spec = do
               spacesSummary = "Sigan este espacio."
             }
 
-    it "builds explicit home-page error state when the database effect fails" $
-      buildPageModelWithDatabase
-        ( buildSeededPageRepository
-            DatabaseSeed
-              { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
-              }
-        )
-        homeRequest
+    it "builds explicit home-page error state when the database effect fails" $ do
+      let failingHomeRepository =
+            buildSeededPageRepository
+              DatabaseSeed
+                { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
+                  spanishHomePageData = Left (HomePageDataError "home seed unavailable"),
+                  englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
+                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
+                }
+      buildPageModelWithDatabase failingHomeRepository homeRequest
         `shouldReturn` HomePage
           HomePageModel
             { homeHeading = "Home",
@@ -8101,6 +8113,19 @@ spec = do
                   { callToActionLabel = "Browse the second page",
                     callToActionRoute = SecondRoute,
                     callToActionHref = "/second"
+                  }
+            }
+      buildPageModelWithDatabase failingHomeRepository spanishHomeRequest
+        `shouldReturn` HomePage
+          HomePageModel
+            { homeHeading = "Inicio",
+              homeSummary = "El contenido de la pagina de inicio no esta disponible temporalmente.",
+              homeErrorMessage = Just "No se pudieron cargar los datos de la pagina de inicio.",
+              homePrimaryAction =
+                CallToAction
+                  { callToActionLabel = "Ver la segunda página",
+                    callToActionRoute = SecondRoute,
+                    callToActionHref = "/es/second"
                   }
             }
 
@@ -8178,17 +8203,16 @@ spec = do
                   }
             }
 
-    it "builds an explicit error-state second page when the database effect fails" $
-      buildPageModelWithDatabase
-        ( buildSeededPageRepository
-            DatabaseSeed
-              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
-                spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
-              }
-        )
-        secondRequest
+    it "builds an explicit error-state second page when the database effect fails" $ do
+      let failingSecondRepository =
+            buildSeededPageRepository
+              DatabaseSeed
+                { englishHomePageData = englishHomePageData defaultDatabaseSeed,
+                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
+                  englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                  spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
+                }
+      buildPageModelWithDatabase failingSecondRepository secondRequest
         `shouldReturn` SecondPage
           SecondPageModel
             { secondHeading = "Second",
@@ -8200,6 +8224,20 @@ spec = do
                   { callToActionLabel = "Return home",
                     callToActionRoute = HomeRoute,
                     callToActionHref = "/"
+                  }
+            }
+      buildPageModelWithDatabase failingSecondRepository spanishSecondRequest
+        `shouldReturn` SecondPage
+          SecondPageModel
+            { secondHeading = "Segunda",
+              secondSummary = "El contenido de la segunda pagina no esta disponible temporalmente.",
+              secondHighlights = [],
+              secondErrorMessage = Just "No se pudieron cargar los datos de la segunda pagina.",
+              secondPrimaryAction =
+                CallToAction
+                  { callToActionLabel = "Volver al inicio",
+                    callToActionRoute = HomeRoute,
+                    callToActionHref = "/es"
                   }
             }
 
@@ -8658,7 +8696,7 @@ spec = do
       Wai.responseStatus secondResponse `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders secondResponse) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
       renderedSecondResponse <- readResponseBody secondResponse
-      Text.isInfixOf "<h1 data-page-title=\"true\">Second</h1>" renderedSecondResponse `shouldBe` True
+      Text.isInfixOf "<h1 data-page-title=\"true\">Segunda</h1>" renderedSecondResponse `shouldBe` True
       Text.isInfixOf "<script nonce=\"" renderedSecondResponse `shouldBe` True
 
       spacesResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["spaces"])
