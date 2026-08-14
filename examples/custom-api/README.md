@@ -40,7 +40,8 @@ cabal test custom-api-tests --test-show-details=direct
 `apiRouteEndpointMiddleware` helpers this example (and `examples/multipart-upload`) used before
 migrating were removed once no application in this repository depended on them any longer — see
 [design guidance](../../docs/design-guidance.md#follow-up-decision--standalone-family-not-found-and-the-custom-api-migration-2026-08-13)
-for the migration this example made and why `web-api` itself has not made the same move yet.
+for the migration this example made; `web-api` has since made the same move for its own
+`/api/status` and `/api/second` routes.
 
 ## Implemented guide: `ApiRoute`/`RouteDefinition`
 

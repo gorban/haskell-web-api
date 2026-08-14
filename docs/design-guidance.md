@@ -359,8 +359,8 @@ route select the existing scoped multipart consumer exactly once; its storage ad
 ownership remain AD policy, so the endpoint does not create a new upload lifecycle or default to
 local files.
 
-`runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that make
-`apiEndpointMiddleware` usable against a real running (or locally test-served) application, not just a
+`runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that run a
+declared route-family application against a real running (or locally test-served) server, not just a
 bare `Wai.Application` in a unit test: `runServer` and `withLocalTestServer` are now defined as the `id`
 middleware case of each. [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload`
 page (`App.MultipartUpload`) is the compiled, tested demonstration of the whole native-upload slice —
