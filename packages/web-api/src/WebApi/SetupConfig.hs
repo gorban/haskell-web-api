@@ -59,18 +59,24 @@ data AppSetupConfigLoadError
   | AppSetupConfigParseError ConfigParseError
   deriving (Eq, Show)
 
-committedSetupDefaults :: [(Text, Text)]
-committedSetupDefaults =
-  [ ("SETUP_AUTOSTART_DATABASE", "true"),
-    ("SETUP_AUTOSTART_JAEGER", "false")
-  ]
-
+-- | The single canonical source for the autostart defaults: 'committedSetupDefaults'
+-- and 'parseSetupAutostartConfig''s own fallback both derive from this record instead
+-- of re-typing 'True'\/'False' as string literals.
 defaultSetupAutostartConfig :: SetupAutostartConfig
 defaultSetupAutostartConfig =
   SetupAutostartConfig
     { setupAutostartDatabase = True,
       setupAutostartJaeger = False
     }
+
+committedSetupDefaults :: [(Text, Text)]
+committedSetupDefaults =
+  [ ("SETUP_AUTOSTART_DATABASE", renderConfigBoolean (setupAutostartDatabase defaultSetupAutostartConfig)),
+    ("SETUP_AUTOSTART_JAEGER", renderConfigBoolean (setupAutostartJaeger defaultSetupAutostartConfig))
+  ]
+
+renderConfigBoolean :: Bool -> Text
+renderConfigBoolean value = if value then "true" else "false"
 
 defaultAppSetupConfig :: AppSetupConfig
 defaultAppSetupConfig =
@@ -156,8 +162,8 @@ parseOptionalMigrationDatabaseConfig committedDefaults localOverrides environmen
 parseSetupAutostartConfig :: [(Text, Text)] -> [(Text, Text)] -> [(Text, Text)] -> Either ConfigParseError SetupAutostartConfig
 parseSetupAutostartConfig committedDefaults localOverrides environmentOverrides =
   SetupAutostartConfig
-    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" True
-    <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" False
+    <$> optionalBoolean "SETUP_AUTOSTART_DATABASE" (setupAutostartDatabase defaultSetupAutostartConfig)
+    <*> optionalBoolean "SETUP_AUTOSTART_JAEGER" (setupAutostartJaeger defaultSetupAutostartConfig)
   where
     optionalBoolean key fallback =
       maybe
