@@ -70,7 +70,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -4716,6 +4716,23 @@ spec = do
       assertAccountStoreSuccess
         (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
         (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+
+      let mfaStoreForAccount = buildRuntimePostgresMfaStore defaultRealPostgresConfig
+          assertMfaBoolResult label action expected = do
+            result <- action
+            case result of
+              Right actual | actual == expected -> pure ()
+              _ -> expectationFailure label
+      let recoveryCodeHash = Account.accountIdText accountId <> "-recovery-hash"
+      assertMfaBoolResult "expected the first enrollment start to succeed" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "encrypted-envelope" 600) True
+      assertMfaBoolResult "expected confirmation to succeed" (confirmTotpEnrollment mfaStoreForAccount accountId (recoveryCodeHash :| []) 700) True
+      assertMfaBoolResult "expected a restart against a confirmed enrollment to be rejected" (saveUnconfirmedTotpEnrollment mfaStoreForAccount accountId "attacker-supplied-envelope" 800) False
+      enrollmentAfterRejectedRestart <- loadTotpEnrollment mfaStoreForAccount accountId
+      case enrollmentAfterRejectedRestart of
+        Right (Just enrollment) -> do
+          storedTotpEncryptedSecret enrollment `shouldBe` "encrypted-envelope"
+          storedTotpConfirmedAtNanoseconds enrollment `shouldBe` Just 700
+        _ -> expectationFailure "expected the confirmed TOTP enrollment to survive a rejected restart"
 
       syntaxResult <- runRuntimeRowsQuery defaultRealPostgresConfig "SELECT FROM"
       syntaxResult

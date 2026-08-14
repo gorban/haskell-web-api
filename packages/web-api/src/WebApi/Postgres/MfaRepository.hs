@@ -102,8 +102,21 @@ decodeSingleColumn row =
     [value] -> Just value
     _ -> Nothing
 
+-- | Starting an enrollment must not silently destroy an already-confirmed
+-- authenticator. The original @WHERE EXISTS@ guard checked only that the
+-- account's email was verified, so re-running enrollment start against a
+-- confirmed account reset 'confirmed_at_nanoseconds' to @NULL@ and replaced
+-- the secret via the @ON CONFLICT@ upsert with no eligibility check of its
+-- own. Extended the same guard with a second @AND NOT EXISTS@ clause (option
+-- 1: small, general, squarely within this query's own existing eligibility
+-- check) instead of adding a separate pre-check query, since
+-- 'startMfaEnrollmentWith' already treats a declined save
+-- (@guardError MfaEnrollmentAccountIsNotEligible@) as the correct outcome for
+-- "not eligible to start" — the same error a confirmed account should now
+-- also receive, reusing the existing interpretation rather than adding a new
+-- one.
 saveUnconfirmedTotpEnrollmentQuery, loadTotpEnrollmentQuery, loadUnusedRecoveryCodeHashesQuery, consumeRecoveryCodeHashQuery :: Text
-saveUnconfirmedTotpEnrollmentQuery = "INSERT INTO web_api.account_totp (account_id, encrypted_secret, created_at_nanoseconds) SELECT $1, convert_to($2, 'UTF8'), $3 WHERE EXISTS (SELECT 1 FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NOT NULL) ON CONFLICT (account_id) DO UPDATE SET encrypted_secret = EXCLUDED.encrypted_secret, confirmed_at_nanoseconds = NULL, created_at_nanoseconds = EXCLUDED.created_at_nanoseconds RETURNING account_id;"
+saveUnconfirmedTotpEnrollmentQuery = "INSERT INTO web_api.account_totp (account_id, encrypted_secret, created_at_nanoseconds) SELECT $1, convert_to($2, 'UTF8'), $3 WHERE EXISTS (SELECT 1 FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM web_api.account_totp WHERE account_id = $1 AND confirmed_at_nanoseconds IS NOT NULL) ON CONFLICT (account_id) DO UPDATE SET encrypted_secret = EXCLUDED.encrypted_secret, confirmed_at_nanoseconds = NULL, created_at_nanoseconds = EXCLUDED.created_at_nanoseconds RETURNING account_id;"
 loadTotpEnrollmentQuery = "SELECT convert_from(encrypted_secret, 'UTF8'), COALESCE(confirmed_at_nanoseconds::TEXT, '') FROM web_api.account_totp WHERE account_id = $1;"
 loadUnusedRecoveryCodeHashesQuery = "SELECT code_hash FROM web_api.account_recovery_codes WHERE account_id = $1 AND used_at_nanoseconds IS NULL ORDER BY code_hash ASC;"
 consumeRecoveryCodeHashQuery = "UPDATE web_api.account_recovery_codes SET used_at_nanoseconds = $3 WHERE account_id = $1 AND code_hash = $2 AND used_at_nanoseconds IS NULL RETURNING account_id;"
