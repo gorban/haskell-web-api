@@ -50,6 +50,7 @@ linker_warning_fixture="$fixture_directory/linker-warning.log"
 near_match_linker_warning_fixture="$fixture_directory/near-match-linker-warning.log"
 wrong_linker_path_fixture="$fixture_directory/wrong-linker-path.log"
 unrecognized_deprecation_fixture="$fixture_directory/unrecognized-deprecation.log"
+uppercase_warning_fixture="$fixture_directory/uppercase-warning.log"
 
 : > "$clean_fixture"
 printf '%s\n' "/usr/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost_closure' are not defined" > "$dynamic_link_warning_fixture"
@@ -67,6 +68,7 @@ printf '%s\n' '/usr/bin/ld.bfd: warning: libmissing.so, needed by app, not found
 printf '%s\n' "/usr/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost' are not defined" > "$near_match_linker_warning_fixture"
 printf '%s\n' "/usr/local/bin/ld.bfd: warning: type and size of dynamic symbol \`harchzmwebzm0zi1zi2zi0zminplace_HarchWebziEmail_smtpServerHost_closure' are not defined" > "$wrong_linker_path_fixture"
 printf '%s\n' 'Deprecation warning:' 'An unrecognised deprecation must not be ignored.' > "$unrecognized_deprecation_fixture"
+printf '%s\n' '/usr/bin/ld.bfd: WARNING: libmissing.so, needed by app, not found' > "$uppercase_warning_fixture"
 
 expect_success 'a clean build log' "$clean_fixture"
 expect_success \
@@ -83,5 +85,6 @@ expect_failure 'the former GHC dynamic-link warning' "$dynamic_link_warning_fixt
 expect_failure 'a closure warning without the generated closure suffix' "$near_match_linker_warning_fixture"
 expect_failure 'a dynamic-link warning from an unapproved linker path' "$wrong_linker_path_fixture"
 expect_failure 'an unrecognised deprecation warning' "$unrecognized_deprecation_fixture"
+expect_failure 'an all-caps WARNING linker diagnostic' "$uppercase_warning_fixture"
 
 printf '%s\n' 'Build diagnostic gate fixture checks passed.'

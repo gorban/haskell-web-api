@@ -41,7 +41,7 @@ for ((index = 0; index < ${#lines[@]}; index += 1)); do
   fi
 
   case "$line" in
-    *warning:* | *Warning:*)
+    *[Ww][Aa][Rr][Nn][Ii][Nn][Gg]:*)
       printf 'Actionable build warning: %s\n' "$line" >&2
       diagnostic_failure=true
       ;;
