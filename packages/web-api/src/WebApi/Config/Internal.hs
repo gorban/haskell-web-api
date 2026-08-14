@@ -112,6 +112,7 @@ import HarchWeb
   )
 import HarchWeb.Secret (SecretEncryptionKey, mkSecretEncryptionKey)
 import System.Environment (getEnvironment)
+import Text.Read (readMaybe)
 
 data AppMode
   = Development
@@ -738,44 +739,43 @@ parseRequestTransportLimitsP =
     <$> parseOptionalRequestTimeoutSecondsP "REQUEST_NETWORK_TIMEOUT_SECONDS"
     <*> parseOptionalRequestByteLimitP "REQUEST_SLOWLORIS_MAX_BYTES"
 
-parseOptionalRequestByteLimitP :: Text -> ConfigParser (Maybe RequestByteLimit)
-parseOptionalRequestByteLimitP key = do
+-- | Parse an optional integer config value directly into the smart
+-- constructor that owns its bound, rather than duplicating that bound in an
+-- intermediate 'parseNonNegativeInt'\/'parsePositiveInt' check first: the
+-- two checks agreeing today made the constructor's own rejection dead code,
+-- so a future change to either bound without the other would have silently
+-- downgraded a configured limit to \"no limit\" instead of failing startup.
+parseOptionalBoundedIntP :: Text -> (Int -> Maybe limit) -> ConfigParser (Maybe limit)
+parseOptionalBoundedIntP key construct = do
   maybeValue <- optionalConfigValueP key
-  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
-  pure (parsedValue >>= requestByteLimit)
+  case maybeValue of
+    Nothing -> pure Nothing
+    Just rawValue -> do
+      parsedInt <- liftEitherP (maybe (Left (InvalidConfigValue key rawValue)) Right (readMaybe (Text.unpack rawValue)))
+      liftEitherP (maybe (Left (InvalidConfigValue key rawValue)) (Right . Just) (construct parsedInt))
+
+parseOptionalRequestByteLimitP :: Text -> ConfigParser (Maybe RequestByteLimit)
+parseOptionalRequestByteLimitP key = parseOptionalBoundedIntP key requestByteLimit
 
 parseOptionalRequestTimeoutSecondsP :: Text -> ConfigParser (Maybe RequestTimeoutSeconds)
-parseOptionalRequestTimeoutSecondsP key = do
-  maybeValue <- optionalConfigValueP key
-  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
-  pure (parsedValue >>= requestTimeoutSeconds)
+parseOptionalRequestTimeoutSecondsP key = parseOptionalBoundedIntP key requestTimeoutSeconds
 
 parseOptionalRequestConcurrencyLimitP :: Text -> ConfigParser (Maybe RequestConcurrencyLimit)
-parseOptionalRequestConcurrencyLimitP key = do
-  maybeValue <- optionalConfigValueP key
-  parsedValue <- liftEitherP (traverse (parsePositiveInt key) maybeValue)
-  pure (parsedValue >>= mkRequestConcurrencyLimit)
+parseOptionalRequestConcurrencyLimitP key = parseOptionalBoundedIntP key mkRequestConcurrencyLimit
 
 parseOptionalRequestHeaderCountLimitP :: Text -> ConfigParser (Maybe RequestHeaderCountLimit)
-parseOptionalRequestHeaderCountLimitP key = do
-  maybeValue <- optionalConfigValueP key
-  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
-  pure (parsedValue >>= mkRequestHeaderCountLimit)
+parseOptionalRequestHeaderCountLimitP key = parseOptionalBoundedIntP key mkRequestHeaderCountLimit
 
 parseOptionalRequestItemCountLimitP :: Text -> ConfigParser (Maybe RequestItemCountLimit)
-parseOptionalRequestItemCountLimitP key = do
-  maybeValue <- optionalConfigValueP key
-  parsedValue <- liftEitherP (traverse (parseNonNegativeInt key) maybeValue)
-  pure (parsedValue >>= requestItemCountLimit)
+parseOptionalRequestItemCountLimitP key = parseOptionalBoundedIntP key requestItemCountLimit
 
+-- | Accepts the same case-insensitive @true\/false\/1\/0\/yes\/no@ forms as
+-- every other boolean config knob (via 'parseOptionalBoolWithDefaultP'),
+-- rather than only the exact lowercase @"true"@\/@"false"@ this previously
+-- hand-matched.
 parseRedirectHttpToHttpsP :: [ListenerConfig] -> ConfigParser Bool
-parseRedirectHttpToHttpsP parsedListeners = do
-  maybeValue <- optionalConfigValueP "REDIRECT_HTTP_TO_HTTPS"
-  liftEitherP $ case maybeValue of
-    Nothing -> Right (defaultRedirectHttpToHttps parsedListeners)
-    Just "true" -> Right True
-    Just "false" -> Right False
-    Just value -> Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" value)
+parseRedirectHttpToHttpsP parsedListeners =
+  parseOptionalBoolWithDefaultP "REDIRECT_HTTP_TO_HTTPS" (defaultRedirectHttpToHttps parsedListeners)
 
 defaultRedirectHttpToHttps :: [ListenerConfig] -> Bool
 defaultRedirectHttpToHttps parsedListeners = any ((== Http) . listenerScheme) parsedListeners && any ((== Https) . listenerScheme) parsedListeners
