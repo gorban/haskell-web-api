@@ -8,7 +8,8 @@ where
 
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.List (maximumBy)
+import Data.Char (isAsciiLower, isAsciiUpper, isDigit)
+import Data.List (isPrefixOf, maximumBy)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -16,8 +17,8 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.StaticAssets (StaticAssetRoot (..), StaticAssetsConfig (..))
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-import System.Directory (doesFileExist)
-import System.FilePath (splitDirectories, takeExtension, (</>))
+import System.Directory (canonicalizePath, doesFileExist)
+import System.FilePath (joinPath, pathSeparator, takeExtension, (</>))
 
 serveStaticAssetResponse :: StaticAssetsConfig -> Text -> IO (Maybe (Text, Wai.Response))
 serveStaticAssetResponse staticAssetsConfig requestPath =
@@ -31,10 +32,9 @@ serveStaticAssetResponse staticAssetsConfig requestPath =
             Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
             Just assetContentType -> do
               let assetFilePath = staticDirectory matchedRoot </> safeAssetPath
-              assetExists <- doesFileExist assetFilePath
-              case assetExists of
-                True -> do
-                  assetContents <- ByteString.readFile assetFilePath
+              maybeAssetContents <- readStaticAssetWithinRoot (staticDirectory matchedRoot) assetFilePath
+              case maybeAssetContents of
+                Just assetContents ->
                   pure
                     ( Just
                         ( staticAssetRoutePath matchedRoot,
@@ -44,7 +44,24 @@ serveStaticAssetResponse staticAssetsConfig requestPath =
                             (LazyByteString.fromStrict assetContents)
                         )
                     )
-                False -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
+                Nothing -> pure (Just (staticAssetRoutePath matchedRoot, missingStaticAssetResponse staticAssetsConfig))
+
+-- | Read an asset only when it both exists and canonicalizes to a path still
+-- rooted under the configured static directory. 'sanitizeStaticAssetPath'
+-- already rejects every segment that could make 'assetFilePath' escape the
+-- root by construction; this closes the remaining escape a symlink planted
+-- inside the root could open.
+readStaticAssetWithinRoot :: FilePath -> FilePath -> IO (Maybe ByteString.ByteString)
+readStaticAssetWithinRoot rootDirectory assetFilePath = do
+  assetExists <- doesFileExist assetFilePath
+  if not assetExists
+    then pure Nothing
+    else do
+      canonicalRoot <- canonicalizePath rootDirectory
+      canonicalAsset <- canonicalizePath assetFilePath
+      if (canonicalRoot <> [pathSeparator]) `isPrefixOf` canonicalAsset
+        then Just <$> ByteString.readFile assetFilePath
+        else pure Nothing
 
 staticAssetRoutePath :: StaticAssetRoot -> Text
 staticAssetRoutePath staticRoot =
@@ -52,14 +69,14 @@ staticAssetRoutePath staticRoot =
     "/" -> "/*"
     staticPrefix -> staticPrefix <> "/*"
 
-matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, FilePath)
+matchStaticAssetRoot :: StaticAssetsConfig -> Text -> Maybe (StaticAssetRoot, Text)
 matchStaticAssetRoot staticAssetsConfig requestPath =
   case matchedRoots of
     [] -> Nothing
     _ -> Just (maximumBy compareStaticPrefixLength matchedRoots)
   where
     matchedRoots =
-      [ (staticRoot, Text.unpack assetPath)
+      [ (staticRoot, assetPath)
       | staticRoot <- staticAssetRoots staticAssetsConfig,
         Just assetPath <- [stripStaticPrefix (staticUrlPrefix staticRoot) requestPath]
       ]
@@ -84,26 +101,32 @@ normalizeStaticAssetRoutePrefix :: Text -> Text
 normalizeStaticAssetRoutePrefix prefix =
   fromMaybe prefix (Text.stripSuffix "/" prefix)
 
-sanitizeStaticAssetPath :: FilePath -> Maybe FilePath
-sanitizeStaticAssetPath assetPath =
-  case splitDirectories assetPath of
+-- | Validate and translate a request-relative asset path into a genuinely
+-- relative 'FilePath'. Every segment must be non-empty and drawn from a
+-- small allowlist of ASCII filename characters, which rejects a leading
+-- @\/@ segment (the absolute-path escape: 'System.FilePath.</>' discards its
+-- left operand when the right one is absolute), @.@/@..@ segments, and
+-- hidden (dotfile) segments in one predicate instead of three.
+sanitizeStaticAssetPath :: Text -> Maybe FilePath
+sanitizeStaticAssetPath relativeAssetPath =
+  case Text.splitOn "/" relativeAssetPath of
     [] -> Nothing
-    segments ->
-      if all isSafeSegment segments
-        then Just assetPath
-        else Nothing
-  where
-    isSafeSegment segment =
-      not (null segment)
-        && segment /= "."
-        && segment /= ".."
-        && not (isHiddenStaticAssetSegment segment)
+    segments
+      | all isSafeStaticAssetSegment segments -> Just (joinPath (map Text.unpack segments))
+      | otherwise -> Nothing
 
-isHiddenStaticAssetSegment :: FilePath -> Bool
-isHiddenStaticAssetSegment segment =
-  case segment of
-    '.' : _ -> True
-    _ -> False
+isSafeStaticAssetSegment :: Text -> Bool
+isSafeStaticAssetSegment segment =
+  not (Text.null segment)
+    && not ("." `Text.isPrefixOf` segment)
+    && Text.all isSafeStaticAssetSegmentChar segment
+
+isSafeStaticAssetSegmentChar :: Char -> Bool
+isSafeStaticAssetSegmentChar character =
+  isAsciiLower character
+    || isAsciiUpper character
+    || isDigit character
+    || character `elem` ("._-" :: String)
 
 staticAssetHeaders :: StaticAssetsConfig -> Text -> Http.ResponseHeaders
 staticAssetHeaders staticAssetsConfig assetContentType =

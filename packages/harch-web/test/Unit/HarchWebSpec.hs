@@ -29,7 +29,7 @@ import Network.Socket.ByteString qualified as SocketByteString
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
 import Network.Wai.Internal qualified as WaiInternal
-import System.Directory (createDirectoryIfMissing, doesFileExist, removePathForcibly)
+import System.Directory (createDirectoryIfMissing, createFileLink, doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
@@ -4525,6 +4525,48 @@ spec = do
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
         Wai.responseStatus rootResponse `shouldBe` Http.status404
         readResponseBody rootResponse `shouldReturn` "Not Found"
+
+    it "rejects an asset path reconstructed as an absolute filesystem path" $
+      withSystemTempDirectory "harch-web-static-absolute-escape" $ \tempDirectory -> do
+        let publicDirectory = tempDirectory <> "/public"
+            secretFilePath = tempDirectory <> "/outside-secret.txt"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = publicDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            -- Concatenating the route prefix with an absolute filesystem
+            -- path is exactly the doubled `/` a reverse proxy or a client
+            -- can send. `System.FilePath.(</>)` previously discarded the
+            -- configured root for such a path and resolved this literal
+            -- absolute path instead, so this must reach neither the file
+            -- nor its contents.
+            escapeRequestPath = Text.pack ("/assets" <> secretFilePath)
+            escapeRequest = (waiRequest []) {Wai.rawPathInfo = TextEncoding.encodeUtf8 escapeRequestPath}
+        createDirectoryIfMissing True publicDirectory
+        writeFile secretFilePath "SECRET=true"
+        escapeResponse <- performWaiRequest (toWaiApplication staticApplication) escapeRequest
+        Wai.responseStatus escapeResponse `shouldBe` Http.status404
+        readResponseBody escapeResponse `shouldReturn` "Not Found"
+
+    it "rejects a symlink inside the static root that points outside it" $
+      withSystemTempDirectory "harch-web-static-symlink-escape" $ \tempDirectory -> do
+        let publicDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = publicDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Nothing
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+        createDirectoryIfMissing True publicDirectory
+        writeFile (tempDirectory <> "/outside-secret.txt") "SECRET=true"
+        createFileLink (tempDirectory <> "/outside-secret.txt") (publicDirectory <> "/linked.txt")
+        symlinkResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "linked.txt"])
+        Wai.responseStatus symlinkResponse `shouldBe` Http.status404
+        readResponseBody symlinkResponse `shouldReturn` "Not Found"
 
     it "keeps cache-control headers on missing static asset responses when configured" $
       withSystemTempDirectory "harch-web-static-missing-cache" $ \tempDirectory -> do
