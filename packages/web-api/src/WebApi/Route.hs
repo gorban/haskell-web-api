@@ -229,7 +229,7 @@ selectRoute requestContext target = do
 
 renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 renderRoutePath routeRequest =
-  applyRequestPathPrefix
+  HarchWeb.applyRequestPathPrefix
     (requestPathPrefix requestContext)
     ( case HarchWeb.requestRoute routeRequest of
         Api apiRoute -> renderApiRoutePath apiRoute
@@ -289,7 +289,7 @@ requestContextFromWaiRequest trustProxyHeaders request requestContext =
           then
             maybe
               Text.empty
-              normalizeRequestPathPrefix
+              HarchWeb.normalizeRequestPathPrefix
               ( lookup "X-Forwarded-Prefix" (Wai.requestHeaders request)
                   >>= either (const Nothing) (firstCommaSeparatedValue . Text.strip) . TextEncoding.decodeUtf8'
               )
@@ -414,17 +414,6 @@ firstCommaSeparatedValue value =
     [] -> Nothing
     firstValue : _ -> Just firstValue
 
-normalizeRequestPathPrefix :: Text -> Text
-normalizeRequestPathPrefix pathPrefix =
-  let trimmedPrefix = Text.strip pathPrefix
-      slashPrefixedPrefix =
-        case (Text.null trimmedPrefix || trimmedPrefix == "/", Text.isPrefixOf "/" trimmedPrefix) of
-          (True, _) -> Text.empty
-          (False, True) -> trimmedPrefix
-          (False, False) -> "/" <> trimmedPrefix
-      normalizedPrefix = Text.dropWhileEnd (== '/') slashPrefixedPrefix
-   in normalizedPrefix
-
 requestSessionIdFromHeaders :: Http.RequestHeaders -> Maybe SessionId
 requestSessionIdFromHeaders headers = do
   cookieHeader <- lookup "Cookie" headers
@@ -438,13 +427,3 @@ requestSessionIdFromHeaders headers = do
     parseCookiePair value =
       let (name, rawValue) = Text.breakOn "=" (Text.strip value)
        in (name, Text.drop 1 rawValue)
-
-applyRequestPathPrefix :: Text -> Text -> Text
-applyRequestPathPrefix pathPrefix path =
-  let normalizedPrefix = normalizeRequestPathPrefix pathPrefix
-   in if Text.null normalizedPrefix
-        then path
-        else
-          if path == "/"
-            then normalizedPrefix
-            else normalizedPrefix <> path

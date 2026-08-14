@@ -6,7 +6,6 @@ module HarchWeb.Gmail
     GmailHttpRequest (..),
     GmailHttpResponse (..),
     GmailHttpRunner,
-    deliverGmailApiEmail,
     deliverGmailApiEmailWithRunner,
     mkGmailApiConfig,
     runGmailHttpRequest,
@@ -53,9 +52,6 @@ type GmailHttpRunner = GmailHttpRequest -> IO GmailHttpResponse
 
 mkGmailApiConfig :: EmailAddress -> GmailAccessTokenProvider -> GmailApiConfig
 mkGmailApiConfig = GmailApiConfig
-
-deliverGmailApiEmail :: GmailHttpRunner -> GmailApiConfig -> EmailMessage -> IO ()
-deliverGmailApiEmail = deliverGmailApiEmailWithRunner
 
 deliverGmailApiEmailWithRunner :: GmailHttpRunner -> GmailApiConfig -> EmailMessage -> IO ()
 deliverGmailApiEmailWithRunner runRequest config message = do

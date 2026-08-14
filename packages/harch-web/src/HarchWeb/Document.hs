@@ -13,7 +13,6 @@ module HarchWeb.Document
     ResolvedNavigationItem (..),
     RuntimeDescriptor (..),
     RuntimeNonce (..),
-    buildDocument,
     buildNavigation,
     buildPageShell,
     defaultCaptureKernel,
@@ -540,8 +539,8 @@ buildNavigation codec page =
           }
     )
 
-buildDocument :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
-buildDocument codec shell page =
+buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
+buildPageShell codec shell page =
   Document
     { documentTitle = pageTitle page,
       documentBodyAttributes = shellBodyAttributes shell,
@@ -580,9 +579,6 @@ renderDocumentWithNonce runtimeNonce document =
       renderHtml (documentMainContent document),
       "</main></body></html>"
     ]
-
-buildPageShell :: (Eq route) => RouteCodec route context -> PageShell route context -> Page route context -> Document route
-buildPageShell = buildDocument
 
 liveRegionAttributes :: LiveRegion -> [HtmlAttribute]
 liveRegionAttributes liveRegion =

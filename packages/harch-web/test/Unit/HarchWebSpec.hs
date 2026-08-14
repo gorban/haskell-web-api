@@ -2063,9 +2063,9 @@ spec = do
                        }
                    ]
 
-  describe "buildDocument" $
+  describe "buildPageShell" $ do
     it "preserves the generic shell contract separately from app-specific page content" $
-      buildDocument sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+      buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
         `shouldBe` Document
           { documentTitle = "Known",
             documentBodyAttributes =
@@ -2107,10 +2107,9 @@ spec = do
             documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]
           }
 
-  describe "buildPageShell" $ do
     it "renders typed external stylesheets before nonce-bound runtime descriptors" $ do
       let document =
-            (buildDocument sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
+            (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
               { documentStylesheets = [stylesheet (AssetPath "/assets/sample.css")]
               }
       Text.isInfixOf

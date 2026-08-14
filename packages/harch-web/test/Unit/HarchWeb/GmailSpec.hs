@@ -11,7 +11,6 @@ import HarchWeb.Email (EmailAddress, EmailMessage, EmailMessageInput (..), mkEma
 import HarchWeb.Gmail
   ( GmailHttpRequest (..),
     GmailHttpResponse (..),
-    deliverGmailApiEmail,
     deliverGmailApiEmailWithRunner,
     mkGmailApiConfig,
     runGmailHttpRequest,
@@ -31,7 +30,7 @@ spec = do
           message = requiredEmailMessage "recipient@example.com" "Welcome" "A line\n.second line"
           config = mkGmailApiConfig sender (pure "delegated-access-token")
           runner request = writeIORef receivedRequest (Just request) >> pure (GmailHttpResponse 200 "{\"id\":\"sent\"}")
-      deliverGmailApiEmail runner config message
+      deliverGmailApiEmailWithRunner runner config message
       request <- readIORef receivedRequest
       case request of
         Nothing -> expectationFailure "Expected Gmail request"

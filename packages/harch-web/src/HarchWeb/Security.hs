@@ -28,6 +28,7 @@ module HarchWeb.Security
     defaultResponseSecurityHeadersConfig,
     externalRequestPath,
     httpsRedirectResponse,
+    normalizeRequestPathPrefix,
     requestContextObservabilityAttributes,
     requestContextFields,
     requestHostWithoutPort,
@@ -500,7 +501,7 @@ limitObservabilityHeaderValue = Text.take 256
 
 requestPathPrefix :: RequestPolicyConfig -> Wai.Request -> Text
 requestPathPrefix requestPolicyConfig request =
-  maybe Text.empty PathPrefix.normalizePathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
+  maybe Text.empty normalizeRequestPathPrefix (trustedRequestHeaderToken requestPolicyConfig "X-Forwarded-Prefix" request)
 
 rawRequestPath :: Wai.Request -> Text
 rawRequestPath request
@@ -526,6 +527,15 @@ appendRawQueryString path rawQueryString =
 
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 externalRequestPath requestPolicyConfig request = applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (waiRequestPath requestPolicyConfig request)
+
+-- | Normalize a raw path-prefix value (trim, ensure a single leading slash,
+-- drop any trailing slash) without applying it to a path. Exposed alongside
+-- 'applyRequestPathPrefix'/'stripRequestPathPrefix' for a caller — such as
+-- @web-api@'s own request-context construction — that needs to store a
+-- normalized prefix on its own, rather than duplicate this module's private
+-- 'HarchWeb.PathPrefix' logic.
+normalizeRequestPathPrefix :: Text -> Text
+normalizeRequestPathPrefix = PathPrefix.normalizePathPrefix
 
 applyRequestPathPrefix :: Text -> Text -> Text
 applyRequestPathPrefix = PathPrefix.applyPathPrefix
