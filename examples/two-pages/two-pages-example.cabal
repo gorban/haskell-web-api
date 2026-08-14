@@ -70,6 +70,11 @@ executable two-pages-example
   import: common
   main-is: Main.hs
   hs-source-dirs: app
+  ghc-options:
+    -rtsopts
+    -threaded
+    -with-rtsopts=-N
+
   build-depends:
     base ^>=4.22.0.0,
     harch-web,
