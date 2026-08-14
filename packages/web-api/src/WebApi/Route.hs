@@ -353,7 +353,6 @@ parseApiPath :: Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
 parseApiPath segment
   | segment == "status" = Right (Nothing, StatusApiRoute)
   | segment == "second" = Right (Nothing, SecondApiRoute)
-  | segment == "404" = Right (Nothing, ApiNotFoundRoute)
 parseApiPath _ = Right (Nothing, ApiNotFoundRoute)
 
 routeFromSegment :: Text -> Maybe AppRoute
