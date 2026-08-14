@@ -1847,7 +1847,15 @@ spec = do
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_MAX_CONCURRENT", "not-a-number")]
                    `shouldBe` Left (InvalidConfigValue "REQUEST_MAX_CONCURRENT" "not-a-number"),
                  parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_MAX_CONCURRENT", "0")]
-                   `shouldBe` Left (InvalidConfigValue "REQUEST_MAX_CONCURRENT" "0")
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_MAX_CONCURRENT" "0"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_TARGET_MAX_BYTES", "-1")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_TARGET_MAX_BYTES" "-1"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_NETWORK_TIMEOUT_SECONDS", "-1")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_NETWORK_TIMEOUT_SECONDS" "-1"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_HEADER_MAX_COUNT", "-1")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_HEADER_MAX_COUNT" "-1"),
+                 parseRuntimeAppConfig committedRuntimeDefaults [] [("REQUEST_PATH_SEGMENT_MAX_COUNT", "-1")]
+                   `shouldBe` Left (InvalidConfigValue "REQUEST_PATH_SEGMENT_MAX_COUNT" "-1")
                ]
         )
 
