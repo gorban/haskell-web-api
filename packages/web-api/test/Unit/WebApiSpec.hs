@@ -5020,7 +5020,7 @@ spec = do
         loadSecondPageValueForRequest postgresEffect spanishRequestContext
           `shouldReturn` Right
             SecondPageData
-              { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
+              { secondPageDataSummary = "Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.",
                 secondPageDataHighlights = []
               }
 
