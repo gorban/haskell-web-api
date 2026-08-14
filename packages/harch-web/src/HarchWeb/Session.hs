@@ -37,10 +37,21 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 
 newtype SessionId = SessionId Text
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Redacted: a session id is a bearer credential, and 'Show' is reachable
+-- from ordinary diagnostics (an uncaught 'error', a failing @shouldBe@, a
+-- record-showing log line) that must never print it in the clear.
+instance Show SessionId where
+  show _ = "SessionId <redacted>"
 
 newtype CsrfToken = CsrfToken Text
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Redacted for the same reason as 'SessionId': a valid CSRF token is a
+-- bearer credential for the client action boundary.
+instance Show CsrfToken where
+  show _ = "CsrfToken <redacted>"
 
 newtype SessionCookieName = SessionCookieName Text
   deriving (Eq, Show)
