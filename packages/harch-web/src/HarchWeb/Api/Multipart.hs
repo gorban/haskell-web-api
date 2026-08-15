@@ -174,8 +174,15 @@ data MultipartConsumeError
     MultipartDeclaredBodyTooLarge
   deriving (Eq, Show)
 
+-- | 'FieldAccumulator' keeps a field's body as reversed chunks plus a
+-- running byte count, concatenated once in 'finalizeMultipartPart', rather
+-- than appending each chunk onto a growing strict 'ByteString' with '<>' —
+-- an attacker who chunks the request body finely (the client controls
+-- chunk size; see 'Wai.getRequestBodyChunk') would otherwise make each
+-- appended chunk re-copy the whole accumulated value, costing O(n^2) time
+-- for an n-byte field within the same declared field-size limit.
 data PartAccumulator stored
-  = FieldAccumulator Text ByteString
+  = FieldAccumulator Text [ByteString] Int
   | FileAccumulator Text Text (MultipartStagedUpload stored) Int
 
 discardActiveMultipartUpload :: IORef.IORef (Maybe (MultipartStagedUpload stored)) -> IO ()
@@ -369,7 +376,7 @@ startMultipartPart consumer partCounts headerBlock =
               when
                 (multipartPartCountsFields partCounts >= multipartLimitsMaxFieldCount (multipartConsumerLimits consumer))
                 (throwError MultipartTooManyFields)
-              pure (FieldAccumulator fieldName ByteString.empty)
+              pure (FieldAccumulator fieldName [] 0)
             Just filename -> do
               when
                 (multipartPartCountsFiles partCounts >= multipartLimitsMaxFileCount (multipartConsumerLimits consumer))
@@ -386,13 +393,13 @@ appendMultipartPartBytes ::
   ExceptT MultipartConsumeError IO (PartAccumulator stored)
 appendMultipartPartBytes consumer accumulator bodyBytes =
   case accumulator of
-    FieldAccumulator fieldName buffered ->
+    FieldAccumulator fieldName chunks buffered ->
       if exceedsMultipartLimit
         (multipartLimitsMaxFieldBytes (multipartConsumerLimits consumer))
-        (ByteString.length buffered)
+        buffered
         (ByteString.length bodyBytes)
         then throwError (MultipartFieldTooLarge fieldName)
-        else pure (FieldAccumulator fieldName (buffered <> bodyBytes))
+        else pure (FieldAccumulator fieldName (bodyBytes : chunks) (buffered + ByteString.length bodyBytes))
     FileAccumulator fieldName filename stagedUpload bytesWritten ->
       if exceedsMultipartLimit
         (multipartLimitsMaxFileBytes (multipartConsumerLimits consumer))
@@ -412,7 +419,7 @@ exceedsMultipartLimit maximumBytes current increment =
 finalizeMultipartPart :: MultipartConsumer stored -> PartAccumulator stored -> IO (MultipartPartWith stored)
 finalizeMultipartPart consumer accumulator =
   case accumulator of
-    FieldAccumulator fieldName buffered -> pure (MultipartFieldPart fieldName (decodeLeniently buffered))
+    FieldAccumulator fieldName chunks _buffered -> pure (MultipartFieldPart fieldName (decodeLeniently (ByteString.concat (reverse chunks))))
     FileAccumulator fieldName filename stagedUpload bytesWritten -> do
       storedUpload <- MultipartStorage.completeMultipartUpload stagedUpload
       IORef.writeIORef (multipartConsumerActiveUploadReference consumer) Nothing
