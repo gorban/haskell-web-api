@@ -6,12 +6,18 @@
 -- Warp lifecycle ownership stays in 'HarchWeb.Server.Transport'.
 module HarchWeb.Server.Transport.Tls
   ( ReloadingTlsCredentials,
+    TlsCertificateFilePath,
+    TlsPrivateKeyFilePath,
     ensureRuntimeFileExists,
     loadReloadingTlsCredentials,
     loadReloadingTlsCredentialsWithLabel,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     awaitReloadingTlsCredentials,
     reloadTlsCredentialsIfChanged,
+    tlsCertificateFilePath,
+    tlsCertificateFilePathValue,
+    tlsPrivateKeyFilePath,
+    tlsPrivateKeyFilePathValue,
   )
 where
 
@@ -36,13 +42,33 @@ data ReloadingTlsCredentials = ReloadingTlsCredentials
     tlsCredentialSnapshotReference :: IORef TlsCredentialSnapshot
   }
 
+-- | A TLS certificate file path. Opaque so it cannot be transposed with
+-- 'TlsPrivateKeyFilePath' at a loader call site.
+newtype TlsCertificateFilePath = TlsCertificateFilePath FilePath
+
+tlsCertificateFilePath :: FilePath -> TlsCertificateFilePath
+tlsCertificateFilePath = TlsCertificateFilePath
+
+tlsCertificateFilePathValue :: TlsCertificateFilePath -> FilePath
+tlsCertificateFilePathValue (TlsCertificateFilePath path) = path
+
+-- | A TLS private key file path. Opaque so it cannot be transposed with
+-- 'TlsCertificateFilePath' at a loader call site.
+newtype TlsPrivateKeyFilePath = TlsPrivateKeyFilePath FilePath
+
+tlsPrivateKeyFilePath :: FilePath -> TlsPrivateKeyFilePath
+tlsPrivateKeyFilePath = TlsPrivateKeyFilePath
+
+tlsPrivateKeyFilePathValue :: TlsPrivateKeyFilePath -> FilePath
+tlsPrivateKeyFilePathValue (TlsPrivateKeyFilePath path) = path
+
 ensureRuntimeFileExists :: String -> FilePath -> IO ()
 ensureRuntimeFileExists errorPrefix filePath = do
   fileExists <- doesFileExist filePath
   unless fileExists (ioError (userError (errorPrefix <> filePath)))
 
-loadReloadingTlsCredentials :: FilePath -> FilePath -> IO ReloadingTlsCredentials
-loadReloadingTlsCredentials certificatePath privateKeyPath = do
+loadReloadingTlsCredentials :: TlsCertificateFilePath -> TlsPrivateKeyFilePath -> IO ReloadingTlsCredentials
+loadReloadingTlsCredentials (TlsCertificateFilePath certificatePath) (TlsPrivateKeyFilePath privateKeyPath) = do
   snapshot <- loadTlsCredentialSnapshotOrThrow certificatePath privateKeyPath
   snapshotReference <- newIORef snapshot
   pure
@@ -52,8 +78,8 @@ loadReloadingTlsCredentials certificatePath privateKeyPath = do
         tlsCredentialSnapshotReference = snapshotReference
       }
 
-loadReloadingTlsCredentialsWithLabel :: String -> FilePath -> FilePath -> IO ReloadingTlsCredentials
-loadReloadingTlsCredentialsWithLabel tlsLabel certificatePath privateKeyPath = do
+loadReloadingTlsCredentialsWithLabel :: String -> TlsCertificateFilePath -> TlsPrivateKeyFilePath -> IO ReloadingTlsCredentials
+loadReloadingTlsCredentialsWithLabel tlsLabel (TlsCertificateFilePath certificatePath) (TlsPrivateKeyFilePath privateKeyPath) = do
   snapshot <- loadTlsCredentialSnapshotOrThrowWithLabel tlsLabel certificatePath privateKeyPath
   snapshotReference <- newIORef snapshot
   pure
@@ -63,8 +89,8 @@ loadReloadingTlsCredentialsWithLabel tlsLabel certificatePath privateKeyPath = d
         tlsCredentialSnapshotReference = snapshotReference
       }
 
-awaitReloadingTlsCredentials :: Maybe Int -> FilePath -> FilePath -> IO ReloadingTlsCredentials
-awaitReloadingTlsCredentials waitTimeoutSeconds certificatePath privateKeyPath = do
+awaitReloadingTlsCredentials :: Maybe Int -> TlsCertificateFilePath -> TlsPrivateKeyFilePath -> IO ReloadingTlsCredentials
+awaitReloadingTlsCredentials waitTimeoutSeconds (TlsCertificateFilePath certificatePath) (TlsPrivateKeyFilePath privateKeyPath) = do
   startedAt <- getMonotonicTimeNSec
   go startedAt
   where
@@ -136,12 +162,12 @@ loadTlsCredentialSnapshotOrThrowWithLabel :: String -> FilePath -> FilePath -> I
 loadTlsCredentialSnapshotOrThrowWithLabel tlsLabel certificatePath privateKeyPath =
   loadTlsCredentialSnapshotOrThrowWithLoader
     tlsLabel
-    certificatePath
-    privateKeyPath
+    (TlsCertificateFilePath certificatePath)
+    (TlsPrivateKeyFilePath privateKeyPath)
     (loadTlsCredentialSnapshotIfPresent certificatePath privateKeyPath)
 
-loadTlsCredentialSnapshotOrThrowWithLoader :: String -> FilePath -> FilePath -> IO (Maybe (Either String TlsCredentialSnapshot)) -> IO TlsCredentialSnapshot
-loadTlsCredentialSnapshotOrThrowWithLoader tlsLabel certificatePath privateKeyPath loadSnapshot = do
+loadTlsCredentialSnapshotOrThrowWithLoader :: String -> TlsCertificateFilePath -> TlsPrivateKeyFilePath -> IO (Maybe (Either String TlsCredentialSnapshot)) -> IO TlsCredentialSnapshot
+loadTlsCredentialSnapshotOrThrowWithLoader tlsLabel (TlsCertificateFilePath certificatePath) (TlsPrivateKeyFilePath privateKeyPath) loadSnapshot = do
   ensureRuntimeFileExists (tlsLabel <> " certificate file does not exist: ") certificatePath
   ensureRuntimeFileExists (tlsLabel <> " private key file does not exist: ") privateKeyPath
   snapshotResult <- loadSnapshot

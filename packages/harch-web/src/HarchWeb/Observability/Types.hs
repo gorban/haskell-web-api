@@ -15,11 +15,15 @@ module HarchWeb.Observability.Types
     RequestObservability (..),
     RequestSpan (..),
     ResponseKind (..),
+    SpanMethodLabel,
+    SpanRoutePath,
     TelemetrySignal (..),
     buildConnectionObservability,
     buildRequestObservability,
     forceConnectionObservability,
     forceRequestObservability,
+    mkSpanMethodLabel,
+    mkSpanRoutePath,
     planObservabilityStartup,
     requestObservabilityAttributes,
     requestSpanName,
@@ -125,8 +129,22 @@ newtype ConnectionObservability = ConnectionObservability
   }
   deriving (Eq, Show)
 
-requestSpanName :: Text -> Text -> Text
-requestSpanName method routePath =
+-- | The HTTP method label in an observability span display name. Opaque so
+-- it cannot be transposed with 'SpanRoutePath' at a 'requestSpanName' call
+-- site.
+newtype SpanMethodLabel = SpanMethodLabel Text
+
+mkSpanMethodLabel :: Text -> SpanMethodLabel
+mkSpanMethodLabel = SpanMethodLabel
+
+-- | The route path label in an observability span display name.
+newtype SpanRoutePath = SpanRoutePath Text
+
+mkSpanRoutePath :: Text -> SpanRoutePath
+mkSpanRoutePath = SpanRoutePath
+
+requestSpanName :: SpanMethodLabel -> SpanRoutePath -> Text
+requestSpanName (SpanMethodLabel method) (SpanRoutePath routePath) =
   Text.concat [method, " ", requestSpanOperationName routePath]
 
 requestObservabilityAttributes ::
@@ -182,7 +200,7 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
    in RequestObservability
         { observabilityRequestSpan =
             RequestSpan
-              { requestSpanDisplayName = requestSpanName method routePath,
+              { requestSpanDisplayName = requestSpanName (mkSpanMethodLabel method) (mkSpanRoutePath routePath),
                 requestSpanAttributes = attributes
               },
           observabilityHttpServerMetrics =

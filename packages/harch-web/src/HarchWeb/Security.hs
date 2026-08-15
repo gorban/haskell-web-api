@@ -16,6 +16,8 @@
 module HarchWeb.Security
   ( module HarchWeb.Security.RequestLimits,
     CorsPolicyConfig (..),
+    PathPrefix.PathPrefix,
+    PathPrefix.UrlPath,
     RequestContextField (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
@@ -28,7 +30,10 @@ module HarchWeb.Security
     defaultResponseSecurityHeadersConfig,
     externalRequestPath,
     httpsRedirectResponse,
+    PathPrefix.mkPathPrefix,
+    PathPrefix.mkUrlPath,
     normalizeRequestPathPrefix,
+    PathPrefix.pathPrefixText,
     requestContextObservabilityAttributes,
     requestContextFields,
     requestHostWithoutPort,
@@ -43,6 +48,7 @@ module HarchWeb.Security
     responseSecurityHeaderValuesWithNonce,
     socketAddressText,
     stripRequestPathPrefix,
+    PathPrefix.urlPathText,
     waiRequestPath,
     waiRequestRouteTarget,
   )
@@ -158,9 +164,11 @@ httpsRedirectResponse redirectLocation =
 
 waiRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
 waiRequestPath requestPolicyConfig request =
-  stripRequestPathPrefix
-    (requestPathPrefix requestPolicyConfig request)
-    (rawRequestPath request)
+  PathPrefix.urlPathText
+    ( stripRequestPathPrefix
+        (PathPrefix.mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (PathPrefix.mkUrlPath (rawRequestPath request))
+    )
 
 requestRedirectLocation :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
 requestRedirectLocation requestPolicyConfig request =
@@ -526,7 +534,12 @@ appendRawQueryString path rawQueryString =
     else either (const path) (path <>) (TextEncoding.decodeUtf8' rawQueryString)
 
 externalRequestPath :: RequestPolicyConfig -> Wai.Request -> Text
-externalRequestPath requestPolicyConfig request = applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) (waiRequestPath requestPolicyConfig request)
+externalRequestPath requestPolicyConfig request =
+  PathPrefix.urlPathText
+    ( applyRequestPathPrefix
+        (PathPrefix.mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (PathPrefix.mkUrlPath (waiRequestPath requestPolicyConfig request))
+    )
 
 -- | Normalize a raw path-prefix value (trim, ensure a single leading slash,
 -- drop any trailing slash) without applying it to a path. Exposed alongside
@@ -537,10 +550,10 @@ externalRequestPath requestPolicyConfig request = applyRequestPathPrefix (reques
 normalizeRequestPathPrefix :: Text -> Text
 normalizeRequestPathPrefix = PathPrefix.normalizePathPrefix
 
-applyRequestPathPrefix :: Text -> Text -> Text
+applyRequestPathPrefix :: PathPrefix.PathPrefix -> PathPrefix.UrlPath -> PathPrefix.UrlPath
 applyRequestPathPrefix = PathPrefix.applyPathPrefix
 
-stripRequestPathPrefix :: Text -> Text -> Text
+stripRequestPathPrefix :: PathPrefix.PathPrefix -> PathPrefix.UrlPath -> PathPrefix.UrlPath
 stripRequestPathPrefix = PathPrefix.stripPathPrefix
 
 firstCommaSeparatedValue :: Text -> Maybe Text

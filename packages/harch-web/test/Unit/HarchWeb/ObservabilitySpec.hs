@@ -188,10 +188,12 @@ spec = do
 
   describe "requestSpanName" $ do
     it "uses the request method with the canonical route path" $
-      Observability.requestSpanName "GET" "/fr/second" `shouldBe` "GET /fr/second"
+      Observability.requestSpanName (Observability.mkSpanMethodLabel "GET") (Observability.mkSpanRoutePath "/fr/second")
+        `shouldBe` "GET /fr/second"
 
     it "uses a stable not-found operation name instead of a route-looking synthetic path" $
-      Observability.requestSpanName "GET" "/fr/404" `shouldBe` "GET not-found"
+      Observability.requestSpanName (Observability.mkSpanMethodLabel "GET") (Observability.mkSpanRoutePath "/fr/404")
+        `shouldBe` "GET not-found"
 
   describe "requestObservabilityAttributes" $
     it "builds stable common attributes for page responses and preserves extra attributes" $

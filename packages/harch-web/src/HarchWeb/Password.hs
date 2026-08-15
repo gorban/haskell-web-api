@@ -1,9 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Password
-  ( Password,
+  ( Argon2Iterations,
+    Argon2MemoryKib,
+    Argon2Parallelism,
+    Password,
     PasswordHash (..),
     PasswordHashingPolicy (..),
+    argon2Iterations,
+    argon2MemoryKib,
+    argon2Parallelism,
     defaultPasswordHashingPolicy,
     hashPassword,
     hashPasswordWithSalt,
@@ -49,8 +55,28 @@ defaultPasswordHashingPolicy =
 mkPassword :: Text -> Password
 mkPassword = Password . TextEncoding.encodeUtf8
 
-mkPasswordHashingPolicy :: Word32 -> Word32 -> Word32 -> Maybe PasswordHashingPolicy
-mkPasswordHashingPolicy iterations memoryKibibytes parallelism =
+-- | The Argon2 time-cost parameter. Construct with 'argon2Iterations' so a
+-- caller cannot transpose it with 'Argon2MemoryKib' or 'Argon2Parallelism' at
+-- a 'mkPasswordHashingPolicy' call site.
+newtype Argon2Iterations = Argon2Iterations Word32
+
+argon2Iterations :: Word32 -> Argon2Iterations
+argon2Iterations = Argon2Iterations
+
+-- | The Argon2 memory-cost parameter, in kibibytes.
+newtype Argon2MemoryKib = Argon2MemoryKib Word32
+
+argon2MemoryKib :: Word32 -> Argon2MemoryKib
+argon2MemoryKib = Argon2MemoryKib
+
+-- | The Argon2 parallelism (lane count) parameter.
+newtype Argon2Parallelism = Argon2Parallelism Word32
+
+argon2Parallelism :: Word32 -> Argon2Parallelism
+argon2Parallelism = Argon2Parallelism
+
+mkPasswordHashingPolicy :: Argon2Iterations -> Argon2MemoryKib -> Argon2Parallelism -> Maybe PasswordHashingPolicy
+mkPasswordHashingPolicy (Argon2Iterations iterations) (Argon2MemoryKib memoryKibibytes) (Argon2Parallelism parallelism) =
   case iterations == 0 || parallelism == 0 || memoryKibibytes < 8 * parallelism of
     True -> Nothing
     False -> Just (PasswordHashingPolicy iterations memoryKibibytes parallelism)
@@ -118,7 +144,7 @@ parsePasswordHash storedHash = do
   memoryKibibytes <- Text.stripPrefix "m=" memoryValue >>= readWord32
   iterations <- Text.stripPrefix "t=" iterationValue >>= readWord32
   parallelism <- Text.stripPrefix "p=" parallelismValue >>= readWord32
-  policy <- mkPasswordHashingPolicy iterations memoryKibibytes parallelism
+  policy <- mkPasswordHashingPolicy (argon2Iterations iterations) (argon2MemoryKib memoryKibibytes) (argon2Parallelism parallelism)
   salt <- either (const Nothing) Just (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedSalt))
   hashValue <- either (const Nothing) Just (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedHash))
   if ByteString.length salt < 16 || ByteString.length hashValue /= 32

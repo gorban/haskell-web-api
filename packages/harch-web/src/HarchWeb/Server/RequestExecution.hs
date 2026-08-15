@@ -42,6 +42,8 @@ import HarchWeb.Security
     corsPreflightResponse,
     externalRequestPath,
     httpsRedirectResponse,
+    mkPathPrefix,
+    mkUrlPath,
     prependRequestLogContext,
     requestConcurrencyLimitValue,
     requestContextObservabilityAttributes,
@@ -51,6 +53,7 @@ import HarchWeb.Security
     requestRedirectLocation,
     requestScheme,
     requestTraceContext,
+    urlPathText,
     validateRequestHead,
     waiRequestPath,
     waiRequestRouteTarget,
@@ -98,7 +101,9 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
   maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath)
   for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
     earlyResponse
-      (applyRequestPathPrefix (requestPathPrefix requestPolicyConfig request) staticRoutePath)
+      ( urlPathText
+          (applyRequestPathPrefix (mkPathPrefix (requestPathPrefix requestPolicyConfig request)) (mkUrlPath staticRoutePath))
+      )
       staticResponse
 
 data RequestExecutionTimings = RequestExecutionTimings

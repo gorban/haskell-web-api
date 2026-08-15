@@ -24,7 +24,7 @@ where
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.PathPrefix (applyPathPrefix)
+import HarchWeb.PathPrefix (applyPathPrefix, mkPathPrefix, mkUrlPath, urlPathText)
 
 data StaticAssetRoot = StaticAssetRoot
   { staticUrlPrefix :: Text,
@@ -100,7 +100,7 @@ staticAssetHrefWithPrefix pathPrefix staticRoot assetPath =
         if Text.null normalizedPrefix
           then "/" <> normalizedAssetPath
           else Text.concat [normalizedPrefix, "/", normalizedAssetPath]
-   in applyPathPrefix pathPrefix assetHref
+   in urlPathText (applyPathPrefix (mkPathPrefix pathPrefix) (mkUrlPath assetHref))
 
 normalizeStaticPrefix :: Text -> Text
 normalizeStaticPrefix prefix =

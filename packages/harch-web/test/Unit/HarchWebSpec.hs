@@ -4858,6 +4858,24 @@ spec = do
       show [DuplicateListenerEndpoint duplicateEndpoint]
         `shouldBe` "[DuplicateListenerEndpoint (ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5001})]"
 
+  describe "PathPrefix and UrlPath" $
+    it "keeps both path roles distinct while applying and stripping prefixes" $
+      expectAll
+        ( (pathPrefixText (mkPathPrefix "/app") `shouldBe` "/app")
+            :| [ urlPathText (mkUrlPath "/known") `shouldBe` "/known",
+                 urlPathText (applyRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/known")) `shouldBe` "/app/known",
+                 urlPathText (stripRequestPathPrefix (mkPathPrefix "/app") (mkUrlPath "/app/known")) `shouldBe` "/known"
+               ]
+        )
+
+  describe "TlsCertificateFilePath and TlsPrivateKeyFilePath" $
+    it "keeps certificate and private-key paths distinct at TLS loader call sites" $
+      expectAll
+        ( (tlsCertificateFilePathValue (tlsCertificateFilePath "a.pem") `shouldBe` "a.pem")
+            :| [ tlsPrivateKeyFilePathValue (tlsPrivateKeyFilePath "a.key") `shouldBe` "a.key"
+               ]
+        )
+
   describe "reloadTlsCredentialsIfChanged" $ do
     it "fails explicitly when initial TLS files exist but do not load as credentials" $
       withSystemTempDirectory "harch-web-reloading-tls" $ \tempDirectory -> do
@@ -4865,7 +4883,7 @@ spec = do
             privateKeyPath = tempDirectory </> "privkey.pem"
         writeFile certificatePath "not a certificate"
         writeFile privateKeyPath "not a private key"
-        startupResult <- try (loadReloadingTlsCredentials certificatePath privateKeyPath)
+        startupResult <- try (loadReloadingTlsCredentials (tlsCertificateFilePath certificatePath) (tlsPrivateKeyFilePath privateKeyPath))
         case startupResult of
           Left exception -> do
             let renderedException = show (exception :: IOError)
@@ -4882,7 +4900,7 @@ spec = do
             privateKeyPath = tempDirectory </> "privkey.pem"
         writeFile certificatePath manualTlsCertificatePem
         writeFile privateKeyPath manualTlsPrivateKeyPem
-        reloadingTlsCredentials <- loadReloadingTlsCredentials certificatePath privateKeyPath
+        reloadingTlsCredentials <- loadReloadingTlsCredentials (tlsCertificateFilePath certificatePath) (tlsPrivateKeyFilePath privateKeyPath)
         initialCredentials <- show <$> reloadTlsCredentialsIfChanged reloadingTlsCredentials
         threadDelay 100000
         writeFile certificatePath manualTlsCertificatePem
@@ -4906,8 +4924,8 @@ spec = do
           try
             ( loadTlsCredentialSnapshotOrThrowWithLoader
                 "Manual TLS"
-                certificatePath
-                privateKeyPath
+                (tlsCertificateFilePath certificatePath)
+                (tlsPrivateKeyFilePath privateKeyPath)
                 (pure Nothing)
             )
         case startupResult of
@@ -4925,8 +4943,8 @@ spec = do
           try
             ( loadTlsCredentialSnapshotOrThrowWithLoader
                 "Manual TLS"
-                certificatePath
-                privateKeyPath
+                (tlsCertificateFilePath certificatePath)
+                (tlsPrivateKeyFilePath privateKeyPath)
                 (pure (Just (Left "synthetic TLS credential error")))
             )
         case startupResult of
@@ -4944,8 +4962,8 @@ spec = do
           try
             ( loadTlsCredentialSnapshotOrThrowWithLoader
                 ""
-                certificatePath
-                privateKeyPath
+                (tlsCertificateFilePath certificatePath)
+                (tlsPrivateKeyFilePath privateKeyPath)
                 (pure (Just (Left "synthetic TLS credential error")))
             )
         case startupResult of

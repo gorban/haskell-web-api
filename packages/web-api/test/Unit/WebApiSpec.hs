@@ -458,7 +458,9 @@ unescapeLibpqConnectionValueBody remaining =
 
 testPasswordHashingPolicy :: Password.PasswordHashingPolicy
 testPasswordHashingPolicy =
-  fromMaybe (error "Expected valid test password hashing policy") (Password.mkPasswordHashingPolicy 1 8 1)
+  fromMaybe
+    (error "Expected valid test password hashing policy")
+    (Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1))
 
 requiredAccountId :: Text -> Account.AccountId
 requiredAccountId value =
@@ -3946,7 +3948,7 @@ spec = do
           password = Password.mkPassword "correct horse battery staple"
           passwordHash = fromMaybe (error "expected test password hash") (Password.hashPasswordWithSalt Password.defaultPasswordHashingPolicy (ByteString.replicate 16 7) password)
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
-          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 7) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
+          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (Secret.mkEncryptionNonce (ByteString.replicate 12 7)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
           credentialStore = AccountCredentialStore (\email -> (email `shouldBe` emailAddress) >> pure (Right (Just (AccountCredential accountId passwordHash True)))) (\_ -> pure (error "unexpected username credential lookup"))
           mfaStore =
             MfaStore
@@ -4020,7 +4022,7 @@ spec = do
           confirmedCredential = AccountCredential accountId passwordHash True
           unverifiedCredential = AccountCredential accountId passwordHash False
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
-          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 8) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret)))
+          encryptedTotpSecret = fromMaybe (error "expected encrypted TOTP secret") (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (Secret.mkEncryptionNonce (ByteString.replicate 12 8)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
           confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1)
           loginRequest requestContext fields = typedAccountActionRequest "POST" "/login" fields requestContext
           spanishLoginRequest fields = typedAccountActionRequest "POST" "/es/login" fields spanishRequestContext
@@ -4277,7 +4279,7 @@ spec = do
           encryptedTotpSecret =
             fromMaybe
               (error "expected encrypted TOTP secret")
-              (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (ByteString.replicate 12 3) (TextEncoding.encodeUtf8 (Totp.renderTotpSecret validTotpSecret)))
+              (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (Secret.mkEncryptionNonce (ByteString.replicate 12 3)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret validTotpSecret))))
           expect mfaStore fields status focusId message = do
             actionResult <- handleAccountAction (workflowFor mfaStore) (request fields)
             actionResult `shouldSatisfy` actionHasStatusAndFocus status focusId message

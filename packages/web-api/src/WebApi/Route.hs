@@ -232,19 +232,23 @@ selectRoute requestContext target = do
 
 renderRoutePath :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text
 renderRoutePath routeRequest =
-  HarchWeb.applyRequestPathPrefix
-    (requestPathPrefix requestContext)
-    ( case HarchWeb.requestRoute routeRequest of
-        Api apiRoute -> renderApiRoutePath apiRoute
-        Page pageRoute ->
-          let renderedPath =
-                Text.concat
-                  [ renderLocalePrefix
-                      (requestLocale requestContext)
-                      (requestLocaleIsExplicit requestContext),
-                    routePageSuffix (pageRouteMetadata pageRoute)
-                  ]
-           in if Text.null renderedPath then "/" else renderedPath
+  HarchWeb.urlPathText
+    ( HarchWeb.applyRequestPathPrefix
+        (HarchWeb.mkPathPrefix (requestPathPrefix requestContext))
+        ( HarchWeb.mkUrlPath
+            ( case HarchWeb.requestRoute routeRequest of
+                Api apiRoute -> renderApiRoutePath apiRoute
+                Page pageRoute ->
+                  let renderedPath =
+                        Text.concat
+                          [ renderLocalePrefix
+                              (requestLocale requestContext)
+                              (requestLocaleIsExplicit requestContext),
+                            routePageSuffix (pageRouteMetadata pageRoute)
+                          ]
+                   in if Text.null renderedPath then "/" else renderedPath
+            )
+        )
     )
   where
     requestContext = HarchWeb.requestContext routeRequest

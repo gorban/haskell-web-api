@@ -29,8 +29,11 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Security
   ( RequestPolicyConfig,
     applyRequestPathPrefix,
+    mkPathPrefix,
+    mkUrlPath,
     requestHostWithoutPort,
     requestPathPrefix,
+    urlPathText,
     waiRequestPath,
   )
 import Network.HTTP.Types qualified as Http
@@ -78,9 +81,11 @@ acmeHttp01ChallengeToken requestPolicyConfig request =
 
 acmeChallengeRoutePath :: RequestPolicyConfig -> Wai.Request -> Text
 acmeChallengeRoutePath requestPolicyConfig request =
-  applyRequestPathPrefix
-    (requestPathPrefix requestPolicyConfig request)
-    "/.well-known/acme-challenge/*"
+  urlPathText
+    ( applyRequestPathPrefix
+        (mkPathPrefix (requestPathPrefix requestPolicyConfig request))
+        (mkUrlPath "/.well-known/acme-challenge/*")
+    )
 
 registerAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
 registerAcmeChallenges (AcmeChallengeStore challengeStore) newChallenges =

@@ -28,21 +28,21 @@ spec = do
   describe "AES-256-GCM secret envelopes" $ do
     it "round-trips a versioned encrypted value and rejects altered inputs" $ do
       let key = requiredKey
-          nonce = "0123456789ab"
+          nonce = mkEncryptionNonce "0123456789ab"
           plaintext = "authenticator-secret"
-          envelope = requiredEnvelope (encryptSecretWithNonce key nonce plaintext)
+          envelope = requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext plaintext))
       decryptSecret key envelope `shouldBe` Just plaintext
       maybeRandomEnvelope <- encryptSecret key plaintext
       expectAll
         ( ((maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext)
             :| [ decryptSecretText key envelope `shouldBe` Just "authenticator-secret",
-                 decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce "\255")) `shouldBe` Nothing,
+                 decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext "\255"))) `shouldBe` Nothing,
                  decryptSecret key "not-base64" `shouldBe` Nothing,
                  decryptSecret key (envelope <> "A") `shouldBe` Nothing,
                  decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing,
                  decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing,
                  decryptSecret otherKey envelope `shouldBe` Nothing,
-                 encryptSecretWithNonce key "short" plaintext `shouldBe` Nothing
+                 encryptSecretWithNonce key (mkEncryptionNonce "short") (mkSecretPlaintext plaintext) `shouldBe` Nothing
                ]
         )
 

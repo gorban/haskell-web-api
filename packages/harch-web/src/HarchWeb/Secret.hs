@@ -1,12 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module HarchWeb.Secret
-  ( SecretEncryptionKey,
+  ( EncryptionNonce,
+    SecretEncryptionKey,
+    SecretPlaintext,
     decryptSecret,
     decryptSecretText,
     encryptSecret,
     encryptSecretWithNonce,
+    mkEncryptionNonce,
     mkSecretEncryptionKey,
+    mkSecretPlaintext,
   )
 where
 
@@ -30,13 +34,27 @@ mkSecretEncryptionKey encodedKey = do
     then Just (SecretEncryptionKey key)
     else Nothing
 
+-- | A fresh (or caller-supplied, in 'encryptSecretWithNonce') AEAD nonce.
+-- Opaque so it cannot be transposed with 'SecretPlaintext' at a call site.
+newtype EncryptionNonce = EncryptionNonce ByteString.ByteString
+
+mkEncryptionNonce :: ByteString.ByteString -> EncryptionNonce
+mkEncryptionNonce = EncryptionNonce
+
+-- | The plaintext bytes being encrypted. Opaque so it cannot be transposed
+-- with 'EncryptionNonce' at a call site.
+newtype SecretPlaintext = SecretPlaintext ByteString.ByteString
+
+mkSecretPlaintext :: ByteString.ByteString -> SecretPlaintext
+mkSecretPlaintext = SecretPlaintext
+
 encryptSecret :: SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text)
 encryptSecret encryptionKey plaintext = do
   nonce <- getEntropy nonceLength
-  pure (encryptSecretWithNonce encryptionKey nonce plaintext)
+  pure (encryptSecretWithNonce encryptionKey (mkEncryptionNonce nonce) (mkSecretPlaintext plaintext))
 
-encryptSecretWithNonce :: SecretEncryptionKey -> ByteString.ByteString -> ByteString.ByteString -> Maybe Text
-encryptSecretWithNonce (SecretEncryptionKey key) nonce plaintext =
+encryptSecretWithNonce :: SecretEncryptionKey -> EncryptionNonce -> SecretPlaintext -> Maybe Text
+encryptSecretWithNonce (SecretEncryptionKey key) (EncryptionNonce nonce) (SecretPlaintext plaintext) =
   TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> encrypt key nonce plaintext
 
 decryptSecret :: SecretEncryptionKey -> Text -> Maybe ByteString.ByteString

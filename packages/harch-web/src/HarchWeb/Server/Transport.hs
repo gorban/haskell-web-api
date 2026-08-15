@@ -10,6 +10,8 @@
 module HarchWeb.Server.Transport
   ( ReloadingTlsCredentials,
     RunningRuntimeServer,
+    TlsCertificateFilePath,
+    TlsPrivateKeyFilePath,
     ensureRuntimeFileExists,
     listenerSchemeText,
     loadReloadingTlsCredentials,
@@ -26,6 +28,10 @@ module HarchWeb.Server.Transport
     startWarpServerOnSocketWithRequestTransportLimits,
     stopRuntimeServer,
     stopRuntimeServers,
+    tlsCertificateFilePath,
+    tlsCertificateFilePathValue,
+    tlsPrivateKeyFilePath,
+    tlsPrivateKeyFilePathValue,
   )
 where
 
@@ -50,12 +56,18 @@ import HarchWeb.Security
 import HarchWeb.Server.Config
 import HarchWeb.Server.Transport.Tls
   ( ReloadingTlsCredentials,
+    TlsCertificateFilePath,
+    TlsPrivateKeyFilePath,
     awaitReloadingTlsCredentials,
     ensureRuntimeFileExists,
     loadReloadingTlsCredentials,
     loadReloadingTlsCredentialsWithLabel,
     loadTlsCredentialSnapshotOrThrowWithLoader,
     reloadTlsCredentialsIfChanged,
+    tlsCertificateFilePath,
+    tlsCertificateFilePathValue,
+    tlsPrivateKeyFilePath,
+    tlsPrivateKeyFilePathValue,
   )
 import Network.Socket qualified as Socket
 import Network.TLS qualified as TLS
@@ -137,13 +149,13 @@ startManualTlsRuntimeServerWithStarterAndRequestTransportLimits startTlsServer m
       RequireCertificateFiles ->
         loadReloadingTlsCredentialsWithLabel
           tlsLabel
-          (tlsCertificateFile manualTlsPlan)
-          (tlsPrivateKeyFile manualTlsPlan)
+          (tlsCertificateFilePath (tlsCertificateFile manualTlsPlan))
+          (tlsPrivateKeyFilePath (tlsPrivateKeyFile manualTlsPlan))
       AwaitCertificateFiles waitTimeoutSeconds ->
         awaitReloadingTlsCredentials
           waitTimeoutSeconds
-          (tlsCertificateFile manualTlsPlan)
-          (tlsPrivateKeyFile manualTlsPlan)
+          (tlsCertificateFilePath (tlsCertificateFile manualTlsPlan))
+          (tlsPrivateKeyFilePath (tlsPrivateKeyFile manualTlsPlan))
   initialTlsCredentials <- reloadTlsCredentialsIfChanged reloadingTlsCredentials
   let endpoint = tlsEndpoint manualTlsPlan
       baseTlsSettings =

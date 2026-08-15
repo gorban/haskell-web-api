@@ -11,7 +11,7 @@ import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
 testPolicy :: PasswordHashingPolicy
-testPolicy = required "test policy" (mkPasswordHashingPolicy 1 8 1)
+testPolicy = required "test policy" (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 1))
 
 samplePassword :: Password
 samplePassword = mkPassword "correct horse battery staple"
@@ -34,10 +34,10 @@ spec = do
                    `shouldBe` "PasswordHashingPolicy {passwordHashIterations = 3, passwordHashMemoryKibibytes = 65536, passwordHashParallelism = 1}",
                  show [defaultPasswordHashingPolicy]
                    `shouldBe` "[PasswordHashingPolicy {passwordHashIterations = 3, passwordHashMemoryKibibytes = 65536, passwordHashParallelism = 1}]",
-                 mkPasswordHashingPolicy 0 8 1 `shouldBe` Nothing,
-                 mkPasswordHashingPolicy 1 8 0 `shouldBe` Nothing,
-                 mkPasswordHashingPolicy 1 15 2 `shouldBe` Nothing,
-                 mkPasswordHashingPolicy 1 16 2 `shouldBe` Just (PasswordHashingPolicy 1 16 2),
+                 mkPasswordHashingPolicy (argon2Iterations 0) (argon2MemoryKib 8) (argon2Parallelism 1) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 0) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 15) (argon2Parallelism 2) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 16) (argon2Parallelism 2) `shouldBe` Just (PasswordHashingPolicy 1 16 2),
                  defaultPasswordHashingPolicy /= testPolicy `shouldBe` True
                ]
         )

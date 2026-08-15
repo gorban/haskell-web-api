@@ -12,7 +12,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode (RecoveryCode, hashRecoveryCodeWithSalt, mkRecoveryCode)
-import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkSecretEncryptionKey)
+import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -223,7 +223,7 @@ requiredEncryptedSecret secret =
 
 requiredEncryptedPlaintext :: ByteString.ByteString -> Text.Text
 requiredEncryptedPlaintext plaintext =
-  case encryptSecretWithNonce encryptionKey "123456789012" plaintext of
+  case encryptSecretWithNonce encryptionKey (mkEncryptionNonce "123456789012") (mkSecretPlaintext plaintext) of
     Just encryptedSecret -> encryptedSecret
     Nothing -> error "expected encryption to succeed"
 
