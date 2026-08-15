@@ -10,8 +10,11 @@ module WebApi.Postgres.Runtime
     buildRuntimePostgresPageRepositoryWithRunner,
     decodeRuntimeQueryValue,
     libpqConnectionValue,
+    renderRunnerError,
     renderRuntimeConnectionErrorMessage,
     renderRuntimeResultErrorMessage,
+    runRequiredScalarCommand,
+    runRowsCommand,
     runRuntimeRowsQuery,
     runRuntimeParameterizedRowsQuery,
     runRuntimeScalarQuery,
@@ -43,7 +46,22 @@ data PostgresCommand = PostgresCommand
     postgresArguments :: [String],
     postgresEnvironment :: [(String, String)]
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Redacted: 'postgresArguments' carries raw SQL (which can embed a
+-- literal password for a privilege-migration @CREATE ROLE@ statement) and
+-- 'postgresEnvironment' carries @PGPASSWORD@ in cleartext. A derived
+-- 'Show' is reachable from ordinary diagnostics ('renderRunnerError',
+-- an uncaught 'error', a failing @shouldBe@) that must never print either
+-- in the clear; only the executable name is safe to surface.
+instance Show PostgresCommand where
+  showsPrec precedence command =
+    showParen
+      (precedence > 10)
+      ( showString "PostgresCommand {postgresExecutable = "
+          . shows (postgresExecutable command)
+          . showString ", postgresArguments = <redacted>, postgresEnvironment = <redacted>}"
+      )
 
 data PostgresCommandResult = PostgresCommandResult
   { postgresExitCode :: ExitCode,
@@ -352,17 +370,11 @@ mergeEnvironment inheritedEnvironment additionalEnvironment =
 renderRunnerError :: PostgresRunnerError -> Text
 renderRunnerError runnerError =
   case runnerError of
-    PostgresCommandFailed command commandResult ->
-      let commandSummary =
-            Text.pack
-              (unwords (postgresExecutable command : postgresArguments command))
-          environmentSummary = Text.pack (show (postgresEnvironment command))
-          stderrText = Text.strip (postgresStderr commandResult)
-       in commandSummary `seq`
-            environmentSummary `seq`
-              if Text.null stderrText
-                then "psql command failed"
-                else stderrText
+    PostgresCommandFailed _command commandResult ->
+      let stderrText = Text.strip (postgresStderr commandResult)
+       in if Text.null stderrText
+            then "psql command failed"
+            else stderrText
     UnexpectedQueryRows message rows ->
       Text.concat
         [ message,

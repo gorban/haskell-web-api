@@ -10,12 +10,13 @@ module WebApi.App
     buildRuntimeAppWithDatabaseBuilder,
     run,
     runWithConfig,
+    runtimeRequestObservabilityReporter,
     unavailableAccountWorkflow,
   )
 where
 
 import Control.Exception (SomeException, displayException, evaluate, try)
-import Control.Monad (forM_)
+import Control.Monad (forM_, unless)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -37,6 +38,7 @@ import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config
   ( AppConfig (..),
     AppEnvironmentConfig (..),
+    AppMode (..),
     AppStartupConfig (..),
     AppStartupConfigLoadError,
     DatabaseConfig,
@@ -168,8 +170,8 @@ buildRuntimeApp config environmentConfig =
             config
             pageRepository
             accountWorkflow
-            (runtimeRequestObservabilityReporter config)
-            (runtimeConnectionObservabilityReporter config)
+            (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
+            (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
             runtimeApplicationLogReporter
 
 buildRuntimeAppWithDatabaseBuilder ::
@@ -184,8 +186,8 @@ buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig 
           config
           pageRepository
           unavailableAccountWorkflow
-          (runtimeRequestObservabilityReporter config)
-          (runtimeConnectionObservabilityReporter config)
+          (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
+          (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
           runtimeApplicationLogReporter
 
 buildRuntimeAccountWorkflow :: AppEnvironmentConfig -> AccountWorkflow
@@ -302,29 +304,45 @@ listenerUrlPrefix listenerScheme =
     Http -> "http://"
     Https -> "https://"
 
-runtimeRequestObservabilityReporter :: AppConfig -> Observability.RequestObservability -> IO ()
-runtimeRequestObservabilityReporter config =
+runtimeRequestObservabilityReporter :: AppMode -> AppConfig -> Observability.RequestObservability -> IO ()
+runtimeRequestObservabilityReporter mode config =
   runtimeObservabilityReporter
+    mode
     config
     "request observability"
     (HarchWeb.exportRequestObservabilityToOtlp "web-api")
 
-runtimeConnectionObservabilityReporter :: AppConfig -> Observability.ConnectionObservability -> IO ()
-runtimeConnectionObservabilityReporter config =
+runtimeConnectionObservabilityReporter :: AppMode -> AppConfig -> Observability.ConnectionObservability -> IO ()
+runtimeConnectionObservabilityReporter mode config =
   runtimeObservabilityReporter
+    mode
     config
     "connection observability"
     (HarchWeb.exportConnectionObservabilityToOtlp "web-api")
 
+-- | The unstructured "TRACE " stderr dump is a local-debugging convenience,
+-- not a private structured log: it carries client.address, user_agent, and
+-- other per-request PII with no level or config gate. Kept for Development
+-- and Test (where CI/local debugging value outweighs the exposure), but
+-- suppressed in Production, where it would otherwise print PII for every
+-- real request forever with no way to turn it off.
 runtimeObservabilityReporter ::
   (Show observability) =>
+  AppMode ->
   AppConfig ->
   Text.Text ->
   (HarchWeb.OtlpExporter -> observability -> IO ()) ->
   observability ->
   IO ()
-runtimeObservabilityReporter config observabilityKind exportObservability observabilityValue = do
-  TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue))
+runtimeObservabilityReporter mode config observabilityKind exportObservability observabilityValue = do
+  -- 'unless's own no-op branch (not a local @pure ()@) is deliberate: a
+  -- bare @()@ literal here is a lazy value nothing downstream forces, the
+  -- same "genuinely never scrutinized" HPC gap this codebase has hit
+  -- before (see the AC decision record in docs/design-guidance.md).
+  -- Delegating the no-op to 'Control.Monad.unless' keeps that triviality
+  -- inside @base@, outside this project's own coverage boundary, rather
+  -- than adding a forced tick for a value with nothing to assert about.
+  unless (mode == Production) (TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue)))
   forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
     exportResult <-
       try (exportObservability exporter observabilityValue) ::

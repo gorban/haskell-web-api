@@ -29,6 +29,7 @@ import WebApi.Postgres.Migration
   )
 import WebApi.Postgres.Runtime
   ( PostgresRunnerError,
+    renderRunnerError,
   )
 
 data DatabaseSetupCommand
@@ -96,9 +97,9 @@ renderDatabaseSetupError setupError =
     DatabaseSetupRuntimeConfigLoadError loadError ->
       "Failed to load runtime database config: " <> show loadError
     DatabaseSetupMigrationError runnerError ->
-      "Failed to apply database migrations: " <> show runnerError
+      "Failed to apply database migrations: " <> Text.unpack (renderRunnerError runnerError)
     DatabaseSetupSeedError runnerError ->
-      "Failed to apply database seed data: " <> show runnerError
+      "Failed to apply database seed data: " <> Text.unpack (renderRunnerError runnerError)
 
 runDatabaseSetupArgs :: Handle -> [String] -> IO ()
 runDatabaseSetupArgs =

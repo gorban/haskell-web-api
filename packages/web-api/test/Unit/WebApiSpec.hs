@@ -57,7 +57,7 @@ import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountSto
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.Api.Endpoints (noApiRequestFields)
-import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, unavailableAccountWorkflow)
+import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, runtimeRequestObservabilityReporter, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.AppEffect qualified as AppEffect
@@ -70,7 +70,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -2488,10 +2488,12 @@ spec = do
               }
           dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
       show dynamicEnvironmentConfig
-        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = \"web_api\"}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
+        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
-                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
+                       <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
                    )
+      show dynamicEnvironmentConfig `shouldNotContain` "databasePassword = \""
+      show dynamicEnvironmentConfig `shouldNotContain` "smtpDeliveryPassword = \""
 
     it "builds localized verification URLs and delivers through the native loopback SMTP server" $
       bracket DevSmtp.startDevSmtpServer DevSmtp.stopDevSmtpServer $ \server -> do
@@ -2540,6 +2542,14 @@ spec = do
           runtimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
           >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
+        let productionRuntimeApplication = buildRuntimeApp defaultAppConfig (environmentConfig {appMode = Production})
+        HarchWeb.renderResponse
+          productionRuntimeApplication
+          (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
+          >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
+        let sampleRequestObservability = Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind []
+        runtimeRequestObservabilityReporter Production defaultAppConfig sampleRequestObservability
+        runtimeRequestObservabilityReporter Development defaultAppConfig sampleRequestObservability
         HarchWeb.reportConnectionObservability
           runtimeApplication
           (Observability.buildConnectionObservability "CONNECTION runtime-account-workflow-test" [])
@@ -2605,13 +2615,15 @@ spec = do
       show Production `shouldBe` "Production"
       show [Development, Test, Production] `shouldBe` "[Development,Test,Production]"
       show productionDatabaseConfig
-        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}"
+        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>}"
       show [productionDatabaseConfig]
-        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = \"super-secret\"}]"
+        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>}]"
+      show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
       show [productionEnvironmentConfig]
-        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = \"password\"}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}]"
+        `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}]"
+      show productionEnvironmentConfig `shouldNotContain` "super-secret"
       show (MissingConfigValue "DATABASE_PASSWORD") `shouldBe` "MissingConfigValue \"DATABASE_PASSWORD\""
       show (InvalidConfigValue "APP_MODE" "staging") `shouldBe` "InvalidConfigValue \"APP_MODE\" \"staging\""
       show [MissingConfigValue "DATABASE_PASSWORD", InvalidConfigValue "APP_MODE" "staging"]
@@ -5039,21 +5051,49 @@ spec = do
       unexpectedRowsError `shouldBe` unexpectedRowsError
       unexpectedRowsError `shouldNotBe` UnexpectedQueryRows "expected exactly one row" ["first"]
       show command
-        `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}"
+        `shouldBe` "PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}"
+      show command `shouldNotContain` "secret"
+      show command `shouldNotContain` "SELECT 1"
       show commandResult
         `shouldBe` "PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}"
       show failedCommandResult
         `shouldBe` "PostgresCommandResult {postgresExitCode = ExitFailure 3, postgresStdout = \"\", postgresStderr = \"boom\"}"
       show runnerError
-        `shouldBe` "PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})"
+        `shouldBe` "PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})"
+      show runnerError `shouldNotContain` "secret"
       show unexpectedRowsError
         `shouldBe` "UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
       show [command]
-        `shouldBe` "[PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}]"
+        `shouldBe` "[PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}]"
       show [commandResult]
         `shouldBe` "[PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"}]"
       show [runnerError]
-        `shouldBe` "[PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = [\"--command\",\"SELECT 1;\"], postgresEnvironment = [(\"PGPASSWORD\",\"secret\")]}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})]"
+        `shouldBe` "[PostgresCommandFailed (PostgresCommand {postgresExecutable = \"psql\", postgresArguments = <redacted>, postgresEnvironment = <redacted>}) (PostgresCommandResult {postgresExitCode = ExitSuccess, postgresStdout = \"1\", postgresStderr = \"\"})]"
+
+    it "embeds the failing query text in a structured runner error for both row and scalar queries" $ do
+      let failingResult =
+            PostgresCommandResult
+              { postgresExitCode = ExitFailure 1,
+                postgresStdout = Text.empty,
+                postgresStderr = "syntax error"
+              }
+          runner _ = pure failingResult
+      rowsResult <- runRowsCommand runner postgresTestConfig "SELECT bogus"
+      case rowsResult of
+        Left (PostgresCommandFailed failedCommand failedCommandResult) -> do
+          postgresExecutable failedCommand `shouldBe` "psql"
+          postgresArguments failedCommand `shouldContain` ["SELECT bogus"]
+          postgresEnvironment failedCommand `shouldBe` []
+          failedCommandResult `shouldBe` failingResult
+        _ -> expectationFailure "expected a structured PostgresCommandFailed error for the rows query"
+      scalarResult <- runRequiredScalarCommand runner postgresTestConfig "SELECT bogus"
+      case scalarResult of
+        Left (PostgresCommandFailed failedCommand failedCommandResult) -> do
+          postgresExecutable failedCommand `shouldBe` "psql"
+          postgresArguments failedCommand `shouldContain` ["SELECT bogus"]
+          postgresEnvironment failedCommand `shouldBe` []
+          failedCommandResult `shouldBe` failingResult
+        _ -> expectationFailure "expected a structured PostgresCommandFailed error for the scalar query"
 
     it "uses the default psql runner for effect loading and database setup when psql is on PATH"
       $ withFakePsqlScript
@@ -5273,7 +5313,7 @@ spec = do
       parseAppEnvironmentConfig committedEnvDefaults [] [("SMTP_PORT", "not-a-port")]
         `shouldBe` Left (InvalidConfigValue "SMTP_PORT" "not-a-port")
       parseAppEnvironmentConfig committedEnvDefaults [] [("TOTP_ENCRYPTION_KEY", "not-a-key")]
-        `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "not-a-key")
+        `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "<redacted>")
       parseAppEnvironmentConfig committedEnvDefaults [("APP_MODE", "production")] []
         `shouldBe` Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "development-default")
       parseAppEnvironmentConfig
@@ -6338,9 +6378,24 @@ spec = do
       renderDatabaseSetupError (DatabaseSetupRuntimeConfigLoadError runtimeLoadError)
         `shouldBe` "Failed to load runtime database config: MissingConfigValue \"DATABASE_PASSWORD\""
       renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
-        `shouldBe` "Failed to apply database migrations: UnexpectedQueryRows \"expected exactly one row\" [\"first\",\"second\"]"
+        `shouldBe` "Failed to apply database migrations: expected exactly one row: first, second"
       renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
-        `shouldBe` "Failed to apply database seed data: UnexpectedQueryRows \"expected exactly one row\" [\"seed\"]"
+        `shouldBe` "Failed to apply database seed data: expected exactly one row: seed"
+      let failedCommandRunnerError =
+            PostgresCommandFailed
+              PostgresCommand
+                { postgresExecutable = "psql",
+                  postgresArguments = ["--command", "CREATE ROLE web_api_runtime PASSWORD 'super-secret'"],
+                  postgresEnvironment = [("PGPASSWORD", "super-secret")]
+                }
+              PostgresCommandResult
+                { postgresExitCode = ExitFailure 1,
+                  postgresStdout = Text.empty,
+                  postgresStderr = "psql: error: connection refused"
+                }
+      renderDatabaseSetupError (DatabaseSetupMigrationError failedCommandRunnerError)
+        `shouldBe` "Failed to apply database migrations: psql: error: connection refused"
+      renderDatabaseSetupError (DatabaseSetupMigrationError failedCommandRunnerError) `shouldNotContain` "super-secret"
 
   describe "parseDatabaseSetupConfig" $ do
     it "reads owner-level migration credentials from dedicated environment variables" $

@@ -127,7 +127,22 @@ data DatabaseConfig = DatabaseConfig
     databaseUser :: Text,
     databasePassword :: Text
   }
-  deriving (Eq, Show)
+  deriving (Eq)
+
+-- | Redacted: a derived 'Show' would print 'databasePassword' in the clear,
+-- and this value is reachable from ordinary diagnostics ('AppEnvironmentConfig'\'s
+-- own 'Show', an uncaught 'error', a failing @shouldBe@).
+instance Show DatabaseConfig where
+  show config =
+    "DatabaseConfig {databaseHost = "
+      <> show (databaseHost config)
+      <> ", databasePort = "
+      <> show (databasePort config)
+      <> ", databaseName = "
+      <> show (databaseName config)
+      <> ", databaseUser = "
+      <> show (databaseUser config)
+      <> ", databasePassword = <redacted>}"
 
 data AppEnvironmentConfig = AppEnvironmentConfig
   { appMode :: AppMode,
@@ -174,8 +189,7 @@ renderSmtpDeliveryConfig
       smtpDeliveryPort,
       smtpDeliveryHeloName,
       smtpDeliverySender,
-      smtpDeliveryUsername,
-      smtpDeliveryPassword
+      smtpDeliveryUsername
     } =
     "SmtpDeliveryConfig {smtpDeliveryHost = "
       <> show smtpDeliveryHost
@@ -187,9 +201,7 @@ renderSmtpDeliveryConfig
       <> show smtpDeliverySender
       <> ", smtpDeliveryUsername = "
       <> show smtpDeliveryUsername
-      <> ", smtpDeliveryPassword = "
-      <> show smtpDeliveryPassword
-      <> "}"
+      <> ", smtpDeliveryPassword = <redacted>}"
 
 data AppEnvironmentConfigLoadError
   = AppEnvironmentOverridesFileError FilePath ConfigOverridesFileError
@@ -464,7 +476,7 @@ parseSmtpPort value = do
 parseTotpEncryptionKey :: Text -> Either ConfigParseError SecretEncryptionKey
 parseTotpEncryptionKey value =
   maybe
-    (Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" value))
+    (Left (InvalidConfigValue "TOTP_ENCRYPTION_KEY" "<redacted>"))
     Right
     (mkSecretEncryptionKey value)
 
