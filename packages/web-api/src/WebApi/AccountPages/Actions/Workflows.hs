@@ -23,7 +23,8 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Session
-  ( defaultSessionCookiePolicy,
+  ( OpaqueSession (..),
+    defaultSessionCookiePolicy,
     renderSessionCookie,
     sessionCookieMaxAgeSeconds,
     sessionId,
@@ -73,7 +74,10 @@ import WebApi.Route
   )
 import WebApi.Session
   ( AccountSessionStore (..),
+    MfaEnrollmentSessionStore (..),
     issueAccountSession,
+    issueMfaEnrollmentSession,
+    mfaEnrollmentSessionCookiePolicy,
   )
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
@@ -146,28 +150,78 @@ handleVerificationSubmission actionRequest submission =
   let tokenValue = verificationTokenValue submission
       path = HarchWeb.clientActionContext actionRequest
    in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token"))
+        Nothing -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token") [])
         Just token -> do
           workflow <- accountWorkflow
           now <- liftAppIO (accountWorkflowClock workflow)
           confirmationResult <- liftAppIO (confirmEmailVerificationAt (accountWorkflowStore workflow) now token)
           case confirmationResult of
-            Right (Account.EmailVerificationAccepted _ _) -> pure (verificationResponse (actionLocale actionRequest) path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing)
-            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token"))
-            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token"))
-            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token")) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+            Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest workflow now accountId
+            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token") [])
+            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path 422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token") [])
+            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path 503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
 
+-- | Email verification just proved ownership of the account, so this is the
+-- one legitimate place to grant enrollment access — see the AM decision
+-- record below for why that access is a distinct, short-lived session
+-- rather than the ordinary login session or a client-supplied account id.
+issueVerificationEnrollmentSession :: AccountActionRequest -> AccountWorkflow -> Word64 -> Account.AccountId -> AccountActionWorkflow
+issueVerificationEnrollmentSession actionRequest workflow now accountId = do
+  let path = HarchWeb.clientActionContext actionRequest
+      successResponse = verificationResponse (actionLocale actionRequest) path 200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing
+  issued <- liftAppIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId now)
+  case issued of
+    Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
+    Left storeError -> throwClientActionFailure (successResponse []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
+
+-- | Decision record (AM, 2026-08-14): MFA enrollment previously trusted a
+-- client-supplied @account@ form field with no session check at all — see
+-- TASKS.md's AM entry for the full vulnerability. The fix binds enrollment
+-- to a session principal, per that entry's own instruction, but no session
+-- existed at either legitimate handoff point (right after email
+-- verification, or after a correct password with enrollment still
+-- required) — 'WebApi.Profile.loadProfile'/'WebApi.Session.AccountSessionStore'
+-- are login sessions, and issuing one before MFA is confirmed would let a
+-- password alone grant everything a completed login grants (Profile access
+-- and any future protected resource), silently narrowing what "signed in"
+-- means. Per this document's missing-capability protocol, option 1 (a
+-- small, general primitive squarely within 'WebApi.Session'\'s existing
+-- ownership) is 'WebApi.Session.MfaEnrollmentSessionStore': its own table,
+-- store, and 10-minute cookie, granting only enrollment and nothing else.
+-- 'handleMfaEnrollmentSubmission' now trusts only that session's principal;
+-- the submitted @account@ field is gone entirely (deleted from
+-- 'MfaEnrollmentSubmission', 'MfaEnrollmentForm', and the hidden form
+-- input), closing the "any 128-bit id" guessing surface named in AM's own
+-- text. AN (a confirmed enrollment silently destroyed by simply restarting
+-- it) was fixed separately and stays a needed guard even under this
+-- session-bound caller: it is what stops the account's own legitimate
+-- enrollment session from clobbering an authenticator it already confirmed
+-- in an earlier session.
 handleMfaEnrollmentSubmission :: AccountActionRequest -> MfaEnrollmentSubmission -> AccountActionWorkflow
-handleMfaEnrollmentSubmission actionRequest submission =
-  let accountValue = mfaEnrollmentAccountValue submission
-      path = HarchWeb.clientActionContext actionRequest
-   in case Account.mkAccountId accountValue of
-        Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm accountValue Nothing [] (Just (localized actionRequest "The enrollment link is invalid." "El enlace de registro no es valido.")) True) (Just "mfa-account"))
-        Just accountId ->
-          case mfaEnrollmentIntentValue submission of
-            "start" -> startMfaAction actionRequest path accountId
-            "confirm" -> confirmMfaAction actionRequest path accountId (mfaEnrollmentCodeValue submission)
-            _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) (Just "mfa-account"))
+handleMfaEnrollmentSubmission actionRequest submission = do
+  let path = HarchWeb.clientActionContext actionRequest
+  case requestMfaEnrollmentSessionId path of
+    Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
+    Just enrollmentSessionId -> do
+      workflow <- accountWorkflow
+      now <- liftAppIO (accountWorkflowClock workflow)
+      loadedSession <- liftAppIO (loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) enrollmentSessionId)
+      case loadedSession of
+        Left storeError -> throwClientActionFailure (invalidEnrollmentSessionResponse actionRequest) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
+        Right Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
+        Right (Just opaqueSession)
+          | sessionExpiresAtNanoseconds opaqueSession <= now -> pure (invalidEnrollmentSessionResponse actionRequest)
+          | otherwise ->
+              let accountId = sessionPrincipal opaqueSession
+               in case mfaEnrollmentIntentValue submission of
+                    "start" -> startMfaAction actionRequest path accountId
+                    "confirm" -> confirmMfaAction actionRequest path accountId (mfaEnrollmentCodeValue submission)
+                    _ -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest "Choose an enrollment action." "Elige una accion de registro.")) True) Nothing [])
+
+invalidEnrollmentSessionResponse :: AccountActionRequest -> HarchWeb.ClientActionResponse
+invalidEnrollmentSessionResponse actionRequest =
+  let path = HarchWeb.clientActionContext actionRequest
+   in mfaEnrollmentResponse (actionLocale actionRequest) path 403 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest "This enrollment link is invalid or has expired. Sign in again to continue." "Este enlace de registro no es valido o ha caducado. Inicia sesion de nuevo para continuar.")) True) Nothing []
 
 startMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> AccountActionWorkflow
 startMfaAction actionRequest path accountId = do
@@ -175,32 +229,31 @@ startMfaAction actionRequest path accountId = do
   now <- liftAppIO (accountWorkflowClock workflow)
   started <- liftAppIO (startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now)
   case started of
-    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code"))
-    Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentStartFailure "mfa-account" errorValue
+    Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code") noHeaders)
+    Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentStartFailure Nothing errorValue
 
 confirmMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> Text -> AccountActionWorkflow
 confirmMfaAction actionRequest path accountId codeValue =
   case Totp.mkTotpCode codeValue of
-    Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code"))
+    Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 422 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code") [])
     Just code -> do
       workflow <- accountWorkflow
       nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
       nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
       confirmed <- liftAppIO (confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code)
       case confirmed of
-        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm (Account.accountIdText accountId) Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing)
-        Left errorValue -> interpretMfaFailure actionRequest path accountId MfaEnrollmentConfirmFailure "mfa-code" errorValue
+        Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path 200 (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing noHeaders)
+        Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentConfirmFailure (Just "mfa-code") errorValue
 
 interpretMfaFailure ::
   AccountActionRequest ->
   AppRequestContext ->
-  Account.AccountId ->
   FailureCode ->
-  Text ->
+  Maybe Text ->
   MfaEnrollmentError ->
   AccountActionWorkflow
-interpretMfaFailure actionRequest path accountId failureCodeValue focusId errorValue =
-  let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm (Account.accountIdText accountId) Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) (Just focusId)
+interpretMfaFailure actionRequest path failureCodeValue focusId errorValue =
+  let response status = mfaEnrollmentResponse (actionLocale actionRequest) path status (MfaEnrollmentForm Nothing [] (Just (mfaErrorMessage actionRequest errorValue)) True) focusId []
    in case mfaEnrollmentFailureDiagnostics failureCodeValue errorValue of
         Nothing -> pure (response 422)
         Just diagnostics -> throwAppFailure AppFailure {appFailurePublic = response 503, appFailureDiagnostics = diagnostics}
@@ -261,7 +314,7 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
    in case loginResult of
         PasswordMfaLoginAccepted accountId -> issueLoginSession actionRequest emailValue nowNanoseconds accountId
         PasswordMfaLoginEmailVerificationRequired _ -> pure (response 403 (localized actionRequest "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True Nothing [])
-        PasswordMfaLoginEnrollmentRequired _ -> pure (response 403 (localized actionRequest "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True Nothing [])
+        PasswordMfaLoginEnrollmentRequired accountId -> issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId
         PasswordMfaLoginRejected -> pure (response 422 (localized actionRequest "Sign-in was rejected." "El inicio de sesion fue rechazado.") True (Just "login-code") [])
         PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
         PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
@@ -276,6 +329,23 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
   case issuedSession of
     Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path 503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path 200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
+
+-- | A correct password already proves account ownership even though MFA
+-- enrollment is still outstanding, so this is the second legitimate place
+-- (with email verification, above) to grant an 'issueMfaEnrollmentSession'
+-- instead of a dead-end rejection with no path forward — see the AM
+-- decision record on 'handleMfaEnrollmentSubmission' for why this session
+-- is deliberately not the same 'issueAccountSession' full login grants.
+issueLoginEnrollmentSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId -> AccountActionWorkflow
+issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId = do
+  workflow <- accountWorkflow
+  let path = HarchWeb.clientActionContext actionRequest
+      form message = LoginForm emailValue (Just message)
+      response = loginResponse (actionLocale actionRequest) path 403 (form (localized actionRequest "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True) Nothing
+  issued <- liftAppIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId nowNanoseconds)
+  case issued of
+    Right opaqueSession -> pure (response [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
+    Left storeError -> throwClientActionFailure (response []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
 
 handleLogout :: AccountActionRequest -> AccountActionWorkflow
 handleLogout actionRequest =

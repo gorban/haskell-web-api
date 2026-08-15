@@ -28,7 +28,7 @@ import WebApi.Account (AccountProfileStore, AccountStore)
 import WebApi.Login (AccountCredentialStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
-import WebApi.Session (AccountSessionStore)
+import WebApi.Session (AccountSessionStore, MfaEnrollmentSessionStore)
 
 data AccountWorkflow = AccountWorkflow
   { accountWorkflowStore :: AccountStore,
@@ -38,6 +38,7 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
     accountWorkflowSessionStore :: AccountSessionStore,
+    accountWorkflowMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore,
     accountWorkflowProfileStore :: AccountProfileStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
     accountWorkflowTotpClock :: IO Word64,
@@ -55,6 +56,7 @@ data FailureCode
   | RegistrationPasswordHashFailure
   | RegistrationClockFailure
   | VerificationStoreFailure
+  | MfaEnrollmentSessionFailure
   | MfaEnrollmentStartFailure
   | MfaEnrollmentConfirmFailure
   | LoginCredentialStoreFailure
@@ -76,6 +78,7 @@ renderFailureCode failureCodeValue =
     RegistrationPasswordHashFailure -> "account.registration.password-hash"
     RegistrationClockFailure -> "account.registration.clock"
     VerificationStoreFailure -> "account.verification.store"
+    MfaEnrollmentSessionFailure -> "account.mfa.enrollment-session"
     MfaEnrollmentStartFailure -> "account.mfa.start"
     MfaEnrollmentConfirmFailure -> "account.mfa.confirm"
     LoginCredentialStoreFailure -> "account.login.credential-store"

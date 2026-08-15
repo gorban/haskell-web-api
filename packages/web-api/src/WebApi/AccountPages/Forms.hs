@@ -36,8 +36,7 @@ data PendingProfileForm = PendingProfileForm
   deriving (Eq)
 
 data MfaEnrollmentForm = MfaEnrollmentForm
-  { mfaEnrollmentFormAccountId :: Text,
-    mfaEnrollmentFormSecret :: Maybe Text,
+  { mfaEnrollmentFormSecret :: Maybe Text,
     mfaEnrollmentFormRecoveryCodes :: [Text],
     mfaEnrollmentFormMessage :: Maybe Text,
     mfaEnrollmentFormIsError :: Bool

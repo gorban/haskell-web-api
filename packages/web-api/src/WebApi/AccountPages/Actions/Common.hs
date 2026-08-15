@@ -16,6 +16,7 @@ module WebApi.AccountPages.Actions.Common
     accountStoreErrorDetail,
     mfaStoreErrorMessage,
     sessionStoreErrorMessage,
+    mfaEnrollmentSessionStoreErrorMessage,
     registrationResponse,
     verificationResponse,
     mfaEnrollmentResponse,
@@ -26,6 +27,7 @@ module WebApi.AccountPages.Actions.Common
     emailLocale,
     validPassword,
     nonEmptyText,
+    noHeaders,
   )
 where
 
@@ -56,7 +58,7 @@ import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Profile (ProfileLoadError (..))
 import WebApi.Route (AppLocale (..), AppRequestContext (..))
-import WebApi.Session (AccountSessionStoreError (..))
+import WebApi.Session (AccountSessionStoreError (..), MfaEnrollmentSessionStoreError (..))
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
 
@@ -158,6 +160,12 @@ sessionStoreErrorMessage storeError =
     AccountSessionStoreUnavailable -> "account session store unavailable"
     AccountSessionStoreCorruptData -> "account session store returned corrupt data"
 
+mfaEnrollmentSessionStoreErrorMessage :: MfaEnrollmentSessionStoreError -> Text
+mfaEnrollmentSessionStoreErrorMessage storeError =
+  case storeError of
+    MfaEnrollmentSessionStoreUnavailable -> "MFA enrollment session store unavailable"
+    MfaEnrollmentSessionStoreCorruptData -> "MFA enrollment session store returned corrupt data"
+
 registrationResponse :: AppLocale -> AppRequestContext -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
 registrationResponse locale requestContext status form focusId =
   HarchWeb.ClientActionResponse
@@ -169,24 +177,24 @@ registrationResponse locale requestContext status form focusId =
       HarchWeb.clientActionLogEntries = []
     }
 
-verificationResponse :: AppLocale -> AppRequestContext -> Int -> VerificationForm -> Maybe Text -> HarchWeb.ClientActionResponse
-verificationResponse locale requestContext status form focusId =
+verificationResponse :: AppLocale -> AppRequestContext -> Int -> VerificationForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+verificationResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (verificationRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
 
-mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Int -> MfaEnrollmentForm -> Maybe Text -> HarchWeb.ClientActionResponse
-mfaEnrollmentResponse locale requestContext status form focusId =
+mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Int -> MfaEnrollmentForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
       HarchWeb.clientActionPatches = replaceRegionPatch (mfaEnrollmentRegion requestContext locale form),
       HarchWeb.clientActionFocusId = focusId,
-      HarchWeb.clientActionHeaders = [],
+      HarchWeb.clientActionHeaders = headers,
       HarchWeb.clientActionObservabilityAttributes = [],
       HarchWeb.clientActionLogEntries = []
     }
@@ -239,3 +247,13 @@ validPassword password = Text.length password >= 12
 nonEmptyText :: Text -> Maybe Text
 nonEmptyText "" = Nothing
 nonEmptyText value = Just value
+
+-- | A single named binding for "no extra response headers," used at every
+-- call site that would otherwise repeat an empty-list literal of this exact
+-- type. Repeating the literal risks the CSE-sharing HPC gap this codebase
+-- has already hit more than once (see the AC decision record in
+-- docs/design-guidance.md): GHC can common up textually identical literals
+-- into one CAF, silently leaving every call site but one permanently
+-- unticked even though each is genuinely reached.
+noHeaders :: Http.ResponseHeaders
+noHeaders = []

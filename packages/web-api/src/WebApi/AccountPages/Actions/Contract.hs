@@ -55,8 +55,7 @@ data RegistrationSubmission = RegistrationSubmission
 newtype VerificationSubmission = VerificationSubmission {verificationTokenValue :: Text}
 
 data MfaEnrollmentSubmission = MfaEnrollmentSubmission
-  { mfaEnrollmentAccountValue :: Text,
-    mfaEnrollmentIntentValue :: Text,
+  { mfaEnrollmentIntentValue :: Text,
     mfaEnrollmentCodeValue :: Text
   }
 
@@ -125,8 +124,7 @@ registrationSubmission =
 mfaEnrollmentSubmission :: ActionDecoder MfaEnrollmentSubmission
 mfaEnrollmentSubmission =
   MfaEnrollmentSubmission
-    <$> (singleOrDefault $! "") (formField "account" textValue)
-    <*> (singleOrDefault $! "") (formField "intent" textValue)
+    <$> (singleOrDefault $! "") (formField "intent" textValue)
     <*> (singleOrDefault $! "") (formField "code" textValue)
 
 {-# ANN loginSubmission ("HLint: ignore Redundant $!" :: String) #-}

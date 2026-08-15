@@ -54,6 +54,7 @@ import WebApi.Postgres.AccountRepository
     buildRuntimePostgresAccountProfileStore,
     buildRuntimePostgresAccountStore,
   )
+import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
@@ -66,7 +67,7 @@ import WebApi.Route
     requestContextFromWaiRequest,
     routeCodec,
   )
-import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 
 buildAppWithDatabase ::
   AppConfig ->
@@ -199,6 +200,7 @@ buildRuntimeAccountWorkflow !environmentConfig =
             accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
             accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
             accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
+            accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore databaseConfiguration,
             accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
             accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
             accountWorkflowTotpClock = floor <$> getPOSIXTime,
@@ -368,6 +370,7 @@ unavailableAccountWorkflow =
       accountWorkflowMfaStore = unavailableMfaStore,
       accountWorkflowCredentialStore = unavailableAccountCredentialStore,
       accountWorkflowSessionStore = unavailableAccountSessionStore,
+      accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
       accountWorkflowTotpClock = pure 0,
@@ -406,6 +409,14 @@ unavailableAccountSessionStore =
     { saveAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
       loadAccountSession = const (unavailableResult AccountSessionStoreUnavailable),
       invalidateAccountSession = const (const (unavailableResult AccountSessionStoreUnavailable))
+    }
+
+unavailableMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore
+unavailableMfaEnrollmentSessionStore =
+  MfaEnrollmentSessionStore
+    { saveMfaEnrollmentSession = const (unavailableResult MfaEnrollmentSessionStoreUnavailable),
+      loadMfaEnrollmentSession = const (unavailableResult MfaEnrollmentSessionStoreUnavailable),
+      invalidateMfaEnrollmentSession = const (const (unavailableResult MfaEnrollmentSessionStoreUnavailable))
     }
 
 unavailableAccountProfileStore :: AccountProfileStore

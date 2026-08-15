@@ -77,7 +77,7 @@ buildPageModelFromRouteData routeRequest routeData =
     MfaEnrollmentRouteDataResult ->
       MfaEnrollmentPage
         EnrollMfaTarget
-        (MfaEnrollmentForm (fromMaybe Text.empty (lookup "account" (requestQueryParameters (HarchWeb.requestContext routeRequest)))) Nothing [] Nothing False)
+        (MfaEnrollmentForm Nothing [] Nothing False)
     LoginRouteDataResult ->
       LoginPage
         LoginAccountTarget

@@ -75,7 +75,7 @@ import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectRe
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
 import WebApi.RouteData (HomeRouteData (..), RouteDataResult (..), RouteDataSelection (..), SecondRouteData (..), StatusApiData (..), selectRouteData, selectRouteDataSelectionWithDatabase, selectRouteDataWithDatabase)
-import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 import WebApi.SetupConfig (AppSetupConfig (..), AppSetupConfigLoadError (..), SetupAutostartConfig (..), committedSetupDefaults, defaultAppSetupConfig, defaultSetupAutostartConfig, loadAppSetupConfig, loadAppSetupConfigWithFiles, parseAppSetupConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingEndpointParseError (..), TracingPrerequisitePlan (..), checkTcpEndpointReachable, checkTcpEndpointReachableWithTimeout, checkTracingEndpointReachable, defaultContainerAutostartPlan, parseTracingEndpoint, planAppPrerequisites, toSetupPrerequisiteConfig)
 
@@ -466,6 +466,38 @@ requiredEmailAddress value =
 requiredVerificationToken :: Text -> Account.EmailVerificationToken
 requiredVerificationToken value =
   fromMaybe (error "Expected a valid verification token") (Account.mkEmailVerificationToken value)
+
+enrollmentSessionIdValue :: Session.SessionId
+enrollmentSessionIdValue =
+  fromMaybe (error "Expected a valid MFA enrollment session id") (Session.mkSessionId "MFAENROLL0123456789ABCDEF0123456789ABCDEF01")
+
+enrollmentCsrfTokenValue :: Session.CsrfToken
+enrollmentCsrfTokenValue =
+  fromMaybe (error "Expected a valid MFA enrollment CSRF token") (Session.mkCsrfToken "MFACSRF0123456789ABCDEF0123456789ABCDEF01234")
+
+-- | A store whose only valid session binds 'enrollmentSessionIdValue' to the
+-- given account, matching how 'issueMfaEnrollmentSession' would have issued
+-- it. Any other session id is treated as absent.
+enrollmentSessionStoreFor :: Account.AccountId -> MfaEnrollmentSessionStore
+enrollmentSessionStoreFor accountId =
+  MfaEnrollmentSessionStore
+    { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA enrollment session save"),
+      loadMfaEnrollmentSession = \requestedSessionId ->
+        pure $
+          Right $
+            if requestedSessionId == enrollmentSessionIdValue
+              then
+                Just
+                  Session.OpaqueSession
+                    { Session.sessionId = enrollmentSessionIdValue,
+                      Session.sessionPrincipal = accountId,
+                      Session.sessionCsrfToken = enrollmentCsrfTokenValue,
+                      Session.sessionIssuedAtNanoseconds = 0,
+                      Session.sessionExpiresAtNanoseconds = maxBound
+                    }
+              else Nothing,
+      invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA enrollment session invalidation")
+    }
 
 isUnavailable :: Text -> AccountStoreError -> Bool
 isUnavailable expectedError = \case
@@ -2488,6 +2520,7 @@ spec = do
         accountWorkflowMfaStore workflow `seq` pure ()
         accountWorkflowCredentialStore workflow `seq` pure ()
         accountWorkflowSessionStore workflow `seq` pure ()
+        accountWorkflowMfaEnrollmentSessionStore workflow `seq` pure ()
         accountWorkflowProfileStore workflow `seq` pure ()
         accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
@@ -3329,9 +3362,9 @@ spec = do
       buildPageModelFromRouteData (HarchWeb.RouteRequest EmailVerificationRoute defaultRequestContext) EmailVerificationRouteDataResult
         `shouldBe` EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False)
       buildPageModelFromRouteData mfaRequest MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm "account_01" Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False)
       buildPageModelFromRouteData (HarchWeb.RouteRequest MfaEnrollmentRoute defaultRequestContext) MfaEnrollmentRouteDataResult
-        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Text.empty Nothing [] Nothing False)
+        `shouldBe` MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False)
       buildPageModelFromRouteData loginRequest LoginRouteDataResult
         `shouldBe` LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False)
       buildPageModelFromRouteData logoutRequest LogoutRouteDataResult
@@ -3425,14 +3458,14 @@ spec = do
       if emptyRegistrationForm == RegistrationForm Text.empty Text.empty Text.empty Nothing False then pure () else expectationFailure "expected empty registration form"
       if RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False /= RegistrationForm "other_01" "other@example.test" "Other Example" Nothing False then pure () else expectationFailure "registration forms must compare identity values"
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
-      if MfaEnrollmentForm "account_01" Nothing [] Nothing False /= MfaEnrollmentForm "account_01" Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
+      if MfaEnrollmentForm Nothing [] Nothing False /= MfaEnrollmentForm Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
       show (RegistrationPage RegisterAccountTarget (RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False))
         `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
       show (EmailVerificationPage VerifyEmailTarget (VerificationForm "token" (Just "ready") False))
         `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
-      show (MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm "account_01" Nothing [] Nothing False))
-        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget \"account_01\" Nothing False"
+      show (MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False))
+        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget Nothing False"
       show (LoginPage LoginAccountTarget (LoginForm "person@example.test" Nothing False))
         `shouldBe` "LoginPage LoginAccountTarget \"person@example.test\" Nothing False"
       show (LogoutPage LogoutAccountTarget) `shouldBe` "LogoutPage LogoutAccountTarget"
@@ -3456,7 +3489,7 @@ spec = do
         `shouldSatisfy` (not . Text.isInfixOf "data-account-message")
       renderRegistrationRegion defaultRequestContext English (RegistrationForm "'>&" "'>&" "'>&" Nothing False)
         `shouldSatisfy` \html -> "&#39;&gt;&amp;" `Text.isInfixOf` html
-      let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm "account_01" (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
+      let spanishMfaPage = renderMfaEnrollmentPage (defaultRequestContext {requestLocale = Spanish}) Spanish (MfaEnrollmentForm (Just "SECRET&VALUE") ["CODE-ONE"] (Just "Ready <now>") False)
       spanishMfaPage
         `shouldSatisfy` \html -> "data-harch-control" `Text.isInfixOf` html && "SECRET&amp;VALUE" `Text.isInfixOf` html && "Ready &lt;now&gt;" `Text.isInfixOf` html && "action=\"/es/mfa\"" `Text.isInfixOf` html
       mapM_
@@ -3468,7 +3501,7 @@ spec = do
           "Codigos de recuperacion",
           "Guarda estos codigos. No se mostraran de nuevo."
         ]
-      renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm "account_01" Nothing ["CODE-ONE"] Nothing False)
+      renderMfaEnrollmentRegion defaultRequestContext English (MfaEnrollmentForm Nothing ["CODE-ONE"] Nothing False)
         `shouldSatisfy` Text.isInfixOf "data-recovery-codes=\"true\""
       let spanishLoginPage = renderLoginPage (defaultRequestContext {requestLocale = Spanish}) Spanish (LoginForm "person@example.test\" onclick=\"bad" (Just "Ready <now>") False)
       spanishLoginPage
@@ -3525,6 +3558,7 @@ spec = do
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
@@ -3567,7 +3601,6 @@ spec = do
                  assertDuplicateField "/register" "displayName",
                  assertDuplicateField "/register" "password",
                  assertDuplicateField "/verify" "token",
-                 assertDuplicateField "/mfa" "account",
                  assertDuplicateField "/mfa" "intent",
                  assertDuplicateField "/mfa" "code",
                  assertDuplicateField "/login" "email",
@@ -3584,7 +3617,7 @@ spec = do
       case Action.decodeAction accountActions (rawAction "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")]) of
         HarchWeb.DecodedClientAction _ -> pure ()
         _ -> expectationFailure "expected a fully populated registration submission to decode"
-      case Action.decodeAction accountActions (rawAction "POST" "/mfa" [("account", "account_01"), ("intent", "confirm"), ("code", "123456")]) of
+      case Action.decodeAction accountActions (rawAction "POST" "/mfa" [("intent", "confirm"), ("code", "123456")]) of
         HarchWeb.DecodedClientAction _ -> pure ()
         _ -> expectationFailure "expected a fully populated MFA enrollment submission to decode"
       case Action.decodeAction accountActions (rawAction "POST" "/login" [("email", "person@example.test"), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "123456"), ("code", "recovery-code")]) of
@@ -3606,10 +3639,10 @@ spec = do
                ]
         )
       invalidMfaResult <- handleAccountAction workflow (request "POST" "/mfa" [("intent", "start")] English)
-      invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "mfa-account") "The enrollment link is invalid"
+      invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 403 Nothing "This enrollment link is invalid or has expired"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
       spanishInvalidMfaResult `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 422 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> HarchWeb.clientActionStatus response == 403 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       invalidUsernameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "no!"), ("email", "person@example.test"), ("password", "correct horse battery staple")] English)
       invalidUsernameResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Use a username"
@@ -3678,6 +3711,15 @@ spec = do
       assertSessionUnavailable (saveAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
       assertSessionUnavailable (loadAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input"))
       assertSessionUnavailable (invalidateAccountSession unconfiguredSessionStore (error "unavailable session store must ignore input") (error "unavailable session store must ignore input"))
+      let unconfiguredMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow
+          assertMfaEnrollmentSessionUnavailable :: IO (Either MfaEnrollmentSessionStoreError value) -> Expectation
+          assertMfaEnrollmentSessionUnavailable action =
+            action >>= \case
+              Left MfaEnrollmentSessionStoreUnavailable -> pure ()
+              _ -> expectationFailure "expected unavailable MFA-enrollment sessions"
+      assertMfaEnrollmentSessionUnavailable (saveMfaEnrollmentSession unconfiguredMfaEnrollmentSessionStore (error "unavailable MFA-enrollment session store must ignore input"))
+      assertMfaEnrollmentSessionUnavailable (loadMfaEnrollmentSession unconfiguredMfaEnrollmentSessionStore (error "unavailable MFA-enrollment session store must ignore input"))
+      assertMfaEnrollmentSessionUnavailable (invalidateMfaEnrollmentSession unconfiguredMfaEnrollmentSessionStore (error "unavailable MFA-enrollment session store must ignore input") (error "unavailable MFA-enrollment session store must ignore input"))
       findAccountProfile (accountWorkflowProfileStore unavailableAccountWorkflow) accountId
         >>= \case
           Left (AccountStoreUnavailable "account profiles are not configured") -> pure ()
@@ -3731,6 +3773,7 @@ spec = do
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
+                accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
                 accountWorkflowTotpClock = pure 0,
@@ -3799,6 +3842,29 @@ spec = do
       missingVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "link is invalid"
       acceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (request "/verify" validToken)
       acceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "email address is verified"
+      acceptedVerificationSessionReference <- newIORef Nothing
+      let workingEnrollmentSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \session -> writeIORef acceptedVerificationSessionReference (Just session) >> pure (Right True),
+                loadMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session load"),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+      acceptedVerificationWithSession <-
+        handleAccountAction
+          (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery)
+            { accountWorkflowMfaEnrollmentSessionStore = workingEnrollmentSessionStore
+            }
+          (request "/verify" validToken)
+      case acceptedVerificationWithSession of
+        Just response -> do
+          forceShowValue response `shouldBe` True
+          HarchWeb.clientActionStatus response `shouldBe` 200
+          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+        Nothing -> expectationFailure "expected a verification action response"
+      savedEnrollmentSession <- readIORef acceptedVerificationSessionReference
+      case savedEnrollmentSession of
+        Just session -> Session.sessionPrincipal session `shouldBe` accountId
+        Nothing -> expectationFailure "expected an MFA-enrollment session to be saved after verification"
       spanishAcceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (spanishAction "/verify" validToken)
       spanishAcceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "direccion de correo esta verificada"
       expiredVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (request "/verify" validToken)
@@ -3968,6 +4034,29 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Enroll your authenticator")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right Nothing) (Right True) (Right True)) (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "Registra tu autenticador")
+      loginEnrollmentSessionReference <- newIORef Nothing
+      let workingLoginEnrollmentSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \session -> writeIORef loginEnrollmentSessionReference (Just session) >> pure (Right True),
+                loadMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session load"),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+      loginEnrollmentRequiredWithSession <-
+        handleAccountAction
+          (workflowFor (Right (Just confirmedCredential)) (Right Nothing) (Right True) (Right True))
+            { accountWorkflowMfaEnrollmentSessionStore = workingLoginEnrollmentSessionStore
+            }
+          (loginRequest defaultRequestContext validFields)
+      case loginEnrollmentRequiredWithSession of
+        Just response -> do
+          forceShowValue response `shouldBe` True
+          HarchWeb.clientActionStatus response `shouldBe` 403
+          HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
+        Nothing -> expectationFailure "expected a login action response"
+      savedLoginEnrollmentSession <- readIORef loginEnrollmentSessionReference
+      case savedLoginEnrollmentSession of
+        Just session -> Session.sessionPrincipal session `shouldBe` accountId
+        Nothing -> expectationFailure "expected an MFA-enrollment session to be saved after a password-only login"
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
       handleAccountAction validWorkflow (spanishLoginRequest [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", invalidCode)])
@@ -4055,15 +4144,19 @@ spec = do
           workflow =
             unavailableAccountWorkflow
               { accountWorkflowMfaStore = mfaStore,
+                accountWorkflowMfaEnrollmentSessionStore = enrollmentSessionStoreFor accountId,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
               }
-          request path actionContext fields = typedAccountActionRequest "POST" path (("account", Account.accountIdText accountId) : fields) actionContext
+          request path actionContext fields = typedAccountActionRequest "POST" path fields (actionContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
       started `shouldSatisfy` \case
         Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
         Nothing -> False
+      case started of
+        Just response -> forceShowValue response `shouldBe` True
+        Nothing -> expectationFailure "expected an enrollment-start action response"
       secret <-
         case started of
           Just response ->
@@ -4080,6 +4173,9 @@ spec = do
       confirmed `shouldSatisfy` \case
         Just response -> HarchWeb.clientActionStatus response == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
+      case confirmed of
+        Just response -> forceShowValue response `shouldBe` True
+        Nothing -> expectationFailure "expected an enrollment-confirm action response"
       confirmationHashes <- readIORef confirmationHashesReference
       length confirmationHashes `shouldBe` 8
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
@@ -4105,11 +4201,12 @@ spec = do
 
     it "returns every MFA enrollment action error as a localized region patch" $ do
       let accountId = requiredAccountId "account_01"
-          request fields = typedAccountActionRequest "POST" "/mfa" (("account", Account.accountIdText accountId) : fields) defaultRequestContext
-          spanishRequest fields = typedAccountActionRequest "POST" "/es/mfa" (("account", Account.accountIdText accountId) : fields) (defaultRequestContext {requestLocale = Spanish})
+          request fields = typedAccountActionRequest "POST" "/mfa" fields (defaultRequestContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
+          spanishRequest fields = typedAccountActionRequest "POST" "/es/mfa" fields (defaultRequestContext {requestLocale = Spanish, requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
           workflowFor mfaStore =
             unavailableAccountWorkflow
               { accountWorkflowMfaStore = mfaStore,
+                accountWorkflowMfaEnrollmentSessionStore = enrollmentSessionStoreFor accountId,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
@@ -4133,24 +4230,70 @@ spec = do
           expectSpanish mfaStore fields status focusId message = do
             actionResult <- handleAccountAction (workflowFor mfaStore) (spanishRequest fields)
             actionResult `shouldSatisfy` actionHasStatusAndFocus status focusId message
-      expect (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verify your email address"
-      expect (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 (Just "mfa-account") "temporarily unavailable"
+      expect (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 Nothing "Verify your email address"
+      expect (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 Nothing "temporarily unavailable"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Enter a six-digit authenticator code"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Start a new authenticator enrollment"
       expect (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "That enrollment can no longer be confirmed"
-      expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Choose an enrollment action"
-      expectSpanish (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 (Just "mfa-account") "Verifica tu direccion de correo"
-      expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 (Just "mfa-account") "no esta disponible temporalmente"
+      expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 Nothing "Choose an enrollment action"
+      expectSpanish (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 Nothing "Verifica tu direccion de correo"
+      expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 Nothing "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Introduce un codigo de autenticador"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Inicia un nuevo registro"
       expectSpanish (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Ese registro ya no se puede confirmar"
-      expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 (Just "mfa-account") "Elige una accion de registro"
+      expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 Nothing "Elige una accion de registro"
       expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
       expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
+      let unusedMfaStore = mfaStoreFor (Right True) (Right Nothing) (Right False)
+          withSessionStore sessionStore = (workflowFor unusedMfaStore) {accountWorkflowMfaEnrollmentSessionStore = sessionStore}
+          unavailableSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                loadMfaEnrollmentSession = \_ -> pure (Left MfaEnrollmentSessionStoreUnavailable),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+          corruptSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                loadMfaEnrollmentSession = \_ -> pure (Left MfaEnrollmentSessionStoreCorruptData),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+          missingSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                loadMfaEnrollmentSession = \_ -> pure (Right Nothing),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+          expiredSessionStore =
+            MfaEnrollmentSessionStore
+              { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                loadMfaEnrollmentSession = \_ ->
+                  pure
+                    ( Right
+                        ( Just
+                            Session.OpaqueSession
+                              { Session.sessionId = enrollmentSessionIdValue,
+                                Session.sessionPrincipal = accountId,
+                                Session.sessionCsrfToken = enrollmentCsrfTokenValue,
+                                Session.sessionIssuedAtNanoseconds = 0,
+                                Session.sessionExpiresAtNanoseconds = 500
+                              }
+                        )
+                    ),
+                invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+              }
+      handleAccountAction (withSessionStore unavailableSessionStore) (request [("intent", "start")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "invalid or has expired")
+      handleAccountAction (withSessionStore corruptSessionStore) (request [("intent", "start")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "invalid or has expired")
+      handleAccountAction (withSessionStore missingSessionStore) (request [("intent", "start")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "invalid or has expired")
+      handleAccountAction (withSessionStore expiredSessionStore) (request [("intent", "start")])
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 403 Nothing "invalid or has expired")
       forM_
         [ (MfaEnrollmentRecoveryCodeHashingFailed, "RecoveryCodeHashingError", "recovery-code hashing failed"),
           (MfaEnrollmentEncryptionFailed, "TotpEncryptionError", "TOTP secret encryption failed")
@@ -6587,7 +6730,8 @@ spec = do
                 requestCorrelationId = Just "req-456",
                 requestPathPrefix = "",
                 requestQueryParameters = [],
-                requestSessionId = Nothing
+                requestSessionId = Nothing,
+                requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -6825,10 +6969,11 @@ spec = do
               requestCorrelationId = Just "req-789",
               requestPathPrefix = "",
               requestQueryParameters = [],
-              requestSessionId = Nothing
+              requestSessionId = Nothing,
+              requestMfaEnrollmentSessionId = Nothing
             }
         )
-        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
+        `shouldBe` "AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-789\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show
         ( CallToAction
             { callToActionLabel = "Return home",
@@ -6959,7 +7104,8 @@ spec = do
                 requestCorrelationId = Just "req-123",
                 requestPathPrefix = "",
                 requestQueryParameters = [],
-                requestSessionId = Nothing
+                requestSessionId = Nothing,
+                requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -7040,7 +7186,7 @@ spec = do
       SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
       RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` HomePage homePageModel
       EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
-      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Text.empty Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
+      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
       LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
       LogoutPage LogoutAccountTarget `shouldNotBe` HomePage homePageModel
       ProfilePage (UnavailableProfilePage "Profile" "Unavailable" callToAction) `shouldNotBe` HomePage homePageModel
@@ -7123,7 +7269,8 @@ spec = do
                 requestCorrelationId = Just "req-999",
                 requestPathPrefix = "",
                 requestQueryParameters = [],
-                requestSessionId = Nothing
+                requestSessionId = Nothing,
+                requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -7259,7 +7406,8 @@ spec = do
                 requestCorrelationId = Just "req-list",
                 requestPathPrefix = "",
                 requestQueryParameters = [],
-                requestSessionId = Nothing
+                requestSessionId = Nothing,
+                requestMfaEnrollmentSessionId = Nothing
               }
           callToAction =
             CallToAction
@@ -7317,7 +7465,7 @@ spec = do
       show [Page WebApi.Route.HomePage, Api WebApi.Route.StatusApi]
         `shouldBe` "[HomeRoute,StatusApiRoute]"
       show [requestContext]
-        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}]"
+        `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = \"/\"}]"
       show [homePageModel]
@@ -7624,9 +7772,9 @@ spec = do
               }
       show config
         `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
-      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}"
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
       show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
-        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
       renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
 
   describe "selectResponse" $ do

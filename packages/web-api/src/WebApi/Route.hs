@@ -51,6 +51,7 @@ import HarchWeb.Session
   )
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
 data AppLocale
   = English
@@ -63,7 +64,8 @@ data AppRequestContext = AppRequestContext
     requestCorrelationId :: Maybe Text,
     requestPathPrefix :: Text,
     requestQueryParameters :: [(Text, Text)],
-    requestSessionId :: Maybe SessionId
+    requestSessionId :: Maybe SessionId,
+    requestMfaEnrollmentSessionId :: Maybe SessionId
   }
   deriving (Eq, Show)
 
@@ -183,7 +185,8 @@ defaultRequestContext =
       requestCorrelationId = Nothing,
       requestPathPrefix = Text.empty,
       requestQueryParameters = [],
-      requestSessionId = Nothing
+      requestSessionId = Nothing,
+      requestMfaEnrollmentSessionId = Nothing
     }
 
 routeCodec :: HarchWeb.RouteCodec AppRoute AppRequestContext
@@ -294,7 +297,8 @@ requestContextFromWaiRequest trustProxyHeaders request requestContext =
                   >>= either (const Nothing) (firstCommaSeparatedValue . Text.strip) . TextEncoding.decodeUtf8'
               )
           else Text.empty,
-      requestSessionId = requestSessionIdFromHeaders (Wai.requestHeaders request)
+      requestSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy)) (Wai.requestHeaders request),
+      requestMfaEnrollmentSessionId = sessionIdFromCookieHeaders (sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy)) (Wai.requestHeaders request)
     }
 
 parseRoutePath :: Text -> Either RouteSelectionError (Maybe AppLocale, AppRoute)
@@ -413,14 +417,11 @@ firstCommaSeparatedValue value =
     [] -> Nothing
     firstValue : _ -> Just firstValue
 
-requestSessionIdFromHeaders :: Http.RequestHeaders -> Maybe SessionId
-requestSessionIdFromHeaders headers = do
+sessionIdFromCookieHeaders :: Text -> Http.RequestHeaders -> Maybe SessionId
+sessionIdFromCookieHeaders cookieName headers = do
   cookieHeader <- lookup "Cookie" headers
   cookieText <- either (const Nothing) Just (TextEncoding.decodeUtf8' cookieHeader)
-  cookieValue <-
-    lookup
-      (sessionCookieNameText (sessionCookieName defaultSessionCookiePolicy))
-      (map parseCookiePair (Text.splitOn ";" cookieText))
+  cookieValue <- lookup cookieName (map parseCookiePair (Text.splitOn ";" cookieText))
   mkSessionId cookieValue
   where
     parseCookiePair value =

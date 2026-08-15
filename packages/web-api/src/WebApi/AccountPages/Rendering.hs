@@ -144,8 +144,7 @@ mfaEnrollmentRegion context locale form =
           actionForm
             context
             EnrollMfaTarget
-            [ hiddenInput "account" (mfaEnrollmentFormAccountId form),
-              hiddenInput "intent" "start",
+            [ hiddenInput "intent" "start",
               submitButton (accountStartMfaEnrollmentLabel copy)
             ],
           renderConfirmationForm context locale form
@@ -330,4 +329,4 @@ renderRecoveryCodes copy = \case
       ]
 
 renderConfirmationForm :: AppRequestContext -> AppLocale -> MfaEnrollmentForm -> HarchWeb.Html
-renderConfirmationForm context locale form = maybe (HarchWeb.fragment []) (const (actionForm context EnrollMfaTarget [hiddenInput "account" (mfaEnrollmentFormAccountId form), hiddenInput "intent" "confirm", labelWithFor "mfa-code" (accountAuthenticatorCodeLabel (accountPageCopy locale)), inputWithId "mfa-code" [HarchWeb.inputMode "numeric", HarchWeb.autocomplete "one-time-code", HarchWeb.name "code", HarchWeb.required], submitButton (accountConfirmMfaEnrollmentLabel (accountPageCopy locale))])) (mfaEnrollmentFormSecret form)
+renderConfirmationForm context locale form = maybe (HarchWeb.fragment []) (const (actionForm context EnrollMfaTarget [hiddenInput "intent" "confirm", labelWithFor "mfa-code" (accountAuthenticatorCodeLabel (accountPageCopy locale)), inputWithId "mfa-code" [HarchWeb.inputMode "numeric", HarchWeb.autocomplete "one-time-code", HarchWeb.name "code", HarchWeb.required], submitButton (accountConfirmMfaEnrollmentLabel (accountPageCopy locale))])) (mfaEnrollmentFormSecret form)
