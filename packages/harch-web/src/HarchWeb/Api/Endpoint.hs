@@ -415,16 +415,15 @@ runApiRouteEndpoint endpoint =
 -- has no failure case to interpret at all
 -- ('runApiRouteEndpointHandlerNeverFailing').
 runDecodedApiRequest ::
+  ApiRequestData ->
   RequestCodec fields ->
   ApiRequestBody body ->
   (fields -> body -> IO ProtocolResponse) ->
   Wai.Request ->
   IO ProtocolResponse
-runDecodedApiRequest fields body onDecoded request =
+runDecodedApiRequest requestData fields body onDecoded request =
   decodeBody body
   where
-    requestData = apiRequestDataFromWaiRequest request
-
     decodeBody requestBody =
       case requestBody of
         ApiNoRequestBody -> decodeInitialFields (`onDecoded` ())
@@ -459,7 +458,7 @@ runDecodedApiRequest fields body onDecoded request =
       case bodyResult of
         Left RequestBodyLimitExceeded -> pure (apiFailureProtocolResponse HttpTypes.status413 "API request body exceeds its declared limit.")
         Right lazyBody ->
-          case selectApiBodyDecoder missingContentTypePolicy decoders (contentType request) (LazyByteString.toStrict lazyBody) of
+          case selectApiBodyDecoder missingContentTypePolicy decoders (contentType requestData) (LazyByteString.toStrict lazyBody) of
             ApiUnsupportedMediaType _ -> pure (apiFailureProtocolResponse HttpTypes.status415 "API request body has an unsupported media type.")
             ApiMalformedBody -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request body is malformed.")
             ApiDecodedBody decodedBody -> onDecodedBody decodedBody
@@ -476,11 +475,13 @@ runApiRouteEndpointHandler ::
   Wai.Request ->
   IO ProtocolResponse
 runApiRouteEndpointHandler fields body encoders handler failureResponse request =
-  runDecodedApiRequest fields body runHandler request
+  runDecodedApiRequest requestData fields body runHandler request
   where
+    requestData = apiRequestDataFromWaiRequest request
+
     runHandler decodedFields decodedBody = do
       handlerResult <- handler (ApiEndpointRequest decodedFields decodedBody)
-      pure (renderEndpointResult encoders request (either failureResponse id handlerResult))
+      pure (renderEndpointResult encoders requestData (either failureResponse id handlerResult))
 
 -- | Like 'runApiRouteEndpointHandler', for a handler with no domain failure
 -- to interpret; see 'apiRouteDefinitionWithContextNeverFailing'.
@@ -492,11 +493,13 @@ runApiRouteEndpointHandlerNeverFailing ::
   Wai.Request ->
   IO ProtocolResponse
 runApiRouteEndpointHandlerNeverFailing fields body encoders handler request =
-  runDecodedApiRequest fields body runHandler request
+  runDecodedApiRequest requestData fields body runHandler request
   where
+    requestData = apiRequestDataFromWaiRequest request
+
     runHandler decodedFields decodedBody = do
       responseValue <- handler (ApiEndpointRequest decodedFields decodedBody)
-      pure (renderEndpointResult encoders request responseValue)
+      pure (renderEndpointResult encoders requestData responseValue)
 
 newApiStreamingRequest :: Int -> Wai.Request -> IO ApiStreamingRequest
 newApiStreamingRequest maximumBytes request =
@@ -519,13 +522,11 @@ newApiMultipartRequest storage limits request = do
                   Right () -> Right ()
       }
 
-contentType :: Wai.Request -> Maybe Text
-contentType request =
-  singleHeaderValue (apiHeaderName "content-type") (apiRequestDataFromWaiRequest request)
+contentType :: ApiRequestData -> Maybe Text
+contentType = singleHeaderValue (apiHeaderName "content-type")
 
-acceptHeader :: Wai.Request -> Maybe Text
-acceptHeader request =
-  singleHeaderValue (apiHeaderName "accept") (apiRequestDataFromWaiRequest request)
+acceptHeader :: ApiRequestData -> Maybe Text
+acceptHeader = singleHeaderValue (apiHeaderName "accept")
 
 -- | RFC 9110 section 5.3: a field defined as a comma-separated list may
 -- legally appear as several separate header lines with the same name, and a
@@ -541,14 +542,14 @@ singleHeaderValue wanted requestData =
     [] -> Nothing
     values -> Just (Text.intercalate ", " values)
 
-renderEndpointResult :: NonEmpty (ApiResponseEncoder response) -> Wai.Request -> ApiResponse response -> ProtocolResponse
-renderEndpointResult encoders request responseValue =
-  case selectContentTypeRepresentation declaredContentTypes (acceptHeader request) of
+renderEndpointResult :: NonEmpty (ApiResponseEncoder response) -> ApiRequestData -> ApiResponse response -> ProtocolResponse
+renderEndpointResult encoders requestData responseValue =
+  case selectContentTypeRepresentation declaredContentTypes (acceptHeader requestData) of
     NoAcceptableContentTypeRepresentation -> apiFailureProtocolResponse HttpTypes.status406 "API response has no acceptable representation."
     SelectedContentTypeRepresentation selectedContentType ->
       ProtocolResponse
         { protocolResponseStatus = apiEndpointResponseStatus responseValue,
-          protocolResponseHeaders = endpointProtocolResponseHeaders encoders responseValue selectedEncoder,
+          protocolResponseHeaders = endpointProtocolResponseHeaders responseValue selectedEncoder,
           protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)),
           protocolResponseObservabilityAttributes = apiEndpointResponseObservabilityAttributes responseValue,
           protocolResponseLogEntries = apiEndpointResponseLogEntries responseValue
@@ -566,16 +567,23 @@ responseEncoderFor selectedContentType encoders =
       | apiResponseEncoderContentType candidate == selectedContentType = candidate
       | otherwise = fallback
 
-endpointResponseHeaders :: NonEmpty (ApiResponseEncoder response) -> ApiResponse response -> [(Text, Text)]
-endpointResponseHeaders encoders responseValue
-  | length encoders > 1 = addVaryAccept (apiEndpointResponseHeaders responseValue)
-  | otherwise = apiEndpointResponseHeaders responseValue
+-- | Every declaration here resolves through 'selectContentTypeRepresentation'
+-- against the request's 'Accept' header, so the response always depends on
+-- it — even with exactly one declared encoder, where 'Accept: text/plain'
+-- still yields 200 and an unsatisfiable 'Accept' still yields 406. A cache
+-- keyed on URL alone (no 'Vary') could serve one client's 406 to another
+-- who would have gotten 200. Emitting 'Vary: Accept' unconditionally, not
+-- only once alternatives exist, describes the response's real dependency
+-- rather than a proxy for it (a second encoder) that happens to be true
+-- only sometimes.
+endpointResponseHeaders :: ApiResponse response -> [(Text, Text)]
+endpointResponseHeaders responseValue = addVaryAccept (apiEndpointResponseHeaders responseValue)
 
-endpointProtocolResponseHeaders :: NonEmpty (ApiResponseEncoder response) -> ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
-endpointProtocolResponseHeaders encoders responseValue encoder =
+endpointProtocolResponseHeaders :: ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
+endpointProtocolResponseHeaders responseValue encoder =
   ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))
     : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value)
-      | (name, value) <- endpointResponseHeaders encoders responseValue
+      | (name, value) <- endpointResponseHeaders responseValue
       ]
 
 protocolResponseBodyFor :: ApiEncodedResponseBody -> ProtocolResponseBody

@@ -352,7 +352,11 @@ expectedApiJsonProtocolResponse :: ByteString.ByteString -> HarchWeb.ProtocolRes
 expectedApiJsonProtocolResponse jsonBody =
   HarchWeb.ProtocolResponse
     { HarchWeb.protocolResponseStatus = Http.status200,
-      HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json")],
+      -- Vary: Accept is unconditional on every typed API endpoint response,
+      -- even a single-representation one (see the BF task record): the
+      -- response genuinely depends on the request's Accept header, whether
+      -- or not an alternative representation happens to be declared.
+      HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json"), (Http.hVary, "Accept")],
       HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes jsonBody,
       HarchWeb.protocolResponseObservabilityAttributes = [],
       HarchWeb.protocolResponseLogEntries = []
@@ -8922,7 +8926,7 @@ spec = do
         `shouldBe` HarchWeb.ProtocolResponseResult
           HarchWeb.ProtocolResponse
             { HarchWeb.protocolResponseStatus = Http.status503,
-              HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json")],
+              HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json"), (Http.hVary, "Accept")],
               HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes "{\"error\":\"second-page-unavailable\"}",
               HarchWeb.protocolResponseObservabilityAttributes =
                 [ Observability.ObservabilityAttribute

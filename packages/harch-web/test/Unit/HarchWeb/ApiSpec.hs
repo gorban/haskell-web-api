@@ -384,7 +384,11 @@ spec =
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
               :| [ apiRouteResponseBody response `shouldBe` "accepted",
                    lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "text/plain; charset=utf-8",
-                   lookup "Vary" (apiRouteResponseHeaders response) `shouldBe` Nothing
+                   -- A single-encoder endpoint's response still depends on
+                   -- Accept (an unsatisfiable one would 406 instead), so
+                   -- Vary: Accept is present even with only one declared
+                   -- representation.
+                   lookup "Vary" (apiRouteResponseHeaders response) `shouldBe` Just "Accept"
                  ]
           )
 
