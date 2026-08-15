@@ -43,15 +43,31 @@ newtype AuthenticationAuditSink = AuthenticationAuditSink
   { recordAuthenticationAuditEvent :: AuthenticationAuditEvent -> IO ()
   }
 
+-- | Deliberately does not assume any particular ordering of 'attempts': an
+-- earlier version relied on the caller passing them oldest-first (undocumented
+-- except in the test suite) and used 'reverse' to find the newest failure,
+-- so a caller that instead queried its store newest-first (an @ORDER BY …
+-- DESC@, the natural way to write "recent attempts") would silently compute
+-- a lockout expiry from the oldest failure instead of the newest, expiring
+-- the lockout too early. Computing the newest timestamp with 'maximum'
+-- instead makes the result correct for any input order.
 evaluateLoginAttempt :: LoginProtectionPolicy -> Word64 -> [LoginAttempt] -> LoginProtectionResult
 evaluateLoginAttempt policy now attempts =
-  case reverse [loginAttemptAtNanoseconds attempt | attempt <- attempts, not (loginAttemptSucceeded attempt), now >= loginAttemptAtNanoseconds attempt, now - loginAttemptAtNanoseconds attempt < loginProtectionWindowNanoseconds policy] of
+  case recentFailureTimestamps of
     [] -> LoginPermitted
-    newestFailure : olderFailures ->
-      if fromIntegral (length olderFailures + 1) < loginProtectionMaximumFailures policy
+    _ ->
+      if fromIntegral (length recentFailureTimestamps) < loginProtectionMaximumFailures policy
         then LoginPermitted
         else
-          let lockoutEndsAt = newestFailure + loginProtectionLockoutNanoseconds policy
+          let lockoutEndsAt = maximum recentFailureTimestamps + loginProtectionLockoutNanoseconds policy
            in if now < lockoutEndsAt
                 then LoginThrottledUntil lockoutEndsAt
                 else LoginPermitted
+  where
+    recentFailureTimestamps =
+      [ loginAttemptAtNanoseconds attempt
+      | attempt <- attempts,
+        not (loginAttemptSucceeded attempt),
+        now >= loginAttemptAtNanoseconds attempt,
+        now - loginAttemptAtNanoseconds attempt < loginProtectionWindowNanoseconds policy
+      ]

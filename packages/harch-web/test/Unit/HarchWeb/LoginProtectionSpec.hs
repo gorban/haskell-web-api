@@ -47,6 +47,14 @@ spec = do
                ]
         )
 
+    it "computes the same lockout regardless of whether the caller passes attempts oldest-first or newest-first" $ do
+      expectAll
+        ( (evaluateLoginAttempt policy 100 [LoginAttempt 90 False, LoginAttempt 60 False] `shouldBe` LoginThrottledUntil 140)
+            :| [ evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140,
+                 evaluateLoginAttempt policy 100 [LoginAttempt 90 False, LoginAttempt 20 False, LoginAttempt 60 False] `shouldBe` LoginThrottledUntil 140
+               ]
+        )
+
   describe "AuthenticationAuditSink" $ do
     it "leaves audit delivery application-owned" $ do
       events <- newIORef []
