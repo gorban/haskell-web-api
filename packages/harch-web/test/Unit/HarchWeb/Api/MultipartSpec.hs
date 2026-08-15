@@ -3,6 +3,8 @@
 
 module Unit.HarchWeb.Api.MultipartSpec (spec) where
 
+import Control.Concurrent (forkIO, myThreadId)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception qualified as Exception
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
@@ -518,6 +520,27 @@ spec =
                   Nothing -> Exception.throwIO Exception.ThreadKilled
           attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
             Exception.try (withMultipartBodyWith (storageFromOpener trackedOpener) testLimits boundaryToken cancelledReadChunk (const (pure (Right ()))))
+          maybeSpooledPath <- IORef.readIORef spooledPathReference
+          case (attempt, maybeSpooledPath) of
+            (Left exception, Just spooledPath) -> do
+              Exception.fromException exception `shouldBe` Just Exception.ThreadKilled
+              doesFileExist spooledPath `shouldReturn` False
+            other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "discards a file cancelled between its storage staging and its active-upload bookkeeping" $
+        withTestUploadOpener $ \openUploadFile -> do
+          spooledPathReference <- IORef.newIORef Nothing
+          openedSignal <- newEmptyMVar
+          callingThreadId <- myThreadId
+          let signalingOpener filename = do
+                (path, handle) <- openUploadFile filename
+                IORef.writeIORef spooledPathReference (Just path)
+                putMVar openedSignal ()
+                pure (path, handle)
+              readChunk = pure ("--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\nfile contents")
+          _ <- forkIO (takeMVar openedSignal >> Exception.throwTo callingThreadId Exception.ThreadKilled)
+          attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
+            Exception.try (withMultipartBodyWith (storageFromOpener signalingOpener) testLimits boundaryToken readChunk (const (pure (Right ()))))
           maybeSpooledPath <- IORef.readIORef spooledPathReference
           case (attempt, maybeSpooledPath) of
             (Left exception, Just spooledPath) -> do

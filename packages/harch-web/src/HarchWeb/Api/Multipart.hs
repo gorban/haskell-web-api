@@ -382,8 +382,15 @@ startMultipartPart consumer partCounts headerBlock =
                 (multipartPartCountsFiles partCounts >= multipartLimitsMaxFileCount (multipartConsumerLimits consumer))
                 (throwError MultipartTooManyFiles)
               let storage = multipartConsumerStorage consumer
-              stagedUpload <- liftIO (MultipartStorage.beginMultipartUpload storage $! filename)
-              liftIO (IORef.writeIORef (multipartConsumerActiveUploadReference consumer) (Just stagedUpload))
+              -- An async exception landing between the upload starting and its
+              -- reference being recorded would leave it visible to neither
+              -- 'discardActiveMultipartUpload' nor 'discardUnclaimed', orphaning
+              -- it in the storage adapter; mask_ makes the two one atomic step.
+              stagedUpload <-
+                liftIO . Exception.mask_ $ do
+                  stagedUpload <- MultipartStorage.beginMultipartUpload storage $! filename
+                  IORef.writeIORef (multipartConsumerActiveUploadReference consumer) (Just stagedUpload)
+                  pure stagedUpload
               pure (FileAccumulator fieldName filename stagedUpload 0)
 
 appendMultipartPartBytes ::
