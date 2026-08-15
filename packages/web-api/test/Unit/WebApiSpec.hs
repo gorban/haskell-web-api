@@ -3703,9 +3703,9 @@ spec = do
       spanishInvalidPasswordResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("password", "short")] Spanish)
       spanishInvalidPasswordResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-password") "Usa una contrasena"
       emptyDisplayNameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", ""), ("password", "correct horse battery staple")] English)
-      emptyDisplayNameResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Check your inbox"
+      emptyDisplayNameResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register, check its inbox"
       createdResult <- handleAccountAction workflow (request "POST" "/es/register" [("username", "person_01"), ("email", "person@example.test"), ("displayName", "Person Example"), ("password", "correct horse battery staple")] Spanish)
-      createdResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Revisa tu bandeja de entrada"
+      createdResult `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion puede registrarse, revisa su bandeja de entrada"
       deliveredMessages <- readIORef deliveredMessagesReference
       deliveredMessages `shouldSatisfy` \case
         [_, message] -> "https://account.example.test/es/verify?token=" `Text.isInfixOf` Email.emailMessageBody message
@@ -3841,7 +3841,11 @@ spec = do
       spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
       spanishAlreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion"
       createdEnglish <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
-      createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Check your inbox"
+      createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
+      -- Byte-identical responses for the already-registered and newly-created
+      -- outcomes: the hedged "if that address can register" wording only
+      -- protects against enumeration if both branches answer identically.
+      alreadyRegistered `shouldBe` createdEnglish
       unavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       unavailableRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       spanishUnavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
