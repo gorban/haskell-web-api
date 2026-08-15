@@ -424,6 +424,53 @@ spec =
                  ]
           )
 
+      it "combines repeated Content-Type header lines per RFC 9110 instead of silently treating the request as having none" $ do
+        -- Content-Type is not itself a list-valued field (unlike Accept), so
+        -- RFC 9110's combine-with-commas rule turns two declared lines —
+        -- even two identical, individually acceptable ones — into a value
+        -- no single declared media type can match. That is the point: the
+        -- previous behavior silently treated two lines as "Content-Type
+        -- absent", which combined with an AssumeMediaType policy meant the
+        -- body was parsed as an assumed type instead of the server noticing
+        -- the client sent something malformed. 415 here is a strictly safer
+        -- outcome than a silent 200 that guessed.
+        let assumedEndpoint =
+              apiRouteEndpoint
+                ApiPost
+                (pure ())
+                (ApiBufferedRequestBody (AssumeMediaType plainTextMediaType) 4 [textBodyDecoder])
+                (textResponseEncoder :| [])
+                (pure . Right . apiResponse . apiEndpointRequestBody)
+                (\() -> apiResponse "unreachable")
+        duplicateHeaderRequest <- requestWithBody [("Content-Type", "text/plain"), ("Content-Type", "text/plain")] ["ok"]
+        singleHeaderRequest <- requestWithBody [("Content-Type", "text/plain")] ["ok"]
+        duplicateResponse <- runApiRoute assumedEndpoint duplicateHeaderRequest
+        singleResponse <- runApiRoute assumedEndpoint singleHeaderRequest
+        expectAll
+          ( (apiRouteResponseStatus duplicateResponse `shouldBe` HttpTypes.status415)
+              :| [ apiRouteResponseStatus singleResponse `shouldBe` HttpTypes.status200,
+                   apiRouteResponseBody singleResponse `shouldBe` "ok"
+                 ]
+          )
+
+      it "combines repeated Accept header lines per RFC 9110 instead of falling back to the first declared representation" $ do
+        let negotiatedEndpoint =
+              apiRouteEndpoint
+                ApiGet
+                (pure ())
+                ApiNoRequestBody
+                (textResponseEncoder :| [jsonResponseEncoder])
+                (\_ -> pure (Right (apiResponse "hello")))
+                (\() -> apiResponse "unreachable")
+        let duplicateAcceptRequest = Wai.defaultRequest {Wai.requestHeaders = [("Accept", "application/json"), ("Accept", "application/json")]}
+        response <- runApiRoute negotiatedEndpoint duplicateAcceptRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status200)
+              :| [ apiRouteResponseBody response `shouldBe` "\"hello\"",
+                   lookup "Content-Type" (apiRouteResponseHeaders response) `shouldBe` Just "application/json; charset=utf-8"
+                 ]
+          )
+
       it "uses an explicitly assumed media type only when the endpoint opts in" $ do
         let assumedContentTypeEndpoint =
               apiRouteEndpoint

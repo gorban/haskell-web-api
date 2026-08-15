@@ -521,15 +521,25 @@ newApiMultipartRequest storage limits request = do
 
 contentType :: Wai.Request -> Maybe Text
 contentType request =
-  case [value | (name, value) <- apiRequestHeaders (apiRequestDataFromWaiRequest request), name == apiHeaderName "content-type"] of
-    [value] -> Just value
-    _ -> Nothing
+  singleHeaderValue (apiHeaderName "content-type") (apiRequestDataFromWaiRequest request)
 
 acceptHeader :: Wai.Request -> Maybe Text
 acceptHeader request =
-  case [value | (name, value) <- apiRequestHeaders (apiRequestDataFromWaiRequest request), name == apiHeaderName "accept"] of
-    [value] -> Just value
-    _ -> Nothing
+  singleHeaderValue (apiHeaderName "accept") (apiRequestDataFromWaiRequest request)
+
+-- | RFC 9110 section 5.3: a field defined as a comma-separated list may
+-- legally appear as several separate header lines with the same name, and a
+-- recipient must combine them exactly as if they had been sent as one line
+-- joined by commas. The previous shape (@[value] -> Just value; _ ->
+-- Nothing@) silently treated "two declared values" the same as "no header
+-- at all", which fed a wrong single-media-type decision into
+-- 'selectApiBodyDecoder' and 'selectContentTypeRepresentation' rather than
+-- combining what the client actually sent.
+singleHeaderValue :: ApiHeaderName -> ApiRequestData -> Maybe Text
+singleHeaderValue wanted requestData =
+  case [value | (name, value) <- apiRequestHeaders requestData, name == wanted] of
+    [] -> Nothing
+    values -> Just (Text.intercalate ", " values)
 
 renderEndpointResult :: NonEmpty (ApiResponseEncoder response) -> Wai.Request -> ApiResponse response -> ProtocolResponse
 renderEndpointResult encoders request responseValue =
