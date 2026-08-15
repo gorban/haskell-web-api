@@ -6,12 +6,51 @@
 -- The framework facade re-exports this module. Applications can keep using
 -- 'HarchWeb' for the convenience API, while this focused module owns the
 -- route codec boundary without depending on server or document machinery.
+--
+-- === Design decision: 'RouteMethodPolicy' over parsed request methods
+--
+-- 'RouteCodec.routeMethods' reports a 'RouteMethodPolicy' (an opaque
+-- \"hidden or these methods\" set) rather than a raw @['RouteMethod']@, and
+-- method/path dispatch consumes opaque 'RequestMethod' \/ 'RequestPath'
+-- newtypes rather than bare 'Text'. This extends the existing route codec
+-- boundary instead of adding a parallel one, per
+-- @docs/design-guidance.md@'s extend-vs-new-abstraction rule.
+--
+-- 'RequestMethod' deliberately stays a 'Text' wrapper instead of parsing
+-- into 'RouteMethod': 'RouteMethod' only models the five methods a route can
+-- declare (GET, POST, PUT, PATCH, DELETE), while 'matchRouteMethod' still
+-- has to recognise HEAD and OPTIONS by string comparison to dispatch them
+-- against a GET-declaring or any-declaring route. Parsing the incoming
+-- method into 'RouteMethod' up front would have discarded that information
+-- before dispatch could use it. This is the framework-capability-gap
+-- protocol's middle tier: work around the gap in this module rather than
+-- widening 'RouteMethod' to model methods no route ever declares.
+--
+-- 'RouteMethod' additionally derives 'Ord' so 'routeMethodPolicy' can store
+-- declared methods in a 'Data.Set.Set', which subsumes the 'Data.List.nub'
+-- deduplication this module used to do by hand. This is an observable
+-- behavior change: the @Allow@ header (see 'routeAllowHeaderValue') now
+-- lists methods in ascending @Ord@ order (GET, POST, PUT, PATCH, DELETE)
+-- instead of the order a route family's 'RouteMethod' list declared them
+-- in. RFC 9110 does not mandate an @Allow@-header method order, and a
+-- repo-wide search found no route declaring its methods out of ascending
+-- order, so the change is currently behavior-invisible; it is recorded here
+-- because it is observable in principle.
 module HarchWeb.Routing
   ( RouteCodec (..),
     RouteDispatch (..),
     RouteMethod (..),
+    RouteMethodPolicy (..),
     RouteRequest (..),
     RouteFamily (..),
+    RequestMethod,
+    RequestPath,
+    requestMethod,
+    requestMethodText,
+    requestPath,
+    requestPathText,
+    routeMethodPolicy,
+    routeMethodPolicyMethods,
     matchRouteMethod,
     matchRoute,
     combineRouteCodecs,
@@ -22,10 +61,11 @@ module HarchWeb.Routing
 where
 
 import Control.Applicative ((<|>))
-import Data.List qualified as List
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
+import Data.Set (Set)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 
@@ -37,16 +77,64 @@ data RouteMethod
   | RoutePut
   | RoutePatch
   | RouteDelete
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show)
 
 routeMethodText :: RouteMethod -> Text
-routeMethodText routeMethod =
-  case routeMethod of
+routeMethodText routeMethodValue =
+  case routeMethodValue of
     RouteGet -> "GET"
     RoutePost -> "POST"
     RoutePut -> "PUT"
     RoutePatch -> "PATCH"
     RouteDelete -> "DELETE"
+
+-- | An incoming request's method, kept distinct from 'RouteMethod' — the
+-- request domain includes @HEAD@, @OPTIONS@, and methods no route ever
+-- declares, none of which belong in the declaration-only 'RouteMethod' ADT.
+newtype RequestMethod = RequestMethod Text
+  deriving (Eq, Show)
+
+requestMethod :: Text -> RequestMethod
+requestMethod = RequestMethod
+
+requestMethodText :: RequestMethod -> Text
+requestMethodText (RequestMethod value) = value
+
+-- | An incoming request's target path, kept distinct from 'RequestMethod' so
+-- 'matchRouteMethod' cannot compile with the two swapped.
+newtype RequestPath = RequestPath Text
+  deriving (Eq, Show)
+
+requestPath :: Text -> RequestPath
+requestPath = RequestPath
+
+requestPathText :: RequestPath -> Text
+requestPathText (RequestPath value) = value
+
+-- | A route's declared method policy. 'RouteHidden' is its own case instead
+-- of overloading an empty method list, and 'RouteAllows' holds a 'Set' so a
+-- duplicate declaration cannot make 'matchRouteMethod' or
+-- 'routeAllowHeaderValue' re-derive uniqueness themselves.
+data RouteMethodPolicy
+  = RouteHidden
+  | RouteAllows (Set RouteMethod)
+  deriving (Eq, Show)
+
+-- | Build a 'RouteMethodPolicy' from the plain list a route declaration
+-- naturally writes (e.g. @[RouteGet]@); an empty declaration is 'RouteHidden'.
+routeMethodPolicy :: [RouteMethod] -> RouteMethodPolicy
+routeMethodPolicy declaredMethods =
+  case declaredMethods of
+    [] -> RouteHidden
+    _ -> RouteAllows (Set.fromList declaredMethods)
+
+-- | The plain list a 'RouteMethodPolicy' declares, for a caller that derives
+-- its own declaration from an existing 'RouteCodec' rather than the reverse.
+routeMethodPolicyMethods :: RouteMethodPolicy -> [RouteMethod]
+routeMethodPolicyMethods routeMethodPolicyValue =
+  case routeMethodPolicyValue of
+    RouteHidden -> []
+    RouteAllows declaredMethods -> Set.toList declaredMethods
 
 -- | The result of matching a request target and method through one route
 -- codec. Method policy is evaluated only after the path is known to exist, so
@@ -69,7 +157,7 @@ data RouteCodec route context = RouteCodec
   { parseRoute :: context -> Text -> Maybe (RouteRequest route context),
     renderRoute :: RouteRequest route context -> Text,
     notFoundRequest :: context -> RouteRequest route context,
-    routeMethods :: route -> [RouteMethod]
+    routeMethods :: route -> RouteMethodPolicy
   }
 
 routeHref :: RouteCodec route context -> context -> route -> Text
@@ -126,27 +214,36 @@ matchRoute :: RouteCodec route context -> context -> Text -> RouteRequest route 
 matchRoute codec context path =
   fromMaybe (notFoundRequest codec context) (parseRoute codec context path)
 
--- | Match a route's path before evaluating its declared method policy. An
--- empty method declaration is an explicit typed not-found route. It retains
--- its parsed route so an API or page route family can render its own 404
+-- | Match a route's path before evaluating its declared method policy. A
+-- 'RouteHidden' policy is an explicit typed not-found route. It retains its
+-- parsed route so an API or page route family can render its own 404
 -- representation, while a path that did not parse uses 'notFoundRequest'.
-matchRouteMethod :: RouteCodec route context -> context -> Text -> Text -> RouteDispatch route context
-matchRouteMethod codec context requestMethod path =
-  case parseRoute codec context path of
+-- The request's method and path are distinct types (not two adjacent 'Text'
+-- values), so passing them in the wrong order is a compile error rather than
+-- a silently-swapped runtime bug.
+matchRouteMethod :: RouteCodec route context -> context -> RequestMethod -> RequestPath -> RouteDispatch route context
+matchRouteMethod codec context incomingMethod incomingPath =
+  case parseRoute codec context (requestPathText incomingPath) of
     Nothing -> RouteNotFound (notFoundRequest codec context)
     Just routeRequest ->
-      case List.nub (routeMethods codec (requestRoute routeRequest)) of
-        [] -> RouteNotFound routeRequest
-        firstMethod : remainingMethods ->
-          matchDeclaredMethods routeRequest requestMethod (firstMethod :| remainingMethods)
+      case routeMethods codec (requestRoute routeRequest) of
+        RouteHidden -> RouteNotFound routeRequest
+        RouteAllows declaredMethods ->
+          case NonEmpty.nonEmpty (Set.toList declaredMethods) of
+            Nothing -> RouteNotFound routeRequest
+            Just nonEmptyDeclaredMethods ->
+              matchDeclaredMethods routeRequest (requestMethodText incomingMethod) nonEmptyDeclaredMethods
 
 matchDeclaredMethods :: RouteRequest route context -> Text -> NonEmpty RouteMethod -> RouteDispatch route context
-matchDeclaredMethods routeRequest requestMethod declaredMethods
-  | requestMethod == "HEAD", RouteGet `elem` declaredMethods = RouteMatchedHead routeRequest
-  | requestMethod == "OPTIONS" = RouteOptions routeRequest declaredMethods
-  | any ((== requestMethod) . routeMethodText) declaredMethods = RouteMatched routeRequest
+matchDeclaredMethods routeRequest incomingMethodText declaredMethods
+  | incomingMethodText == "HEAD", RouteGet `elem` declaredMethods = RouteMatchedHead routeRequest
+  | incomingMethodText == "OPTIONS" = RouteOptions routeRequest declaredMethods
+  | any ((== incomingMethodText) . routeMethodText) declaredMethods = RouteMatched routeRequest
   | otherwise = RouteMethodNotAllowed routeRequest declaredMethods
 
+-- | The declared methods reaching this from 'matchRouteMethod' are already
+-- deduplicated by 'RouteAllows'' 'Set'; a caller building its own
+-- 'NonEmpty' by hand still gets a correct (if possibly redundant) value.
 routeAllowHeaderValue :: NonEmpty RouteMethod -> Text
 routeAllowHeaderValue declaredMethods =
   Text.intercalate
@@ -156,4 +253,4 @@ routeAllowHeaderValue declaredMethods =
         <> ["OPTIONS"]
     )
   where
-    declaredMethodList = List.nub (NonEmpty.toList declaredMethods)
+    declaredMethodList = NonEmpty.toList declaredMethods

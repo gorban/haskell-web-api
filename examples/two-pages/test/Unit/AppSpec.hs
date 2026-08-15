@@ -196,15 +196,15 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
                    parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Page HomePage)
-                     `shouldBe` [RouteGet],
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Page PageNotFound)
-                     `shouldBe` [],
+                     `shouldBe` HarchWeb.RouteHidden,
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Api LiveDataEvents)
-                     `shouldBe` [RouteGet],
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom (PreviewPage previewSlug))
-                     `shouldBe` [RouteGet],
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet],
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Custom NativeSubscriptionFallback)
-                     `shouldBe` [RouteGet, RoutePost],
+                     `shouldBe` HarchWeb.routeMethodPolicy [RouteGet, RoutePost],
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page HomePage, requestContext = ()} `shouldBe` "/",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page SecondPage, requestContext = ()} `shouldBe` "/second",
                    renderRoute ExampleRoutes.routeCodec RouteRequest {requestRoute = Page LiveDataPage, requestContext = ()} `shouldBe` "/live-data",

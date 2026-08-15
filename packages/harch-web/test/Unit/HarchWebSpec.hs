@@ -18,7 +18,7 @@ import Data.Maybe (fromMaybe, isNothing, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb
+import HarchWeb hiding (requestMethod, requestPath)
 import HarchWeb.Action qualified as Action
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
@@ -103,7 +103,7 @@ sampleCodec =
     { parseRoute = parseSampleRoute,
       renderRoute = renderSampleRoute,
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
-      routeMethods = sampleRouteMethods
+      routeMethods = routeMethodPolicy . sampleRouteMethods
     }
 
 sampleRouteMethods :: TestRoute -> [RouteMethod]
@@ -519,7 +519,7 @@ rootPathCodec =
           EventStreamRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/events"
           MissingRoute -> applyTestPathPrefix (testContextPathPrefix (requestContext request)) "/404",
       notFoundRequest = \routeContext -> routeContext `seq` RouteRequest {requestRoute = MissingRoute, requestContext = routeContext},
-      routeMethods = sampleRouteMethods
+      routeMethods = routeMethodPolicy . sampleRouteMethods
     }
 
 renderSampleResponse :: RouteRequest TestRoute TestContext -> Response TestRoute TestContext

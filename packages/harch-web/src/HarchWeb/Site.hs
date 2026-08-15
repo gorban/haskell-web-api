@@ -128,7 +128,7 @@ buildSiteApplication site =
         applicationStaticAssets = siteStaticAssets site,
         applicationRequestPolicy = siteRequestPolicy site,
         applicationRequestMiddleware = siteRequestMiddleware site,
-        routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = routeMethods . siteRouteDefinition site},
+        routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . routeMethods . siteRouteDefinition site},
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
         handleClientAction = siteHandleClientAction site,

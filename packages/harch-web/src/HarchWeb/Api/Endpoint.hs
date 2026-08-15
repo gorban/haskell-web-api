@@ -344,7 +344,7 @@ apiRouteEndpointFamilyCodec endpoints =
           else Nothing,
       HarchWeb.renderRoute = apiPathText . HarchWeb.requestRoute,
       HarchWeb.notFoundRequest = HarchWeb.RouteRequest (ApiPath Text.empty),
-      HarchWeb.routeMethods = \(ApiPath pathText) -> apiPathRouteMethods endpoints pathText
+      HarchWeb.routeMethods = \(ApiPath pathText) -> HarchWeb.routeMethodPolicy (apiPathRouteMethods endpoints pathText)
     }
 
 apiPathText :: ApiPath -> Text

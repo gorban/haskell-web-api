@@ -4,6 +4,7 @@
 module Unit.HarchWeb.RoutingSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Set qualified as Set
 import HarchWeb.Routing
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -53,18 +54,18 @@ spec = do
 
     it "delegates routeMethods to whichever family a route belongs to" $
       expectAll
-        ( (routeMethods combinedCodec (RouteFamilyA WriteRoute) `shouldBe` [RoutePost, RoutePut])
-            :| [routeMethods combinedCodec (RouteFamilyB SecondOnlyRoute) `shouldBe` [RouteGet]]
+        ( (routeMethods combinedCodec (RouteFamilyA WriteRoute) `shouldBe` routeMethodPolicy [RoutePost, RoutePut])
+            :| [routeMethods combinedCodec (RouteFamilyB SecondOnlyRoute) `shouldBe` routeMethodPolicy [RouteGet]]
         )
 
     it "derives one shared 404/405/HEAD/OPTIONS authority across both combined families" $
       expectAll
-        ( (matchRouteMethod combinedCodec TestContext "GET" "/missing" `shouldBe` RouteNotFound (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext))
-            :| [ matchRouteMethod combinedCodec TestContext "DELETE" "/read"
+        ( (matchRouteMethod combinedCodec TestContext (requestMethod "GET") (requestPath "/missing") `shouldBe` RouteNotFound (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext))
+            :| [ matchRouteMethod combinedCodec TestContext (requestMethod "DELETE") (requestPath "/read")
                    `shouldBe` RouteMethodNotAllowed (RouteRequest (RouteFamilyA ReadRoute) TestContext) (RouteGet :| []),
-                 matchRouteMethod combinedCodec TestContext "HEAD" "/second-only"
+                 matchRouteMethod combinedCodec TestContext (requestMethod "HEAD") (requestPath "/second-only")
                    `shouldBe` RouteMatchedHead (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext),
-                 matchRouteMethod combinedCodec TestContext "GET" "/second-only"
+                 matchRouteMethod combinedCodec TestContext (requestMethod "GET") (requestPath "/second-only")
                    `shouldBe` RouteMatched (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext)
                ]
         )
@@ -80,11 +81,11 @@ spec = do
 
   describe "matchRouteMethod" $ do
     it "keeps an unknown path as not found rather than manufacturing a 405" $
-      matchRouteMethod testCodec TestContext "DELETE" "/missing"
+      matchRouteMethod testCodec TestContext (requestMethod "DELETE") (requestPath "/missing")
         `shouldBe` RouteNotFound missingRequest
 
     it "derives a 405 and Allow value only after a path matches" $
-      case matchRouteMethod testCodec TestContext "POST" "/read" of
+      case matchRouteMethod testCodec TestContext (requestMethod "POST") (requestPath "/read") of
         RouteMethodNotAllowed routeRequest declaredMethods -> do
           routeRequest `shouldBe` readRequest
           declaredMethods `shouldBe` RouteGet :| []
@@ -92,11 +93,11 @@ spec = do
         routeDispatch -> expectationFailure ("expected a method mismatch, got " <> show routeDispatch)
 
     it "derives HEAD from GET without declaring another route" $
-      matchRouteMethod testCodec TestContext "HEAD" "/read"
+      matchRouteMethod testCodec TestContext (requestMethod "HEAD") (requestPath "/read")
         `shouldBe` RouteMatchedHead readRequest
 
     it "synthesizes OPTIONS from every declared method in declaration order" $
-      case matchRouteMethod testCodec TestContext "OPTIONS" "/write" of
+      case matchRouteMethod testCodec TestContext (requestMethod "OPTIONS") (requestPath "/write") of
         RouteOptions routeRequest declaredMethods -> do
           routeRequest `shouldBe` writeRequest
           declaredMethods `shouldBe` RoutePost :| [RoutePut]
@@ -104,16 +105,52 @@ spec = do
         routeDispatch -> expectationFailure ("expected options, got " <> show routeDispatch)
 
     it "matches a declared non-GET method directly" $
-      matchRouteMethod testCodec TestContext "PUT" "/write"
+      matchRouteMethod testCodec TestContext (requestMethod "PUT") (requestPath "/write")
         `shouldBe` RouteMatched writeRequest
 
     it "keeps a parsed zero-method route so its route family can render its own 404" $
-      matchRouteMethod testCodec TestContext "GET" "/empty"
+      matchRouteMethod testCodec TestContext (requestMethod "GET") (requestPath "/empty")
         `shouldBe` RouteNotFound emptyRequest
+
+    it "also treats a route allowing an empty method set as not found" $
+      matchRouteMethod
+        (testCodec {routeMethods = const (RouteAllows Set.empty)})
+        TestContext
+        (requestMethod "GET")
+        (requestPath "/read")
+        `shouldBe` RouteNotFound readRequest
 
     it "renders every declared method in the public protocol vocabulary" $
       map routeMethodText [RouteGet, RoutePost, RoutePut, RoutePatch, RouteDelete]
         `shouldBe` ["GET", "POST", "PUT", "PATCH", "DELETE"]
+
+    it "keeps RequestMethod, RequestPath, and RouteMethodPolicy comparable, printable, and total" $
+      expectAll
+        ( (requestMethod "GET" `shouldBe` requestMethod "GET")
+            :| [ requestMethod "GET" `shouldNotBe` requestMethod "POST",
+                 requestMethodText (requestMethod "GET") `shouldBe` "GET",
+                 length (show (requestMethod "GET")) + length (showList [requestMethod "GET"] "") `shouldSatisfy` (> 0),
+                 requestPath "/read" `shouldBe` requestPath "/read",
+                 requestPath "/read" `shouldNotBe` requestPath "/write",
+                 requestPathText (requestPath "/read") `shouldBe` "/read",
+                 length (show (requestPath "/read")) + length (showList [requestPath "/read"] "") `shouldSatisfy` (> 0),
+                 routeMethodPolicy [] `shouldBe` RouteHidden,
+                 routeMethodPolicy [RouteGet, RouteGet] `shouldBe` RouteAllows (Set.fromList [RouteGet]),
+                 RouteHidden `shouldNotBe` routeMethodPolicy [RouteGet],
+                 length (show RouteHidden) + length (showList [RouteHidden] "") `shouldSatisfy` (> 0),
+                 routeMethodPolicyMethods RouteHidden `shouldBe` [],
+                 routeMethodPolicyMethods (routeMethodPolicy [RoutePost, RouteGet]) `shouldBe` [RouteGet, RoutePost],
+                 compare RouteGet RoutePost `shouldBe` LT,
+                 compare RoutePost RouteGet `shouldBe` GT,
+                 compare RouteGet RouteGet `shouldBe` EQ,
+                 (RouteGet < RoutePost) `shouldBe` True,
+                 (RouteGet <= RouteGet) `shouldBe` True,
+                 (RoutePost > RouteGet) `shouldBe` True,
+                 (RouteGet >= RouteGet) `shouldBe` True,
+                 max RouteGet RoutePost `shouldBe` RoutePost,
+                 min RouteGet RoutePost `shouldBe` RouteGet
+               ]
+        )
 
     it "keeps every public dispatch value comparable and inspectable" $ do
       let methods = [RouteGet, RoutePost, RoutePut, RoutePatch, RouteDelete]
@@ -164,12 +201,13 @@ testCodec =
           SharedRoute -> "/shared"
           MissingRoute -> "/404",
       notFoundRequest = \requestContextValue -> missingRequest {requestContext = requestContextValue},
-      routeMethods = \case
-        ReadRoute -> [RouteGet]
-        WriteRoute -> [RoutePost, RoutePut]
-        EmptyRoute -> []
-        SharedRoute -> [RouteGet]
-        MissingRoute -> []
+      routeMethods =
+        routeMethodPolicy . \case
+          ReadRoute -> [RouteGet]
+          WriteRoute -> [RoutePost, RoutePut]
+          EmptyRoute -> []
+          SharedRoute -> [RouteGet]
+          MissingRoute -> []
     }
 
 -- | A second, independent route family used only to exercise
@@ -189,9 +227,10 @@ secondCodec =
           SecondOnlyRoute -> "/second-only"
           SharedRouteB -> "/shared",
       notFoundRequest = RouteRequest SecondOnlyRoute,
-      routeMethods = \case
-        SecondOnlyRoute -> [RouteGet]
-        SharedRouteB -> [RouteGet]
+      routeMethods =
+        routeMethodPolicy . \case
+          SecondOnlyRoute -> [RouteGet]
+          SharedRouteB -> [RouteGet]
     }
 
 combinedCodec :: RouteCodec (RouteFamily TestRoute SecondFamilyRoute) TestContext

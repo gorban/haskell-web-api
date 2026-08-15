@@ -8876,7 +8876,7 @@ spec = do
       HarchWeb.renderRoute codec apiNotFoundRequest `shouldBe` renderRoutePath apiNotFoundRequest
       HarchWeb.renderRoute codec notFoundRequest `shouldBe` renderRoutePath notFoundRequest
       HarchWeb.notFoundRequest codec defaultRequestContext `shouldBe` notFoundRequest
-      HarchWeb.routeMethods codec NotFoundRoute `shouldBe` []
+      HarchWeb.routeMethods codec NotFoundRoute `shouldBe` HarchWeb.RouteHidden
       -- 'pureApplication's own codec (above) has its 'HarchWeb.routeMethods'
       -- overridden by 'HarchWeb.buildSiteApplication' to derive from each
       -- route's live 'HarchWeb.RouteDefinition' instead — which, for
@@ -8885,9 +8885,9 @@ spec = do
       -- 'Api _' declaration. Test 'WebApi.Route.routeCodec' directly for
       -- those two so this assertion exercises the declaration it names,
       -- not a same-valued but different code path.
-      HarchWeb.routeMethods WebApi.Route.routeCodec ApiNotFoundRoute `shouldBe` []
-      HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` [HarchWeb.RouteGet]
-      HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec ApiNotFoundRoute `shouldBe` HarchWeb.RouteHidden
+      HarchWeb.routeMethods WebApi.Route.routeCodec StatusApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
+      HarchWeb.routeMethods WebApi.Route.routeCodec SecondApiRoute `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet]
 
     it "stores the same response-selection behavior used by direct response tests" $ do
       expectedHomeResponse <- selectResponse defaultAppConfig homeRequest

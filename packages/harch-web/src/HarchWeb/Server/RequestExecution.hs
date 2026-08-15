@@ -33,6 +33,7 @@ import HarchWeb.Routing
     renderRoute,
     routeAllowHeaderValue,
   )
+import HarchWeb.Routing qualified as Routing
 import HarchWeb.Security
   ( RequestConcurrencyLimit,
     RequestHeadLimitFailure (..),
@@ -257,8 +258,8 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
         matchRouteMethod
           (routeCodec webApplication)
           requestContext
-          (requestMethodText request)
-          (waiRequestRouteTarget requestPolicyConfig request)
+          (Routing.requestMethod (requestMethodText request))
+          (Routing.requestPath (waiRequestRouteTarget requestPolicyConfig request))
       routeRequest = routeDispatchRequest routeDispatch
   routeMatchedAt <- routeDispatch `seq` getMonotonicTimeNSec
   renderStartedAt <- getMonotonicTimeNSec

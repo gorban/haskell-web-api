@@ -31,6 +31,7 @@ import HarchWeb
   ( RouteCodec (..),
     RouteMethod (..),
     RouteRequest (..),
+    routeMethodPolicy,
   )
 import HarchWeb.Action
   ( ActionCodec,
@@ -100,7 +101,7 @@ routeCodec =
       renderRoute = routeHref . requestRoute,
       notFoundRequest = \() ->
         RouteRequest {requestRoute = Page PageNotFound, requestContext = ()},
-      routeMethods = twoPageRouteMethods
+      routeMethods = routeMethodPolicy . twoPageRouteMethods
     }
 
 twoPageRouteMethods :: TwoPageRoute -> [RouteMethod]

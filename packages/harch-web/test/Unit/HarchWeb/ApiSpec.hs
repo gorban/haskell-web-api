@@ -177,13 +177,13 @@ spec =
 
       it "reports every declared method at a path, deduplicated" $
         HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
-          `shouldBe` [HarchWeb.RouteGet, HarchWeb.RoutePost]
+          `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet, HarchWeb.RoutePost]
 
       it "reports no methods for a path with no declared endpoint" $
-        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/unknown") `shouldBe` []
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/unknown") `shouldBe` HarchWeb.RouteHidden
 
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
-        routeMethods (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status"))
+        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status")))
           `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
 
       it "keeps the definition's navigation label unset like the single-endpoint adapter" $
@@ -246,18 +246,18 @@ spec =
                 { HarchWeb.parseRoute = \requestContextValue path -> if path == "/home" then Just (RouteRequest "home" requestContextValue) else Nothing,
                   HarchWeb.renderRoute = const "/home",
                   HarchWeb.notFoundRequest = RouteRequest "not-found",
-                  HarchWeb.routeMethods = const [HarchWeb.RouteGet]
+                  HarchWeb.routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
                 }
             combined = HarchWeb.combineRouteCodecs (apiRouteEndpointFamilyCodec testEndpointTable) pageCodec
         expectAll
-          ( ( HarchWeb.matchRouteMethod combined () "GET" "/home"
+          ( ( HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/home")
                 `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyB "home") ())
             )
-              :| [ HarchWeb.matchRouteMethod combined () "GET" "/api/status"
+              :| [ HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/api/status")
                      `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()),
-                   HarchWeb.matchRouteMethod combined () "DELETE" "/api/status"
+                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "DELETE") (HarchWeb.requestPath "/api/status")
                      `shouldBe` HarchWeb.RouteMethodNotAllowed (RouteRequest (HarchWeb.RouteFamilyA (at "/api/status")) ()) (HarchWeb.RouteGet :| [HarchWeb.RoutePost]),
-                   HarchWeb.matchRouteMethod combined () "GET" "/missing" `shouldBe` HarchWeb.RouteNotFound (RouteRequest (HarchWeb.RouteFamilyB "not-found") ())
+                   HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/missing") `shouldBe` HarchWeb.RouteNotFound (RouteRequest (HarchWeb.RouteFamilyB "not-found") ())
                  ]
           )
 

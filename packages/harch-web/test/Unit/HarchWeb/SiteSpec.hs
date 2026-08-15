@@ -155,7 +155,7 @@ spec = do
     it "takes method ownership from route definitions rather than a codec shadow table" $ do
       let conflictingCodec =
             (siteRouteCodec sampleSite)
-              { HarchWeb.routeMethods = const [HarchWeb.RouteDelete]
+              { HarchWeb.routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteDelete])
               }
           application = buildSiteApplication (sampleSite {siteRouteCodec = conflictingCodec})
           deleteHomeRequest = (waiRequest []) {Wai.requestMethod = "DELETE"}
@@ -399,9 +399,10 @@ sampleRouteCodec =
           _ -> Nothing,
       renderRoute = \routeRequest -> renderRouteHref (requestContext routeRequest) (requestRoute routeRequest),
       notFoundRequest = \requestContextValue -> RouteRequest {requestRoute = NotFoundRoute, requestContext = requestContextValue},
-      routeMethods = \case
-        NotFoundRoute -> []
-        _ -> [HarchWeb.RouteGet]
+      routeMethods =
+        HarchWeb.routeMethodPolicy . \case
+          NotFoundRoute -> []
+          _ -> [HarchWeb.RouteGet]
     }
 
 renderRouteHref :: SampleContext -> SampleRoute -> Text
