@@ -2121,6 +2121,29 @@ spec = do
       renderDocument (buildPageShell sampleCodec sampleShell (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
 
+    it "HTML-escapes the stylesheet href, navigation href/label, main id, and deferred module src sinks" $
+      renderDocument
+        Document
+          { documentTitle = "Known",
+            documentBodyAttributes = [],
+            documentNavigationAttributes = [],
+            documentNavigation =
+              [ ResolvedNavigationItem
+                  { navigationLabel = "A & <B>",
+                    navigationRoute = KnownRoute,
+                    navigationHref = "/known?a=1&b=2",
+                    navigationIsActive = False
+                  }
+              ],
+            documentMainId = "app-main\" onclick=\"steal()",
+            documentMainAttributes = [],
+            documentMainContent = trustedMarkup "<h1>Known</h1>",
+            documentBootstrapHooks = [],
+            documentStylesheets = [stylesheet (AssetPath "/assets/sample.css?a=1&b=2")],
+            documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js?a=1&b=2"]
+          }
+        `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><link rel=\"stylesheet\" href=\"/assets/sample.css?a=1&amp;b=2\"><script type=\"module\" src=\"/assets/navigation.js?a=1&amp;b=2\" defer></script></head><body><nav><a href=\"/known?a=1&amp;b=2\" data-page-link=\"true\">A &amp; &lt;B&gt;</a></nav><main id=\"app-main&quot; onclick=&quot;steal()\"><h1>Known</h1></main></body></html>"
+
     it "renders bootstrap hook metadata only for pages that opt in" $
       renderDocument
         ( buildPageShell

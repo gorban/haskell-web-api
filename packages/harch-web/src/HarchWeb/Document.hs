@@ -557,6 +557,22 @@ buildPageShell codec shell page =
 renderDocument :: Document route -> Text
 renderDocument = renderDocumentWithNonce (RuntimeNonce "development-render-nonce")
 
+-- | Decision record (AS/AT/CR): this function, 'renderStylesheets',
+-- 'renderNavigationItem', and 'renderRuntimeDescriptor'\'s 'DeferredModule'
+-- case previously hand-concatenated several sinks (@main id@, a
+-- navigation @href@/label, a stylesheet @href@, a deferred module @src@)
+-- with no escaping at all, even though this same function already escapes
+-- 'documentTitle' and every 'HtmlAttribute' via 'renderHtml' \/ 'text'.
+-- Per the "extend an existing boundary" rule, every interpolated value at
+-- those sinks now goes through the same 'renderHtml' \/ 'text' pair rather
+-- than a new escaping mechanism. 'InlineBootstrap'\'s inline JavaScript
+-- source is deliberately left unescaped: it is framework-authored script
+-- content inside a @\<script\>@ element, not an HTML attribute or text
+-- node, and HTML-escaping it would corrupt valid JavaScript rather than
+-- neutralize an injection. This closes AT's confirmed
+-- @X-Forwarded-Prefix@ reachability end to end (the sink now escapes
+-- regardless of what the source validates) and makes README.md's existing
+-- "escaping is centralized in the Html renderer" claim (CR) true again.
 renderDocumentWithNonce :: RuntimeNonce -> Document route -> Text
 renderDocumentWithNonce runtimeNonce document =
   Text.concat
@@ -572,7 +588,7 @@ renderDocumentWithNonce runtimeNonce document =
       ">",
       Text.concat (map renderNavigationItem (documentNavigation document)),
       "</nav><main id=\"",
-      documentMainId document,
+      renderHtml (text (documentMainId document)),
       "\"",
       renderAttributes (documentMainAttributes document <> renderBootstrapHookAttributes (documentBootstrapHooks document)),
       ">",
@@ -591,7 +607,7 @@ renderStylesheets =
   Text.concat
     . map
       ( \Stylesheet {stylesheetAsset = AssetPath assetPath} ->
-          "<link rel=\"stylesheet\" href=\"" <> assetPath <> "\">"
+          "<link rel=\"stylesheet\" href=\"" <> renderHtml (text assetPath) <> "\">"
       )
 
 renderAttributes :: [HtmlAttribute] -> Text
@@ -627,12 +643,12 @@ renderNavigationItem
     } =
     Text.concat
       [ "<a href=\"",
-        itemHref,
+        renderHtml (text itemHref),
         "\"",
         " data-page-link=\"true\"",
         if itemIsActive then " aria-current=\"page\"" else Text.empty,
         ">",
-        itemLabel,
+        renderHtml (text itemLabel),
         "</a>"
       ]
 
@@ -654,6 +670,6 @@ renderRuntimeDescriptor runtimeNonce descriptor =
     DeferredModule {runtimeDescriptorSource = source} ->
       Text.concat
         [ "<script type=\"module\" src=\"",
-          source,
+          renderHtml (text source),
           "\" defer></script>"
         ]
