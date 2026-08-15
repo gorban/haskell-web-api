@@ -8,36 +8,44 @@
 module HarchWeb.Controls
   ( ActionCapability (..),
     ActionFormAttributes (..),
-    ActionIdempotency (..),
+    ActionIdempotency,
     ActionRecoveryCopy (..),
+    FormMethod (..),
     NativeActionFallback (..),
     actionForm,
+    actionIdempotency,
+    actionIdempotencyKey,
     defaultActionFormAttributes,
     defaultActionRecoveryCopy,
     pageLink,
   )
 where
 
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Action
   ( ActionCodec,
-    ActionMethod (..),
     actionMethod,
     actionMethodText,
     actionPath,
   )
 import HarchWeb.Markup
 
--- | The recovery capability an action explicitly declares. The default is an
--- exclusive client handler: it retains work until that handler settles it and
--- does not make a native submission promise.
+-- | The recovery capability an action explicitly declares, each paired with
+-- whatever evidence that capability requires. Attaching the evidence to the
+-- constructor (rather than a same-shaped 'Maybe' field elsewhere) makes an
+-- inconsistent pairing — a native fallback with no 'NativeFallback'
+-- capability, or vice versa — impossible to construct, closing the four
+-- render-time 'error' calls this module previously needed to reject it. The
+-- default is an exclusive client handler: it retains work until that handler
+-- settles it and does not make a native submission promise.
 data ActionCapability
   = ExclusiveClientHandler
   | HandlerSafeRetry
   | ConditionalLeaveConfirmation
-  | IdempotentMutationRetry
-  | NativeFallback
+  | IdempotentMutationRetry ActionIdempotency
+  | NativeFallback NativeActionFallback
   deriving (Eq, Show)
 
 -- | Localized copy used by the capture kernel's control-local status region.
@@ -68,19 +76,36 @@ defaultActionRecoveryCopy =
 -- | The stable identity supplied with every attempt of an explicitly
 -- idempotent client action. The server action handler receives the same value
 -- in 'HarchWeb.ClientActionRequest' and is responsible for its durable
--- deduplication boundary.
+-- deduplication boundary. Opaque: 'actionIdempotency' is the only
+-- constructor, so a key that could never distinguish attempts cannot exist.
 newtype ActionIdempotency = ActionIdempotency
   { actionIdempotencyKey :: Text
   }
+  deriving (Eq, Show)
+
+-- | Reject an empty key: it could not distinguish one attempt from another,
+-- defeating the deduplication the capability names.
+actionIdempotency :: Text -> Maybe ActionIdempotency
+actionIdempotency key
+  | Text.null key = Nothing
+  | otherwise = Just (ActionIdempotency key)
+
+-- | The HTML @method@ attribute accepts only these two values. Restricting a
+-- native fallback's method to this type, rather than the full
+-- 'HarchWeb.Action.ActionMethod', makes a PUT\/PATCH\/DELETE fallback
+-- unrepresentable instead of a render-time 'error'.
+data FormMethod = FormGet | FormPost
+  deriving (Eq, Show)
 
 -- | An explicitly authored non-JavaScript submission endpoint. Applications
 -- provide the endpoint and CSRF field from their server-side form workflow;
 -- enhancement continues to use the action codec's typed endpoint.
 data NativeActionFallback = NativeActionFallback
   { nativeActionFallbackPath :: Text,
-    nativeActionFallbackMethod :: ActionMethod,
+    nativeActionFallbackMethod :: FormMethod,
     nativeActionFallbackCsrfToken :: Text
   }
+  deriving (Eq, Show)
 
 -- | The optional non-routing attributes of a client action form. Framework
 -- owned attributes are deliberately absent, so the target, method, capture
@@ -88,8 +113,6 @@ data NativeActionFallback = NativeActionFallback
 data ActionFormAttributes = ActionFormAttributes
   { actionFormAriaLabel :: Maybe Text,
     actionFormCapabilities :: [ActionCapability],
-    actionFormIdempotency :: Maybe ActionIdempotency,
-    actionFormNativeFallback :: Maybe NativeActionFallback,
     actionFormRecoveryCopy :: ActionRecoveryCopy
   }
 
@@ -98,8 +121,6 @@ defaultActionFormAttributes =
   ActionFormAttributes
     { actionFormAriaLabel = Nothing,
       actionFormCapabilities = [ExclusiveClientHandler],
-      actionFormIdempotency = Nothing,
-      actionFormNativeFallback = Nothing,
       actionFormRecoveryCopy = defaultActionRecoveryCopy
     }
 
@@ -117,7 +138,7 @@ actionForm codec context target attributes children =
         <> [ dataFlag "harch-control",
              dataAttribute "harch-action" "true",
              dataAttribute "harch-action-path" (actionPath codec context target),
-             dataAttribute "harch-action-method" (formMethod (actionMethod codec target)),
+             dataAttribute "harch-action-method" (Text.toLower (actionMethodText (actionMethod codec target))),
              dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes))
            ]
         <> maybe [] (pure . dataAttribute "harch-action-idempotency-key" . actionIdempotencyKey) idempotency
@@ -139,8 +160,8 @@ actionForm codec context target attributes children =
     )
   where
     recoveryCopy = actionFormRecoveryCopy attributes
-    nativeFallback = requireNativeFallback attributes
-    idempotency = requireIdempotency attributes
+    nativeFallback = nativeFallbackFor attributes
+    idempotency = idempotencyFor attributes
 
 actionStatus :: ActionFormAttributes -> Html
 actionStatus attributes =
@@ -173,29 +194,19 @@ actionRetry attributes =
     ]
     [text (actionRetryCopy (actionFormRecoveryCopy attributes))]
 
-requireNativeFallback :: ActionFormAttributes -> Maybe NativeActionFallback
-requireNativeFallback attributes =
-  case (NativeFallback `elem` actionFormCapabilities attributes, actionFormNativeFallback attributes) of
-    (False, Nothing) -> Nothing
-    (True, Just fallback) -> Just fallback
-    (True, Nothing) -> error "NativeFallback requires an explicit NativeActionFallback endpoint and CSRF token"
-    (False, Just _) -> error "NativeActionFallback requires the NativeFallback capability"
+nativeFallbackFor :: ActionFormAttributes -> Maybe NativeActionFallback
+nativeFallbackFor attributes =
+  listToMaybe [fallback | NativeFallback fallback <- actionFormCapabilities attributes]
 
-requireIdempotency :: ActionFormAttributes -> Maybe ActionIdempotency
-requireIdempotency attributes =
-  case (IdempotentMutationRetry `elem` actionFormCapabilities attributes, actionFormIdempotency attributes) of
-    (False, Nothing) -> Nothing
-    (True, Just idempotency)
-      | Text.null (actionIdempotencyKey idempotency) -> error "IdempotentMutationRetry requires a non-empty ActionIdempotency key"
-      | otherwise -> Just idempotency
-    (True, Nothing) -> error "IdempotentMutationRetry requires an ActionIdempotency key and a server deduplication boundary"
-    (False, Just _) -> error "ActionIdempotency requires the IdempotentMutationRetry capability"
+idempotencyFor :: ActionFormAttributes -> Maybe ActionIdempotency
+idempotencyFor attributes =
+  listToMaybe [idempotency | IdempotentMutationRetry idempotency <- actionFormCapabilities attributes]
 
 formTarget :: (Eq target) => ActionCodec target context action -> context -> target -> Maybe NativeActionFallback -> Text
 formTarget codec context target = maybe (actionPath codec context target) nativeActionFallbackPath
 
 nativeMethod :: Maybe NativeActionFallback -> Text
-nativeMethod = maybe "dialog" (formMethod . nativeActionFallbackMethod)
+nativeMethod = maybe "dialog" (formMethodText . nativeActionFallbackMethod)
 
 nativeCsrfField :: Maybe NativeActionFallback -> [Html]
 nativeCsrfField =
@@ -218,12 +229,11 @@ renderCapability actionCapability =
     ExclusiveClientHandler -> "exclusive-client-handler"
     HandlerSafeRetry -> "handler-safe-retry"
     ConditionalLeaveConfirmation -> "conditional-leave-confirmation"
-    IdempotentMutationRetry -> "idempotent-mutation-retry"
-    NativeFallback -> "native-fallback"
+    IdempotentMutationRetry _ -> "idempotent-mutation-retry"
+    NativeFallback _ -> "native-fallback"
 
-formMethod :: ActionMethod -> Text
-formMethod actionMethodValue =
-  case actionMethodValue of
-    ActionGet -> "get"
-    ActionPost -> "post"
-    _ -> error ("HTML forms only support GET and POST client actions, not " <> Text.unpack (Text.toLower (actionMethodText actionMethodValue)))
+formMethodText :: FormMethod -> Text
+formMethodText formMethodValue =
+  case formMethodValue of
+    FormGet -> "get"
+    FormPost -> "post"

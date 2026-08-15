@@ -64,7 +64,6 @@ import HarchWeb
     toHtml,
     value,
   )
-import HarchWeb.Action qualified as Action
 import HarchWeb.Controls qualified as Controls
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site
@@ -126,14 +125,14 @@ nativeSubscriptionFallbackForm =
     ()
     Controls.defaultActionFormAttributes
       { Controls.actionFormAriaLabel = Just "Native fallback subscription",
-        Controls.actionFormCapabilities = [Controls.NativeFallback],
-        Controls.actionFormNativeFallback =
-          Just
-            Controls.NativeActionFallback
-              { Controls.nativeActionFallbackPath = "/native-subscribe",
-                Controls.nativeActionFallbackMethod = Action.ActionPost,
-                Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
-              }
+        Controls.actionFormCapabilities =
+          [ Controls.NativeFallback
+              Controls.NativeActionFallback
+                { Controls.nativeActionFallbackPath = "/native-subscribe",
+                  Controls.nativeActionFallbackMethod = Controls.FormPost,
+                  Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
+                }
+          ]
       }
     [ element labelTag [labelFor (literalElementId "native-subscription-email")] [text "Native fallback email address"],
       element inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"] [],

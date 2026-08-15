@@ -896,14 +896,10 @@ spec = do
         )
 
     it "renders only explicitly declared native fallback and recovery capabilities" $ do
-      let idempotency = ActionIdempotency "mutation-1"
-          nativeFallback = NativeActionFallback "/native-subscribe" Action.ActionPost "csrf-token"
-          nativeAttributes =
-            defaultActionFormAttributes
-              { actionFormCapabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback],
-                actionFormIdempotency = Just idempotency,
-                actionFormNativeFallback = Just nativeFallback
-              }
+      let idempotency = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "mutation-1")
+          nativeFallback = NativeActionFallback "/native-subscribe" FormPost "csrf-token"
+          capabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry idempotency, NativeFallback nativeFallback]
+          nativeAttributes = defaultActionFormAttributes {actionFormCapabilities = capabilities}
           nativeForm = renderHtml (actionForm testActionCodec defaultContext "save" nativeAttributes [])
           nativeGetForm = renderHtml (actionForm testActionCodec defaultContext "read" nativeAttributes [])
       expectAll
@@ -922,13 +918,35 @@ spec = do
                  actionRetryCopy defaultActionRecoveryCopy `shouldBe` "Retry action",
                  actionCancelCopy defaultActionRecoveryCopy `shouldBe` "Cancel action",
                  actionIdempotencyKey idempotency `shouldBe` "mutation-1",
+                 actionIdempotency "" `shouldBe` Nothing,
                  nativeActionFallbackPath nativeFallback `shouldBe` "/native-subscribe",
-                 nativeActionFallbackMethod nativeFallback `shouldBe` Action.ActionPost,
+                 nativeActionFallbackMethod nativeFallback `shouldBe` FormPost,
                  nativeActionFallbackCsrfToken nativeFallback `shouldBe` "csrf-token",
-                 show NativeFallback `shouldBe` "NativeFallback",
-                 showList [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback] "" `shouldSatisfy` (not . null),
-                 sum [fromEnum (left == right) | left <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback], right <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]] `shouldBe` 5,
-                 sum [fromEnum (left /= right) | left <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback], right <- [ExclusiveClientHandler, HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry, NativeFallback]] `shouldBe` 20
+                 length (show (NativeFallback nativeFallback)) `shouldSatisfy` (> 0),
+                 showList capabilities "" `shouldSatisfy` (not . null),
+                 sum [fromEnum (left == right) | left <- capabilities, right <- capabilities] `shouldBe` length capabilities,
+                 sum [fromEnum (left /= right) | left <- capabilities, right <- capabilities] `shouldBe` length capabilities * (length capabilities - 1)
+               ]
+        )
+
+    it "keeps FormMethod, NativeActionFallback, and ActionIdempotency comparable and printable, and renders a GET native fallback" $ do
+      let getFallback = NativeActionFallback "/native-get" FormGet "csrf-token"
+          postFallback = NativeActionFallback "/native-post" FormPost "csrf-token"
+          idempotencyA = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "a")
+          idempotencyB = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "b")
+          getAttributes = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback getFallback]}
+          getForm = renderHtml (actionForm testActionCodec defaultContext "save" getAttributes [])
+      expectAll
+        ( (FormGet `shouldBe` FormGet)
+            :| [ FormGet `shouldNotBe` FormPost,
+                 length (show FormGet) + length (showList [FormGet] "") `shouldSatisfy` (> 0),
+                 getFallback `shouldBe` getFallback,
+                 getFallback `shouldNotBe` postFallback,
+                 length (show getFallback) + length (showList [getFallback] "") `shouldSatisfy` (> 0),
+                 idempotencyA `shouldBe` idempotencyA,
+                 idempotencyA `shouldNotBe` idempotencyB,
+                 length (show idempotencyA) + length (showList [idempotencyA] "") `shouldSatisfy` (> 0),
+                 Text.isInfixOf "action=\"/native-get\" method=\"get\"" getForm `shouldBe` True
                ]
         )
 
@@ -1070,7 +1088,7 @@ spec = do
                ]
         )
 
-    it "rejects undeclared targets and non-native action methods at the rendering boundary" $ do
+    it "rejects undeclared codec targets and renders a PUT-declared action safely through its native fallback" $ do
       let emptyCodec :: Action.ActionCodec Text TestContext Text
           emptyCodec = Action.emptyActionCodec
           unsupportedCodec :: Action.ActionCodec Text TestContext Text
@@ -1079,38 +1097,16 @@ spec = do
               Action.actionCodec [Action.action "put" (Action.put "/put") (pure "put")]
           nativeAttributes =
             defaultActionFormAttributes
-              { actionFormCapabilities = [NativeFallback],
-                actionFormNativeFallback = Just (NativeActionFallback "/native" Action.ActionPost "csrf-token")
+              { actionFormCapabilities = [NativeFallback (NativeActionFallback "/native" FormPost "csrf-token")]
               }
-          missingNativeFallback = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback]}
-          missingIdempotency = defaultActionFormAttributes {actionFormCapabilities = [IdempotentMutationRetry]}
-          emptyIdempotency =
-            defaultActionFormAttributes
-              { actionFormCapabilities = [IdempotentMutationRetry],
-                actionFormIdempotency = Just (ActionIdempotency "")
-              }
-          undeclaredNativeFallback =
-            defaultActionFormAttributes
-              { actionFormNativeFallback = Just (NativeActionFallback "/native" Action.ActionPost "csrf-token")
-              }
-          undeclaredIdempotency = defaultActionFormAttributes {actionFormIdempotency = Just (ActionIdempotency "mutation-1")}
       missingPath <- try (evaluate (Text.length (Action.actionPath emptyCodec defaultContext "missing"))) :: IO (Either SomeException Int)
       missingMethod <- try (evaluate (Action.actionMethod emptyCodec "missing")) :: IO (Either SomeException Action.ActionMethod)
-      unsupportedForm <- try (evaluate (Text.length (renderHtml (actionForm unsupportedCodec defaultContext "put" nativeAttributes [])))) :: IO (Either SomeException Int)
-      missingFallbackForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" missingNativeFallback [])))) :: IO (Either SomeException Int)
-      undeclaredFallbackForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" undeclaredNativeFallback [])))) :: IO (Either SomeException Int)
-      missingIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" missingIdempotency [])))) :: IO (Either SomeException Int)
-      emptyIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" emptyIdempotency [])))) :: IO (Either SomeException Int)
-      undeclaredIdempotencyForm <- try (evaluate (Text.length (renderHtml (actionForm testActionCodec defaultContext "save" undeclaredIdempotency [])))) :: IO (Either SomeException Int)
+      let unsupportedForm = renderHtml (actionForm unsupportedCodec defaultContext "put" nativeAttributes [])
       expectAll
         ( (either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingPath `shouldBe` True)
             :| [ either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingMethod `shouldBe` True,
-                 either (Text.isInfixOf "HTML forms only support GET and POST client actions" . Text.pack . displayException) (const False) unsupportedForm `shouldBe` True,
-                 either (Text.isInfixOf "NativeFallback requires an explicit NativeActionFallback endpoint and CSRF token" . Text.pack . displayException) (const False) missingFallbackForm `shouldBe` True,
-                 either (Text.isInfixOf "NativeActionFallback requires the NativeFallback capability" . Text.pack . displayException) (const False) undeclaredFallbackForm `shouldBe` True,
-                 either (Text.isInfixOf "IdempotentMutationRetry requires an ActionIdempotency key" . Text.pack . displayException) (const False) missingIdempotencyForm `shouldBe` True,
-                 either (Text.isInfixOf "IdempotentMutationRetry requires a non-empty ActionIdempotency key" . Text.pack . displayException) (const False) emptyIdempotencyForm `shouldBe` True,
-                 either (Text.isInfixOf "ActionIdempotency requires the IdempotentMutationRetry capability" . Text.pack . displayException) (const False) undeclaredIdempotencyForm `shouldBe` True
+                 Text.isInfixOf "data-harch-action-method=\"put\"" unsupportedForm `shouldBe` True,
+                 Text.isInfixOf "action=\"/native\" method=\"post\"" unsupportedForm `shouldBe` True
                ]
         )
 
