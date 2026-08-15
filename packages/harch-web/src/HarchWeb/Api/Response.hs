@@ -14,6 +14,11 @@ module HarchWeb.Api.Response
     urlEncodedFormBodyDecoder,
     ApiResponse (..),
     apiResponse,
+    ApiHeaderValue,
+    apiHeaderValue,
+    apiHeaderValueText,
+    apiHeaderValueLiteral,
+    apiHeaderValueAppendLiteral,
     ApiEncodedResponseBody (..),
     ApiResponseEncoder (..),
     jsonResponseEncoder,
@@ -75,11 +80,48 @@ data ApiBodyOutcome request
 -- fields for the non-API dispatch path.
 data ApiResponse response = ApiResponse
   { apiEndpointResponseStatus :: HttpTypes.Status,
-    apiEndpointResponseHeaders :: [(Text, Text)],
+    apiEndpointResponseHeaders :: [(Text, ApiHeaderValue)],
     apiEndpointResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
     apiEndpointResponseLogEntries :: [Text],
     apiEndpointResponseValue :: response
   }
+
+-- | A validated response header value: no @CR@, @LF@, or @NUL@ (the classic
+-- response-splitting and header-injection payload — a handler that echoes
+-- request-derived text into a header value, such as a redirect
+-- @Location@, an @ETag@, or a filename, would otherwise get injection for
+-- free), and no leading or trailing optional whitespace. Header *names* are
+-- left as plain 'Text' deliberately: every name in this codebase is a
+-- framework or application literal ("Content-Type", "Location", …), never
+-- attacker-echoed, so the vulnerable position this closes is values only.
+newtype ApiHeaderValue = ApiHeaderValue Text
+  deriving (Eq, Show)
+
+apiHeaderValue :: Text -> Maybe ApiHeaderValue
+apiHeaderValue value =
+  if value == Text.strip value && Text.all isValidHeaderValueCharacter value
+    then Just (ApiHeaderValue value)
+    else Nothing
+  where
+    isValidHeaderValueCharacter character = character /= '\r' && character /= '\n' && character /= '\NUL'
+
+apiHeaderValueText :: ApiHeaderValue -> Text
+apiHeaderValueText (ApiHeaderValue value) = value
+
+-- | Wrap a value the framework author has written directly as a source
+-- literal, skipping the runtime check 'apiHeaderValue' performs on
+-- caller-supplied text. Every argument must be a fixed string literal that
+-- is visibly free of 'apiHeaderValue''s excluded characters and surrounding
+-- whitespace, not a value built from request or database input.
+apiHeaderValueLiteral :: Text -> ApiHeaderValue
+apiHeaderValueLiteral = ApiHeaderValue
+
+-- | Append a source-literal suffix to an already-validated header value,
+-- skipping re-validation. The suffix must be visibly free of
+-- 'apiHeaderValue''s excluded characters and must not introduce new leading
+-- or trailing whitespace.
+apiHeaderValueAppendLiteral :: ApiHeaderValue -> Text -> ApiHeaderValue
+apiHeaderValueAppendLiteral (ApiHeaderValue value) suffix = ApiHeaderValue (value <> suffix)
 
 -- | Construct an ordinary successful API result without application headers
 -- or private diagnostics.
@@ -250,7 +292,7 @@ decodeUtf8Field bytes =
 data ApiResponseBody = ApiResponseBody
   { apiResponseStatus :: HttpTypes.Status,
     apiResponseContentType :: ApiContentType,
-    apiResponseHeaders :: [(Text, Text)],
+    apiResponseHeaders :: [(Text, ApiHeaderValue)],
     apiResponseBodyBytes :: ByteString
   }
   deriving (Eq, Show)

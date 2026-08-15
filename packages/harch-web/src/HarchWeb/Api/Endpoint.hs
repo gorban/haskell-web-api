@@ -576,13 +576,13 @@ responseEncoderFor selectedContentType encoders =
 -- only once alternatives exist, describes the response's real dependency
 -- rather than a proxy for it (a second encoder) that happens to be true
 -- only sometimes.
-endpointResponseHeaders :: ApiResponse response -> [(Text, Text)]
+endpointResponseHeaders :: ApiResponse response -> [(Text, ApiHeaderValue)]
 endpointResponseHeaders responseValue = addVaryAccept (apiEndpointResponseHeaders responseValue)
 
 endpointProtocolResponseHeaders :: ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
 endpointProtocolResponseHeaders responseValue encoder =
   ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))
-    : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value)
+    : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 (apiHeaderValueText value))
       | (name, value) <- endpointResponseHeaders responseValue
       ]
 
@@ -592,16 +592,18 @@ protocolResponseBodyFor encodedBody =
     ApiEncodedResponseBytes bytes -> ProtocolResponseBytes bytes
     ApiEncodedResponseStream stream -> ProtocolResponseStream stream
 
-addVaryAccept :: [(Text, Text)] -> [(Text, Text)]
+addVaryAccept :: [(Text, ApiHeaderValue)] -> [(Text, ApiHeaderValue)]
 addVaryAccept headers =
   case break ((== "vary") . Text.toCaseFold . fst) headers of
-    (_, []) -> headers <> [("Vary", "Accept")]
+    (_, []) -> headers <> [("Vary", apiHeaderValueLiteral "Accept")]
     (beforeVary, (name, value) : afterVary) -> beforeVary <> [(name, varyValueWithAccept value)] <> afterVary
 
-varyValueWithAccept :: Text -> Text
-varyValueWithAccept value
-  | any ((== "accept") . Text.toCaseFold . Text.strip) (Text.splitOn "," value) = value
-  | otherwise = value <> ", Accept"
+varyValueWithAccept :: ApiHeaderValue -> ApiHeaderValue
+varyValueWithAccept headerValue
+  | any ((== "accept") . Text.toCaseFold . Text.strip) (Text.splitOn "," value) = headerValue
+  | otherwise = apiHeaderValueAppendLiteral headerValue ", Accept"
+  where
+    value = apiHeaderValueText headerValue
 
 apiFailureProtocolResponse :: HttpTypes.Status -> Text -> ProtocolResponse
 apiFailureProtocolResponse status bodyText =
@@ -618,7 +620,7 @@ toRouteMethod apiMethod =
 
 data ApiHttpResponse = ApiHttpResponse
   { apiHttpResponseStatus :: HttpTypes.Status,
-    apiHttpResponseHeaders :: [(Text, Text)],
+    apiHttpResponseHeaders :: [(Text, ApiHeaderValue)],
     apiHttpResponseBody :: Maybe ApiResponseBody
   }
   deriving (Eq, Show)
@@ -627,7 +629,7 @@ apiHttpResponseToProtocolResponse :: ApiHttpResponse -> ProtocolResponse
 apiHttpResponseToProtocolResponse httpResponse =
   ProtocolResponse
     { protocolResponseStatus = apiHttpResponseStatus httpResponse,
-      protocolResponseHeaders = [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value) | (name, value) <- apiHttpResponseHeaders httpResponse],
+      protocolResponseHeaders = [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 (apiHeaderValueText value)) | (name, value) <- apiHttpResponseHeaders httpResponse],
       protocolResponseBody = ProtocolResponseBytes (maybe ByteString.empty apiResponseBodyBytes (apiHttpResponseBody httpResponse)),
       protocolResponseObservabilityAttributes = [],
       protocolResponseLogEntries = []
@@ -641,7 +643,7 @@ apiResponseBodyToProtocolResponse body =
     { protocolResponseStatus = apiResponseStatus body,
       protocolResponseHeaders =
         ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseContentType body)))
-          : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 value)
+          : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 (apiHeaderValueText value))
             | (name, value) <- apiResponseHeaders body
             ],
       protocolResponseBody = ProtocolResponseBytes (apiResponseBodyBytes body),

@@ -65,6 +65,9 @@ streamEndpoint =
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
 
+testHeaderValue :: Text -> ApiHeaderValue
+testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
+
 requestWithBody :: HttpTypes.RequestHeaders -> [ByteString.ByteString] -> IO Wai.Request
 requestWithBody headers chunks = do
   chunksReference <- newIORef chunks
@@ -270,10 +273,31 @@ spec =
         )
         `shouldBe` at ""
 
+    describe "apiHeaderValue" $ do
+      it "accepts a value without control characters or surrounding whitespace" $
+        let acceptedValue = testHeaderValue "no-store"
+         in expectAll
+              ( (acceptedValue `shouldBe` testHeaderValue "no-store")
+                  :| [ acceptedValue `shouldNotBe` testHeaderValue "must-revalidate",
+                       apiHeaderValueText acceptedValue `shouldBe` "no-store",
+                       length (show acceptedValue) + length (showList [acceptedValue] "") `shouldSatisfy` (> 0)
+                     ]
+              )
+
+      it "rejects CR, LF, NUL, and surrounding whitespace" $
+        expectAll
+          ( (apiHeaderValue "bad\rvalue" `shouldBe` Nothing)
+              :| [ apiHeaderValue "bad\nvalue" `shouldBe` Nothing,
+                   apiHeaderValue "bad\NULvalue" `shouldBe` Nothing,
+                   apiHeaderValue " padded" `shouldBe` Nothing,
+                   apiHeaderValue "padded " `shouldBe` Nothing
+                 ]
+          )
+
     describe "apiResponseBodyToProtocolResponse" $ do
       it "converts status, headers, and body into the server protocol response" $
         apiResponseBodyToProtocolResponse
-          ((apiTextResponse "hello") {apiResponseStatus = HttpTypes.status201, apiResponseHeaders = [("X-Example", "present")]})
+          ((apiTextResponse "hello") {apiResponseStatus = HttpTypes.status201, apiResponseHeaders = [("X-Example", testHeaderValue "present")]})
           `shouldBe` ProtocolResponse
             { protocolResponseStatus = HttpTypes.status201,
               protocolResponseHeaders = [("Content-Type", "text/plain; charset=utf-8"), ("X-Example", "present")],
@@ -585,7 +609,7 @@ spec =
                     pure
                       ( Right
                           ( (apiResponse "hello")
-                              { apiEndpointResponseHeaders = [("Cache-Control", "no-store")]
+                              { apiEndpointResponseHeaders = [("Cache-Control", testHeaderValue "no-store")]
                               }
                           )
                       )
@@ -647,7 +671,7 @@ spec =
                     pure
                       ( Right
                           ( (apiResponse "hello")
-                              { apiEndpointResponseHeaders = [("X-Trace", "present"), ("vArY", "Origin"), ("Cache-Control", "no-store")]
+                              { apiEndpointResponseHeaders = [("X-Trace", testHeaderValue "present"), ("vArY", testHeaderValue "Origin"), ("Cache-Control", testHeaderValue "no-store")]
                               }
                           )
                       )
@@ -659,7 +683,7 @@ spec =
                 (pure ())
                 ApiNoRequestBody
                 (textResponseEncoder :| [jsonResponseEncoder])
-                (\_ -> pure (Right ((apiResponse "hello") {apiEndpointResponseHeaders = [("Vary", "Accept")]})))
+                (\_ -> pure (Right ((apiResponse "hello") {apiEndpointResponseHeaders = [("Vary", testHeaderValue "Accept")]})))
                 (\() -> apiResponse "unreachable")
         response <- runApiRoute varyEndpoint Wai.defaultRequest
         alreadyVaryResponse <- runApiRoute alreadyVaryEndpoint Wai.defaultRequest
@@ -931,7 +955,7 @@ spec =
     describe "apiHttpResponseToProtocolResponse" $ do
       it "preserves a matched response's status, headers, and strict protocol bytes" $
         apiHttpResponseToProtocolResponse
-          (ApiHttpResponse HttpTypes.status201 [("Content-Type", "application/example"), ("X-Example", "present")] (Just (apiBytesResponse (apiContentType (testMediaType "application/example")) "\NUL\SOH\STX")))
+          (ApiHttpResponse HttpTypes.status201 [("Content-Type", testHeaderValue "application/example"), ("X-Example", testHeaderValue "present")] (Just (apiBytesResponse (apiContentType (testMediaType "application/example")) "\NUL\SOH\STX")))
           `shouldBe` ProtocolResponse
             { protocolResponseStatus = HttpTypes.status201,
               protocolResponseHeaders = [("Content-Type", "application/example"), ("X-Example", "present")],
@@ -941,7 +965,7 @@ spec =
             }
 
       it "uses an empty strict body for a protocol result without an API body" $
-        case protocolResponseBody (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status405 [("Allow", "GET, HEAD, OPTIONS")] Nothing)) of
+        case protocolResponseBody (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status405 [("Allow", testHeaderValue "GET, HEAD, OPTIONS")] Nothing)) of
           ProtocolResponseBytes bodyBytes -> bodyBytes `shouldBe` ""
           ProtocolResponseStream _ -> expectationFailure "expected a strict protocol body"
 
