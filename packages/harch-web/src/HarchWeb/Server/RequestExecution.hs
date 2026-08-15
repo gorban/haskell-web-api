@@ -201,8 +201,9 @@ toValidatedWaiApplication webApplication request respond = do
   earlyResult <- runExceptT (runEarlyRequestStages webApplication request requestPath policyResponseHeaders)
   let respondEarlyRequest (earlyResponsePath, earlyResponseValue) = do
         responseReportedAt <- earlyResponseValue `seq` getMonotonicTimeNSec
+        responseReceived <- respond earlyResponseValue
         reportEarlyRequestObservability webApplication request requestStartedAt responseReportedAt earlyResponsePath earlyResponseValue
-        respond earlyResponseValue
+        pure responseReceived
 
       handleRoutedRequestAfterEarlyStages =
         handleRoutedRequest
@@ -405,6 +406,24 @@ readClientActionBody request = do
       Left RequestBodyLimitExceeded -> Left ClientActionBodyTooLarge
       Right requestBody -> Right requestBody
 
+-- | Decision record (AU): 'respond' now runs before 'reportRequestObservability'
+-- and 'reportApplicationLog', not after. Previously an app-supplied reporter
+-- (web-api's OTLP exporter, in particular) sat on the response path — a slow
+-- or hung collector added its latency to every user response before a byte
+-- was sent. Both this function and 'respondEarlyRequest' in
+-- 'toValidatedWaiApplication' now hand the WAI response to Warp first and
+-- report observability afterward, so no caller-supplied reporter can ever
+-- delay a response again, regardless of how slow it is. Timing fields
+-- ('responseReportedAt' and friends) are still captured immediately after
+-- the response value is forced, before 'respond' runs, so recorded
+-- durations reflect render time, not reporter time. This is a small,
+-- general framework fix (every 'Application', not just web-api, benefits);
+-- see 'docs/design-guidance.md' for the full framework-capability-gap
+-- protocol this follows. It does not by itself make an app's reporter
+-- non-blocking — a reporter that itself blocks (e.g. on a synchronous
+-- network call) still occupies this request's handling thread after
+-- 'respond' returns; decoupling that is the caller's responsibility (see
+-- web-api's bounded-queue 'WebApi.App' exporter, added alongside this fix).
 finalizeRoutedResponse ::
   (Eq route) =>
   RoutedRequestExecution route action context ->
@@ -423,14 +442,16 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omit
       diagnosticValues = responseDiagnostics response
       contextualizedLogs = map (prependRequestLogContext requestLogFields) (diagnosticLogEntries diagnosticValues)
       observabilityValue = buildRoutedRequestObservability routedRequestExecution executionTimings routeRequest response diagnosticValues
+  responseReceived <-
+    respond
+      ( omitResponseBodyWhen
+          omitResponseBody
+          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
+      )
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue
       >> mapM_ (reportApplicationLog webApplication) contextualizedLogs
-      >> respond
-        ( omitResponseBodyWhen
-            omitResponseBody
-            (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
-        )
+  pure responseReceived
 
 omitResponseBodyWhen :: Bool -> Wai.Response -> Wai.Response
 omitResponseBodyWhen omitResponseBody waiResponse =

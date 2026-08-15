@@ -22,6 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
@@ -840,6 +841,39 @@ withOtlpCaptureServer responseStatus responseBody action = do
     _ ->
       close listenerSocket
         >> error "expected IPv4 loopback OTLP capture socket"
+
+-- | Accepts exactly one connection like 'withOtlpCaptureServer', but waits
+-- 'delayMicroseconds' after reading the request before responding — used
+-- to hold the AU export worker busy on one item long enough to force the
+-- bounded queue past capacity deterministically.
+withSlowOtlpCaptureServer ::
+  Int ->
+  Http.Status ->
+  ByteString.ByteString ->
+  (Text -> IO a) ->
+  IO a
+withSlowOtlpCaptureServer delayMicroseconds responseStatus responseBody action = do
+  listenerSocket <- socket AF_INET Stream defaultProtocol
+  bind listenerSocket (SockAddrInet 0 (tupleToHostAddress (127, 0, 0, 1)))
+  listen listenerSocket 1
+  socketAddress <- getSocketName listenerSocket
+  case socketAddress of
+    SockAddrInet port _ -> do
+      let collectorUrl = Text.pack ("http://127.0.0.1:" <> show (fromIntegral port :: Int) <> "/v1/traces")
+      serverThreadId <-
+        forkIO $
+          ( do
+              (clientSocket, _) <- NetworkSocket.accept listenerSocket
+              _ <- readCapturedHttpRequest clientSocket
+              threadDelay delayMicroseconds
+              SocketByteString.sendAll clientSocket (buildHttpResponse responseStatus responseBody)
+              close clientSocket
+          )
+            `finally` close listenerSocket
+      action collectorUrl `finally` killThread serverThreadId
+    _ ->
+      close listenerSocket
+        >> error "expected IPv4 loopback slow OTLP capture socket"
 
 readCapturedHttpRequest :: NetworkSocket.Socket -> IO CapturedOtlpRequest
 readCapturedHttpRequest clientSocket = do
@@ -9178,6 +9212,45 @@ spec = do
           readMVar capturedRequestReference
         requestMethod `shouldBe` "POST"
         requestPath `shouldBe` "/v1/traces"
+
+    it "enqueues OTLP exports without blocking the caller, dropping and counting once the bounded queue is full" $
+      withSlowOtlpCaptureServer 3000000 Http.ok200 "{}" $ \collectorUrl -> do
+        let runtimeAppConfig =
+              defaultAppConfig
+                { observability =
+                    (observability defaultAppConfig)
+                      { tracingExporter =
+                          Just
+                            OtlpExporter
+                              { otlpEndpoint = collectorUrl,
+                                otlpHeaders = []
+                              }
+                      }
+                }
+            runtimeApplication =
+              buildRuntimeAppWithDatabaseBuilder
+                runtimeAppConfig
+                (const defaultPageRepository)
+                defaultAppEnvironmentConfig
+            floodObservability =
+              Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind []
+        floodStartedAt <- getMonotonicTimeNSec
+        -- One export occupies the worker for the full 3s collector delay, so
+        -- the other 279 calls must pile into the 256-item bounded queue —
+        -- guaranteeing at least a couple dozen are dropped rather than
+        -- blocking this thread. The 2s ceiling below still leaves a wide
+        -- margin over the ~280 synchronous stderr writes this loop performs
+        -- (well under 1s even under load) while staying clearly short of
+        -- the 3s collector stall it must not be waiting on.
+        mapM_ (const (HarchWeb.reportRequestObservability runtimeApplication floodObservability)) [1 :: Int .. 280]
+        floodCompletedAt <- getMonotonicTimeNSec
+        (floodCompletedAt - floodStartedAt) `shouldSatisfy` (< 2000000000)
+        -- Let the one in-flight export finish and receive its real response
+        -- before the collector socket goes away, so the shared background
+        -- worker never blocks on a connection that died mid-request (which
+        -- would otherwise stall every later test's export behind
+        -- http-client's default 30s response timeout).
+        threadDelay 3500000
 
     it "exports runtime connection observability to the configured OTLP tracing endpoint" $
       withOtlpCaptureServer Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do

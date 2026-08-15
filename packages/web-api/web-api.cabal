@@ -126,6 +126,7 @@ library
     mtl,
     postgresql-libpq,
     process,
+    stm,
     text,
     time,
     transformers,

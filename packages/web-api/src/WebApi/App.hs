@@ -15,8 +15,12 @@ module WebApi.App
   )
 where
 
+import Control.Concurrent (forkIO)
+import Control.Concurrent.STM (atomically)
+import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Control.Exception (SomeException, displayException, evaluate, try)
-import Control.Monad (forM_, unless)
+import Control.Monad (forM_, forever, unless)
+import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -28,8 +32,10 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
+import Numeric.Natural (Natural)
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
+import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
 import WebApi.AccountPages (AccountAction, accountActions, handleAccountAction)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
@@ -343,14 +349,67 @@ runtimeObservabilityReporter mode config observabilityKind exportObservability o
   -- inside @base@, outside this project's own coverage boundary, rather
   -- than adding a forced tick for a value with nothing to assert about.
   unless (mode == Production) (TextIO.hPutStrLn stderr ("TRACE " <> Text.pack (show observabilityValue)))
-  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter -> do
-    exportResult <-
-      try (exportObservability exporter observabilityValue) ::
-        IO (Either SomeException ())
-    either
-      (runtimeApplicationLogReporter . exportFailureMessage observabilityKind)
-      (const (hFlush stderr))
-      exportResult
+  forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter ->
+    enqueueOtlpExport observabilityKind (exportObservability exporter observabilityValue)
+
+-- | Decision record (AU): the request-handling thread must never block on
+-- network I/O to the OTLP collector, so 'runtimeObservabilityReporter'
+-- hands each export off to this bounded queue instead of awaiting
+-- 'exportObservability' itself. A background worker — started once,
+-- lazily, via the same 'unsafePerformIO' \/ 'NOINLINE' idiom
+-- @HarchWeb.Observability.Otlp@ already uses for its shared HTTP manager —
+-- drains the queue and performs the actual blocking POST off the request
+-- path. A full queue drops the export and counts it rather than blocking
+-- the caller: a slow or hung collector degrades trace completeness, never
+-- response latency. This is deliberately an application-layer fix rather
+-- than a framework one (per the framework-capability-gap protocol in
+-- @docs/design-guidance.md@): 'web-api' is this tree's only caller of
+-- @HarchWeb.exportRequestObservabilityToOtlp@\/@exportConnectionObservabilityToOtlp@
+-- today, so there is no shared boundary yet to extend. If a second
+-- application adopts OTLP export, promote this queue into
+-- @HarchWeb.Observability@ instead of duplicating it there.
+enqueueOtlpExport :: Text.Text -> IO () -> IO ()
+enqueueOtlpExport observabilityKind exportAction = do
+  enqueued <- atomically $ do
+    full <- isFullTBQueue otlpExportQueue
+    unless full (writeTBQueue otlpExportQueue (observabilityKind, exportAction))
+    pure (not full)
+  unless enqueued $ do
+    droppedTotal <- atomicModifyIORef' otlpExportDroppedCount (\count -> (count + 1, count + 1))
+    runtimeApplicationLogReporter (otlpExportQueueFullMessage observabilityKind droppedTotal)
+
+otlpExportQueueCapacity :: Natural
+otlpExportQueueCapacity = 256
+
+otlpExportQueue :: TBQueue (Text.Text, IO ())
+{-# NOINLINE otlpExportQueue #-}
+otlpExportQueue =
+  unsafePerformIO $ do
+    queue <- newTBQueueIO otlpExportQueueCapacity
+    _ <- forkIO (otlpExportWorker queue)
+    pure queue
+
+otlpExportDroppedCount :: IORef Int
+{-# NOINLINE otlpExportDroppedCount #-}
+otlpExportDroppedCount =
+  unsafePerformIO (newIORef 0)
+
+otlpExportWorker :: TBQueue (Text.Text, IO ()) -> IO ()
+otlpExportWorker queue = forever $ do
+  (observabilityKind, exportAction) <- atomically (readTBQueue queue)
+  exportResult <- try exportAction :: IO (Either SomeException ())
+  either
+    (runtimeApplicationLogReporter . exportFailureMessage observabilityKind)
+    (const (hFlush stderr))
+    exportResult
+
+otlpExportQueueFullMessage :: Text.Text -> Int -> Text.Text
+otlpExportQueueFullMessage observabilityKind droppedTotal =
+  "Dropped "
+    <> observabilityKind
+    <> " OTLP export because the export queue is full ("
+    <> Text.pack (show droppedTotal)
+    <> " dropped total)"
 
 exportFailureMessage :: Text.Text -> SomeException -> Text.Text
 exportFailureMessage observabilityKind exportError =
