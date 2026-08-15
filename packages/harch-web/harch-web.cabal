@@ -142,6 +142,7 @@ library
   build-depends:
     aeson,
     base ^>=4.22.0.0,
+    base16-bytestring,
     base64-bytestring,
     bytestring,
     case-insensitive,

@@ -13,17 +13,16 @@ module HarchWeb.Observability.Otlp
 where
 
 import Control.Monad (unless)
-import Data.Bits (shiftR, xor)
+import Crypto.Random.Entropy (getEntropy)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base16 qualified as Base16
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.String (fromString)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.Word (Word64)
-import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb.Observability.Types (OtlpExporter (..))
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
@@ -55,12 +54,18 @@ currentUnixTimeNSec :: IO Word64
 currentUnixTimeNSec =
   floor . (* 1000000000) <$> getPOSIXTime
 
+-- | Decision record (AV): trace and span ids must be unpredictable per the
+-- W3C Trace Context spec, not derived from a boot-relative clock reading
+-- plus a per-process counter — that scheme let two replicas started at
+-- similar uptimes mint identical trace ids and silently merge unrelated
+-- traces, and let anyone holding a trace id recompute its span id.
+-- 'getEntropy' (the same CSPRNG source already used for session ids,
+-- secrets, and TOTP keys elsewhere in this module's package) replaces both
+-- halves with independently random bytes.
 nextOtlpSpanIdentifiers :: IO (Text, Text)
 nextOtlpSpanIdentifiers = do
-  requestSeed <- atomicModifyIORef' otlpSpanSeed (\seed -> let nextSeed = seed + 1 in (nextSeed, nextSeed))
-  monotonicTime <- getMonotonicTimeNSec
-  let traceIdBytes = word64Bytes monotonicTime <> word64Bytes requestSeed
-      spanIdBytes = word64Bytes (monotonicTime `xor` (requestSeed + 0x9e3779b97f4a7c15))
+  traceIdBytes <- getEntropy 16
+  spanIdBytes <- getEntropy 8
   pure (otlpIdHexText traceIdBytes, otlpIdHexText spanIdBytes)
 
 nextOtlpSpanId :: IO Text
@@ -76,36 +81,9 @@ otlpHeader (headerName, headerValue) =
 
 otlpIdHexText :: ByteString.ByteString -> Text
 otlpIdHexText =
-  Text.concatMap renderHexByte . TextEncoding.decodeLatin1
-  where
-    renderHexByte byte =
-      let byteValue = fromEnum byte
-          highNibble = byteValue `div` 16
-          lowNibble = byteValue `mod` 16
-       in Text.pack [hexDigit highNibble, hexDigit lowNibble]
-
-    hexDigit nibble =
-      "0123456789abcdef" !! nibble
-
-word64Bytes :: Word64 -> ByteString.ByteString
-word64Bytes word =
-  ByteString.pack
-    [ fromIntegral (word `shiftR` 56),
-      fromIntegral (word `shiftR` 48),
-      fromIntegral (word `shiftR` 40),
-      fromIntegral (word `shiftR` 32),
-      fromIntegral (word `shiftR` 24),
-      fromIntegral (word `shiftR` 16),
-      fromIntegral (word `shiftR` 8),
-      fromIntegral word
-    ]
+  TextEncoding.decodeLatin1 . Base16.encode
 
 otlpHttpManager :: HttpClient.Manager
 {-# NOINLINE otlpHttpManager #-}
 otlpHttpManager =
   unsafePerformIO (HttpClient.newManager HttpClientTls.tlsManagerSettings)
-
-otlpSpanSeed :: IORef Word64
-{-# NOINLINE otlpSpanSeed #-}
-otlpSpanSeed =
-  unsafePerformIO (newIORef 0)
