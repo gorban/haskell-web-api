@@ -4,15 +4,17 @@
 module Unit.WebApi.MfaEnrollmentSpec (spec) where
 
 import Control.Monad (unless)
+import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode (RecoveryCode, hashRecoveryCodeWithSalt, mkRecoveryCode)
-import HarchWeb.Secret (EncryptionNonce, SecretEncryptionError (..), SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
+import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -71,15 +73,15 @@ spec = do
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
-      startMfaEnrollmentWith (pure secret) (\_ plaintext -> if plaintext == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" then pure (Right "encrypted-secret") else pure (Left SecretEncryptionGeneratedInvalidNonce)) store encryptionKey accountId 100
+      startMfaEnrollmentWith (pure secret) (\_ plaintext -> if plaintext == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" then pure (Just "encrypted-secret") else pure Nothing) store encryptionKey accountId 100
         `shouldReturnEqual` Right (MfaEnrollmentStart secret)
       savedValues <- readIORef savedValuesReference
       savedValues `shouldBe` [(accountId, "encrypted-secret", 100)]
 
     it "preserves enrollment start encryption, eligibility, and store failures" $ do
       let secret = requiredTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP"
-          startWith result = startMfaEnrollmentWith (pure secret) (\_ _ -> pure (Right "encrypted-secret")) (storeWithSave result) encryptionKey accountId 100
-      startMfaEnrollmentWith (pure secret) (\_ _ -> pure (Left SecretEncryptionGeneratedInvalidNonce)) (storeWithSave (Right True)) encryptionKey accountId 100
+          startWith result = startMfaEnrollmentWith (pure secret) (\_ _ -> pure (Just "encrypted-secret")) (storeWithSave result) encryptionKey accountId 100
+      startMfaEnrollmentWith (pure secret) (\_ _ -> pure Nothing) (storeWithSave (Right True)) encryptionKey accountId 100
         `shouldReturnEqual` Left MfaEnrollmentEncryptionFailed
       startWith (Right False) `shouldReturnEqual` Left MfaEnrollmentAccountIsNotEligible
       startWith (Left (MfaStoreUnavailable "unavailable")) `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreUnavailable "unavailable"))
@@ -223,9 +225,10 @@ requiredEncryptedSecret secret =
 
 requiredEncryptedPlaintext :: ByteString.ByteString -> Text.Text
 requiredEncryptedPlaintext plaintext =
-  case encryptSecretWithNonce encryptionKey (requiredEncryptionNonce "123456789012") (mkSecretPlaintext plaintext) of
-    Right encryptedSecret -> encryptedSecret
-    Left _ -> error "expected encryption to succeed"
+  requiredCrypto (encryptSecretWithNonce encryptionKey (requiredEncryptionNonce "123456789012") (mkSecretPlaintext plaintext))
+
+requiredCrypto :: CryptoFailable value -> value
+requiredCrypto = fromMaybe (error "expected cryptographic operation to succeed") . maybeCryptoError
 
 requiredEncryptionNonce :: ByteString.ByteString -> EncryptionNonce
 requiredEncryptionNonce value =

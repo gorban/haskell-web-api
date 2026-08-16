@@ -4,7 +4,6 @@ module HarchWeb.Secret
   ( EncryptionNonce,
     SecretDecryptionError (..),
     SecretEncryptionKey,
-    SecretEncryptionError (..),
     SecretPlaintext,
     decryptSecret,
     decryptSecretText,
@@ -18,7 +17,7 @@ where
 
 import Crypto.Cipher.AES (AES256)
 import Crypto.Cipher.Types (AEADMode (AEAD_GCM), AuthTag (..), aeadInit, aeadSimpleDecrypt, aeadSimpleEncrypt, cipherInit)
-import Crypto.Error (CryptoFailable (..))
+import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Crypto.Random.Entropy (getEntropy)
 import Data.Bifunctor (first)
 import Data.ByteArray (convert)
@@ -28,15 +27,19 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
 
-newtype SecretEncryptionKey = SecretEncryptionKey ByteString.ByteString
-  deriving (Eq)
+-- | An AES-256 key whose successful construction also proves that Cryptonite
+-- has initialized its cipher context. Cryptonite represents AEAD setup with
+-- 'CryptoFailable', which our public operations preserve instead of throwing:
+-- AES-GCM can then remain total for its explicit cryptographic error rail.
+data SecretEncryptionKey = SecretEncryptionKey ByteString.ByteString AES256
+
+instance Eq SecretEncryptionKey where
+  SecretEncryptionKey firstKey _ == SecretEncryptionKey secondKey _ = firstKey == secondKey
 
 mkSecretEncryptionKey :: Text -> Maybe SecretEncryptionKey
 mkSecretEncryptionKey encodedKey = do
   key <- either (const Nothing) Just (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedKey))
-  if ByteString.length key == 32
-    then Just (SecretEncryptionKey key)
-    else Nothing
+  SecretEncryptionKey key <$> maybeCryptoError (cipherInit key :: CryptoFailable AES256)
 
 -- | A fresh (or caller-supplied, in 'encryptSecretWithNonce') AEAD nonce.
 -- Opaque so it cannot be transposed with 'SecretPlaintext' at a call site.
@@ -54,66 +57,53 @@ newtype SecretPlaintext = SecretPlaintext ByteString.ByteString
 mkSecretPlaintext :: ByteString.ByteString -> SecretPlaintext
 mkSecretPlaintext = SecretPlaintext
 
-data SecretEncryptionError
-  = SecretEncryptionGeneratedInvalidNonce
-  | SecretEncryptionCipherInitializationFailed
-  | SecretEncryptionAeadInitializationFailed
-  deriving (Eq)
-
 data SecretDecryptionError
   = SecretDecryptionMalformedEnvelope
   | SecretDecryptionUnsupportedEnvelopeVersion Word8
-  | SecretDecryptionCipherInitializationFailed
-  | SecretDecryptionAeadInitializationFailed
   | SecretDecryptionAuthenticationFailed
   | SecretDecryptionPlaintextIsNotUtf8
   deriving (Eq)
 
--- | Encrypts a secret with fresh OS entropy. The nonce remains validated at
--- the construction boundary even though 'getEntropy' is expected to return
--- the requested length, so a short read is an explicit result instead of an
--- exception or an invalid GCM invocation.
-encryptSecret :: SecretEncryptionKey -> ByteString.ByteString -> IO (Either SecretEncryptionError Text)
+-- | Encrypts a secret with fresh OS entropy. 'getEntropy' returns exactly the
+-- requested number of bytes, so the module can create the opaque nonce
+-- directly. Cryptographic setup failures remain an explicit
+-- 'CryptoFailable' result rather than a partial pure exception.
+encryptSecret :: SecretEncryptionKey -> ByteString.ByteString -> IO (CryptoFailable Text)
 encryptSecret encryptionKey plaintext = do
   nonce <- getEntropy nonceLength
-  pure $
-    case mkEncryptionNonce nonce of
-      Nothing -> Left SecretEncryptionGeneratedInvalidNonce
-      Just validatedNonce -> encryptSecretWithNonce encryptionKey validatedNonce (mkSecretPlaintext plaintext)
+  pure (encryptSecretWithNonce encryptionKey (EncryptionNonce nonce) (mkSecretPlaintext plaintext))
 
 -- | Encrypts with a caller-supplied, already-validated nonce. The nonce and
 -- plaintext roles are distinct, so a 12-byte plaintext cannot be accidentally
 -- transposed into the nonce position.
-encryptSecretWithNonce :: SecretEncryptionKey -> EncryptionNonce -> SecretPlaintext -> Either SecretEncryptionError Text
-encryptSecretWithNonce (SecretEncryptionKey key) (EncryptionNonce nonce) (SecretPlaintext plaintext) =
+encryptSecretWithNonce :: SecretEncryptionKey -> EncryptionNonce -> SecretPlaintext -> CryptoFailable Text
+encryptSecretWithNonce (SecretEncryptionKey _ key) (EncryptionNonce nonce) (SecretPlaintext plaintext) =
   TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> encrypt key nonce plaintext
 
 -- | Decrypts a versioned envelope. Authentication failures are distinct from
 -- malformed or unsupported envelopes so callers can log private diagnostics
 -- without exposing the cause in a public response.
-decryptSecret :: SecretEncryptionKey -> Text -> Either SecretDecryptionError ByteString.ByteString
-decryptSecret (SecretEncryptionKey key) encodedEnvelope = do
-  envelope <- first (const SecretDecryptionMalformedEnvelope) (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedEnvelope))
-  (nonce, authenticationTag, ciphertext) <- splitEnvelope envelope
-  decrypt key nonce authenticationTag ciphertext
+decryptSecret :: SecretEncryptionKey -> Text -> CryptoFailable (Either SecretDecryptionError ByteString.ByteString)
+decryptSecret (SecretEncryptionKey _ key) encodedEnvelope = do
+  case first (const SecretDecryptionMalformedEnvelope) (Base64Url.decodeUnpadded (TextEncoding.encodeUtf8 encodedEnvelope)) >>= splitEnvelope of
+    Left failure -> pure (Left failure)
+    Right (nonce, authenticationTag, ciphertext) -> decrypt key nonce authenticationTag ciphertext
 
-decryptSecretText :: SecretEncryptionKey -> Text -> Either SecretDecryptionError Text
+decryptSecretText :: SecretEncryptionKey -> Text -> CryptoFailable (Either SecretDecryptionError Text)
 decryptSecretText encryptionKey encodedEnvelope = do
   plaintext <- decryptSecret encryptionKey encodedEnvelope
-  first (const SecretDecryptionPlaintextIsNotUtf8) (TextEncoding.decodeUtf8' plaintext)
+  pure (plaintext >>= first (const SecretDecryptionPlaintextIsNotUtf8) . TextEncoding.decodeUtf8')
 
-encrypt :: ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString -> Either SecretEncryptionError ByteString.ByteString
+encrypt :: AES256 -> ByteString.ByteString -> ByteString.ByteString -> CryptoFailable ByteString.ByteString
 encrypt key nonce plaintext = do
-  cipher <- cryptoFailableToEither SecretEncryptionCipherInitializationFailed (cipherInit key :: CryptoFailable AES256)
-  aead <- cryptoFailableToEither SecretEncryptionAeadInitializationFailed (aeadInit AEAD_GCM cipher nonce)
+  aead <- aeadInit AEAD_GCM key nonce
   let (authenticationTag, ciphertext) = aeadSimpleEncrypt aead associatedData plaintext authenticationTagLength
   pure (envelopeVersion <> nonce <> convert authenticationTag <> ciphertext)
 
-decrypt :: ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString -> Either SecretDecryptionError ByteString.ByteString
+decrypt :: AES256 -> ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString -> CryptoFailable (Either SecretDecryptionError ByteString.ByteString)
 decrypt key nonce authenticationTag ciphertext = do
-  cipher <- cryptoFailableToEither SecretDecryptionCipherInitializationFailed (cipherInit key :: CryptoFailable AES256)
-  aead <- cryptoFailableToEither SecretDecryptionAeadInitializationFailed (aeadInit AEAD_GCM cipher nonce)
-  maybe (Left SecretDecryptionAuthenticationFailed) Right (aeadSimpleDecrypt aead associatedData ciphertext (AuthTag (convert authenticationTag)))
+  aead <- aeadInit AEAD_GCM key nonce
+  pure (maybe (Left SecretDecryptionAuthenticationFailed) Right (aeadSimpleDecrypt aead associatedData ciphertext (AuthTag (convert authenticationTag))))
 
 splitEnvelope :: ByteString.ByteString -> Either SecretDecryptionError (ByteString.ByteString, ByteString.ByteString, ByteString.ByteString)
 splitEnvelope envelope =
@@ -126,12 +116,6 @@ splitEnvelope envelope =
       where
         (nonce, afterNonce) = ByteString.splitAt nonceLength remainder
         (authenticationTag, ciphertext) = ByteString.splitAt authenticationTagLength afterNonce
-
-cryptoFailableToEither :: errorValue -> CryptoFailable value -> Either errorValue value
-cryptoFailableToEither failure cryptoResult =
-  case cryptoResult of
-    CryptoPassed value -> Right value
-    CryptoFailed _ -> Left failure
 
 envelopeVersion :: ByteString.ByteString
 envelopeVersion = "\x01"

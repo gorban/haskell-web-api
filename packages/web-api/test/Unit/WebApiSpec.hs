@@ -8,6 +8,7 @@ import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, read
 import Control.Exception (ErrorCall (..), IOException, SomeException, bracket, displayException, evaluate, finally, try)
 import Control.Monad (forM_)
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
@@ -478,11 +479,8 @@ requiredSecretNonce :: ByteString.ByteString -> Secret.EncryptionNonce
 requiredSecretNonce value =
   fromMaybe (error "Expected a valid secret encryption nonce") (Secret.mkEncryptionNonce value)
 
-requiredSecretEnvelope :: Either errorValue Text -> Text
-requiredSecretEnvelope result =
-  case result of
-    Right value -> value
-    Left _ -> error "Expected secret encryption to succeed"
+requiredSecretEnvelope :: CryptoFailable Text -> Text
+requiredSecretEnvelope = fromMaybe (error "Expected secret encryption to succeed") . maybeCryptoError
 
 enrollmentSessionIdValue :: Session.SessionId
 enrollmentSessionIdValue =

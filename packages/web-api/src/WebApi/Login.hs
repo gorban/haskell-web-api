@@ -15,6 +15,7 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
+import Crypto.Error (maybeCryptoError)
 import Data.List (find)
 import Data.Text (Text)
 import Data.Word (Word64)
@@ -228,4 +229,4 @@ infrastructureFailureResult infrastructureError =
 
 decodeTotpSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
 decodeTotpSecret encryptionKey encryptedSecret =
-  either (const Nothing) mkTotpSecret (decryptSecretText encryptionKey encryptedSecret)
+  maybeCryptoError (decryptSecretText encryptionKey encryptedSecret) >>= either (const Nothing) mkTotpSecret

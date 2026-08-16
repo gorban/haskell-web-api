@@ -3,9 +3,11 @@
 
 module Unit.HarchWeb.SecretSpec (spec) where
 
+import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Secret
@@ -20,6 +22,7 @@ spec = do
         ( (isJust (mkSecretEncryptionKey encodedKey) `shouldBe` True)
             :| [ isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True,
                  isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True,
+                 isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded (ByteString.replicate 16 1)))) `shouldBe` True,
                  requiredKey == requiredKey `shouldBe` True,
                  requiredKey /= otherKey `shouldBe` True
                ]
@@ -30,30 +33,28 @@ spec = do
       let key = requiredKey
           nonce = requiredNonce "0123456789ab"
           plaintext = "authenticator-secret"
-          envelope = requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext plaintext))
-      expectRight plaintext (decryptSecret key envelope)
-      randomEnvelope <- requiredEnvelope <$> encryptSecret key plaintext
+          envelope = requiredCrypto (encryptSecretWithNonce key nonce (mkSecretPlaintext plaintext))
+      expectRight plaintext (requiredCrypto (decryptSecret key envelope))
+      randomEnvelope <- requiredCrypto <$> encryptSecret key plaintext
       expectAll
-        ( (expectRight plaintext (decryptSecret key randomEnvelope))
-            :| [ expectRight "authenticator-secret" (decryptSecretText key envelope),
-                 expectLeft SecretDecryptionPlaintextIsNotUtf8 (decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext "\255")))),
-                 expectLeft SecretDecryptionMalformedEnvelope (decryptSecret key "not-base64"),
-                 expectLeft SecretDecryptionAuthenticationFailed (decryptSecret key (envelope <> "A")),
-                 expectLeft (SecretDecryptionUnsupportedEnvelopeVersion 2) (decryptSecret key (encodedEnvelope "\x02")),
-                 expectLeft SecretDecryptionMalformedEnvelope (decryptSecret key (encodedEnvelope "\x01")),
-                 expectLeft SecretDecryptionAuthenticationFailed (decryptSecret otherKey envelope),
+        ( expectRight plaintext (requiredCrypto (decryptSecret key randomEnvelope))
+            :| [ expectRight "authenticator-secret" (requiredCrypto (decryptSecretText key envelope)),
+                 expectLeft SecretDecryptionPlaintextIsNotUtf8 (requiredCrypto (decryptSecretText key (requiredCrypto (encryptSecretWithNonce key nonce (mkSecretPlaintext "\255"))))),
+                 expectLeft SecretDecryptionMalformedEnvelope (requiredCrypto (decryptSecret key "not-base64")),
+                 expectLeft SecretDecryptionMalformedEnvelope (requiredCrypto (decryptSecret key (encodedEnvelope ""))),
+                 expectLeft SecretDecryptionAuthenticationFailed (requiredCrypto (decryptSecret key (envelope <> "A"))),
+                 expectLeft (SecretDecryptionUnsupportedEnvelopeVersion 2) (requiredCrypto (decryptSecret key (encodedEnvelope "\x02"))),
+                 expectLeft SecretDecryptionMalformedEnvelope (requiredCrypto (decryptSecret key (encodedEnvelope "\x01"))),
+                 expectLeft SecretDecryptionAuthenticationFailed (requiredCrypto (decryptSecret otherKey envelope)),
                  isNothing (mkEncryptionNonce "short") `shouldBe` True
                ]
         )
 
-    it "keeps encryption and decryption error categories inspectable for private diagnostics" $
+    it "keeps decryption error categories inspectable for private diagnostics" $
       expectAll
-        ( (SecretEncryptionGeneratedInvalidNonce /= SecretEncryptionCipherInitializationFailed `shouldBe` True)
-            :| [ SecretEncryptionAeadInitializationFailed /= SecretEncryptionGeneratedInvalidNonce `shouldBe` True,
-                 SecretDecryptionMalformedEnvelope /= SecretDecryptionAuthenticationFailed `shouldBe` True,
-                 SecretDecryptionUnsupportedEnvelopeVersion 1 /= SecretDecryptionUnsupportedEnvelopeVersion 2 `shouldBe` True,
-                 SecretDecryptionCipherInitializationFailed /= SecretDecryptionAuthenticationFailed `shouldBe` True,
-                 SecretDecryptionAeadInitializationFailed /= SecretDecryptionAuthenticationFailed `shouldBe` True
+        ( (SecretDecryptionMalformedEnvelope /= SecretDecryptionAuthenticationFailed `shouldBe` True)
+            :| [ SecretDecryptionUnsupportedEnvelopeVersion 1 /= SecretDecryptionUnsupportedEnvelopeVersion 2 `shouldBe` True,
+                 SecretDecryptionPlaintextIsNotUtf8 /= SecretDecryptionAuthenticationFailed `shouldBe` True
                ]
         )
 
@@ -84,25 +85,22 @@ requiredNonce bytes =
     Just nonce -> nonce
     Nothing -> error "expected a valid encryption nonce"
 
-requiredEnvelope :: Either errorValue Text -> Text
-requiredEnvelope encryptionResult =
-  case encryptionResult of
-    Right envelope -> envelope
-    Left _ -> error "expected a valid secret envelope"
-
 expectRight :: (Eq value, Show value) => value -> Either errorValue value -> Expectation
 expectRight expected result =
   case result of
     Right actual -> actual `shouldBe` expected
     Left _ -> expectationFailure "expected secret operation to succeed"
 
-expectLeft :: Eq errorValue => errorValue -> Either errorValue value -> Expectation
+expectLeft :: (Eq errorValue) => errorValue -> Either errorValue value -> Expectation
 expectLeft expected result =
   case result of
     Left actual
       | actual == expected -> pure ()
       | otherwise -> expectationFailure "secret operation returned the wrong failure category"
     Right _ -> expectationFailure "expected secret operation to fail"
+
+requiredCrypto :: CryptoFailable value -> value
+requiredCrypto = fromMaybe (error "expected cryptographic operation to succeed") . maybeCryptoError
 
 encodedEnvelope :: ByteString.ByteString -> Text
 encodedEnvelope = TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded
