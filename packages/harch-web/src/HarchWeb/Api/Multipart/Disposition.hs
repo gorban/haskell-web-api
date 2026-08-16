@@ -11,6 +11,7 @@ where
 
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe qualified as Maybe
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -29,16 +30,25 @@ data MultipartFieldDisposition = MultipartFieldDisposition
   deriving (Eq, Show)
 
 -- | Parse a part's @Content-Disposition@ header, if present, from its raw
--- header block.
+-- header block. RFC 7578 admits only @form-data@ dispositions. A parameter
+-- must occur at most once: accepting an arbitrary duplicate would let
+-- different multipart consumers disagree about which untrusted value owns a
+-- part. Missing @name@ remains represented explicitly for the consumer to
+-- report as its existing 'MultipartMissingDisposition' failure.
 parseMultipartFieldDisposition :: ByteString -> Maybe MultipartFieldDisposition
 parseMultipartFieldDisposition headerBlock = do
   dispositionValue <- lookup "content-disposition" (multipartHeaderFields headerBlock)
-  let parameters = parseDispositionParameters dispositionValue
-  pure
-    MultipartFieldDisposition
-      { multipartFieldName = lookup "name" parameters,
-        multipartFieldFilename = lookup "filename" parameters
-      }
+  let (dispositionType, parameters) = parseDispositionParameters dispositionValue
+  if Text.toCaseFold (Text.strip dispositionType) /= "form-data"
+    then Nothing
+    else do
+      name <- atMostOneParameterValue "name" parameters
+      filename <- atMostOneParameterValue "filename" parameters
+      pure
+        MultipartFieldDisposition
+          { multipartFieldName = name,
+            multipartFieldFilename = filename
+          }
 
 multipartHeaderFields :: ByteString -> [(Text, Text)]
 multipartHeaderFields headerBlock =
@@ -70,22 +80,33 @@ decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDec
 -- | Split a @Content-Disposition@ value's @;@-separated parameters,
 -- respecting quoted-string boundaries so a semicolon inside a quoted
 -- @filename@ does not end the parameter early.
-parseDispositionParameters :: Text -> [(Text, Text)]
+parseDispositionParameters :: Text -> (Text, [(Text, Text)])
 parseDispositionParameters value =
-  Maybe.mapMaybe parseParameter (splitParameters value)
+  case splitParameters value of
+    dispositionType :| parameterSegments ->
+      (dispositionType, Maybe.mapMaybe parseParameter parameterSegments)
 
-splitParameters :: Text -> [Text]
+atMostOneParameterValue :: Text -> [(Text, Text)] -> Maybe (Maybe Text)
+atMostOneParameterValue parameterName parameters =
+  case [value | (candidateName, value) <- parameters, candidateName == parameterName] of
+    [] -> Just Nothing
+    [value] -> Just (Just value)
+    _ -> Nothing
+
+splitParameters :: Text -> NonEmpty Text
 splitParameters = go False Text.empty
   where
     go !inQuotes current remaining =
       case Text.uncons remaining of
-        Nothing -> [current]
+        Nothing -> current :| []
         Just ('"', rest) -> go (not inQuotes) (Text.snoc current '"') rest
         Just ('\\', rest) | inQuotes ->
           case Text.uncons rest of
             Just (escaped, rest') -> go inQuotes (Text.snoc (Text.snoc current '\\') escaped) rest'
             Nothing -> go inQuotes (Text.snoc current '\\') rest
-        Just (';', rest) | not inQuotes -> current : go False Text.empty rest
+        Just (';', rest) | not inQuotes ->
+          case go False Text.empty rest of
+            nextSegment :| remainingSegments -> current :| (nextSegment : remainingSegments)
         Just (nextChar, rest) -> go inQuotes (Text.snoc current nextChar) rest
 
 parseParameter :: Text -> Maybe (Text, Text)

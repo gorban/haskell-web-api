@@ -335,6 +335,14 @@ spec =
       it "returns Nothing when there is no Content-Disposition header" $
         parseMultipartFieldDisposition "Content-Type: text/plain" `shouldBe` Nothing
 
+      it "accepts only form-data and rejects duplicate disposition parameters" $
+        expectAll
+          ( (parseMultipartFieldDisposition "Content-Disposition: attachment; name=\"field\"" `shouldBe` Nothing)
+              :| [ parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"first\"; name=\"second\"" `shouldBe` Nothing,
+                   parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"field\"; filename=\"first.txt\"; filename=\"second.txt\"" `shouldBe` Nothing
+                 ]
+          )
+
       it "is case-insensitive for the header name" $
         parseMultipartFieldDisposition "content-DISPOSITION: form-data; name=\"x\""
           `shouldBe` Just (MultipartFieldDisposition (Just "x") Nothing)

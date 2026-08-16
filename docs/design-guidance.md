@@ -310,6 +310,10 @@ request capability: it gives the handler a one-shot scoped consumer (`withApiMul
 an application-selected storage adapter and `MultipartLimits`, preserving both duplicate-consumption
 rejection and the multipart parser's typed failure.
 
+The disposition parser accepts only a case-insensitive `form-data` type and rejects duplicate `name` or
+`filename` parameters. This keeps a part's metadata unambiguous before the consumer assigns resource
+ownership; a missing `name` remains a typed consumer rejection (`MultipartMissingDisposition`).
+
 `apiRouteDefinition` places one endpoint directly in an application's `RouteDefinition` table; for a
 heterogeneous endpoint table, `SomeApiRouteEndpoint` wraps declarations of different types and
 `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` adapt the whole table into one
