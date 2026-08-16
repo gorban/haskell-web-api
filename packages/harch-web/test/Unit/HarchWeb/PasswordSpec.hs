@@ -6,6 +6,7 @@ module Unit.HarchWeb.PasswordSpec (spec) where
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
+import Data.Word (Word32)
 import HarchWeb.Password
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -37,7 +38,12 @@ spec = do
                  mkPasswordHashingPolicy (argon2Iterations 0) (argon2MemoryKib 8) (argon2Parallelism 1) `shouldBe` Nothing,
                  mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 0) `shouldBe` Nothing,
                  mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 15) (argon2Parallelism 2) `shouldBe` Nothing,
-                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 16) (argon2Parallelism 2) `shouldBe` Just (PasswordHashingPolicy 1 16 2),
+                 fmap policyCosts (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 16) (argon2Parallelism 2)) `shouldBe` Just (1, 16, 2),
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 127) (argon2Parallelism 16) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 11) (argon2MemoryKib 8) (argon2Parallelism 1) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 262145) (argon2Parallelism 1) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 128) (argon2Parallelism 17) `shouldBe` Nothing,
+                 mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 0) (argon2Parallelism 536870912) `shouldBe` Nothing,
                  defaultPasswordHashingPolicy /= testPolicy `shouldBe` True
                ]
         )
@@ -62,6 +68,9 @@ spec = do
             :| [ isNothing (readPasswordHash "$argon2id$v=19$m=8,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$short") `shouldBe` True,
                  isNothing (readPasswordHash "$argon2id$v=19$m=8,t=1,p=1$@@@$XdTJKPvVpEdCNu922dgwQXj-XfOITS04PpG3cDMn5sE") `shouldBe` True,
                  isNothing (readPasswordHash "$argon2id$v=19$m=8,t=1,p=1$MDEyMzQ1Njc4OWFiY2Rl$XdTJKPvVpEdCNu922dgwQXj-XfOITS04PpG3cDMn5sE") `shouldBe` True,
+                 isNothing (readPasswordHash "$argon2id$v=19$m=262145,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$XdTJKPvVpEdCNu922dgwQXj-XfOITS04PpG3cDMn5sE") `shouldBe` True,
+                 isNothing (readPasswordHash "$argon2id$v=19$m=8,t=11,p=1$MDEyMzQ1Njc4OWFiY2RlZg$XdTJKPvVpEdCNu922dgwQXj-XfOITS04PpG3cDMn5sE") `shouldBe` True,
+                 isNothing (readPasswordHash "$argon2id$v=19$m=128,t=1,p=17$MDEyMzQ1Njc4OWFiY2RlZg$XdTJKPvVpEdCNu922dgwQXj-XfOITS04PpG3cDMn5sE") `shouldBe` True,
                  isNothing (readPasswordHash "$argon2i$v=19$m=8,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$2kTgJk6VdlkTLGO2AH5eQCP8qZAQH4CZAPyfIsyPXdo") `shouldBe` True,
                  isNothing (readPasswordHash "$argon2id$v=16$m=8,t=1,p=1$MDEyMzQ1Njc4OWFiY2RlZg$2kTgJk6VdlkTLGO2AH5eQCP8qZAQH4CZAPyfIsyPXdo") `shouldBe` True,
                  verifyPassword samplePassword (PasswordHash "not-a-password-hash") `shouldBe` False
@@ -77,3 +86,10 @@ spec = do
                  fmap passwordHashText firstHash /= fmap passwordHashText secondHash `shouldBe` True
                ]
         )
+
+policyCosts :: PasswordHashingPolicy -> (Word32, Word32, Word32)
+policyCosts policy =
+  ( passwordHashIterations policy,
+    passwordHashMemoryKibibytes policy,
+    passwordHashParallelism policy
+  )

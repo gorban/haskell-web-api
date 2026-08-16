@@ -6,7 +6,7 @@ module HarchWeb.Password
     Argon2Parallelism,
     Password,
     PasswordHash (..),
-    PasswordHashingPolicy (..),
+    PasswordHashingPolicy,
     argon2Iterations,
     argon2MemoryKib,
     argon2Parallelism,
@@ -16,6 +16,9 @@ module HarchWeb.Password
     mkPassword,
     mkPasswordHashingPolicy,
     passwordHashText,
+    passwordHashIterations,
+    passwordHashMemoryKibibytes,
+    passwordHashParallelism,
     readPasswordHash,
     verifyPassword,
   )
@@ -30,7 +33,7 @@ import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Word (Word32)
+import Data.Word (Word32, Word64)
 import Text.Read (readMaybe)
 
 newtype Password = Password ByteString.ByteString
@@ -75,11 +78,34 @@ newtype Argon2Parallelism = Argon2Parallelism Word32
 argon2Parallelism :: Word32 -> Argon2Parallelism
 argon2Parallelism = Argon2Parallelism
 
+-- | Validates both newly configured and persisted Argon2id resource costs at
+-- the one policy boundary. The 10-iteration, 256-MiB, and 16-lane ceilings
+-- allow a deliberate increase over the production default while preventing
+-- stored hashes from turning verification into an unbounded memory, CPU, or
+-- lane-allocation request. Raising them is a compatibility decision that needs
+-- an accompanying password-rehash plan.
 mkPasswordHashingPolicy :: Argon2Iterations -> Argon2MemoryKib -> Argon2Parallelism -> Maybe PasswordHashingPolicy
 mkPasswordHashingPolicy (Argon2Iterations iterations) (Argon2MemoryKib memoryKibibytes) (Argon2Parallelism parallelism) =
-  case iterations == 0 || parallelism == 0 || memoryKibibytes < 8 * parallelism of
+  case iterations == 0
+    || iterations > maximumArgon2Iterations
+    || parallelism == 0
+    || parallelism > maximumArgon2Parallelism
+    || memoryKibibytes > maximumArgon2MemoryKibibytes
+    || fromIntegral memoryKibibytes < minimumMemoryKibibytesPerLane * fromIntegral parallelism of
     True -> Nothing
     False -> Just (PasswordHashingPolicy iterations memoryKibibytes parallelism)
+
+maximumArgon2Iterations :: Word32
+maximumArgon2Iterations = 10
+
+maximumArgon2MemoryKibibytes :: Word32
+maximumArgon2MemoryKibibytes = 262144
+
+maximumArgon2Parallelism :: Word32
+maximumArgon2Parallelism = 16
+
+minimumMemoryKibibytesPerLane :: Word64
+minimumMemoryKibibytesPerLane = 8
 
 hashPassword :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)
 hashPassword policy password = do
