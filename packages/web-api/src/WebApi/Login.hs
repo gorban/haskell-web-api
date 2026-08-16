@@ -228,4 +228,4 @@ infrastructureFailureResult infrastructureError =
 
 decodeTotpSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
 decodeTotpSecret encryptionKey encryptedSecret =
-  mkTotpSecret =<< decryptSecretText encryptionKey encryptedSecret
+  either (const Nothing) mkTotpSecret (decryptSecretText encryptionKey encryptedSecret)

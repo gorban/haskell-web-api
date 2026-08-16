@@ -52,7 +52,7 @@ spec = do
 
     it "accepts a validated TOTP only after validating the password" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
-          encryptedSecret = required "encrypted TOTP secret" (encryptSecretWithNonce encryptionKey (mkEncryptionNonce (ByteString.replicate 12 7)) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
+          encryptedSecret = requiredRight "encrypted TOTP secret" (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 7))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
           confirmedStore = mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100))))
           validProof = TotpLoginProof (totpCode 123456 secret)
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") validProof
@@ -117,7 +117,7 @@ spec = do
 
     it "preserves every password and second-factor state without authenticating early" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
-          encryptedSecret = required "encrypted TOTP secret" (encryptSecretWithNonce encryptionKey (mkEncryptionNonce (ByteString.replicate 12 8)) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
+          encryptedSecret = requiredRight "encrypted TOTP secret" (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 8))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
           confirmedEnrollment = StoredTotpEnrollment encryptedSecret (Just 100)
           validProof = TotpLoginProof (totpCode 123456 secret)
           completeWith credentialStoreValue mfaStoreValue = completePasswordLogin credentialStoreValue mfaStoreValue encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") validProof
@@ -130,7 +130,7 @@ spec = do
       completeWith (credentialStore (Right (Just verifiedCredential))) noEnrollmentStore `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
       pendingEnrollmentStore <- storeWithLookups [Right (Just confirmedEnrollment), Right (Just (StoredTotpEnrollment encryptedSecret Nothing))]
       completeWith (credentialStore (Right (Just verifiedCredential))) pendingEnrollmentStore `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
-      let invalidUtf8Envelope = required "encrypted invalid UTF-8" (encryptSecretWithNonce encryptionKey (mkEncryptionNonce (ByteString.replicate 12 9)) (mkSecretPlaintext (ByteString.pack [255])))
+      let invalidUtf8Envelope = requiredRight "encrypted invalid UTF-8" (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 9))) (mkSecretPlaintext (ByteString.pack [255])))
       completeWith (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment invalidUtf8Envelope (Just 100))))) `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
 
     it "rejects malformed, missing, and unavailable recovery-code state" $ do
@@ -289,6 +289,12 @@ encryptionKey = required "encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAA
 
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
+
+requiredRight :: String -> Either errorValue value -> value
+requiredRight label result =
+  case result of
+    Right value -> value
+    Left _ -> error ("expected " <> label)
 
 encodedPasswordHash :: Text.Text
 encodedPasswordHash = passwordHashText passwordHash

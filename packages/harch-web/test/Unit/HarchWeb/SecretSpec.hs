@@ -28,21 +28,32 @@ spec = do
   describe "AES-256-GCM secret envelopes" $ do
     it "round-trips a versioned encrypted value and rejects altered inputs" $ do
       let key = requiredKey
-          nonce = mkEncryptionNonce "0123456789ab"
+          nonce = requiredNonce "0123456789ab"
           plaintext = "authenticator-secret"
           envelope = requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext plaintext))
-      decryptSecret key envelope `shouldBe` Just plaintext
-      maybeRandomEnvelope <- encryptSecret key plaintext
+      expectRight plaintext (decryptSecret key envelope)
+      randomEnvelope <- requiredEnvelope <$> encryptSecret key plaintext
       expectAll
-        ( ((maybeRandomEnvelope >>= decryptSecret key) `shouldBe` Just plaintext)
-            :| [ decryptSecretText key envelope `shouldBe` Just "authenticator-secret",
-                 decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext "\255"))) `shouldBe` Nothing,
-                 decryptSecret key "not-base64" `shouldBe` Nothing,
-                 decryptSecret key (envelope <> "A") `shouldBe` Nothing,
-                 decryptSecret key (encodedEnvelope "\x02") `shouldBe` Nothing,
-                 decryptSecret key (encodedEnvelope "\x01") `shouldBe` Nothing,
-                 decryptSecret otherKey envelope `shouldBe` Nothing,
-                 encryptSecretWithNonce key (mkEncryptionNonce "short") (mkSecretPlaintext plaintext) `shouldBe` Nothing
+        ( (expectRight plaintext (decryptSecret key randomEnvelope))
+            :| [ expectRight "authenticator-secret" (decryptSecretText key envelope),
+                 expectLeft SecretDecryptionPlaintextIsNotUtf8 (decryptSecretText key (requiredEnvelope (encryptSecretWithNonce key nonce (mkSecretPlaintext "\255")))),
+                 expectLeft SecretDecryptionMalformedEnvelope (decryptSecret key "not-base64"),
+                 expectLeft SecretDecryptionAuthenticationFailed (decryptSecret key (envelope <> "A")),
+                 expectLeft (SecretDecryptionUnsupportedEnvelopeVersion 2) (decryptSecret key (encodedEnvelope "\x02")),
+                 expectLeft SecretDecryptionMalformedEnvelope (decryptSecret key (encodedEnvelope "\x01")),
+                 expectLeft SecretDecryptionAuthenticationFailed (decryptSecret otherKey envelope),
+                 isNothing (mkEncryptionNonce "short") `shouldBe` True
+               ]
+        )
+
+    it "keeps encryption and decryption error categories inspectable for private diagnostics" $
+      expectAll
+        ( (SecretEncryptionGeneratedInvalidNonce /= SecretEncryptionCipherInitializationFailed `shouldBe` True)
+            :| [ SecretEncryptionAeadInitializationFailed /= SecretEncryptionGeneratedInvalidNonce `shouldBe` True,
+                 SecretDecryptionMalformedEnvelope /= SecretDecryptionAuthenticationFailed `shouldBe` True,
+                 SecretDecryptionUnsupportedEnvelopeVersion 1 /= SecretDecryptionUnsupportedEnvelopeVersion 2 `shouldBe` True,
+                 SecretDecryptionCipherInitializationFailed /= SecretDecryptionAuthenticationFailed `shouldBe` True,
+                 SecretDecryptionAeadInitializationFailed /= SecretDecryptionAuthenticationFailed `shouldBe` True
                ]
         )
 
@@ -67,11 +78,31 @@ otherKey =
     Just key -> key
     Nothing -> error "expected a valid encryption key"
 
-requiredEnvelope :: Maybe Text -> Text
-requiredEnvelope maybeEnvelope =
-  case maybeEnvelope of
-    Just envelope -> envelope
-    Nothing -> error "expected a valid secret envelope"
+requiredNonce :: ByteString.ByteString -> EncryptionNonce
+requiredNonce bytes =
+  case mkEncryptionNonce bytes of
+    Just nonce -> nonce
+    Nothing -> error "expected a valid encryption nonce"
+
+requiredEnvelope :: Either errorValue Text -> Text
+requiredEnvelope encryptionResult =
+  case encryptionResult of
+    Right envelope -> envelope
+    Left _ -> error "expected a valid secret envelope"
+
+expectRight :: (Eq value, Show value) => value -> Either errorValue value -> Expectation
+expectRight expected result =
+  case result of
+    Right actual -> actual `shouldBe` expected
+    Left _ -> expectationFailure "expected secret operation to succeed"
+
+expectLeft :: Eq errorValue => errorValue -> Either errorValue value -> Expectation
+expectLeft expected result =
+  case result of
+    Left actual
+      | actual == expected -> pure ()
+      | otherwise -> expectationFailure "secret operation returned the wrong failure category"
+    Right _ -> expectationFailure "expected secret operation to fail"
 
 encodedEnvelope :: ByteString.ByteString -> Text
 encodedEnvelope = TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded

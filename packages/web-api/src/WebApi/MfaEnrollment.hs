@@ -26,7 +26,7 @@ import HarchWeb.RecoveryCode
     hashRecoveryCode,
     recoveryCodeHashText,
   )
-import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText, encryptSecret)
+import HarchWeb.Secret (SecretEncryptionError, SecretEncryptionKey, decryptSecretText, encryptSecret)
 import HarchWeb.Totp
   ( TotpCode,
     TotpSecret,
@@ -68,7 +68,7 @@ startMfaEnrollment =
 
 startMfaEnrollmentWith ::
   IO TotpSecret ->
-  (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text)) ->
+  (SecretEncryptionKey -> ByteString.ByteString -> IO (Either SecretEncryptionError Text)) ->
   MfaStore ->
   SecretEncryptionKey ->
   AccountId ->
@@ -77,8 +77,8 @@ startMfaEnrollmentWith ::
 startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
   runExceptT $ do
     (secret, encryptedSecret) <-
-      liftMaybeWith
-        MfaEnrollmentEncryptionFailed
+      liftEitherWith
+        (const MfaEnrollmentEncryptionFailed)
         (generateEncryptedSecret generateSecret encrypt encryptionKey)
     saved <- liftMfaStore (saveUnconfirmedTotpEnrollment mfaStore accountId encryptedSecret now)
     guardError MfaEnrollmentAccountIsNotEligible saved
@@ -86,14 +86,14 @@ startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId n
 
 generateEncryptedSecret ::
   IO TotpSecret ->
-  (SecretEncryptionKey -> ByteString.ByteString -> IO (Maybe Text)) ->
+  (SecretEncryptionKey -> ByteString.ByteString -> IO (Either SecretEncryptionError Text)) ->
   SecretEncryptionKey ->
-  IO (Maybe (TotpSecret, Text))
+  IO (Either SecretEncryptionError (TotpSecret, Text))
 generateEncryptedSecret generateSecret encrypt encryptionKey = do
   secret <- generateSecret
   encryptedSecret <-
     encrypt encryptionKey (TextEncoding.encodeUtf8 (renderTotpSecret secret))
-  pure (fmap (pairTotpSecret secret) encryptedSecret)
+  pure (pairTotpSecret secret <$> encryptedSecret)
 
 pairTotpSecret :: TotpSecret -> Text -> (TotpSecret, Text)
 pairTotpSecret = (,)
@@ -149,7 +149,7 @@ requireUnconfirmedEnrollment enrollment =
 
 decodeSecret :: SecretEncryptionKey -> Text -> Maybe TotpSecret
 decodeSecret encryptionKey encryptedSecret =
-  mkTotpSecret =<< decryptSecretText encryptionKey encryptedSecret
+  either (const Nothing) mkTotpSecret (decryptSecretText encryptionKey encryptedSecret)
 
 generateRecoveryCodes :: IO RecoveryCode -> IO (NonEmpty RecoveryCode)
 generateRecoveryCodes generateCode = do
