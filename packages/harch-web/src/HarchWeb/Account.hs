@@ -19,9 +19,7 @@ where
 
 import Crypto.Hash (Digest, SHA256, hash)
 import Crypto.Random.Entropy (getEntropy)
-import Data.Bits (xor, (.|.))
 import Data.ByteArray (convert)
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
@@ -29,6 +27,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Email (EmailAddress)
+import HarchWeb.Security.ConstantTime (constantWorkEquals)
 
 newtype AccountId = AccountId Text
   deriving (Eq, Show)
@@ -104,26 +103,14 @@ validateEmailVerificationToken now token storedVerification =
   case now >= storedVerificationExpiresAtNanoseconds storedVerification of
     True -> EmailVerificationExpired
     False ->
-      case constantWorkEqual
-        (digestText (emailVerificationTokenDigest token))
-        (digestText (storedVerificationTokenDigest storedVerification)) of
+      case constantWorkEquals
+        (TextEncoding.encodeUtf8 (digestText (emailVerificationTokenDigest token)))
+        (TextEncoding.encodeUtf8 (digestText (storedVerificationTokenDigest storedVerification))) of
         True -> EmailVerificationAccepted (storedVerificationAccountId storedVerification) (storedVerificationEmail storedVerification)
         False -> EmailVerificationRejected
 
 digestText :: EmailVerificationTokenDigest -> Text
 digestText (EmailVerificationTokenDigest value) = value
-
-constantWorkEqual :: Text -> Text -> Bool
-constantWorkEqual expected actual =
-  let expectedBytes = TextEncoding.encodeUtf8 expected
-      actualBytes = TextEncoding.encodeUtf8 actual
-      byteDifference =
-        foldl'
-          (.|.)
-          0
-          (ByteString.zipWith (\left right -> fromIntegral (left `xor` right)) expectedBytes actualBytes)
-      lengthDifference = ByteString.length expectedBytes `xor` ByteString.length actualBytes
-   in (byteDifference .|. lengthDifference) == 0
 
 isAccountIdCharacter :: Char -> Bool
 isAccountIdCharacter character =

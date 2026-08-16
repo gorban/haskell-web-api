@@ -27,14 +27,13 @@ module HarchWeb.Session
 where
 
 import Crypto.Random.Entropy (getEntropy)
-import Data.Bits (xor, (.|.))
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
+import HarchWeb.Security.ConstantTime (constantWorkEquals)
 
 newtype SessionId = SessionId Text
   deriving (Eq)
@@ -155,15 +154,9 @@ validateSession now (Just session) =
 -- bytes are compared without an early mismatch exit.
 validateCsrfToken :: CsrfToken -> CsrfToken -> Bool
 validateCsrfToken expected supplied =
-  let expectedBytes = TextEncoding.encodeUtf8 (csrfTokenText expected)
-      suppliedBytes = TextEncoding.encodeUtf8 (csrfTokenText supplied)
-      byteDifference =
-        foldl'
-          (.|.)
-          0
-          (ByteString.zipWith (\left right -> fromIntegral (left `xor` right)) expectedBytes suppliedBytes)
-      lengthDifference = ByteString.length expectedBytes `xor` ByteString.length suppliedBytes
-   in (byteDifference .|. lengthDifference) == 0
+  constantWorkEquals
+    (TextEncoding.encodeUtf8 (csrfTokenText expected))
+    (TextEncoding.encodeUtf8 (csrfTokenText supplied))
 
 opaqueTokenText :: Text -> Maybe Text
 opaqueTokenText token =

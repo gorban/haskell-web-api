@@ -27,6 +27,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
 import HarchWeb.Markup (regionPatchHtml, regionPatchId)
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import HarchWeb.Server.Response
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -65,7 +66,7 @@ validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientAction
 validateClientActionCsrf request actionFields
   | Just cookieToken <- requestCsrfCookie request,
     Just submittedToken <- lookup "_harch_csrf" actionFields,
-    cookieToken == submittedToken =
+    constantWorkEquals (TextEncoding.encodeUtf8 cookieToken) (TextEncoding.encodeUtf8 submittedToken) =
       Right ()
   | otherwise = Left ClientActionCsrfRejected
 

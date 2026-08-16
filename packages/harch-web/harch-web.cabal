@@ -121,6 +121,7 @@ library
     HarchWeb.Observability.Otlp.Wire
     HarchWeb.Observability.Types
     HarchWeb.PathPrefix
+    HarchWeb.Security.ConstantTime
     HarchWeb.Security.RequestLimits
     HarchWeb.Server.Application
     HarchWeb.Server.ClientAction

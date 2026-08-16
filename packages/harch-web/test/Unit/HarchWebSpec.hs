@@ -2430,6 +2430,7 @@ spec = do
       invalidContentTypeChunks <- newIORef ["email=ada%40example.test"]
       missingContentTypeChunks <- newIORef ["email=ada%40example.test"]
       missingCsrfChunks <- newIORef ["email=ada%40example.test"]
+      mismatchedCsrfChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token-mismatch"]
       invalidHostChunks <- newIORef ["email=ada%40example.test"]
       invalidOriginChunks <- newIORef ["email=ada%40example.test"]
       invalidCookieChunks <- newIORef ["email=ada%40example.test"]
@@ -2451,6 +2452,7 @@ spec = do
       invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingContentTypeChunks [("X-Harch-Action", "1"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
+      mismatchedCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith mismatchedCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
       invalidHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "\255"), ("Origin", "http://example.test")])
       invalidOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidOriginChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "\255")])
       invalidCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidCookieChunks (validHeaders <> [("Cookie", "harch-csrf=\255")]))
@@ -2465,6 +2467,7 @@ spec = do
             crossOriginResponse,
             invalidContentTypeResponse,
             missingCsrfResponse,
+            mismatchedCsrfResponse,
             invalidHostResponse,
             invalidOriginResponse,
             invalidCookieResponse,
@@ -2477,13 +2480,14 @@ spec = do
       Wai.responseStatus invalidContentTypeResponse `shouldBe` Http.status415
       Wai.responseStatus missingContentTypeResponse `shouldBe` Http.status415
       Wai.responseStatus missingCsrfResponse `shouldBe` Http.status403
+      Wai.responseStatus mismatchedCsrfResponse `shouldBe` Http.status403
       Wai.responseStatus invalidHostResponse `shouldBe` Http.status403
       Wai.responseStatus invalidOriginResponse `shouldBe` Http.status403
       Wai.responseStatus invalidCookieResponse `shouldBe` Http.status403
       Wai.responseStatus missingCookieResponse `shouldBe` Http.status403
       Wai.responseStatus parameterizedContentTypeResponse `shouldBe` Http.status404
       Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
-      rejectedBodies `shouldBe` replicate 10 "{\"patches\":[],\"focusId\":null}"
+      rejectedBodies `shouldBe` replicate 11 "{\"patches\":[],\"focusId\":null}"
 
     it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
       receivedAction <- newIORef Nothing

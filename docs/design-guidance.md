@@ -207,7 +207,8 @@ The framework owns:
 - page route generation and the shared site dispatcher,
 - native/deferred navigation conventions and the immediate event-capture contract,
 - typed client-action responses, region replacement, and SSE transport,
-- server integration, request policy, security headers, proxy prefixes, and observability seams, and
+- server integration, request policy, security headers, proxy prefixes, observability seams, and the
+  private shared constant-work comparison primitive used by framework credential boundaries, and
 - accessible live-region helpers and browser-test infrastructure.
 
 The application owns:

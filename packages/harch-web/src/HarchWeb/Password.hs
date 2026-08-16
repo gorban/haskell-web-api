@@ -27,13 +27,13 @@ where
 import Crypto.Error (CryptoFailable (..))
 import Crypto.KDF.Argon2 qualified as Argon2
 import Crypto.Random.Entropy (getEntropy)
-import Data.Bits (xor, (.|.))
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word32, Word64)
+import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import Text.Read (readMaybe)
 
 newtype Password = Password ByteString.ByteString
@@ -145,7 +145,7 @@ verifyPassword (Password password) (PasswordHash storedHash) =
   case parsePasswordHash storedHash of
     Nothing -> False
     Just (policy, salt, expectedHash) ->
-      constantWorkEqual expectedHash (argon2Hash policy salt password)
+      constantWorkEquals expectedHash (argon2Hash policy salt password)
 
 argon2Hash :: PasswordHashingPolicy -> ByteString.ByteString -> ByteString.ByteString -> ByteString.ByteString
 argon2Hash policy salt password =
@@ -182,13 +182,3 @@ readWord32 = readMaybe . Text.unpack
 
 encodeBase64Url :: ByteString.ByteString -> Text
 encodeBase64Url = TextEncoding.decodeUtf8
-
-constantWorkEqual :: ByteString.ByteString -> ByteString.ByteString -> Bool
-constantWorkEqual expected actual =
-  let byteDifference =
-        foldl'
-          (.|.)
-          0
-          (ByteString.zipWith (\left right -> fromIntegral (left `xor` right)) expected actual)
-      lengthDifference = ByteString.length expected `xor` ByteString.length actual
-   in (byteDifference .|. lengthDifference) == 0
