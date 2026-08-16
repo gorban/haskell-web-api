@@ -7669,6 +7669,12 @@ spec = do
             { HarchWeb.requestRoute = EmailVerificationRoute,
               HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token"), ("flag", "")]}
             }
+      parseRoute defaultRequestContext "/verify?to%6Ben=opaque%2Dtoken%2Btwo&flag&token=%FF&to%FFken=ignored"
+        `shouldBe` Just
+          HarchWeb.RouteRequest
+            { HarchWeb.requestRoute = EmailVerificationRoute,
+              HarchWeb.requestContext = defaultRequestContext {requestQueryParameters = [("token", "opaque-token+two"), ("flag", "")]}
+            }
 
     it "keeps supported path routes available when raw query strings are present" $
       parseRoute defaultRequestContext "/second?utm=demo"

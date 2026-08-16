@@ -37,7 +37,7 @@ module WebApi.Route
 where
 
 import Data.Char (isAsciiLower)
-import Data.Maybe (mapMaybe)
+import Data.Maybe (fromMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -50,6 +50,7 @@ import HarchWeb.Session
     sessionCookieNameText,
   )
 import Network.HTTP.Types qualified as Http
+import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 import WebApi.Session (mfaEnrollmentSessionCookiePolicy)
 
@@ -266,14 +267,14 @@ routeQuery target =
     (_, queryText) ->
       case Text.uncons queryText of
         Nothing -> []
-        Just _ -> mapMaybe parsePair (Text.splitOn "&" (Text.drop 1 queryText))
+        Just _ -> mapMaybe parsePair (HttpUri.parseQuery (TextEncoding.encodeUtf8 (Text.drop 1 queryText)))
   where
-    parsePair pair =
-      case Text.breakOn "=" pair of
-        (key, value) ->
-          case Text.uncons key of
-            Nothing -> Nothing
-            Just _ -> Just (key, Text.drop 1 value)
+    parsePair (rawKey, rawValue) = do
+      key <- either (const Nothing) Just (TextEncoding.decodeUtf8' rawKey)
+      value <- either (const Nothing) Just (TextEncoding.decodeUtf8' (fromMaybe "" rawValue))
+      case Text.null key of
+        True -> Nothing
+        False -> Just (key, value)
 
 mergeRequestContext :: AppRequestContext -> Maybe AppLocale -> AppRequestContext
 mergeRequestContext requestContext maybeLocale =
