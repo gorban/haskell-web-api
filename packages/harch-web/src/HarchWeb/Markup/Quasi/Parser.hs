@@ -7,7 +7,7 @@ module HarchWeb.Markup.Quasi.Parser
   )
 where
 
-import Data.Char (isAlphaNum, isLower, isSpace, isUpper)
+import Data.Char (isAlphaNum, isLower, isSpace, toLower)
 import Data.List (intercalate)
 import Data.Maybe (fromMaybe)
 import Language.Haskell.TH (Loc, loc_filename, loc_start)
@@ -159,12 +159,7 @@ lowerInitial :: String -> String
 lowerInitial value =
   case value of
     [] -> []
-    firstCharacter : remaining -> toLowerAscii firstCharacter : remaining
-
-toLowerAscii :: Char -> Char
-toLowerAscii character
-  | isUpper character = toEnum (fromEnum character + 32)
-  | otherwise = character
+    firstCharacter : remaining -> toLower firstCharacter : remaining
 
 parseAttributes :: ParseState -> Either ParseError ([MarkupAttribute], Bool, ParseState)
 parseAttributes initialState = go [] (skipWhitespace initialState)

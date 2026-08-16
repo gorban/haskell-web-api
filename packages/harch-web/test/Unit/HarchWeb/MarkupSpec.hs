@@ -15,6 +15,9 @@ import TestCore.CustomAssertions (expectAll)
 import Unit.HarchWeb.MarkupComponents qualified as Account
 import Unit.HarchWeb.MarkupRejection (rejectedMarkup)
 
+turkishInitialComponent :: Html
+turkishInitialComponent = [harch|<Account.İtem itemLabel="Unicode component" />|]
+
 duplicateNamedPropertyRejected :: Bool
 duplicateNamedPropertyRejected =
   $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" heroTitle=\"Second\" />")
@@ -119,6 +122,9 @@ spec = do
             |]
       renderHtml quoted
         `shouldBe` "<section data-hero-card=\"true\"><h2>Second page</h2><p data-profile-card=\"true\">Ada</p></section>"
+
+    it "uses Unicode case mapping when lowering a component's initial character" $
+      renderHtml turkishInitialComponent `shouldBe` "Unicode component"
 
     it "passes computed children and heterogeneous positional props directly to components" $ do
       let computedChildren = [element paragraphTag [] [text "Computed child"]]

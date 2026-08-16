@@ -4,9 +4,11 @@ module Unit.HarchWeb.MarkupComponents
   ( AccountProfile (..),
     AvatarSize (..),
     HeroCardProps (..),
+    ItemProps (..),
     ProfileCardProps (..),
     TypedActionFormProps (..),
     heroCard,
+    item,
     profileCard,
     typedActionForm,
     userAvatar,
@@ -28,6 +30,13 @@ heroCard props children =
     sectionTag
     [dataAttribute "hero-card" "true"]
     (element headingTwoTag [] [text (heroTitle props)] : children)
+
+newtype ItemProps = ItemProps
+  { itemLabel :: Text
+  }
+
+item :: ItemProps -> [Html] -> Html
+item props _children = text (itemLabel props)
 
 newtype ProfileCardProps = ProfileCardProps
   { profileCardTitle :: Text
