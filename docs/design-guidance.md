@@ -116,6 +116,12 @@ scripts-disabled navigation. JavaScript enhances declared surfaces; it does not 
 exists. Native links remain navigable, and a modeled framework control must have an immediate capture
 path before it is shipped enabled; a native fallback is an explicit action capability, not a default.
 
+Every complete HTML response receives one fresh opaque CSP nonce from the framework's cryptographic
+entropy source. The server passes that same nonce to document rendering, CSP construction, and the
+CSRF cookie; non-page responses carry no nonce. `renderDocumentForTests` is intentionally deterministic
+and must only support golden markup tests—production callers use `renderDocumentWithNonce` with a
+freshly generated nonce, so no stable nonce can become a valid script capability.
+
 ### Apps have a small composition root
 
 The runnable starter is organized as:

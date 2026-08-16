@@ -128,9 +128,10 @@ spec = do
       case response of
         PageResponse page -> do
           let document = HarchWeb.pageShell siteApplication page
+          runtimeNonce <- HarchWeb.generateRuntimeNonce
           HarchWeb.documentRuntimeDescriptors document
             `shouldBe` [HarchWeb.defaultCaptureKernel, HarchWeb.DeferredModule "harch-navigation" "/assets/navigation.js"]
-          Text.isInfixOf "<script nonce=\"test-nonce\">" (HarchWeb.renderDocumentWithNonce (HarchWeb.RuntimeNonce "test-nonce") document)
+          Text.isInfixOf ("<script nonce=\"" <> HarchWeb.runtimeNonceValue runtimeNonce <> "\">") (HarchWeb.renderDocumentWithNonce runtimeNonce document)
             `shouldBe` True
         PageResponseWithMetadata _ _ ->
           expectationFailure "expected pageRoute to render a plain page response"
@@ -240,7 +241,7 @@ spec = do
           siteApplication = buildSiteApplication bareShellSite
           request = RouteRequest {requestRoute = HomeRoute, requestContext = SampleContext ""}
       PageResponse page <- HarchWeb.renderResponse siteApplication request
-      HarchWeb.renderDocument (HarchWeb.pageShell siteApplication page)
+      HarchWeb.renderDocumentForTests (HarchWeb.pageShell siteApplication page)
         `shouldBe` "<!DOCTYPE html><html><head><title>Home</title></head><body><nav data-navigation-region=\"primary\"><a href=\"/\" data-page-link=\"true\" aria-current=\"page\">Home</a><a href=\"/second\" data-page-link=\"true\">Second</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Home</h1><p><a href=\"/second\">Browse second</a></p></main></body></html>"
 
     it "does not duplicate a runtime module already supplied by the app shell" $ do

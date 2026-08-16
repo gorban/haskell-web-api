@@ -379,7 +379,7 @@ renderedShellForRequest :: AppConfig -> HarchWeb.RouteRequest AppRoute AppReques
 renderedShellForRequest config routeRequest = do
   let application = buildApp config
   page <- renderPage config routeRequest
-  pure (HarchWeb.renderDocument (HarchWeb.pageShell application page))
+  pure (HarchWeb.renderDocumentForTests (HarchWeb.pageShell application page))
 
 data CapturedOtlpRequest = CapturedOtlpRequest
   { capturedOtlpMethod :: ByteString.ByteString,
@@ -7864,7 +7864,7 @@ spec = do
       Text.isInfixOf "<title>test-app: Second</title>" secondShell `shouldBe` True
       Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" secondShell `shouldBe` True
       Text.isInfixOf "<title>test-app: Not Found</title>" notFoundShell `shouldBe` True
-      Text.isInfixOf "<script nonce=\"development-render-nonce\">" homeShell `shouldBe` True
+      Text.isInfixOf "<script nonce=\"" homeShell `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do

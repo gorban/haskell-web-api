@@ -66,6 +66,9 @@ data TestRoute
 trustedMarkup :: Text -> Html
 trustedMarkup = trustedHtml . MarkupUnsafe.unsafeTrustHtml
 
+renderDocument :: Document route -> Text
+renderDocument = renderDocumentForTests
+
 testRegionPatch :: Text -> Text -> RegionPatch
 testRegionPatch identifier message =
   replaceRegion
@@ -1758,8 +1761,6 @@ spec = do
           otherNavigationRuntime = NavigationRuntime {navigationRuntimePath = "/assets/other-navigation.js", navigationRuntimeScript = "console.log('other');"}
           inlineBootstrap = InlineBootstrap "capture" "window.capture = true;"
           otherInlineBootstrap = InlineBootstrap "other-capture" "window.capture = false;"
-          runtimeNonce = RuntimeNonce "test-nonce"
-          otherRuntimeNonce = RuntimeNonce "other-nonce"
           stylesheetPath = AssetPath "/assets/sample.css"
           otherStylesheetPath = AssetPath "/assets/other.css"
           stylesheetValue = stylesheet stylesheetPath
@@ -1818,6 +1819,8 @@ spec = do
           otherRegionPatch = testRegionPatch "other-region" "Other"
           clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+      runtimeNonce <- generateRuntimeNonce
+      otherRuntimeNonce <- generateRuntimeNonce
 
       (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
@@ -1842,8 +1845,8 @@ spec = do
       show inlineBootstrap `shouldBe` "InlineBootstrap {runtimeDescriptorName = \"capture\", runtimeDescriptorSource = \"window.capture = true;\"}"
       (runtimeNonce == runtimeNonce) `shouldBe` True
       (runtimeNonce /= otherRuntimeNonce) `shouldBe` True
-      show runtimeNonce `shouldBe` "RuntimeNonce {runtimeNonceValue = \"test-nonce\"}"
-      show [runtimeNonce] `shouldBe` "[RuntimeNonce {runtimeNonceValue = \"test-nonce\"}]"
+      show runtimeNonce `shouldContain` "RuntimeNonce {runtimeNonceValue = \""
+      show [runtimeNonce] `shouldContain` "[RuntimeNonce {runtimeNonceValue = \""
       (stylesheetPath == stylesheetPath) `shouldBe` True
       (stylesheetPath /= otherStylesheetPath) `shouldBe` True
       show stylesheetPath `shouldBe` "AssetPath {assetPathText = \"/assets/sample.css\"}"
@@ -1957,7 +1960,7 @@ spec = do
       renderDocument (pageShell sampleApplication (samplePage request))
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\"><h1>Known</h1></main></body></html>"
       Text.isInfixOf
-        "<script nonce=\"development-render-nonce\">window.capture = true;</script>"
+        "<script nonce=\""
         ( renderDocument
             ( (pageShell sampleApplication (samplePage request))
                 { documentRuntimeDescriptors = [InlineBootstrap "capture" "window.capture = true;"]
@@ -2156,6 +2159,20 @@ spec = do
         )
         `shouldBe` "<!DOCTYPE html><html><head><title>Known</title><script type=\"module\" src=\"/assets/navigation.js\" defer></script></head><body data-app=\"sample\"><nav data-navigation-region=\"primary\"><a href=\"/known\" data-page-link=\"true\" aria-current=\"page\">Known</a><a href=\"/404\" data-page-link=\"true\">Missing</a></nav><main id=\"app-main\" data-navigation-content=\"true\" data-bootstrap-hooks=\"known-page,hydrate-known\"><h1>Known</h1></main></body></html>"
 
+    it "generates a fresh unpadded 32-byte CSP nonce for each response" $ do
+      firstNonce <- generateRuntimeNonce
+      secondNonce <- generateRuntimeNonce
+      let firstValue = runtimeNonceValue firstNonce
+          secondValue = runtimeNonceValue secondNonce
+      expectAll
+        ( (Text.length firstValue `shouldBe` 43)
+            :| [ Text.length secondValue `shouldBe` 43,
+                 Text.isSuffixOf "=" firstValue `shouldBe` False,
+                 Text.isSuffixOf "=" secondValue `shouldBe` False,
+                 firstNonce /= secondNonce `shouldBe` True
+               ]
+        )
+
   describe "runRequestMiddlewarePipeline" $ do
     it "runs in declaration order, carries context forward, and stops after a halt" $ do
       visitedMiddleware <- newIORef ([] :: [Text])
@@ -2191,6 +2208,13 @@ spec = do
       showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
   describe "toWaiApplication" $ do
+    it "fails closed if a page response reaches rendering without its CSP nonce" $ do
+      let pageResponse = PageResponse (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}))
+          response = toWaiResponse [] Nothing sampleApplication pageResponse
+      Wai.responseStatus response `shouldBe` Http.status500
+      Wai.responseHeaders response `shouldBe` [(Http.hContentType, "text/html; charset=utf-8")]
+      readResponseBody response `shouldReturn` "A page response was missing its CSP nonce."
+
     it "runs app middleware for dynamic routes while preserving transformed context" $ do
       let middlewareApplication =
             sampleApplication

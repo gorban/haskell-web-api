@@ -12,7 +12,7 @@ module HarchWeb.Document
     PageShell (..),
     ResolvedNavigationItem (..),
     RuntimeDescriptor (..),
-    RuntimeNonce (..),
+    RuntimeNonce,
     buildNavigation,
     buildPageShell,
     defaultCaptureKernel,
@@ -23,12 +23,13 @@ module HarchWeb.Document
     generateRuntimeNonce,
     liveRegionAttributes,
     navigationRuntimeScriptSource,
-    renderDocument,
+    renderDocumentForTests,
     renderDocumentWithNonce,
+    runtimeNonceValue,
   )
 where
 
-import Data.ByteString qualified as ByteString
+import Crypto.Random.Entropy (getEntropy)
 import Data.ByteString.Base64.URL qualified as Base64Url
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -37,7 +38,6 @@ import HarchWeb.Markup (Html, renderHtml, text)
 import HarchWeb.PathPrefix (applyPathPrefix, mkPathPrefix, mkUrlPath, urlPathText)
 import HarchWeb.Routing (RouteCodec, routeHref)
 import HarchWeb.StaticAssets (AssetPath (..), Stylesheet (..))
-import System.IO (IOMode (ReadMode), withBinaryFile)
 
 data Page route context = Page
   { pageTitle :: Text,
@@ -518,14 +518,13 @@ defaultCaptureKernelScript =
 defaultCaptureKernelByteBudget :: Int
 defaultCaptureKernelByteBudget = 12288
 
+-- | Generates the 32-byte nonce that binds one complete HTML response to its
+-- CSP header. Nonces are opaque so raw text cannot be interpolated into the
+-- CSP or a script attribute; production rendering must obtain one here and
+-- pass the same value to 'renderDocumentWithNonce' and the response headers.
 generateRuntimeNonce :: IO RuntimeNonce
 generateRuntimeNonce =
-  withBinaryFile "/dev/urandom" ReadMode $ \randomHandle -> do
-    randomBytes <- ByteString.hGet randomHandle 32
-    pure
-      ( RuntimeNonce
-          (TextEncoding.decodeUtf8 (Base64Url.encode randomBytes))
-      )
+  RuntimeNonce . TextEncoding.decodeUtf8 . Base64Url.encodeUnpadded <$> getEntropy 32
 
 buildNavigation :: (Eq route) => RouteCodec route context -> Page route context -> [NavigationItem route] -> [ResolvedNavigationItem route]
 buildNavigation codec page =
@@ -554,8 +553,12 @@ buildPageShell codec shell page =
       documentRuntimeDescriptors = shellRuntimeDescriptors shell
     }
 
-renderDocument :: Document route -> Text
-renderDocument = renderDocumentWithNonce (RuntimeNonce "development-render-nonce")
+-- | Renders deterministic markup for tests only. It deliberately has a
+-- test-only name because its fixed nonce must never be paired with a
+-- production CSP header; use 'renderDocumentWithNonce' with a freshly
+-- generated 'RuntimeNonce' for every real response.
+renderDocumentForTests :: Document route -> Text
+renderDocumentForTests = renderDocumentWithNonce testRuntimeNonce
 
 -- | Decision record (AS/AT/CR): this function, 'renderStylesheets',
 -- 'renderNavigationItem', and 'renderRuntimeDescriptor'\'s 'DeferredModule'
@@ -595,6 +598,9 @@ renderDocumentWithNonce runtimeNonce document =
       renderHtml (documentMainContent document),
       "</main></body></html>"
     ]
+
+testRuntimeNonce :: RuntimeNonce
+testRuntimeNonce = RuntimeNonce "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY"
 
 liveRegionAttributes :: LiveRegion -> [HtmlAttribute]
 liveRegionAttributes liveRegion =

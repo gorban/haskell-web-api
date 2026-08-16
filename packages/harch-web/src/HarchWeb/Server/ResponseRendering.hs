@@ -37,31 +37,19 @@ applyResponseHeaders :: Http.ResponseHeaders -> Wai.Response -> Wai.Response
 applyResponseHeaders additionalHeaders =
   Wai.mapResponseHeaders (additionalHeaders <>)
 
-responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Document.RuntimeNonce -> Response route context -> Http.ResponseHeaders
-responsePolicyHeaders requestPolicyConfig request runtimeNonce response =
-  requestPolicyResponseHeadersWithNonce
-    requestPolicyConfig
-    request
-    ( case response of
-        PageResponse _ -> Just runtimeNonce
-        PageResponseWithMetadata _ _ -> Just runtimeNonce
-        BodyResponse _ -> Nothing
-        RedirectResponse _ _ -> Nothing
-        ClientActionBodyResponse _ -> Nothing
-        EventStreamResponse _ _ -> Nothing
-        ProtocolResponseResult _ -> Nothing
-    )
+responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Maybe Document.RuntimeNonce -> Http.ResponseHeaders
+responsePolicyHeaders = requestPolicyResponseHeadersWithNonce
 
-responseRuntimeNonce :: Response route context -> IO Document.RuntimeNonce
+responseRuntimeNonce :: Response route context -> IO (Maybe Document.RuntimeNonce)
 responseRuntimeNonce response =
   case response of
-    PageResponse _ -> Document.generateRuntimeNonce
-    PageResponseWithMetadata _ _ -> Document.generateRuntimeNonce
-    BodyResponse _ -> pure $! Document.RuntimeNonce ""
-    RedirectResponse _ _ -> pure $! Document.RuntimeNonce ""
-    ClientActionBodyResponse _ -> pure $! Document.RuntimeNonce ""
-    EventStreamResponse _ _ -> pure $! Document.RuntimeNonce ""
-    ProtocolResponseResult _ -> pure $! Document.RuntimeNonce ""
+    PageResponse _ -> Just <$> Document.generateRuntimeNonce
+    PageResponseWithMetadata _ _ -> Just <$> Document.generateRuntimeNonce
+    BodyResponse _ -> pure Nothing
+    RedirectResponse _ _ -> pure Nothing
+    ClientActionBodyResponse _ -> pure Nothing
+    EventStreamResponse _ _ -> pure Nothing
+    ProtocolResponseResult _ -> pure Nothing
 
 redirectResponse :: Int -> Text -> Response route context
 redirectResponse status =
@@ -123,30 +111,39 @@ responseKind response =
 toWaiResponse ::
   (Eq route) =>
   Http.ResponseHeaders ->
-  Document.RuntimeNonce ->
+  Maybe Document.RuntimeNonce ->
   Application route action context ->
   Response route context ->
   Wai.Response
-toWaiResponse additionalHeaders runtimeNonce webApplication response =
+toWaiResponse additionalHeaders maybeRuntimeNonce webApplication response =
   case response of
     PageResponse page ->
-      Wai.responseLBS
+      renderPageResponse
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
-        (pageResponseHeaders additionalHeaders runtimeNonce)
-        (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+        page
     PageResponseWithMetadata pageResponseBodyValue page ->
       let !pageStatusMessage = ByteString.empty
           !pageStatusMessageLength = ByteString.length pageStatusMessage
           !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
-       in Wai.responseLBS
-            pageStatus
-            (pageResponseHeaders additionalHeaders runtimeNonce)
-            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+       in renderPageResponse pageStatus page
     BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
     EventStreamResponse responseBodyValue eventSource -> toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource
     ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
+  where
+    renderPageResponse status page =
+      case maybeRuntimeNonce of
+        Just runtimeNonce ->
+          Wai.responseLBS
+            status
+            (pageResponseHeaders additionalHeaders runtimeNonce)
+            (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
+        Nothing ->
+          Wai.responseLBS
+            Http.internalServerError500
+            [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
+            "A page response was missing its CSP nonce."
 
 pageResponseHeaders :: Http.ResponseHeaders -> Document.RuntimeNonce -> Http.ResponseHeaders
 pageResponseHeaders additionalHeaders runtimeNonce =

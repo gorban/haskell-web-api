@@ -62,7 +62,7 @@ import Data.Maybe (catMaybes, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Document (RuntimeNonce (..))
+import HarchWeb.Document (RuntimeNonce, runtimeNonceValue)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.PathPrefix qualified as PathPrefix
 import HarchWeb.Security.RequestLimits

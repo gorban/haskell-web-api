@@ -436,7 +436,7 @@ finalizeRoutedResponse ::
   RequestExecutionTimings ->
   RouteRequest route context ->
   Bool ->
-  Document.RuntimeNonce ->
+  Maybe Document.RuntimeNonce ->
   Response route context ->
   IO Wai.ResponseReceived
 finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omitResponseBody runtimeNonce response = do
@@ -452,7 +452,7 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omit
     respond
       ( omitResponseBodyWhen
           omitResponseBody
-          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce response) (toWaiResponse [] runtimeNonce webApplication response))
+          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce) (toWaiResponse [] runtimeNonce webApplication response))
       )
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue

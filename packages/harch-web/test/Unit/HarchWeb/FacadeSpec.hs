@@ -15,7 +15,7 @@ spec =
     it "exposes supported framework authoring and extension entry points" $ do
       defaultCaptureKernel `seq`
         defaultNavigationRuntime `seq`
-          renderDocument `seq`
+          renderDocumentForTests `seq`
             staticAssetHref `seq`
               routeHref `seq`
                 facadeWaiApplication `seq`
