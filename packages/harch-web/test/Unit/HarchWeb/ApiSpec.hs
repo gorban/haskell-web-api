@@ -1024,6 +1024,8 @@ spec =
               ( (declaredName `shouldBe` apiHeaderName "x-token")
                   :| [ declaredName `shouldNotBe` apiHeaderName "x-other",
                        apiHeaderNameText declaredName `shouldBe` "x-token",
+                       apiHeaderName "\8490" `shouldNotBe` apiHeaderName "k",
+                       apiHeaderNameText (apiHeaderName "\8490") `shouldBe` "\8490",
                        length (show declaredName) + length (showList [declaredName] "") `shouldSatisfy` (> 0)
                      ]
               )

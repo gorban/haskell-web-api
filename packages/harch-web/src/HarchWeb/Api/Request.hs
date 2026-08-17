@@ -30,6 +30,7 @@ where
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
+import Data.Char (chr, isAsciiUpper, ord)
 import Data.Functor.Compose (Compose (..), getCompose)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -113,7 +114,15 @@ newtype ApiHeaderName = ApiHeaderName Text
   deriving (Eq, Show)
 
 apiHeaderName :: Text -> ApiHeaderName
-apiHeaderName = ApiHeaderName . Text.toCaseFold
+apiHeaderName = ApiHeaderName . Text.map asciiLower
+
+-- HTTP field names are ASCII protocol tokens. Unicode case folding would make
+-- unrelated non-ASCII text (such as the Kelvin sign) collide with a valid
+-- ASCII header name.
+asciiLower :: Char -> Char
+asciiLower character
+  | isAsciiUpper character = chr (ord character + 32)
+  | otherwise = character
 
 apiHeaderNameText :: ApiHeaderName -> Text
 apiHeaderNameText (ApiHeaderName name) = name
