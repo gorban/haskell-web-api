@@ -15,12 +15,13 @@ import Data.Maybe (maybeToList)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Server.Response
+import Network.HTTP.Types qualified as Http
 
 eventStreamResponse :: ServerSentEventSource -> Response route context
 eventStreamResponse =
   EventStreamResponse
     ResponseBody
-      { responseStatus = 200,
+      { responseStatus = Http.status200,
         responseContentType = serverSentEventContentType,
         responseBody = Text.empty,
         responseObservabilityAttributes = [],

@@ -15,6 +15,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Username qualified as Username
+import Network.HTTP.Types qualified as Http
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import WebApi.Account
@@ -145,7 +146,7 @@ spec =
               Nothing -> expectationFailure "expected a profile client-action response"
               Just response ->
                 expectAll
-                  ( (HarchWeb.clientActionStatus response `shouldBe` expectedStatus)
+                  ( (Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` expectedStatus)
                       :| [ HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId),
                            HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml),
                            length (show response) `shouldSatisfy` (> 0)
@@ -269,7 +270,7 @@ responseStatus :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> I
 responseStatus response =
   case response of
     HarchWeb.PageResponse _ -> 200
-    HarchWeb.PageResponseWithMetadata metadata _ -> HarchWeb.responseStatus metadata
+    HarchWeb.PageResponseWithMetadata metadata _ -> Http.statusCode (HarchWeb.responseStatus metadata)
     _ -> 0
 
 responsePageTitle :: HarchWeb.Response AppRoute WebApi.Route.AppRequestContext -> Text

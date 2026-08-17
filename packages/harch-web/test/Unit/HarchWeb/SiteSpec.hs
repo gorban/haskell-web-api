@@ -205,7 +205,7 @@ spec = do
                           pure
                             ( BodyResponse
                                 ResponseBody
-                                  { responseStatus = 200,
+                                  { responseStatus = Http.status200,
                                     responseContentType = "application/json",
                                     responseBody = "{\"status\":\"ok\"}",
                                     responseObservabilityAttributes = [],
@@ -337,7 +337,7 @@ apiRouteDefinition =
           pure
             ( BodyResponse
                 ResponseBody
-                  { responseStatus = 200,
+                  { responseStatus = Http.status200,
                     responseContentType = "application/json",
                     responseBody = "{\"status\":\"ok\"}",
                     responseObservabilityAttributes = [],

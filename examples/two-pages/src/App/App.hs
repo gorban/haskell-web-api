@@ -61,6 +61,7 @@ import HarchWeb.Site
     simpleSite,
   )
 import HarchWeb.Site qualified as Site
+import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
@@ -119,7 +120,7 @@ twoPageClientAction actionRequest =
                 | "@" `Text.isInfixOf` value,
                   "." `Text.isInfixOf` value ->
                     ClientActionResponse
-                      { clientActionStatus = 200,
+                      { clientActionStatus = Http.status200,
                         clientActionPatches = subscriptionPatch "status" "Thanks. Your subscription request is ready.",
                         clientActionFocusId = Nothing,
                         clientActionHeaders = [],
@@ -128,7 +129,7 @@ twoPageClientAction actionRequest =
                       }
               _ ->
                 ClientActionResponse
-                  { clientActionStatus = 422,
+                  { clientActionStatus = Http.status422,
                     clientActionPatches = subscriptionPatch "alert" "Enter a valid email address.",
                     clientActionFocusId = Just "subscription-email",
                     clientActionHeaders = [],
@@ -170,7 +171,7 @@ nativeFallbackBodyTooLarge requestContext =
   HaltMiddleware
     requestContext
     ResponseBody
-      { responseStatus = 413,
+      { responseStatus = Http.status413,
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback request body is too large.",
         responseObservabilityAttributes = [],
@@ -182,7 +183,7 @@ nativeFallbackTooManyFields requestContext =
   HaltMiddleware
     requestContext
     ResponseBody
-      { responseStatus = 413,
+      { responseStatus = Http.status413,
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback request has too many form fields.",
         responseObservabilityAttributes = [],
@@ -194,7 +195,7 @@ nativeFallbackCsrfRejected requestContext =
   HaltMiddleware
     requestContext
     ResponseBody
-      { responseStatus = 403,
+      { responseStatus = Http.status403,
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback CSRF validation failed.",
         responseObservabilityAttributes = [],

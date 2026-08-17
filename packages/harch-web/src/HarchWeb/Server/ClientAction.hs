@@ -29,6 +29,7 @@ import HarchWeb.Markup (regionPatchHtml, regionPatchId)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import HarchWeb.Server.Response
+import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
 
@@ -126,7 +127,7 @@ clientActionProtocolErrorResponse protocolError =
         }
 
 data ClientActionProtocolErrorDetails = ClientActionProtocolErrorDetails
-  { clientActionErrorStatus :: Int,
+  { clientActionErrorStatus :: Http.Status,
     clientActionErrorObservabilityAttributes :: [Observability.ObservabilityAttribute],
     clientActionErrorLogEntries :: [Text]
   }
@@ -134,15 +135,15 @@ data ClientActionProtocolErrorDetails = ClientActionProtocolErrorDetails
 clientActionProtocolErrorDetails :: ClientActionProtocolError -> ClientActionProtocolErrorDetails
 clientActionProtocolErrorDetails protocolError =
   case protocolError of
-    InvalidClientActionEncoding -> ordinaryClientActionError 400
-    ClientActionBodyTooLarge -> ordinaryClientActionError 413
-    ClientActionFieldCountExceeded -> ordinaryClientActionError 413
-    ClientActionUnsupportedMediaType -> ordinaryClientActionError 415
-    ClientActionOriginRejected -> ordinaryClientActionError 403
-    ClientActionCsrfRejected -> ordinaryClientActionError 403
+    InvalidClientActionEncoding -> ordinaryClientActionError Http.status400
+    ClientActionBodyTooLarge -> ordinaryClientActionError Http.status413
+    ClientActionFieldCountExceeded -> ordinaryClientActionError Http.status413
+    ClientActionUnsupportedMediaType -> ordinaryClientActionError Http.status415
+    ClientActionOriginRejected -> ordinaryClientActionError Http.status403
+    ClientActionCsrfRejected -> ordinaryClientActionError Http.status403
     ClientActionPayloadMalformed ->
       ClientActionProtocolErrorDetails
-        { clientActionErrorStatus = 400,
+        { clientActionErrorStatus = Http.status400,
           clientActionErrorObservabilityAttributes =
             [ Observability.ObservabilityAttribute
                 { Observability.attributeName = "harch.client_action.decode_failure",
@@ -151,9 +152,9 @@ clientActionProtocolErrorDetails protocolError =
             ],
           clientActionErrorLogEntries = ["client action decode failure: malformed"]
         }
-    ClientActionNotFound -> ordinaryClientActionError 404
+    ClientActionNotFound -> ordinaryClientActionError Http.status404
 
-ordinaryClientActionError :: Int -> ClientActionProtocolErrorDetails
+ordinaryClientActionError :: Http.Status -> ClientActionProtocolErrorDetails
 ordinaryClientActionError status =
   ClientActionProtocolErrorDetails
     { clientActionErrorStatus = status,
@@ -164,7 +165,7 @@ ordinaryClientActionError status =
 clientActionMethodNotAllowedResponse :: NonEmpty.NonEmpty ActionMethod -> ClientActionResponse
 clientActionMethodNotAllowedResponse allowedMethods =
   ClientActionResponse
-    { clientActionStatus = 405,
+    { clientActionStatus = Http.status405,
       clientActionPatches = [],
       clientActionFocusId = Nothing,
       clientActionHeaders =

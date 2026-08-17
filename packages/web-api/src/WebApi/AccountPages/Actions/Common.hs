@@ -166,7 +166,7 @@ mfaEnrollmentSessionStoreErrorMessage storeError =
     MfaEnrollmentSessionStoreUnavailable -> "MFA enrollment session store unavailable"
     MfaEnrollmentSessionStoreCorruptData -> "MFA enrollment session store returned corrupt data"
 
-registrationResponse :: AppLocale -> AppRequestContext -> Int -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
+registrationResponse :: AppLocale -> AppRequestContext -> Http.Status -> RegistrationForm -> Maybe Text -> HarchWeb.ClientActionResponse
 registrationResponse locale requestContext status form focusId =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
@@ -177,7 +177,7 @@ registrationResponse locale requestContext status form focusId =
       HarchWeb.clientActionLogEntries = []
     }
 
-verificationResponse :: AppLocale -> AppRequestContext -> Int -> VerificationForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+verificationResponse :: AppLocale -> AppRequestContext -> Http.Status -> VerificationForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
 verificationResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
@@ -188,7 +188,7 @@ verificationResponse locale requestContext status form focusId headers =
       HarchWeb.clientActionLogEntries = []
     }
 
-mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Int -> MfaEnrollmentForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+mfaEnrollmentResponse :: AppLocale -> AppRequestContext -> Http.Status -> MfaEnrollmentForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
 mfaEnrollmentResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
@@ -199,7 +199,7 @@ mfaEnrollmentResponse locale requestContext status form focusId headers =
       HarchWeb.clientActionLogEntries = []
     }
 
-loginResponse :: AppLocale -> AppRequestContext -> Int -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+loginResponse :: AppLocale -> AppRequestContext -> Http.Status -> LoginForm -> Maybe Text -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
 loginResponse locale requestContext status form focusId headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
@@ -210,7 +210,7 @@ loginResponse locale requestContext status form focusId headers =
       HarchWeb.clientActionLogEntries = []
     }
 
-logoutResponse :: AppLocale -> AppRequestContext -> Int -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
+logoutResponse :: AppLocale -> AppRequestContext -> Http.Status -> Maybe Text -> Bool -> Http.ResponseHeaders -> HarchWeb.ClientActionResponse
 logoutResponse locale requestContext status message isError headers =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,
@@ -221,7 +221,7 @@ logoutResponse locale requestContext status message isError headers =
       HarchWeb.clientActionLogEntries = []
     }
 
-profileResponse :: AccountActionRequest -> Int -> PendingProfileForm -> HarchWeb.ClientActionResponse
+profileResponse :: AccountActionRequest -> Http.Status -> PendingProfileForm -> HarchWeb.ClientActionResponse
 profileResponse actionRequest status form =
   HarchWeb.ClientActionResponse
     { HarchWeb.clientActionStatus = status,

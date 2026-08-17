@@ -25,6 +25,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Observability qualified as Observability
+import Network.HTTP.Types qualified as Http
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), PageRepository, defaultPageRepository)
@@ -51,7 +52,7 @@ selectResponse config =
 selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponseWithDatabase config pageRepository routeRequest =
   if isHomePageRequest routeRequest
-    then pure (HarchWeb.redirectResponse 302 (spacesLocation routeRequest))
+    then pure (HarchWeb.redirectResponse Http.status302 (spacesLocation routeRequest))
     else
       fmap
         ( \routeDataSelection ->
@@ -137,16 +138,16 @@ renderApiResponseFromRouteDataWithOperations :: [DatabaseOperation] -> RouteData
 renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
   case routeData of
     StatusApiDataResult statusApiData ->
-      jsonResponseBodyWithOperations 200 (statusApiBody statusApiData) databaseOperations
+      jsonResponseBodyWithOperations Http.status200 (statusApiBody statusApiData) databaseOperations
     SecondRouteDataResult (Right secondRouteData) ->
-      jsonResponseBodyWithOperations 200 (secondRouteApiBody secondRouteData) databaseOperations
+      jsonResponseBodyWithOperations Http.status200 (secondRouteApiBody secondRouteData) databaseOperations
     SecondRouteDataResult (Left databaseError) ->
       jsonErrorResponseBody
-        503
+        Http.status503
         (jsonErrorBody "second-page-unavailable")
         (pageFailureDiagnostics ApiFailureSurface "/second" "second-page" databaseOperations databaseError)
     _ ->
-      jsonResponseBodyWithOperations 404 (jsonErrorBody "not-found") databaseOperations
+      jsonResponseBodyWithOperations Http.status404 (jsonErrorBody "not-found") databaseOperations
 
 statusApiBody :: StatusApiData -> JsonEncoding.Encoding
 statusApiBody statusApiData =
@@ -172,7 +173,7 @@ renderLocale locale =
     English -> "en"
     Spanish -> "es"
 
-jsonResponseBodyWithOperations :: Int -> JsonEncoding.Encoding -> [DatabaseOperation] -> HarchWeb.ResponseBody
+jsonResponseBodyWithOperations :: Http.Status -> JsonEncoding.Encoding -> [DatabaseOperation] -> HarchWeb.ResponseBody
 jsonResponseBodyWithOperations statusCode bodyValue databaseOperations =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = statusCode,
@@ -182,7 +183,7 @@ jsonResponseBodyWithOperations statusCode bodyValue databaseOperations =
       HarchWeb.responseLogEntries = []
     }
 
-jsonErrorResponseBody :: Int -> JsonEncoding.Encoding -> FailureDiagnostics -> HarchWeb.ResponseBody
+jsonErrorResponseBody :: Http.Status -> JsonEncoding.Encoding -> FailureDiagnostics -> HarchWeb.ResponseBody
 jsonErrorResponseBody statusCode bodyValue diagnostics =
   HarchWeb.ResponseBody
     { HarchWeb.responseStatus = statusCode,
@@ -198,7 +199,7 @@ jsonText = TextEncoding.decodeUtf8 . LazyByteString.toStrict . JsonEncoding.enco
 pageSuccessResponseMetadata :: [DatabaseOperation] -> HarchWeb.ResponseBody
 pageSuccessResponseMetadata databaseOperations =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = 200,
+    { HarchWeb.responseStatus = Http.status200,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
       HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
@@ -208,7 +209,7 @@ pageSuccessResponseMetadata databaseOperations =
 pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
 pageErrorResponseMetadata diagnostics =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = 500,
+    { HarchWeb.responseStatus = Http.status500,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,

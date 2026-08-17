@@ -562,7 +562,7 @@ spec =
                 clientActionRequestIdempotencyKey = Nothing,
                 clientActionContext = ()
               }
-        fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just 422
+        fmap HarchWeb.clientActionStatus invalidAction `shouldBe` Just Http.status422
 
 isCompletePageResponse :: HarchWeb.Response TwoPageRoute () -> Bool
 isCompletePageResponse response =

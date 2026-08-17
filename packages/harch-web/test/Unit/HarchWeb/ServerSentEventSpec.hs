@@ -14,6 +14,7 @@ import HarchWeb
     serverSentEventContentType,
     serverSentEventSourceFromList,
   )
+import Network.HTTP.Types qualified as Http
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
@@ -45,20 +46,20 @@ spec =
     it "uses an opaque source in response display output" $ do
       source <- serverSentEventSourceFromList []
       show (eventStreamResponse source :: Response () ())
-        `shouldBe` "EventStreamResponse (ResponseBody {responseStatus = 200, responseContentType = \"text/event-stream; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [], responseLogEntries = []}) <event-source>"
+        `shouldBe` "EventStreamResponse (ResponseBody {responseStatus = Status {statusCode = 200, statusMessage = \"OK\"}, responseContentType = \"text/event-stream; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [], responseLogEntries = []}) <event-source>"
 
     it "compares opaque streams by their safe metadata and renders every response form" $ do
       firstSource <- serverSentEventSourceFromList []
       secondSource <- serverSentEventSourceFromList []
-      let responseBodyValue = ResponseBody 204 "text/plain; charset=utf-8" "Done" [] []
-          actionResponse = ClientActionResponse 200 [] Nothing [] [] []
+      let responseBodyValue = ResponseBody Http.status204 "text/plain; charset=utf-8" "Done" [] []
+          actionResponse = ClientActionResponse Http.status200 [] Nothing [] [] []
           streamResponse = eventStreamResponse firstSource :: Response () ()
           clientActionResponse = ClientActionBodyResponse actionResponse :: Response () ()
       expectAll
         ( (streamResponse `shouldBe` eventStreamResponse secondSource)
             :| [ clientActionResponse `shouldBe` clientActionResponse,
                  streamResponse `shouldNotBe` BodyResponse responseBodyValue,
-                 showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = 204, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/next\")",
-                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = 200, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
+                 showsPrec 11 (RedirectResponse responseBodyValue "/next" :: Response () ()) "" `shouldBe` "(RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 204, statusMessage = \"No Content\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Done\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/next\")",
+                 showsPrec 11 clientActionResponse "" `shouldBe` "(ClientActionBodyResponse (ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))"
                ]
         )

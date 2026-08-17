@@ -73,7 +73,7 @@ navigationRuntimeResponse runtime requestPath =
     then
       Just
         ResponseBody
-          { responseStatus = 200,
+          { responseStatus = Http.status200,
             responseContentType = "application/javascript; charset=utf-8",
             responseBody = Document.navigationRuntimeScript runtime,
             responseObservabilityAttributes = [],

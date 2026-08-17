@@ -532,7 +532,7 @@ renderSampleResponse request =
     QueryRoute queryString ->
       BodyResponse
         ResponseBody
-          { responseStatus = 200,
+          { responseStatus = Http.status200,
             responseContentType = "text/plain; charset=utf-8",
             responseBody = queryString,
             responseObservabilityAttributes = [],
@@ -541,7 +541,7 @@ renderSampleResponse request =
     DataRoute ->
       BodyResponse
         ResponseBody
-          { responseStatus = 202,
+          { responseStatus = Http.status202,
             responseContentType = "application/json",
             responseBody = "{\"route\":\"data\"}",
             responseObservabilityAttributes = [],
@@ -550,7 +550,7 @@ renderSampleResponse request =
     EventStreamRoute ->
       BodyResponse
         ResponseBody
-          { responseStatus = 501,
+          { responseStatus = Http.status501,
             responseContentType = "text/plain; charset=utf-8",
             responseBody = "event stream not configured",
             responseObservabilityAttributes = [],
@@ -1627,7 +1627,7 @@ spec = do
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          responseBodyValue = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+          responseBodyValue = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
           clientActionPayload =
             ClientActionPayload
               { clientActionMethod = "POST",
@@ -1645,7 +1645,7 @@ spec = do
                 clientActionContext = defaultContext
               }
           regionPatch = testRegionPatch "status-region" "Ready"
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
           NavigationItem {navigationLabel = navigationItemLabel, navigationRoute = navigationItemRoute} = navigationItem
           ResolvedNavigationItem {navigationLabel = resolvedNavigationItemLabel, navigationRoute = resolvedNavigationItemRoute, navigationHref = resolvedNavigationItemHref, navigationIsActive = resolvedNavigationItemIsActive} = resolvedNavigationItem
 
@@ -1666,7 +1666,7 @@ spec = do
       navigationRuntimeResponse navigationRuntime "/assets/navigation.js"
         `shouldBe` Just
           ResponseBody
-            { responseStatus = 200,
+            { responseStatus = Http.status200,
               responseContentType = "application/javascript; charset=utf-8",
               responseBody = "console.log('nav');",
               responseObservabilityAttributes = [],
@@ -1716,7 +1716,7 @@ spec = do
       requestContextFromRequest sampleApplication Wai.defaultRequest defaultContext `shouldBe` defaultContext
       applicationNavigationRuntime sampleApplication `shouldBe` Nothing
       length (applicationRequestMiddleware sampleApplication) `shouldBe` 0
-      responseStatus responseBodyValue `shouldBe` 202
+      responseStatus responseBodyValue `shouldBe` Http.status202
       responseContentType responseBodyValue `shouldBe` "application/json"
       responseBody responseBodyValue `shouldBe` "{\"route\":\"data\"}"
       responseObservabilityAttributes responseBodyValue `shouldBe` []
@@ -1732,7 +1732,7 @@ spec = do
       clientActionContext clientActionRequest `shouldBe` defaultContext
       regionPatchId regionPatch `shouldBe` "status-region"
       regionPatchHtml regionPatch `shouldBe` "<p id=\"status-region\" data-harch-region=\"true\">Ready</p>"
-      clientActionStatus clientActionResponse `shouldBe` 200
+      clientActionStatus clientActionResponse `shouldBe` Http.status200
       clientActionPatches clientActionResponse `shouldBe` [regionPatch]
       clientActionFocusId clientActionResponse `shouldBe` Nothing
       clientActionHeaders clientActionResponse `shouldBe` []
@@ -1781,10 +1781,10 @@ spec = do
           otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellStylesheets = [], shellRuntimeDescriptors = []}
-          body = ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
-          otherBody = ResponseBody {responseStatus = 200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
-          pageMetadata = ResponseBody {responseStatus = 500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
-          otherPageMetadata = ResponseBody {responseStatus = 503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"]}
+          body = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+          otherBody = ResponseBody {responseStatus = Http.status200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
+          pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
+          otherPageMetadata = ResponseBody {responseStatus = Http.status503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"]}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
           otherPageResponse :: Response TestRoute TestContext
@@ -1817,8 +1817,8 @@ spec = do
               }
           regionPatch = testRegionPatch "status-region" "Ready"
           otherRegionPatch = testRegionPatch "other-region" "Other"
-          clientActionResponse = ClientActionResponse {clientActionStatus = 200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
-          otherClientActionResponse = ClientActionResponse {clientActionStatus = 422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          clientActionResponse = ClientActionResponse {clientActionStatus = Http.status200, clientActionPatches = [regionPatch], clientActionFocusId = Just "email", clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
+          otherClientActionResponse = ClientActionResponse {clientActionStatus = Http.status422, clientActionPatches = [otherRegionPatch], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce
 
@@ -1894,24 +1894,24 @@ spec = do
         )
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
-      show body `shouldBe` "ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
-      show [body] `shouldBe` "[ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
+      show body `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
+      show [body] `shouldBe` "[ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
       (pageMetadata == pageMetadata) `shouldBe` True
       (pageMetadata /= otherPageMetadata) `shouldBe` True
-      show pageMetadata `shouldBe` "ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}"
+      show pageMetadata `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (pageResponseWithMetadata == pageResponseWithMetadata) `shouldBe` True
       (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
-      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
-      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
       (redirectResponseValue == redirectResponseValue) `shouldBe` True
       (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
-      show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/spaces\""
-      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = 500, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = 202, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/spaces\""
+      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
       show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
@@ -1922,8 +1922,8 @@ spec = do
       show [regionPatch] `shouldContain` "ReplaceRegion"
       (clientActionResponse == clientActionResponse) `shouldBe` True
       (clientActionResponse /= otherClientActionResponse) `shouldBe` True
-      show clientActionResponse `shouldContain` "ClientActionResponse {clientActionStatus = 200"
-      show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = 200"
+      show clientActionResponse `shouldContain` "ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}"
+      show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}"
 
     it "reads the Application fields directly without relying on higher-level helpers" $ do
       let request = RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
@@ -1987,7 +1987,7 @@ spec = do
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse ResponseBody {responseStatus = 202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+        `shouldReturn` BodyResponse ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
 
     it "renders a direct route with WAI's empty request rather than ambient transport state" $ do
       observedRequest <- newIORef Nothing
@@ -1995,10 +1995,10 @@ spec = do
             sampleApplication
               { renderRequestResponse = \request _ -> do
                   writeIORef observedRequest (Just request)
-                  pure (BodyResponse (ResponseBody 200 "text/plain" "probe" [] []))
+                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] []))
               }
       renderResponse applicationWithRequestProbe (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse (ResponseBody 200 "text/plain" "probe" [] [])
+        `shouldReturn` BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [])
       capturedRequest <- readIORef observedRequest
       fmap Wai.rawPathInfo capturedRequest `shouldBe` Just ""
 
@@ -2176,7 +2176,7 @@ spec = do
   describe "runRequestMiddlewarePipeline" $ do
     it "runs in declaration order, carries context forward, and stops after a halt" $ do
       visitedMiddleware <- newIORef ([] :: [Text])
-      let responseBodyValue = ResponseBody {responseStatus = 401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
           continuedResult = ContinueMiddleware spanishContext
           haltedResult = HaltMiddleware spanishContext responseBodyValue
           enrichMiddleware =
@@ -2203,9 +2203,9 @@ spec = do
       continuedResult == haltedResult `shouldBe` False
       continuedResult /= haltedResult `shouldBe` True
       show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"})"
-      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
-      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
-      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = 401, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
 
   describe "toWaiApplication" $ do
     it "fails closed if a page response reaches rendering without its CSP nonce" $ do
@@ -2230,7 +2230,7 @@ spec = do
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
 
     it "halts dynamic requests without bypassing framework response headers" $ do
-      let responseBodyValue = ResponseBody {responseStatus = 401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
           middlewareApplication =
             sampleApplication
               { applicationRequestMiddleware =
@@ -2257,7 +2257,7 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication eventApplication) (waiRequest ["events"])
       Wai.responseStatus response `shouldBe` Http.status200
-      Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` "OK"
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/event-stream; charset=utf-8"
       lookup "Cache-Control" (Wai.responseHeaders response) `shouldBe` Just "no-cache"
       lookup "X-Accel-Buffering" (Wai.responseHeaders response) `shouldBe` Just "no"
@@ -2322,7 +2322,7 @@ spec = do
                   pure
                     ( Just
                         ClientActionResponse
-                          { clientActionStatus = 422,
+                          { clientActionStatus = Http.status422,
                             clientActionPatches = [testRegionPatch "status-region" "Enter a valid email address."],
                             clientActionFocusId = Just "email",
                             clientActionHeaders = [("Set-Cookie", "session=opaque")],
@@ -2506,7 +2506,7 @@ spec = do
                   ),
                 handleClientAction = \decodedActionRequest -> do
                   writeIORef receivedAction (Just decodedActionRequest)
-                  pure (Just (ClientActionResponse 204 [] Nothing [] [] []))
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
               }
           actionRequest =
             Wai.setRequestBodyChunks
@@ -2538,7 +2538,7 @@ spec = do
             sampleApplication
               { renderRequestResponse = \request routeRequest -> do
                   atomicModifyIORef' routedRequests (\requests -> (requests <> [(Wai.requestMethod request, requestRoute routeRequest)], ()))
-                  pure (BodyResponse (ResponseBody 200 "text/plain" "recorded" [] []))
+                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "recorded" [] []))
               }
           requestFor requestMethodValue path = Wai.defaultRequest {Wai.requestMethod = requestMethodValue, Wai.rawPathInfo = path}
       notFoundResponse <- performWaiRequest (toWaiApplication recordingApplication) (requestFor "GET" "/missing")
@@ -2557,7 +2557,7 @@ spec = do
           responseBodyValue =
             clientActionResponseBody
               ClientActionResponse
-                { clientActionStatus = 422,
+                { clientActionStatus = Http.status422,
                   clientActionPatches = [testRegionPatch ("first " <> escapedText) escapedText, testRegionPatch "second" escapedText],
                   clientActionFocusId = Just escapedText,
                   clientActionHeaders = [],
@@ -2566,7 +2566,7 @@ spec = do
                 }
           encodedResponse = responseBody responseBodyValue
       expectAll
-        ( (responseStatus responseBodyValue `shouldBe` 422)
+        ( (responseStatus responseBodyValue `shouldBe` Http.status422)
             :| [ responseContentType responseBodyValue `shouldBe` "application/json; charset=utf-8",
                  responseObservabilityAttributes responseBodyValue `shouldBe` [observabilityAttribute],
                  responseLogEntries responseBodyValue `shouldBe` ["private action diagnostic"],
@@ -2606,7 +2606,7 @@ spec = do
                     ( pure
                         ( Just
                             ClientActionResponse
-                              { clientActionStatus = 422,
+                              { clientActionStatus = Http.status422,
                                 clientActionPatches = [],
                                 clientActionFocusId = Nothing,
                                 clientActionHeaders = [],
@@ -2649,7 +2649,7 @@ spec = do
       Wai.responseStatus domainResponse `shouldBe` Http.status422
 
     it "renders typed redirects with the location header and standard response metadata" $ do
-      let typedRedirect = redirectResponse 302 "/spaces" :: Response TestRoute TestContext
+      let typedRedirect = redirectResponse Http.status302 "/spaces" :: Response TestRoute TestContext
           redirectApplication = sampleApplication {renderRequestResponse = \_ _ -> pure typedRedirect}
           diagnostics = responseDiagnostics typedRedirect
       diagnosticObservabilityAttributes diagnostics `shouldBe` []
@@ -2746,10 +2746,10 @@ spec = do
       eventSource <- serverSentEventSourceFromList []
       sameEventSource <- serverSentEventSourceFromList [ServerSentEvent Nothing Nothing "later"]
       otherEventSource <- serverSentEventSourceFromList []
-      let responseBodyValue = ResponseBody 200 "text/plain" "ok" [] []
-          otherResponseBodyValue = ResponseBody 500 "text/plain" "failed" [] []
-          actionResponse = ClientActionResponse 200 [] Nothing [] [] []
-          otherActionResponse = ClientActionResponse 422 [] (Just "email") [] [] []
+      let responseBodyValue = ResponseBody Http.status200 "text/plain" "ok" [] []
+          otherResponseBodyValue = ResponseBody Http.status500 "text/plain" "failed" [] []
+          actionResponse = ClientActionResponse Http.status200 [] Nothing [] [] []
+          otherActionResponse = ClientActionResponse Http.status422 [] (Just "email") [] [] []
           eventResponse = EventStreamResponse responseBodyValue eventSource :: Response TestRoute TestContext
           sameEventResponse = EventStreamResponse responseBodyValue sameEventSource
           otherEventResponse = EventStreamResponse otherResponseBodyValue otherEventSource
@@ -2773,7 +2773,7 @@ spec = do
     it "serializes action responses with no patches or focus target" $ do
       let actionApplication =
             sampleApplication
-              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = 204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
+              { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = Http.status204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
               }
       actionBodyChunks <- newIORef ["_harch_csrf=csrf-token"]
       let actionRequest =
@@ -2804,7 +2804,7 @@ spec = do
     it "uses the page nonce for page responses with metadata" $ do
       let metadata =
             ResponseBody
-              { responseStatus = 422,
+              { responseStatus = Http.status422,
                 responseContentType = "text/html; charset=utf-8",
                 responseBody = "",
                 responseObservabilityAttributes = [],
@@ -2936,7 +2936,7 @@ spec = do
     it "preserves body-response status, content type, and body" $ do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["data"])
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
-      Http.statusMessage (Wai.responseStatus response) `shouldBe` mempty
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` "Accepted"
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json")
       readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
 
@@ -3583,7 +3583,7 @@ spec = do
                     pure $
                       BodyResponse
                         ResponseBody
-                          { responseStatus = 503,
+                          { responseStatus = Http.status503,
                             responseContentType = "application/json",
                             responseBody = "{\"error\":\"data-unavailable\"}",
                             responseObservabilityAttributes = [failureAttribute],
@@ -3679,7 +3679,7 @@ spec = do
                     pure $
                       BodyResponse
                         ResponseBody
-                          { responseStatus = 202,
+                          { responseStatus = Http.status202,
                             responseContentType = "application/json",
                             responseBody = "{\"route\":\"data\"}",
                             responseObservabilityAttributes = [],
@@ -3886,7 +3886,7 @@ spec = do
                     pure $
                       BodyResponse
                         ResponseBody
-                          { responseStatus = 202,
+                          { responseStatus = Http.status202,
                             responseContentType = "application/json",
                             responseBody = "{\"route\":\"data\"}",
                             responseObservabilityAttributes = [],
@@ -3941,7 +3941,7 @@ spec = do
                     pure
                       . PageResponseWithMetadata
                         ResponseBody
-                          { responseStatus = 500,
+                          { responseStatus = Http.status500,
                             responseContentType = "text/html; charset=utf-8",
                             responseBody = "",
                             responseObservabilityAttributes = [failureAttribute],
@@ -3955,7 +3955,7 @@ spec = do
               }
       response <- performWaiRequest (toWaiApplication diagnosticApplication) pageRequest
       Http.statusCode (Wai.responseStatus response) `shouldBe` 500
-      Http.statusMessage (Wai.responseStatus response) `shouldBe` ""
+      Http.statusMessage (Wai.responseStatus response) `shouldBe` "Internal Server Error"
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8"
       readResponseBody response `shouldReturn` renderDocument (pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
       readIORef requestObservabilityReference
@@ -4011,7 +4011,7 @@ spec = do
                         (KnownRoute, "es", _) ->
                           PageResponseWithMetadata
                             ResponseBody
-                              { responseStatus = 500,
+                              { responseStatus = Http.status500,
                                 responseContentType = "text/html; charset=utf-8",
                                 responseBody = "",
                                 responseObservabilityAttributes = [pageFailureAttribute],
@@ -4023,7 +4023,7 @@ spec = do
                         (DataRoute, _, "/app") ->
                           BodyResponse
                             ResponseBody
-                              { responseStatus = 503,
+                              { responseStatus = Http.status503,
                                 responseContentType = "application/json",
                                 responseBody = "{\"error\":\"body-failure\"}",
                                 responseObservabilityAttributes = [bodyFailureAttribute],

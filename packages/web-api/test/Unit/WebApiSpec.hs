@@ -556,7 +556,7 @@ actionHasStatusAndFocus :: Int -> Maybe Text -> Text -> Maybe HarchWeb.ClientAct
 actionHasStatusAndFocus expectedStatus expectedFocus expectedMessage = \case
   Just actionResponse ->
     forceShowValue actionResponse
-      && HarchWeb.clientActionStatus actionResponse == expectedStatus
+      && Http.statusCode (HarchWeb.clientActionStatus actionResponse) == expectedStatus
       && HarchWeb.clientActionFocusId actionResponse == expectedFocus
       && case HarchWeb.clientActionPatches actionResponse of
         [patch] ->
@@ -3702,7 +3702,7 @@ spec = do
       invalidMfaResult `shouldSatisfy` actionHasStatusAndFocus 403 Nothing "This enrollment link is invalid or has expired"
       spanishInvalidMfaResult <- handleAccountAction workflow (request "POST" "/es/mfa" [("intent", "start")] Spanish)
       spanishInvalidMfaResult `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 403 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 403 && any (Text.isInfixOf "action=\"/es/mfa\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       invalidUsernameResult <- handleAccountAction workflow (request "POST" "/register" [("username", "no!"), ("email", "person@example.test"), ("password", "correct horse battery staple")] English)
       invalidUsernameResult `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Use a username"
@@ -3922,7 +3922,7 @@ spec = do
       case acceptedVerificationWithSession of
         Just response -> do
           forceShowValue response `shouldBe` True
-          HarchWeb.clientActionStatus response `shouldBe` 200
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a verification action response"
       savedEnrollmentSession <- readIORef acceptedVerificationSessionReference
@@ -3990,7 +3990,7 @@ spec = do
         Nothing -> expectationFailure "expected login action response"
         Just response -> do
           forceShowValue response `shouldBe` True
-          HarchWeb.clientActionStatus response `shouldBe` 200
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionFocusId response `shouldBe` Nothing
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
       savedSessions <- readIORef savedSessionsReference
@@ -4007,7 +4007,7 @@ spec = do
         Nothing -> expectationFailure "expected logout action response"
         Just response -> do
           forceShowValue response `shouldBe` True
-          HarchWeb.clientActionStatus response `shouldBe` 200
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 200
           HarchWeb.clientActionHeaders response `shouldSatisfy` any (Text.isInfixOf "Max-Age=0" . TextEncoding.decodeUtf8 . snd)
       invalidatedSessions <- readIORef invalidatedSessionsReference
       case invalidatedSessions of
@@ -4114,7 +4114,7 @@ spec = do
       case loginEnrollmentRequiredWithSession of
         Just response -> do
           forceShowValue response `shouldBe` True
-          HarchWeb.clientActionStatus response `shouldBe` 403
+          Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` 403
           HarchWeb.clientActionHeaders response `shouldSatisfy` any ((== "Set-Cookie") . fst)
         Nothing -> expectationFailure "expected a login action response"
       savedLoginEnrollmentSession <- readIORef loginEnrollmentSessionReference
@@ -4216,7 +4216,7 @@ spec = do
           request path actionContext fields = typedAccountActionRequest "POST" path fields (actionContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
       started `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code"
         Nothing -> False
       case started of
         Just response -> forceShowValue response `shouldBe` True
@@ -4235,7 +4235,7 @@ spec = do
       totpSecret <- maybe (expectationFailure "expected a valid enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret secret)
       confirmed <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))])
       confirmed `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && any (Text.isInfixOf "data-recovery-codes=\"true\"" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       case confirmed of
         Just response -> forceShowValue response `shouldBe` True
@@ -4244,7 +4244,7 @@ spec = do
       length confirmationHashes `shouldBe` 8
       spanishStarted <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "start")])
       spanishStarted `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code" && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && HarchWeb.clientActionFocusId response == Just "mfa-code" && any (Text.isInfixOf "Agrega este secreto" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
       spanishSecret <-
         case spanishStarted of
@@ -4260,7 +4260,7 @@ spec = do
       spanishTotpSecret <- maybe (expectationFailure "expected a valid Spanish enrollment secret" >> pure (error "unreachable")) pure (Totp.mkTotpSecret spanishSecret)
       spanishConfirmed <- handleAccountAction workflow (request "/es/mfa" (defaultRequestContext {requestLocale = Spanish}) [("intent", "confirm"), ("code", Totp.totpCodeText (Totp.totpCode 123456 spanishTotpSecret))])
       spanishConfirmed `shouldSatisfy` \case
-        Just response -> HarchWeb.clientActionStatus response == 200 && isNothing (HarchWeb.clientActionFocusId response) && any (Text.isInfixOf "Autenticador registrado" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
+        Just response -> Http.statusCode (HarchWeb.clientActionStatus response) == 200 && isNothing (HarchWeb.clientActionFocusId response) && any (Text.isInfixOf "Autenticador registrado" . HarchWeb.regionPatchHtml) (HarchWeb.clientActionPatches response)
         Nothing -> False
 
     it "returns every MFA enrollment action error as a localized region patch" $ do
@@ -5159,7 +5159,7 @@ spec = do
         fmap stripVolatileDatabaseTimingResponse (HarchWeb.renderResponse application secondRequest)
           `shouldReturn` HarchWeb.PageResponseWithMetadata
             HarchWeb.ResponseBody
-              { HarchWeb.responseStatus = 200,
+              { HarchWeb.responseStatus = Http.status200,
                 HarchWeb.responseContentType = "text/html; charset=utf-8",
                 HarchWeb.responseBody = "",
                 HarchWeb.responseObservabilityAttributes =
@@ -7898,7 +7898,7 @@ spec = do
       selectResponse defaultAppConfig apiStatusRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -7907,7 +7907,7 @@ spec = do
       selectResponse defaultAppConfig apiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -7918,7 +7918,7 @@ spec = do
       selectResponse defaultAppConfig spanishApiStatusRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"es\"}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -7927,7 +7927,7 @@ spec = do
       selectResponse defaultAppConfig spanishApiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -7963,7 +7963,7 @@ spec = do
       fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect secondRequest)
         `shouldReturn` HarchWeb.PageResponseWithMetadata
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
               HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
@@ -7998,7 +7998,7 @@ spec = do
       fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Loaded second summary.\",\"highlights\":[\"Fast SSR\",\"Shared route data\"]}",
               HarchWeb.responseObservabilityAttributes =
@@ -8036,7 +8036,7 @@ spec = do
       selectResponse defaultAppConfig apiNotFoundRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 404,
+            { HarchWeb.responseStatus = Http.status404,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"error\":\"not-found\"}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -8057,7 +8057,7 @@ spec = do
         apiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 503,
+            { HarchWeb.responseStatus = Http.status503,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
               HarchWeb.responseObservabilityAttributes =
@@ -8140,7 +8140,7 @@ spec = do
       fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 503,
+            { HarchWeb.responseStatus = Http.status503,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
               HarchWeb.responseObservabilityAttributes =
@@ -8193,7 +8193,7 @@ spec = do
     it "preserves unexpected database error constructors in API diagnostics" $
       renderApiResponseFromRouteData (SecondRouteDataResult (Left (HomePageDataError "wrong loader")))
         `shouldBe` HarchWeb.ResponseBody
-          { HarchWeb.responseStatus = 503,
+          { HarchWeb.responseStatus = Http.status503,
             HarchWeb.responseContentType = "application/json",
             HarchWeb.responseBody = "{\"error\":\"second-page-unavailable\"}",
             HarchWeb.responseObservabilityAttributes =
@@ -8235,7 +8235,7 @@ spec = do
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect secondRequest
         `shouldReturn` HarchWeb.PageResponseWithMetadata
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 500,
+            { HarchWeb.responseStatus = Http.status500,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
               HarchWeb.responseBody = "",
               HarchWeb.responseObservabilityAttributes =
@@ -8271,7 +8271,7 @@ spec = do
                   spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                 }
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` (HarchWeb.redirectResponse 302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
 
     it "keeps locale and forwarded path prefixes in root redirect locations" $ do
       let prefixedSpanishRequest =
@@ -8279,9 +8279,9 @@ spec = do
               HomeRoute
               spanishRequestContext {requestPathPrefix = "/app"}
       selectResponse defaultAppConfig spanishHomeRequest
-        `shouldReturn` (HarchWeb.redirectResponse 302 "/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
       selectResponse defaultAppConfig prefixedSpanishRequest
-        `shouldReturn` (HarchWeb.redirectResponse 302 "/app/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/app/es/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
 
     it "keeps routes without required database data on their existing responses" $ do
       let failingDatabaseEffect =
@@ -8293,11 +8293,11 @@ spec = do
                   spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
                 }
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect homeRequest
-        `shouldReturn` (HarchWeb.redirectResponse 302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
+        `shouldReturn` (HarchWeb.redirectResponse Http.status302 "/spaces" :: HarchWeb.Response AppRoute AppRequestContext)
       selectResponseWithDatabase defaultAppConfig failingDatabaseEffect apiStatusRequest
         `shouldReturn` HarchWeb.BodyResponse
           HarchWeb.ResponseBody
-            { HarchWeb.responseStatus = 200,
+            { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
               HarchWeb.responseObservabilityAttributes = [],
@@ -8431,7 +8431,7 @@ spec = do
             }
       renderApiResponseFromRouteData selectedRouteData
         `shouldBe` HarchWeb.ResponseBody
-          { HarchWeb.responseStatus = 200,
+          { HarchWeb.responseStatus = Http.status200,
             HarchWeb.responseContentType = "application/json",
             HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}",
             HarchWeb.responseObservabilityAttributes = [],

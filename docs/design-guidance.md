@@ -768,6 +768,18 @@ internal reorganization, not a public API change, and needed no `CHANGELOG.md` e
 exports. Full CI-equivalent pipeline passed with zero test changes, since the moved code's behavior
 and existing coverage carried over unchanged.
 
+### Follow-up decision — DV: typed HTTP response statuses (2026-08-17)
+
+**Decision: extend the existing response boundary with `http-types`' `Http.Status`; do not add a
+framework status wrapper.** `ResponseBody` and `ClientActionResponse` already are the single
+framework-owned point where application responses become WAI responses. A bare `Int` there admitted
+invalid statuses and required every rendering path to discard the standard reason phrase with
+`mkStatus status mempty`. `Http.Status` is the established WAI representation and provides both the
+validated standard constants applications need and the reason phrase WAI must receive. A new
+newtype would duplicate it without improving composition or preventing an additional invalid state.
+Observability remains explicitly numeric: `responseStatusCode` extracts `Http.statusCode` only when
+constructing the low-cardinality HTTP server attribute.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

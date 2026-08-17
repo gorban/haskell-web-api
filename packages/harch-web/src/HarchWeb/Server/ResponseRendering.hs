@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Response finalization and WAI rendering for typed applications.
@@ -15,7 +14,6 @@ module HarchWeb.Server.ResponseRendering
   )
 where
 
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as ByteStringBuilder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Foldable (for_)
@@ -51,7 +49,7 @@ responseRuntimeNonce response =
     EventStreamResponse _ _ -> pure Nothing
     ProtocolResponseResult _ -> pure Nothing
 
-redirectResponse :: Int -> Text -> Response route context
+redirectResponse :: Http.Status -> Text -> Response route context
 redirectResponse status =
   RedirectResponse
     ResponseBody
@@ -89,12 +87,12 @@ responseBodyDiagnostics responseBodyValue =
 responseStatusCode :: (Eq route) => Application route action context -> Response route context -> Int
 responseStatusCode webApplication response =
   case response of
-    PageResponse page -> if isNotFoundPage webApplication page then 404 else 200
-    PageResponseWithMetadata responseBodyValue _ -> responseStatus responseBodyValue
-    BodyResponse responseBodyValue -> responseStatus responseBodyValue
-    RedirectResponse responseBodyValue _ -> responseStatus responseBodyValue
-    ClientActionBodyResponse actionResponse -> clientActionStatus actionResponse
-    EventStreamResponse responseBodyValue _ -> responseStatus responseBodyValue
+    PageResponse page -> Http.statusCode (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
+    PageResponseWithMetadata responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    BodyResponse responseBodyValue -> Http.statusCode (responseStatus responseBodyValue)
+    RedirectResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
+    ClientActionBodyResponse actionResponse -> Http.statusCode (clientActionStatus actionResponse)
+    EventStreamResponse responseBodyValue _ -> Http.statusCode (responseStatus responseBodyValue)
     ProtocolResponseResult protocolResponse -> Http.statusCode (protocolResponseStatus protocolResponse)
 
 responseKind :: Response route context -> Observability.ResponseKind
@@ -122,10 +120,7 @@ toWaiResponse additionalHeaders maybeRuntimeNonce webApplication response =
         (if isNotFoundPage webApplication page then Http.status404 else Http.status200)
         page
     PageResponseWithMetadata pageResponseBodyValue page ->
-      let !pageStatusMessage = ByteString.empty
-          !pageStatusMessageLength = ByteString.length pageStatusMessage
-          !pageStatus = pageStatusMessageLength `seq` Http.Status (responseStatus pageResponseBodyValue) pageStatusMessage
-       in renderPageResponse pageStatus page
+      renderPageResponse (responseStatus pageResponseBodyValue) page
     BodyResponse responseBodyValue -> toWaiBodyResponse additionalHeaders responseBodyValue
     RedirectResponse responseBodyValue location -> toWaiBodyResponse (additionalHeaders <> [(Http.hLocation, TextEncoding.encodeUtf8 location)]) responseBodyValue
     ClientActionBodyResponse actionResponse -> toWaiBodyResponse (additionalHeaders <> clientActionHeaders actionResponse) (clientActionResponseBody actionResponse)
@@ -155,7 +150,7 @@ pageResponseHeaders additionalHeaders runtimeNonce =
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response
 toWaiBodyResponse additionalHeaders responseBodyValue =
   Wai.responseLBS
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    (responseStatus responseBodyValue)
     (additionalHeaders <> [(Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue))])
     (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (responseBody responseBodyValue)))
 
@@ -176,7 +171,7 @@ toWaiProtocolResponse additionalHeaders protocolResponse =
 toWaiEventStreamResponse :: Http.ResponseHeaders -> ResponseBody -> ServerSentEventSource -> Wai.Response
 toWaiEventStreamResponse additionalHeaders responseBodyValue eventSource =
   Wai.responseStream
-    (Http.mkStatus (responseStatus responseBodyValue) mempty)
+    (responseStatus responseBodyValue)
     ( additionalHeaders
         <> [ (Http.hContentType, TextEncoding.encodeUtf8 (responseContentType responseBodyValue)),
              ("Cache-Control", "no-cache"),

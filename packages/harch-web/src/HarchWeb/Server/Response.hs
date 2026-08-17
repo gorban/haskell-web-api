@@ -33,8 +33,16 @@ import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
+-- | A response carries 'Http.Status' rather than a bare numeric code so an
+-- application cannot construct an invalid HTTP status and WAI retains the
+-- standard reason phrase.
+--
+-- Decision record (DV, 2026-08-17): extend the existing response boundary
+-- with the 'http-types' status type instead of adding a framework wrapper.
+-- It is the established representation at the WAI boundary; numeric status
+-- codes are extracted only for observability attributes.
 data ResponseBody = ResponseBody
-  { responseStatus :: Int,
+  { responseStatus :: Http.Status,
     responseContentType :: Text,
     responseBody :: Text,
     responseObservabilityAttributes :: [Observability.ObservabilityAttribute],
@@ -149,8 +157,10 @@ data ClientActionRequest action context = ClientActionRequest
   }
   deriving (Eq, Show)
 
+-- | Client-action status shares the ordinary response boundary's exact HTTP
+-- status representation, including its reason phrase.
 data ClientActionResponse = ClientActionResponse
-  { clientActionStatus :: Int,
+  { clientActionStatus :: Http.Status,
     clientActionPatches :: [RegionPatch],
     clientActionFocusId :: Maybe Text,
     clientActionHeaders :: Http.ResponseHeaders,
