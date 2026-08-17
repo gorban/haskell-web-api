@@ -20,6 +20,7 @@ module HarchWeb.Server.Transport
     openLoopbackSocket,
     reloadTlsCredentialsIfChanged,
     socketPort,
+    startHttpRuntimeServerWithStarter,
     startHttpRuntimeServersWithRequestTransportLimits,
     startManualTlsRuntimeServerWithRequestTransportLimits,
     startManualTlsRuntimeServerWithStarter,
@@ -118,10 +119,19 @@ startManualTlsRuntimeServersWithRequestTransportLimits requestHeadLimits transpo
             `onException` stopRuntimeServers runningServers
 
 startHttpRuntimeServer :: RequestHeadLimits -> RequestTransportLimits -> ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
-startHttpRuntimeServer requestHeadLimits transportLimits endpoint waiApplication = do
+startHttpRuntimeServer requestHeadLimits transportLimits =
+  startHttpRuntimeServerWithStarter
+    (startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits)
+
+-- | Start one HTTP listener with an injected server starter.  The production
+-- path supplies Warp; the injection keeps the post-bind startup failure path
+-- testable so a failed starter cannot leave its listener socket open.
+startHttpRuntimeServerWithStarter :: (ListenerEndpoint -> Socket.Socket -> Wai.Application -> IO ThreadId) -> ListenerEndpoint -> Wai.Application -> IO RunningRuntimeServer
+startHttpRuntimeServerWithStarter startHttpServer endpoint waiApplication = do
   listeningSocket <- openListenerSocket endpoint
   serverThreadId <-
-    startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint listeningSocket waiApplication
+    startHttpServer endpoint listeningSocket waiApplication
+      `onException` Socket.close listeningSocket
   endpoint `seq`
     pure
       RunningRuntimeServer

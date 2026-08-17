@@ -5681,6 +5681,19 @@ spec = do
                  ]
           )
 
+  describe "startHttpRuntimeServerWithStarter" $ do
+    it "closes the listener socket when HTTP startup throws before the server thread starts" $
+      withUnusedLoopbackPort $ \httpPort -> do
+        let endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpPort}
+        startHttpRuntimeServerWithStarter
+          (\_ _ _ -> ioError (userError "synthetic HTTP startup failure"))
+          endpoint
+          (toWaiApplication sampleApplication)
+          `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic HTTP startup failure)")
+        reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
+        Socket.bind reboundSocket (Socket.SockAddrInet (fromIntegral httpPort) (Socket.tupleToHostAddress (127, 0, 0, 1)))
+        Socket.close reboundSocket
+
   describe "runServer" $ do
     it "serves responses on the configured HTTP listener and stays running until signalled to stop" $
       withUnusedLoopbackPort $ \unusedPort ->
@@ -7430,6 +7443,24 @@ spec = do
               ( (Text.isInfixOf "<h1>Known</h1>" knownResponseText `shouldBe` True)
                   :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
               )
+
+  describe "withLocalTestServer startup cleanup" $ do
+    it "closes its loopback listener when Warp rejects the transport settings" $ do
+      let startupFailure = "synthetic local-server transport startup failure"
+          failingApplication =
+            sampleApplicationWithConfig
+              emptyStaticAssets
+              ( defaultRequestPolicy
+                  { requestTransportLimits =
+                      warpDefaultRequestTransportLimits
+                        { requestNetworkTimeout = Just (error startupFailure)
+                        }
+                  }
+              )
+      withLocalTestServer failingApplication (\_ -> expectationFailure "unexpected local server startup")
+        `shouldThrow` (\exception -> startupFailure `isInfixOf` displayException (exception :: SomeException))
+      recoveredResponse <- withLocalTestServer sampleApplication (`readLocalTestServerResponse` "/known")
+      recoveredResponse `shouldSatisfy` Text.isInfixOf "<h1>Known</h1>"
 
 readLocalTestServerResponse :: LocalTestServer -> Text -> IO Text
 readLocalTestServerResponse localTestServer path = do

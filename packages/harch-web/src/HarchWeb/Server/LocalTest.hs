@@ -13,7 +13,7 @@ module HarchWeb.Server.LocalTest
 where
 
 import Control.Concurrent (ThreadId, killThread)
-import Control.Exception (bracket)
+import Control.Exception (bracket, onException)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Security (RequestHeadLimits, RequestTransportLimits, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
@@ -76,6 +76,7 @@ startLocalTestServer requestHeadLimits transportLimits waiApplication = do
   serverThreadId <-
     endpointHost endpoint `seq`
       startWarpServerOnSocketWithRequestTransportLimits requestHeadLimits transportLimits endpoint listeningSocket waiApplication
+        `onException` Socket.close listeningSocket
   localPort `seq`
     pure
       RunningLocalTestServer
