@@ -116,32 +116,49 @@ decodeActionField = either (const (Left InvalidClientActionEncoding)) Right . Te
 
 clientActionProtocolErrorResponse :: ClientActionProtocolError -> ResponseBody
 clientActionProtocolErrorResponse protocolError =
-  ResponseBody
-    { responseStatus =
-        case protocolError of
-          InvalidClientActionEncoding -> 400
-          ClientActionBodyTooLarge -> 413
-          ClientActionFieldCountExceeded -> 413
-          ClientActionUnsupportedMediaType -> 415
-          ClientActionOriginRejected -> 403
-          ClientActionCsrfRejected -> 403
-          ClientActionPayloadMalformed -> 400
-          ClientActionNotFound -> 404,
-      responseContentType = "application/json; charset=utf-8",
-      responseBody = "{\"patches\":[],\"focusId\":null}",
-      responseObservabilityAttributes =
-        case protocolError of
-          ClientActionPayloadMalformed ->
+  let details = clientActionProtocolErrorDetails protocolError
+   in ResponseBody
+        { responseStatus = clientActionErrorStatus details,
+          responseContentType = "application/json; charset=utf-8",
+          responseBody = "{\"patches\":[],\"focusId\":null}",
+          responseObservabilityAttributes = clientActionErrorObservabilityAttributes details,
+          responseLogEntries = clientActionErrorLogEntries details
+        }
+
+data ClientActionProtocolErrorDetails = ClientActionProtocolErrorDetails
+  { clientActionErrorStatus :: Int,
+    clientActionErrorObservabilityAttributes :: [Observability.ObservabilityAttribute],
+    clientActionErrorLogEntries :: [Text]
+  }
+
+clientActionProtocolErrorDetails :: ClientActionProtocolError -> ClientActionProtocolErrorDetails
+clientActionProtocolErrorDetails protocolError =
+  case protocolError of
+    InvalidClientActionEncoding -> ordinaryClientActionError 400
+    ClientActionBodyTooLarge -> ordinaryClientActionError 413
+    ClientActionFieldCountExceeded -> ordinaryClientActionError 413
+    ClientActionUnsupportedMediaType -> ordinaryClientActionError 415
+    ClientActionOriginRejected -> ordinaryClientActionError 403
+    ClientActionCsrfRejected -> ordinaryClientActionError 403
+    ClientActionPayloadMalformed ->
+      ClientActionProtocolErrorDetails
+        { clientActionErrorStatus = 400,
+          clientActionErrorObservabilityAttributes =
             [ Observability.ObservabilityAttribute
                 { Observability.attributeName = "harch.client_action.decode_failure",
                   Observability.attributeValue = Observability.TextAttribute "malformed"
                 }
-            ]
-          _ -> [],
-      responseLogEntries =
-        case protocolError of
-          ClientActionPayloadMalformed -> ["client action decode failure: malformed"]
-          _ -> []
+            ],
+          clientActionErrorLogEntries = ["client action decode failure: malformed"]
+        }
+    ClientActionNotFound -> ordinaryClientActionError 404
+
+ordinaryClientActionError :: Int -> ClientActionProtocolErrorDetails
+ordinaryClientActionError status =
+  ClientActionProtocolErrorDetails
+    { clientActionErrorStatus = status,
+      clientActionErrorObservabilityAttributes = [],
+      clientActionErrorLogEntries = []
     }
 
 clientActionMethodNotAllowedResponse :: NonEmpty.NonEmpty ActionMethod -> ClientActionResponse
