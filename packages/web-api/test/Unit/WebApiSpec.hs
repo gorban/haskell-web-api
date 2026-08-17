@@ -3368,10 +3368,10 @@ spec = do
       show registrationFailure `shouldBe` "RegistrationStoreFailure"
       show [registrationFailure] `shouldBe` "[RegistrationStoreFailure]"
 
-    it "composes application services, IO, and typed failures through one boundary" $ do
+    it "composes application services and typed failures through one boundary" $ do
       let services = AppEffect.AppServices unavailableAccountWorkflow
           successfulAction :: AppEffect.AppM Text Int
-          successfulAction = AppEffect.liftAppIO (pure 42)
+          successfulAction = pure 42
           failureDiagnostics = AppEffect.FailureDiagnostics AppEffect.RegistrationStoreFailure "SampleFailure" ["private detail"]
           failure = AppEffect.AppFailure "safe failure" failureDiagnostics
           failingAction :: AppEffect.AppM Text ()

@@ -12,6 +12,7 @@ module WebApi.AccountPages.Actions.Workflows
 where
 
 import Control.Applicative ((<|>))
+import Control.Monad.IO.Class (liftIO)
 import Data.Foldable (toList)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -24,6 +25,7 @@ import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Session
   ( OpaqueSession (..),
+    SessionId,
     defaultSessionCookiePolicy,
     renderSessionCookie,
     sessionCookieMaxAgeSeconds,
@@ -34,6 +36,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountProfile (..),
+    AccountStoreError,
     RegistrationError (..),
     RegistrationResult (..),
     ResendVerificationError (..),
@@ -50,7 +53,6 @@ import WebApi.AppEffect
     AppM,
     FailureCode (..),
     FailureDiagnostics,
-    liftAppIO,
     throwAppFailure,
   )
 import WebApi.Login
@@ -67,7 +69,8 @@ import WebApi.MfaEnrollment
     startMfaEnrollment,
   )
 import WebApi.Profile
-  ( ProfileState (..),
+  ( ProfileLoadError,
+    ProfileState (..),
     loadProfile,
   )
 import WebApi.Route
@@ -75,7 +78,9 @@ import WebApi.Route
   )
 import WebApi.Session
   ( AccountSessionStore (..),
+    AccountSessionStoreError,
     MfaEnrollmentSessionStore (..),
+    MfaEnrollmentSessionStoreError,
     issueAccountSession,
     issueMfaEnrollmentSession,
     mfaEnrollmentSessionCookiePolicy,
@@ -91,25 +96,36 @@ handleRegistrationSubmission :: AccountActionRequest -> RegistrationSubmission -
 handleRegistrationSubmission actionRequest submission =
   case parseRegistrationForm actionRequest submission of
     Left response -> pure response
-    Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress) -> do
-      workflow <- accountWorkflow
-      now <- liftAppIO (accountWorkflowClock workflow)
-      registrationResult <-
-        liftAppIO $
-          registerAccountWithIdentityAtWithPasswordHasher
-            (accountWorkflowPasswordHasher workflow)
-            Password.defaultPasswordHashingPolicy
-            (accountWorkflowStore workflow)
-            (accountWorkflowEmailDelivery workflow)
-            (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
-            (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
-            now
-            emailVerificationLifetimeNanoseconds
-            (Just username)
-            (nonEmptyText displayNameValue)
-            emailAddress
-            (Password.mkPassword passwordValue)
+    Right registration -> do
+      registrationResult <- registerAccountNow actionRequest registration
+      let (usernameValue, emailValue, displayNameValue, _, _, _) = registration
       interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult
+
+-- | Registration is one application operation: it obtains one clock value
+-- and invokes the account service with dependencies selected for this
+-- request. This keeps the workflow from splitting that operation across
+-- generic IO lifts.
+registerAccountNow ::
+  AccountActionRequest ->
+  ParsedRegistration ->
+  AppM publicFailure (Either RegistrationError RegistrationResult)
+registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, username, emailAddress) = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    registerAccountWithIdentityAtWithPasswordHasher
+      (accountWorkflowPasswordHasher workflow)
+      Password.defaultPasswordHashingPolicy
+      (accountWorkflowStore workflow)
+      (accountWorkflowEmailDelivery workflow)
+      (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
+      (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
+      now
+      emailVerificationLifetimeNanoseconds
+      (Just username)
+      (nonEmptyText displayNameValue)
+      emailAddress
+      (Password.mkPassword passwordValue)
 
 parseRegistrationForm ::
   AccountActionRequest ->
@@ -157,24 +173,37 @@ handleVerificationSubmission actionRequest submission =
    in case Account.mkEmailVerificationToken tokenValue of
         Nothing -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token") [])
         Just token -> do
-          workflow <- accountWorkflow
-          now <- liftAppIO (accountWorkflowClock workflow)
-          confirmationResult <- liftAppIO (confirmEmailVerificationAt (accountWorkflowStore workflow) now token)
+          (now, confirmationResult) <- confirmEmailVerificationNow token
           case confirmationResult of
-            Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest workflow now accountId
+            Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest now accountId
             Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token") [])
             Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token") [])
             Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path Http.status503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+
+-- | Verification confirmation reads the clock and store as one operation so
+-- the accepted result and subsequent enrollment session share one time.
+confirmEmailVerificationNow :: Account.EmailVerificationToken -> AppM publicFailure (Word64, Either AccountStoreError Account.EmailVerificationValidation)
+confirmEmailVerificationNow token = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    confirmationResult <- confirmEmailVerificationAt (accountWorkflowStore workflow) now token
+    pure (now, confirmationResult)
+
+issueMfaEnrollmentSessionNow :: Account.AccountId -> Word64 -> AppM publicFailure (Either MfaEnrollmentSessionStoreError (OpaqueSession Account.AccountId))
+issueMfaEnrollmentSessionNow accountId now = do
+  workflow <- accountWorkflow
+  liftIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId now)
 
 -- | Email verification just proved ownership of the account, so this is the
 -- one legitimate place to grant enrollment access — see the AM decision
 -- record below for why that access is a distinct, short-lived session
 -- rather than the ordinary login session or a client-supplied account id.
-issueVerificationEnrollmentSession :: AccountActionRequest -> AccountWorkflow -> Word64 -> Account.AccountId -> AccountActionWorkflow
-issueVerificationEnrollmentSession actionRequest workflow now accountId = do
+issueVerificationEnrollmentSession :: AccountActionRequest -> Word64 -> Account.AccountId -> AccountActionWorkflow
+issueVerificationEnrollmentSession actionRequest now accountId = do
   let path = HarchWeb.clientActionContext actionRequest
       successResponse = verificationResponse (actionLocale actionRequest) path Http.status200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing
-  issued <- liftAppIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId now)
+  issued <- issueMfaEnrollmentSessionNow accountId now
   case issued of
     Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
     Left storeError -> throwClientActionFailure (successResponse []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
@@ -208,9 +237,7 @@ handleMfaEnrollmentSubmission actionRequest submission = do
   case requestMfaEnrollmentSessionId path of
     Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
     Just enrollmentSessionId -> do
-      workflow <- accountWorkflow
-      now <- liftAppIO (accountWorkflowClock workflow)
-      loadedSession <- liftAppIO (loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) enrollmentSessionId)
+      (now, loadedSession) <- loadMfaEnrollmentSessionNow enrollmentSessionId
       case loadedSession of
         Left storeError -> throwClientActionFailure (invalidEnrollmentSessionResponse actionRequest) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
         Right Nothing -> pure (invalidEnrollmentSessionResponse actionRequest)
@@ -228,11 +255,24 @@ invalidEnrollmentSessionResponse actionRequest =
   let path = HarchWeb.clientActionContext actionRequest
    in mfaEnrollmentResponse (actionLocale actionRequest) path Http.status403 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest "This enrollment link is invalid or has expired. Sign in again to continue." "Este enlace de registro no es valido o ha caducado. Inicia sesion de nuevo para continuar.")) True) Nothing []
 
+loadMfaEnrollmentSessionNow :: SessionId -> AppM publicFailure (Word64, Either MfaEnrollmentSessionStoreError (Maybe (OpaqueSession Account.AccountId)))
+loadMfaEnrollmentSessionNow enrollmentSessionId = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    loadedSession <- loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) enrollmentSessionId
+    pure (now, loadedSession)
+
+startMfaEnrollmentNow :: Account.AccountId -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentStart)
+startMfaEnrollmentNow accountId = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now
+
 startMfaAction :: AccountActionRequest -> AppRequestContext -> Account.AccountId -> AccountActionWorkflow
 startMfaAction actionRequest path accountId = do
-  workflow <- accountWorkflow
-  now <- liftAppIO (accountWorkflowClock workflow)
-  started <- liftAppIO (startMfaEnrollment (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId now)
+  started <- startMfaEnrollmentNow accountId
   case started of
     Right (MfaEnrollmentStart secret) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status200 (MfaEnrollmentForm (Just (Totp.renderTotpSecret secret)) [] (Just (localized actionRequest "Add this secret to your authenticator, then enter its six-digit code." "Agrega este secreto a tu autenticador y luego introduce su codigo de seis digitos.")) False) (Just "mfa-code") noHeaders)
     Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentStartFailure Nothing errorValue
@@ -242,13 +282,18 @@ confirmMfaAction actionRequest path accountId codeValue =
   case Totp.mkTotpCode codeValue of
     Nothing -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status422 (MfaEnrollmentForm Nothing [] (Just (localized actionRequest "Enter a six-digit authenticator code." "Introduce un codigo de autenticador de seis digitos.")) True) (Just "mfa-code") [])
     Just code -> do
-      workflow <- accountWorkflow
-      nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
-      nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
-      confirmed <- liftAppIO (confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code)
+      confirmed <- confirmMfaEnrollmentNow accountId code
       case confirmed of
         Right (MfaEnrollmentConfirmation recoveryCodes) -> pure (mfaEnrollmentResponse (actionLocale actionRequest) path Http.status200 (MfaEnrollmentForm Nothing (map RecoveryCode.recoveryCodeText (toList recoveryCodes)) (Just (localized actionRequest "Authenticator enrolled. Save these recovery codes now." "Autenticador registrado. Guarda estos codigos de recuperacion ahora.")) False) Nothing noHeaders)
         Left errorValue -> interpretMfaFailure actionRequest path MfaEnrollmentConfirmFailure (Just "mfa-code") errorValue
+
+confirmMfaEnrollmentNow :: Account.AccountId -> Totp.TotpCode -> AppM publicFailure (Either MfaEnrollmentError MfaEnrollmentConfirmation)
+confirmMfaEnrollmentNow accountId code = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    nowNanoseconds <- accountWorkflowClock workflow
+    nowSeconds <- accountWorkflowTotpClock workflow
+    confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code
 
 interpretMfaFailure ::
   AccountActionRequest ->
@@ -279,11 +324,17 @@ handleLoginSubmission actionRequest submission =
   case parseLoginForm actionRequest submission of
     Left response -> pure response
     Right (emailValue, passwordValue, identifier, proof) -> do
-      workflow <- accountWorkflow
-      nowNanoseconds <- liftAppIO (accountWorkflowClock workflow)
-      nowSeconds <- liftAppIO (accountWorkflowTotpClock workflow)
-      loginResult <- liftAppIO (completePasswordLoginWithIdentifier (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds identifier (Password.mkPassword passwordValue) proof)
+      (nowNanoseconds, loginResult) <- completePasswordLoginNow identifier passwordValue proof
       interpretLoginResult actionRequest emailValue nowNanoseconds loginResult
+
+completePasswordLoginNow :: LoginIdentifier -> Text -> MfaLoginProof -> AppM publicFailure (Word64, PasswordMfaLoginResult)
+completePasswordLoginNow identifier passwordValue proof = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    nowNanoseconds <- accountWorkflowClock workflow
+    nowSeconds <- accountWorkflowTotpClock workflow
+    loginResult <- completePasswordLoginWithIdentifier (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds identifier (Password.mkPassword passwordValue) proof
+    pure (nowNanoseconds, loginResult)
 
 parseLoginForm ::
   AccountActionRequest ->
@@ -327,13 +378,17 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
 
 issueLoginSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId -> AccountActionWorkflow
 issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
-  workflow <- accountWorkflow
-  issuedSession <- liftAppIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
+  issuedSession <- issueAccountSessionNow accountId nowNanoseconds
   let path = HarchWeb.clientActionContext actionRequest
       form message = LoginForm emailValue (Just message)
   case issuedSession of
     Left storeError -> throwClientActionFailure (loginResponse (actionLocale actionRequest) path Http.status503 (form (localized actionRequest "Sign-in is temporarily unavailable." "El inicio de sesion no esta disponible temporalmente.") True) (Just "login-email") []) LoginSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
     Right opaqueSession -> pure (loginResponse (actionLocale actionRequest) path Http.status200 (form (localized actionRequest "You are signed in." "Has iniciado sesion.") False) Nothing [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie defaultSessionCookiePolicy (sessionId opaqueSession)))])
+
+issueAccountSessionNow :: Account.AccountId -> Word64 -> AppM publicFailure (Either AccountSessionStoreError (OpaqueSession Account.AccountId))
+issueAccountSessionNow accountId nowNanoseconds = do
+  workflow <- accountWorkflow
+  liftIO (issueAccountSession (accountWorkflowSessionStore workflow) accountId nowNanoseconds)
 
 -- | A correct password already proves account ownership even though MFA
 -- enrollment is still outstanding, so this is the second legitimate place
@@ -343,11 +398,10 @@ issueLoginSession actionRequest emailValue nowNanoseconds accountId = do
 -- is deliberately not the same 'issueAccountSession' full login grants.
 issueLoginEnrollmentSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId -> AccountActionWorkflow
 issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId = do
-  workflow <- accountWorkflow
   let path = HarchWeb.clientActionContext actionRequest
       form message = LoginForm emailValue (Just message)
       response = loginResponse (actionLocale actionRequest) path Http.status403 (form (localized actionRequest "Enroll your authenticator before signing in." "Registra tu autenticador antes de iniciar sesion.") True) Nothing
-  issued <- liftAppIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId nowNanoseconds)
+  issued <- issueMfaEnrollmentSessionNow accountId nowNanoseconds
   case issued of
     Right opaqueSession -> pure (response [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
     Left storeError -> throwClientActionFailure (response []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
@@ -358,46 +412,60 @@ handleLogout actionRequest =
    in case requestSessionId (HarchWeb.clientActionContext actionRequest) of
         Nothing -> pure (logoutResponse (actionLocale actionRequest) path Http.status200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [])
         Just sessionToken -> do
-          workflow <- accountWorkflow
-          now <- liftAppIO (accountWorkflowClock workflow)
-          invalidated <- liftAppIO (invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken now)
+          invalidated <- invalidateAccountSessionNow sessionToken
           case invalidated of
             Left storeError -> throwClientActionFailure (logoutResponse (actionLocale actionRequest) path Http.status503 (Just (localized actionRequest "Sign-out is temporarily unavailable." "El cierre de sesion no esta disponible temporalmente.")) True []) LogoutSessionFailure "AccountSessionStoreError" (sessionStoreErrorMessage storeError)
             Right _ -> pure (logoutResponse (actionLocale actionRequest) path Http.status200 (Just (localized actionRequest "You are signed out." "Has cerrado sesion.")) False [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie (defaultSessionCookiePolicy {sessionCookieMaxAgeSeconds = 0}) sessionToken))])
 
+invalidateAccountSessionNow :: SessionId -> AppM publicFailure (Either AccountSessionStoreError Bool)
+invalidateAccountSessionNow sessionToken = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken now
+
 handleProfileSubmission :: AccountActionRequest -> ProfileSubmission -> AccountActionWorkflow
 handleProfileSubmission actionRequest submission = do
-  workflow <- accountWorkflow
-  now <- liftAppIO (accountWorkflowClock workflow)
-  loadedProfile <- liftAppIO (loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now (requestSessionId (HarchWeb.clientActionContext actionRequest)))
+  (now, loadedProfile) <- loadProfileNow (requestSessionId (HarchWeb.clientActionContext actionRequest))
   case loadedProfile of
     Left loadError -> throwClientActionFailure (profileResponse actionRequest Http.status503 (PendingProfileForm Text.empty (Just (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.")) True (resendLabel actionRequest))) ProfileLoadFailure (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
     Right ProfileUnauthenticated -> pure (profileResponse actionRequest Http.status403 (PendingProfileForm Text.empty (Just (localized actionRequest "Sign in before requesting another verification email." "Inicia sesion antes de solicitar otro correo de verificacion.")) True (resendLabel actionRequest)))
     Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest Http.status409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest "Your email address is already verified." "Tu direccion de correo ya esta verificada.")) True (resendLabel actionRequest)))
-    Right (ProfilePending profile) -> handlePendingProfile actionRequest submission workflow now profile
+    Right (ProfilePending profile) -> handlePendingProfile actionRequest submission now profile
+
+loadProfileNow :: Maybe SessionId -> AppM publicFailure (Word64, Either ProfileLoadError ProfileState)
+loadProfileNow maybeSessionId = do
+  workflow <- accountWorkflow
+  liftIO $ do
+    now <- accountWorkflowClock workflow
+    loadedProfile <- loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now maybeSessionId
+    pure (now, loadedProfile)
 
 handlePendingProfile ::
   AccountActionRequest ->
   ProfileSubmission ->
-  AccountWorkflow ->
   Word64 ->
   AccountProfile ->
   AccountActionWorkflow
-handlePendingProfile actionRequest submission workflow now profile =
+handlePendingProfile actionRequest submission now profile =
   case profileIntentValue submission of
     "resend-verification" -> do
-      resendResult <-
-        liftAppIO $
-          resendEmailVerificationAt
-            (accountWorkflowStore workflow)
-            (accountWorkflowEmailDelivery workflow)
-            (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
-            (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
-            now
-            emailVerificationLifetimeNanoseconds
-            profile
+      resendResult <- resendEmailVerificationNow actionRequest now profile
       interpretProfileResendResult actionRequest profile resendResult
     _ -> pure (profileResponse actionRequest Http.status422 (pendingProfileForm actionRequest profile (Just (localized actionRequest "Choose a profile action." "Elige una accion de perfil.")) True))
+
+resendEmailVerificationNow :: AccountActionRequest -> Word64 -> AccountProfile -> AppM publicFailure (Either ResendVerificationError ())
+resendEmailVerificationNow actionRequest now profile = do
+  workflow <- accountWorkflow
+  liftIO $
+    resendEmailVerificationAt
+      (accountWorkflowStore workflow)
+      (accountWorkflowEmailDelivery workflow)
+      (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
+      (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
+      now
+      emailVerificationLifetimeNanoseconds
+      profile
 
 interpretProfileResendResult ::
   AccountActionRequest ->

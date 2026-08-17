@@ -8,7 +8,6 @@ module WebApi.AppEffect
     FailureCode (..),
     FailureDiagnostics (..),
     askAppServices,
-    liftAppIO,
     renderFailureCode,
     runAppM,
     throwAppFailure,
@@ -16,7 +15,6 @@ module WebApi.AppEffect
 where
 
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
-import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Reader (MonadReader (ask), ReaderT, runReaderT)
 import Data.Text (Text)
 import Data.Word (Word64)
@@ -106,9 +104,6 @@ type AppM publicFailure = ReaderT AppServices (ExceptT (AppFailure publicFailure
 
 askAppServices :: AppM publicFailure AppServices
 askAppServices = ask
-
-liftAppIO :: IO value -> AppM publicFailure value
-liftAppIO = liftIO
 
 throwAppFailure :: AppFailure publicFailure -> AppM publicFailure value
 throwAppFailure = throwError
