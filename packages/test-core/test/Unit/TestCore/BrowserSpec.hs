@@ -449,7 +449,10 @@ spec = do
       exists <- doesFileExist path
       if exists
         then pure ()
-        else threadDelay 1000 >> waitForFile path
+        -- Leave time for the worker thread and its Node child to run.  A
+        -- millisecond-scale filesystem polling loop can starve that handshake
+        -- under a clean, CPU-contended coverage build.
+        else threadDelay 100000 >> waitForFile path
 
     interruptedByThreadKilled result =
       case result of
