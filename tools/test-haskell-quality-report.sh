@@ -25,7 +25,8 @@ printf '%s\n' 'module Vendor where' 'vendored value = case value of Left problem
 
 printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\\n" "$*" >>"$QUALITY_ARGON_CALLS"' 'printf "%s\\n" "fixture/Production.hs" "  1:1 productionHotspot - 12" "  2:1 spec - 120" "  3:1 helperHotspot - 9"' >"$fixture_root/bin/argon"
 printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$fixture_root/bin/hlint"
-chmod +x "$fixture_root/bin/argon" "$fixture_root/bin/hlint" "$fixture_root/tools/haskell-quality-report.sh"
+printf '%s\n' '#!/usr/bin/env bash' 'if [ "${1:-}" = "-v" ]; then' "  grep -Ev '^[[:space:]]+[0-9]+:[0-9]+ spec - '" 'elif [[ " $* " == *" --no-filename "* ]]; then' "  echo '\"repeat\"'" "  echo '\"repeat\"'" "  echo '\"repeat\"'" 'else' '  printf "%s\n" "packages/core/src/Fixture.hs:2:forward value = case value of Left problem -> Left problem; Right result -> Right result" "packages/core/src/Repeat.hs:2:manual action = withExceptT Wrap (ExceptT action)"' 'fi' >"$fixture_root/bin/rg"
+chmod +x "$fixture_root/bin/argon" "$fixture_root/bin/hlint" "$fixture_root/bin/rg" "$fixture_root/tools/haskell-quality-report.sh"
 
 argon_calls="$fixture_root/argon-calls.txt"
 report_output="$(cd "$fixture_root" && QUALITY_ARGON_CALLS="$argon_calls" PATH="$fixture_root/bin:$PATH" tools/haskell-quality-report.sh)"
