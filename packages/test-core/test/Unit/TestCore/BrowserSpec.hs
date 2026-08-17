@@ -2,8 +2,9 @@
 
 {-# SPEC #-}
 
-import Control.Concurrent (threadDelay)
-import Control.Exception (finally)
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (AsyncException (ThreadKilled), SomeException, finally, fromException, try)
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Encoding qualified as AesonEncoding
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -11,11 +12,12 @@ import Data.Foldable (traverse_)
 import Data.IORef (newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
-import System.Directory (withCurrentDirectory)
+import System.Directory (doesFileExist, withCurrentDirectory)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
+import System.Timeout (timeout)
 import TestCore.Browser
 
 data FieldState = FieldState
@@ -101,6 +103,23 @@ spec = do
             Right _ -> False
 
   describe "runBrowserScenario" $ do
+    it "terminates the runner when initialization is interrupted asynchronously" $
+      withCancellableFakeRunner $ \config terminationPath -> do
+        completion <- newEmptyMVar
+        workerThread <-
+          forkIO $ do
+            result <- try (runBrowserScenario config (pure ())) :: IO (Either SomeException (Either BrowserRunnerError ()))
+            putMVar completion result
+        let interruptWorker = killThread workerThread
+        ( do
+            awaitFile (terminationPath <> ".entered") `shouldReturn` Just ()
+            interruptWorker
+            completionResult <- timeout 1000000 (takeMVar completion)
+            completionResult `shouldSatisfy` interruptedByThreadKilled
+            awaitFile terminationPath `shouldReturn` Just ()
+          )
+          `finally` interruptWorker
+
     it "uses semantic locators and batches only composed observations" $
       withFakeRunner "normal" $ \config -> do
         let emailField = byLabel "Email address"
@@ -405,19 +424,55 @@ spec = do
         writeFile runnerPath fakeRunnerSource
         action config
 
+    withCancellableFakeRunner action =
+      withSystemTempDirectory "browser-runner-cancellation" $ \tempDirectory -> do
+        let runnerPath = tempDirectory </> "runner.js"
+            terminationPath = tempDirectory </> "terminated"
+            config =
+              defaultPlaywrightBrowserConfig
+                { browserRunnerArguments = [runnerPath, "hang-initialize", terminationPath],
+                  browserTimeoutMilliseconds = 250
+                }
+        writeFile runnerPath fakeRunnerSource
+        action config terminationPath
+
+    awaitFile path =
+      timeout 1000000 (waitForFile path)
+
+    waitForFile path = do
+      exists <- doesFileExist path
+      if exists
+        then pure ()
+        else threadDelay 1000 >> waitForFile path
+
+    interruptedByThreadKilled result =
+      case result of
+        Just (Left exception) ->
+          case fromException exception of
+            Just ThreadKilled -> True
+            _ -> False
+        _ -> False
+
     fakeRunnerSource =
       unlines
-        [ "const readline = require('node:readline');",
+        [ "const fs = require('node:fs');",
+          "const readline = require('node:readline');",
           "const mode = process.argv[2];",
+          "const terminationPath = process.argv[3];",
           "let textAttempts = 0;",
           "const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
           "function reply(id, status, value, message, artifacts = []) {",
           "  process.stdout.write(JSON.stringify({ protocol: 1, id, status, value, message, artifacts }) + '\\n');",
           "}",
           "function rawReply(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }",
+          "if (mode === 'hang-initialize') {",
+          "  process.on('SIGTERM', () => { fs.writeFileSync(terminationPath, 'terminated'); process.exit(0); });",
+          "  setTimeout(() => process.exit(0), 2000).unref();",
+          "}",
           "(async () => {",
           "  for await (const line of lines) {",
           "    const request = JSON.parse(line);",
+          "    if (mode === 'hang-initialize' && request.command === 'initialize') { fs.writeFileSync(terminationPath + '.entered', 'entered'); continue; }",
           "    if (mode === 'init-error' && request.command === 'initialize') { reply(request.id, 'error', null, 'initialization failed'); continue; }",
           "    if (mode === 'malformed' && request.command === 'visit') { process.stdout.write('{invalid\\n'); continue; }",
           "    if (mode === 'wrong-protocol' && request.command === 'visit') { rawReply({ protocol: 2, id: request.id, status: 'ok', value: null }); continue; }",

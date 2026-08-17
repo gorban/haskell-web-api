@@ -8,7 +8,7 @@ module TestCore.Browser.Protocol
   )
 where
 
-import Control.Exception (IOException, SomeException, displayException, try)
+import Control.Exception (IOException, SomeException, bracket, displayException, finally, mask, try)
 import Control.Monad (void)
 import Data.Aeson (Value (Null), eitherDecodeStrict', encode, object, withObject, (.:), (.:?), (.=))
 import Data.Aeson.Types (Pair, parseEither)
@@ -35,12 +35,17 @@ data BrowserSession = BrowserSession
 
 withBrowserSession :: BrowserConfig -> (BrowserSession -> IO (Either BrowserRunnerError a)) -> IO (Either BrowserRunnerError a)
 withBrowserSession config action =
-  launchBrowserSession config >>= either (pure . Left) (initializeBrowserSession action)
+  mask $ \restore -> do
+    launchResult <- launchBrowserSession config
+    case launchResult of
+      Left launchError -> pure (Left launchError)
+      Right session ->
+        bracket (pure session) releaseSession (restore . initializeBrowserSession action)
 
 initializeBrowserSession :: (BrowserSession -> IO (Either BrowserRunnerError a)) -> BrowserSession -> IO (Either BrowserRunnerError a)
 initializeBrowserSession action session = do
   initialized <- sendCommand session "initialize" (configurationFields (sessionConfig session))
-  either (closeFailedSession session) (const (runBrowserSession action session)) initialized
+  either (pure . Left) (const (runBrowserSession action session)) initialized
 
 runBrowserSession :: (BrowserSession -> IO (Either BrowserRunnerError a)) -> BrowserSession -> IO (Either BrowserRunnerError a)
 runBrowserSession action session = do
@@ -106,13 +111,21 @@ finishSession session scenarioResult = do
           responseValue
       )
 
-closeFailedSession :: BrowserSession -> BrowserRunnerError -> IO (Either BrowserRunnerError a)
-closeFailedSession session initializationError = do
-  terminateProcess (sessionProcess session)
-  safeClose (sessionInput session)
-  safeClose (sessionOutput session)
-  _ <- waitForProcess (sessionProcess session)
-  pure (Left initializationError)
+releaseSession :: BrowserSession -> IO ()
+releaseSession session =
+  safeTerminate (sessionProcess session)
+    `finally` do
+      safeClose (sessionInput session)
+      safeClose (sessionOutput session)
+      safeWait (sessionProcess session)
+
+safeTerminate :: ProcessHandle -> IO ()
+safeTerminate processHandle =
+  void (try (terminateProcess processHandle) :: IO (Either IOException ()))
+
+safeWait :: ProcessHandle -> IO ()
+safeWait processHandle =
+  void (try (waitForProcess processHandle) :: IO (Either IOException ExitCode))
 
 safeClose :: Handle -> IO ()
 safeClose handle = void (try (hClose handle) :: IO (Either IOException ()))
