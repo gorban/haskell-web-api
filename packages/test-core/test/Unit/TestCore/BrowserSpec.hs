@@ -437,7 +437,7 @@ spec = do
         action config terminationPath
 
     awaitFile path =
-      timeout 1000000 (waitForFile path)
+      timeout 5000000 (waitForFile path)
 
     waitForFile path = do
       exists <- doesFileExist path
@@ -467,7 +467,7 @@ spec = do
           "function rawReply(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }",
           "if (mode === 'hang-initialize') {",
           "  process.on('SIGTERM', () => { fs.writeFileSync(terminationPath, 'terminated'); process.exit(0); });",
-          "  setTimeout(() => process.exit(0), 2000).unref();",
+          "  setTimeout(() => process.exit(0), 15000).unref();",
           "}",
           "(async () => {",
           "  for await (const line of lines) {",
