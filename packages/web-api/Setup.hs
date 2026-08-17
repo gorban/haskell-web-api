@@ -1,5 +1,4 @@
 import Control.Monad (when)
-import Core.Setup (copyLicenseFromRoot)
 import Core.Setup.PrerequisiteReport
   ( DatabasePrerequisiteStatus (DatabasePrerequisiteAutostarted),
     SetupPrerequisiteReport (databasePrerequisiteStatus),
@@ -24,7 +23,6 @@ main = do
   defaultMainWithHooks
     simpleUserHooks
       { preConf = \args flags -> do
-          copyLicenseFromRoot
           recordDatabaseAutostart
           preConf simpleUserHooks args flags,
         buildHook = runBuildAndDatabaseSetup,

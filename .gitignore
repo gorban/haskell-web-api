@@ -16,7 +16,12 @@ cabal.project.local~
 **/LICENSE
 !/LICENSE
 !/examples/two-pages/LICENSE
+!/packages/core/LICENSE
+!/packages/harch-web/LICENSE
 !/packages/hspec-expectations-match/LICENSE
+!/packages/test-core/LICENSE
+!/packages/web-api/LICENSE
 
-# Ignore intentionally duplicated test-core sources in core package that avoids cyclic dependencies
-/packages/core/test-core-src/
+# Keep core's small, intentional test-core source snapshot: core tests cannot
+# depend on test-core without creating a package dependency cycle.
+!/packages/core/test-core-src/

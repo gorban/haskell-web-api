@@ -1,4 +1,4 @@
-import Core.Setup (copyLicenseFromRoot, coreMain)
+import Core.Setup (coreMain)
 
 main :: IO ()
-main = coreMain [copyLicenseFromRoot]
+main = coreMain
