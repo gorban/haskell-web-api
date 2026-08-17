@@ -1186,6 +1186,8 @@ spec =
               ( (apiBodyDecoderMediaType formDecoder `shouldBe` urlEncodedFormMediaType)
                   :| [ fmap apiFormFields parsedForm `shouldBe` Right [("name", "Ada Lovelace"), ("empty", "")],
                        apiBodyDecoderParse formDecoder "one=1&two=2&three=3" `shouldBe` Left "form contains more fields than declared",
+                       apiBodyDecoderParse formDecoder "one=1&two=2&three=%"
+                         `shouldBe` Left "form contains more fields than declared",
                        apiBodyDecoderParse formDecoder "name=%ZZ" `shouldBe` Left "form contains invalid percent encoding",
                        apiBodyDecoderParse formDecoder "name=%" `shouldBe` Left "form contains invalid percent encoding",
                        apiBodyDecoderParse formDecoder "name=%A" `shouldBe` Left "form contains invalid percent encoding",

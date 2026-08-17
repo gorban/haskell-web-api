@@ -246,6 +246,8 @@ apiFormFields (ApiForm fields) = fields
 
 -- | Decode a small URL-encoded form with an explicit field-count bound.
 -- Byte limits remain owned by the enclosing 'ApiRequestBody' declaration.
+-- The field bound is admitted before percent-validation and query decoding, so
+-- an over-limit body never asks 'HttpUri.parseQuery' to allocate every field.
 urlEncodedFormBodyDecoder :: Natural -> ApiBodyDecoder ApiForm
 urlEncodedFormBodyDecoder maximumFields =
   ApiBodyDecoder
@@ -254,13 +256,31 @@ urlEncodedFormBodyDecoder maximumFields =
     }
   where
     parseForm bodyBytes = do
+      unless (hasAtMostFormFields maximumFields bodyBytes) tooManyFormFields
       validatePercentEscapes bodyBytes
       let fields = HttpUri.parseQuery bodyBytes
-      if fromIntegral (length fields) > maximumFields
-        then Left "form contains more fields than declared"
-        else ApiForm <$> traverse decodeField fields
+      ApiForm <$> traverse decodeField fields
     decodeField (name, maybeValue) =
       (,) <$> decodeUtf8Field name <*> maybe (Right "") decodeUtf8Field maybeValue
+
+tooManyFormFields :: Either Text ()
+tooManyFormFields = Left "form contains more fields than declared"
+
+-- | Count form components only until the declared bound is exceeded. This
+-- deliberately matches 'HttpUri.parseQuery': the empty body has no fields,
+-- while each ampersand terminates one field and a trailing ampersand creates
+-- no extra empty field.
+hasAtMostFormFields :: Natural -> ByteString -> Bool
+hasAtMostFormFields = go
+  where
+    go remainingFields remainingBytes
+      | ByteString.null remainingBytes = True
+      | remainingFields == 0 = False
+      | otherwise =
+          case ByteString.elemIndex 38 remainingBytes of
+            Nothing -> True
+            Just separatorIndex ->
+              go (remainingFields - 1) (ByteString.drop (separatorIndex + 1) remainingBytes)
 
 validatePercentEscapes :: ByteString -> Either Text ()
 validatePercentEscapes bytes =

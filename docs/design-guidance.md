@@ -347,7 +347,9 @@ body consumer now run inside that same route table and response interpreter. Typ
 declarative JSON, text, byte, or custom encoders with RFC 9110 `Accept` selection and `Vary: Accept`.
 `RequestCodec` now also decodes case-sensitive cookie fields; malformed cookie fragments are ignored and
 repeated names produce the same typed duplicate-field error as query and header fields. A declared bounded
-`urlEncodedFormBodyDecoder` decodes one `application/x-www-form-urlencoded` body with a field-count cap;
+`urlEncodedFormBodyDecoder` admits one `application/x-www-form-urlencoded` body against its field-count
+cap before percent validation or query decoding, so an over-limit form cannot allocate an unbounded query
+field list; it then decodes the admitted form;
 `ApiUrlEncodedFormRequestBody` makes that form decoder an endpoint's one body consumer; it adds its fields
 to query/header/cookie request data before the same accumulating `RequestCodec` runs through `formField`.
 This preserves parse failure separately from field validation. Response `Accept` media parameters now match
