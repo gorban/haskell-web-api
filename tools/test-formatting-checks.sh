@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+formatting_script="$repo_root/.github/scripts/formatting-checks.sh"
+fixture_root="$(mktemp -d)"
+trap 'rm -rf "$fixture_root"' EXIT
+
+mkdir -p "$fixture_root/bin" "$fixture_root/empty/packages" "$fixture_root/only-cabal/packages/core" "$fixture_root/only-haskell/packages/core" "$fixture_root/complete/packages/core"
+
+printf '%s\n' '#!/usr/bin/env bash' 'if [ "${1:-}" = "--help" ]; then' '  printf "%s\\n" "Usage: cabal-gild [OPTIONS] [FILE ...]"' 'fi' >"$fixture_root/bin/cabal-gild"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$fixture_root/bin/hlint"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$fixture_root/bin/ormolu"
+printf '%s\n' '#!/usr/bin/env bash' 'exit 0' >"$fixture_root/bin/dos2unix"
+chmod +x "$fixture_root/bin/cabal-gild" "$fixture_root/bin/hlint" "$fixture_root/bin/ormolu" "$fixture_root/bin/dos2unix"
+
+printf '%s\n' 'cabal-version: 3.0' 'name: fixture' 'version: 0' >"$fixture_root/only-cabal/packages/core/fixture.cabal"
+printf '%s\n' 'module Fixture where' 'fixture = ()' >"$fixture_root/only-haskell/packages/core/Fixture.hs"
+printf '%s\n' 'cabal-version: 3.0' 'name: fixture' 'version: 0' >"$fixture_root/complete/packages/core/fixture.cabal"
+printf '%s\n' 'module Fixture where' 'fixture = ()' >"$fixture_root/complete/packages/core/Fixture.hs"
+
+expect_failure() {
+  local description="$1"
+  local fixture_path="$2"
+  local expected_message="$3"
+  local output
+
+  if output="$(PATH="$fixture_root/bin:$PATH" "$formatting_script" --format-target-fixture "$fixture_path" 2>&1)"; then
+    printf 'Formatting check unexpectedly accepted %s.\n' "$description" >&2
+    exit 1
+  fi
+  if ! printf '%s' "$output" | rg -Fq "$expected_message"; then
+    printf 'Formatting check did not explain %s.\n' "$description" >&2
+    exit 1
+  fi
+}
+
+expect_failure 'an empty formatting target' "$fixture_root/empty" 'No Cabal files were found for formatting checks.'
+expect_failure 'a target with no Haskell files' "$fixture_root/only-cabal" 'No Haskell files were found for formatting checks.'
+expect_failure 'a target with no Cabal files' "$fixture_root/only-haskell" 'No Cabal files were found for formatting checks.'
+
+PATH="$fixture_root/bin:$PATH" "$formatting_script" --format-target-fixture "$fixture_root/complete" >/dev/null
+
+printf '%s\n' 'Formatting-check fixture checks passed.'

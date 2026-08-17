@@ -6,6 +6,11 @@ repo_root="$(git rev-parse --show-toplevel)"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
 
+if ! grep -Fq 'tools/test-haskell-quality-report.sh' "$repo_root/tools/run-optimized-build-check.sh"; then
+  printf '%s\n' 'Optimized build gate does not run the Haskell quality-report fixture checks.' >&2
+  exit 1
+fi
+
 mkdir -p "$fixture_root/bin" "$fixture_root/tools" "$fixture_root/packages/core/src" "$fixture_root/packages/core/test" "$fixture_root/packages/harch-web/src" "$fixture_root/packages/harch-web/test" "$fixture_root/packages/test-core/src" "$fixture_root/packages/test-core/test" "$fixture_root/packages/web-api/src" "$fixture_root/packages/web-api/test" "$fixture_root/packages/hspec-expectations-match/src" "$fixture_root/examples"
 git -C "$fixture_root" init --quiet
 cp "$repo_root/tools/haskell-quality-report.sh" "$fixture_root/tools/haskell-quality-report.sh"

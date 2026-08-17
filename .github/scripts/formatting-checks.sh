@@ -5,7 +5,27 @@ set -euo pipefail
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-required_commands=(cabal-gild hlint ormolu dos2unix)
+format_root="$repo_root"
+case "${1:-}" in
+  '') ;;
+  --format-target-fixture)
+    if [ "$#" != 2 ]; then
+      printf 'usage: %s --format-target-fixture <directory>\n' "$0" >&2
+      exit 2
+    fi
+    format_root="$2"
+    ;;
+  *)
+    printf 'usage: %s [--format-target-fixture <directory>]\n' "$0" >&2
+    exit 2
+    ;;
+esac
+
+if [ "$format_root" = "$repo_root" ]; then
+  "$repo_root/tools/test-formatting-checks.sh"
+fi
+
+required_commands=(cabal-gild hlint ormolu dos2unix rg)
 missing_commands=()
 
 for command_name in "${required_commands[@]}"; do
@@ -28,14 +48,32 @@ fi
 
 format_ok=0
 
-while IFS= read -r cabal_file; do
+if [ ! -d "$format_root/packages" ]; then
+  printf 'Formatting target root has no packages directory: %s\n' "$format_root" >&2
+  exit 1
+fi
+
+mapfile -t cabal_files < <(find "$format_root/packages" -name '*.cabal' -type f ! -path "$format_root/packages/hspec-expectations-match/*" -print | sort)
+mapfile -t haskell_files < <(find "$format_root/packages" -name '*.hs' -type f ! -path "$format_root/packages/hspec-expectations-match/*" -print | sort)
+
+if [ "${#cabal_files[@]}" -eq 0 ]; then
+  printf '%s\n' 'No Cabal files were found for formatting checks.' >&2
+  exit 1
+fi
+
+if [ "${#haskell_files[@]}" -eq 0 ]; then
+  printf '%s\n' 'No Haskell files were found for formatting checks.' >&2
+  exit 1
+fi
+
+for cabal_file in "${cabal_files[@]}"; do
   output="$(cabal-gild "$cabal_file" --mode check 2>&1)" || {
     printf '%s: %s\n\n' "$cabal_file" "$output"
     format_ok=1
   }
-done < <(find packages -name '*.cabal' -type f | grep -v '^packages/hspec-expectations-match')
+done
 
-while IFS= read -r haskell_file; do
+for haskell_file in "${haskell_files[@]}"; do
   dos2unix -q "$haskell_file"
   output="$(hlint --language=ImportQualifiedPost "$haskell_file" 2>&1)" || {
     printf '%s\n' "$output"
@@ -46,7 +84,7 @@ while IFS= read -r haskell_file; do
     printf '%s\n' "$output"
     format_ok=1
   }
-done < <(find packages -name '*.hs' -type f | grep -v '^packages/hspec-expectations-match')
+done
 
 if [ "$format_ok" -ne 0 ]; then
   echo 'Found formatting issues in packages/ files'

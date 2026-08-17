@@ -7,6 +7,8 @@ build_log="$(mktemp)"
 trap 'rm -f "$build_log"' EXIT
 
 "$repo_root/tools/test-check-build-diagnostics.sh"
+"$repo_root/tools/test-haskell-quality-report.sh"
+"$repo_root/tools/test-install-git-hooks.sh"
 
 if ! command -v ld.lld >/dev/null; then
   printf '%s\n' 'LLVM lld is required for the optimized diagnostic gate; install an ld.lld executable before running this check.' >&2

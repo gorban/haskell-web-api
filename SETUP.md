@@ -1322,8 +1322,8 @@ image, database migration, app endpoints, and cleanup.
 The .github workflow `ci.yml` requires formatting checks with `cabal-gild`, `hlint`, and `ormolu` for the
 `Formatting checks` step.
 
-You may want to install the formatting tools and set up the pre-commit hook that the CI workflow uses to
-fail fast on formatting regressions before a push or pull request.
+You may want to install the formatting tools and set up the tracked pre-commit hook, which runs the same
+formatting gate as CI, to fail fast on formatting regressions before a push or pull request.
 
 ```bash
 .github/scripts/install-formatting-tools.sh
@@ -1339,14 +1339,15 @@ installer intentionally pins `cabal-gild` to `1.8.4.1` and Ormolu to a tested re
 match CI. Both the CI check and the VS Code formatter pass `-XImportQualifiedPost` to Ormolu, matching the
 project's postpositive qualified-import style.
 
-To fail fast on formatting regressions before a push or pull request, copy the tracked pre-commit hook into
-your local git hooks directory:
+To fail fast on formatting regressions before a push or pull request, install the tracked pre-commit hook:
 
 ```bash
-install -Dm755 .github/hooks/pre-commit .git/hooks/pre-commit
+tools/install-git-hooks.sh
 ```
 
-After copying it, any git commit will automatically run formatting checks, or you can also run it yourself:
+The installer will not overwrite a different pre-commit hook or bypass an existing `core.hooksPath`; resolve
+either intentional local policy first. After installation, any git commit will automatically run formatting
+checks, or you can also run it yourself:
 
 ```bash
 git hook run pre-commit
