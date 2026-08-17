@@ -196,9 +196,8 @@ openLoopbackSocket =
   openListenerSocket ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = 0}
 
 socketPort :: Socket.Socket -> IO Int
-socketPort listeningSocket = do
-  Socket.SockAddrInet portNumber _ <- Socket.getSocketName listeningSocket
-  pure (fromIntegral portNumber)
+socketPort listeningSocket =
+  fromIntegral <$> Socket.socketPort listeningSocket
 
 openListenerSocket :: ListenerEndpoint -> IO Socket.Socket
 openListenerSocket endpoint = do
