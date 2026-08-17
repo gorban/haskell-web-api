@@ -44,6 +44,24 @@ spec =
         devSmtpRecipients delivered `shouldBe` ["ada@example.test"]
         devSmtpRawMessage delivered `shouldSatisfy` ByteString.isInfixOf "Subject: Authenticated"
 
+    it "retains arrival order while finding and removing the newest matching email" $
+      bracket startDevSmtpServer stopDevSmtpServer $ \server -> do
+        let sender = required (mkEmailAddress "noreply@example.test")
+            recipient = required (mkEmailAddress "ada@example.test")
+            config = required (mkSmtpConfig (smtpConfigInput "127.0.0.1" (devSmtpPort server) "account.example.test" sender Nothing))
+            firstMessage = required (mkEmailMessage (EmailMessageInput recipient "First" "First body"))
+            secondMessage = required (mkEmailMessage (EmailMessageInput recipient "Second" "Second body"))
+        deliverSmtpEmail config firstMessage
+        deliverSmtpEmail config secondMessage
+        receivedEmails <- devSmtpReceivedEmails server
+        latestEmail <- awaitEmail server "ada@example.test"
+        ( map (ByteString.isInfixOf "Subject: First" . devSmtpRawMessage) receivedEmails,
+          map (ByteString.isInfixOf "Subject: Second" . devSmtpRawMessage) receivedEmails
+          )
+          `shouldBe` ([True, False], [False, True])
+        devSmtpRawMessage latestEmail `shouldSatisfy` ByteString.isInfixOf "Subject: Second"
+        (null <$> devSmtpReceivedEmails server) `shouldReturn` True
+
 required :: Maybe value -> value
 required = fromMaybe (error "Expected valid development SMTP fixture")
 

@@ -56,14 +56,14 @@ stopDevSmtpServer server = do
   Socket.close (devSmtpListener server)
 
 devSmtpReceivedEmails :: DevSmtpServer -> IO [DevSmtpEmail]
-devSmtpReceivedEmails = readMVar . devSmtpMailbox
+devSmtpReceivedEmails server = reverse <$> readMVar (devSmtpMailbox server)
 
 takeLatestDevSmtpEmailTo :: DevSmtpServer -> Text -> IO (Maybe DevSmtpEmail)
 takeLatestDevSmtpEmailTo server recipient = do
   let normalizedRecipient = Text.toCaseFold recipient
   modifyMVar (devSmtpMailbox server) $ \emails -> do
     let matchingEmail email = normalizedRecipient `elem` map Text.toCaseFold (devSmtpRecipients email)
-        result = find matchingEmail (reverse emails)
+        result = find matchingEmail emails
     pure (filter (not . matchingEmail) emails, result)
 
 acceptConnections :: Socket.Socket -> MVar [DevSmtpEmail] -> IO ()
@@ -71,7 +71,7 @@ acceptConnections listener mailbox = forever $ do
   (socket, _) <- Socket.accept listener
   void . forkIO $ do
     email <- receiveDevSmtpEmail socket
-    modifyMVar_ mailbox (pure . (<> [email]))
+    modifyMVar_ mailbox (pure . (email :))
 
 receiveDevSmtpEmail :: Socket.Socket -> IO DevSmtpEmail
 receiveDevSmtpEmail socket = do
