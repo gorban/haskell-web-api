@@ -12,9 +12,10 @@ cabal.project.local~
 /.env.local
 **/.tls/
 
-# Ignore LICENSE files copied by Setup.hs, except root and 3rd party packages
+# Ignore LICENSE files copied by Setup.hs, except root, published packages, and third-party packages
 **/LICENSE
 !/LICENSE
+!/examples/two-pages/LICENSE
 !/packages/hspec-expectations-match/LICENSE
 
 # Ignore intentionally duplicated test-core sources in core package that avoids cyclic dependencies

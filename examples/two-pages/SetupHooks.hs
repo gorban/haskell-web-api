@@ -3,7 +3,7 @@
 
 module SetupHooks (setupHooks) where
 
-import Control.Monad (filterM, when)
+import Control.Monad (filterM)
 import Control.Monad.IO.Class (liftIO)
 import Core.PageRoutes.Generator
   ( defaultGeneratorConfig,
@@ -20,7 +20,6 @@ import Distribution.Simple.SetupHooks
     Location (..),
     PreBuildComponentInputs (..),
     PreBuildComponentRules,
-    PreConfPackageHook,
     RulesM,
     SetupHooks (..),
     TargetInfo (..),
@@ -30,10 +29,7 @@ import Distribution.Simple.SetupHooks
     mkCommand,
     monitorDirectory,
     noBuildHooks,
-    noConfigureHooks,
-    noPreConfPackageOutputs,
     noSetupHooks,
-    preConfPackageHook,
     registerRule_,
     rules,
     staticRule,
@@ -44,8 +40,7 @@ import Distribution.Utils.Path
     makeSymbolicPath,
   )
 import System.Directory
-  ( copyFile,
-    doesDirectoryExist,
+  ( doesDirectoryExist,
     doesFileExist,
     listDirectory,
     makeAbsolute,
@@ -55,26 +50,11 @@ import System.FilePath (takeExtension, (</>))
 setupHooks :: SetupHooks
 setupHooks =
   noSetupHooks
-    { configureHooks =
-        noConfigureHooks
-          { preConfPackageHook = Just copyLicenseHook
-          },
-      buildHooks =
+    { buildHooks =
         noBuildHooks
           { preBuildComponentRules = Just pageRouteRules
           }
     }
-
-copyLicenseHook :: PreConfPackageHook
-copyLicenseHook inputs = do
-  let source = "../../LICENSE"
-      destination = "LICENSE"
-  sourceExists <- doesFileExist source
-  destinationExists <- doesFileExist destination
-  when (sourceExists && not destinationExists) $ do
-    copyFile source destination
-    putStrLn "Setup: Copied LICENSE from repository root"
-  pure (noPreConfPackageOutputs inputs)
 
 pageRouteRules :: PreBuildComponentRules
 pageRouteRules =
