@@ -8,13 +8,75 @@ coverage_fraction_is_incomplete() {
   local total
 
   IFS='/' read -r covered total <<<"$fraction"
-  [ -n "$covered" ] && [ -n "$total" ] && [ "$total" != "0" ] && [ "$covered" != "$total" ]
+  if ! [[ "$covered" =~ ^[0-9]+$ && "$total" =~ ^[0-9]+$ ]]; then
+    return 0
+  fi
+  if [ "$total" = "0" ]; then
+    [ "$covered" != "0" ]
+    return
+  fi
+  [ "$covered" != "$total" ]
 }
 
 coverage_percentage_is_incomplete() {
   local percentage="$1"
 
+  if ! [[ "$percentage" =~ ^[0-9]+([.][0-9]+)?$ ]]; then
+    return 0
+  fi
   awk -v percentage="$percentage" 'BEGIN { exit !(percentage + 0 < 100) }'
+}
+
+categories=(
+  "Top-level declarations"
+  "Alternatives"
+  "Expressions"
+)
+
+report_coverage_fractions() {
+  local report="$1"
+
+  awk 'BEGIN{IGNORECASE=1}
+    {
+      if (!capture) {
+        if (match($0, /Program Coverage Total/)) {
+          $0 = substr($0, RSTART + RLENGTH)
+          capture = 1
+        } else {
+          next
+        }
+      }
+      while (match($0, /[0-9]+[[:space:]]*\/[[:space:]]*[0-9]+/)) {
+        s = substr($0, RSTART, RLENGTH)
+        gsub(/[[:space:]]/, "", s)
+        n = index(s, "/")
+        if (n > 0) {
+          printf "%s/%s\n", substr(s, 1, n-1), substr(s, n+1)
+        }
+        $0 = substr($0, 1, RSTART-1) substr($0, RSTART+RLENGTH)
+      }
+      if (index($0, "</tr>") > 0) {
+        exit
+      }
+    }
+  ' "$report"
+}
+
+report_coverage_is_complete() {
+  local report="$1"
+  local -a fractions=()
+  local fraction
+
+  mapfile -t fractions < <(report_coverage_fractions "$report")
+  if [ "${#fractions[@]}" -lt "${#categories[@]}" ]; then
+    return 1
+  fi
+  for index in "${!categories[@]}"; do
+    fraction="${fractions[$index]}"
+    if coverage_fraction_is_incomplete "$fraction"; then
+      return 1
+    fi
+  done
 }
 
 # GHC executes these implementation modules only while compiling quasiquotes.
@@ -61,6 +123,15 @@ if [ "${1:-}" = "--coverage-gate-fixture" ]; then
     exit 2
   fi
   coverage_gate_fixture "$2" "$3"
+  exit
+fi
+
+if [ "${1:-}" = "--coverage-report-fixture" ]; then
+  if [ "$#" != 2 ]; then
+    printf 'usage: %s --coverage-report-fixture <hpc-report>\n' "$0" >&2
+    exit 2
+  fi
+  report_coverage_is_complete "$2"
   exit
 fi
 
@@ -321,15 +392,12 @@ repoRoot="$(pwd)"
 missing_coverage=false
 declare -a per_project_findings=()
 declare -a aggregate_findings=()
-categories=(
-  "Top-level declarations"
-  "Alternatives"
-  "Expressions"
-)
 aggregate_covered=(0 0 0)
 aggregate_total=(0 0 0)
+report_count=0
 while IFS= read -r report; do
   [ -z "$report" ] && continue
+  report_count=$((report_count + 1))
   echo "<iframe src='${report#$repoRoot/}'></iframe><br/>" >> hpc_index.html
   snippet=$(
     sed -e ':a' -e 'N' -e '$!ba' \
@@ -383,44 +451,20 @@ SCRIPT
   pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$report")")")")")")"
   package_name="${pkg_version_dir%%-[0-9]*}"
 
-  fractions=()
-  while IFS= read -r fraction_line; do
-    fractions+=("$fraction_line")
-  done < <(
-    awk 'BEGIN{IGNORECASE=1}
-      {
-        if (!capture) {
-          if (match($0, /Program Coverage Total/)) {
-            $0 = substr($0, RSTART + RLENGTH)
-            capture = 1
-          } else {
-            next
-          }
-        }
-        while (match($0, /[0-9]+[[:space:]]*\/[[:space:]]*[0-9]+/)) {
-          s = substr($0, RSTART, RLENGTH)
-          gsub(/[[:space:]]/, "", s)
-          n = index(s, "/")
-          if (n > 0) {
-            printf "%s/%s\n", substr(s, 1, n-1), substr(s, n+1)
-          }
-          $0 = substr($0, 1, RSTART-1) substr($0, RSTART+RLENGTH)
-        }
-        if (index($0, "</tr>") > 0) {
-          exit
-        }
-      }
-    ' "$report"
-  )
+  mapfile -t fractions < <(report_coverage_fractions "$report")
 
   for idx in "${!categories[@]}"; do
     fraction="${fractions[$idx]:-}"
     if [ -z "$fraction" ]; then
+      per_project_findings+=("${categories[$idx]} coverage for $package_name could not be parsed from its HPC report.")
+      missing_coverage=true
       continue
     fi
     cleaned_fraction="${fraction//[[:space:]]/}"
     IFS='/' read -r covered total <<<"$cleaned_fraction"
     if [ -z "$covered" ] || [ -z "$total" ]; then
+      per_project_findings+=("${categories[$idx]} coverage for $package_name could not be parsed from its HPC report.")
+      missing_coverage=true
       continue
     fi
     aggregate_covered[$idx]=$((aggregate_covered[$idx] + covered))
@@ -431,6 +475,10 @@ SCRIPT
     fi
   done
 done < <(find dist-newstyle -name hpc_index.html -type f -print | sort)
+if [ "$report_count" = "0" ]; then
+  per_project_findings+=("No per-project HPC reports were found.")
+  missing_coverage=true
+fi
 # Each package report is produced by its own coverage build. Aggregate those
 # authoritative production-report totals, rather than unioning raw TIX files
 # that also contain test-suite and build-only instrumentation from other runs.
