@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 module HarchWeb.DevSmtp
   ( DevSmtpEmail (..),
@@ -46,8 +45,7 @@ startDevSmtpServer = do
   Socket.setSocketOption listener Socket.ReuseAddr 1
   Socket.bind listener (Socket.SockAddrInet 0 (Socket.tupleToHostAddress (127, 0, 0, 1)))
   Socket.listen listener 16
-  address <- Socket.getSocketName listener
-  let Socket.SockAddrInet port _ = address
+  port <- Socket.socketPort listener
   mailbox <- newMVar []
   thread <- forkIO (acceptConnections listener mailbox)
   pure (DevSmtpServer listener thread (fromIntegral port) mailbox)
