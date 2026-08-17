@@ -29,32 +29,35 @@ printf '%s\n' '#!/usr/bin/env bash' 'if [ "${1:-}" = "-v" ]; then' "  grep -Ev '
 chmod +x "$fixture_root/bin/argon" "$fixture_root/bin/hlint" "$fixture_root/bin/rg" "$fixture_root/tools/haskell-quality-report.sh"
 
 argon_calls="$fixture_root/argon-calls.txt"
-report_output="$(cd "$fixture_root" && QUALITY_ARGON_CALLS="$argon_calls" PATH="$fixture_root/bin:$PATH" tools/haskell-quality-report.sh)"
+# Restrict the report's fallback PATH to standard system tools.  In particular,
+# this proves the fixture's `rg` executable is used instead of one incidentally
+# installed by a developer environment.
+report_output="$(cd "$fixture_root" && QUALITY_ARGON_CALLS="$argon_calls" PATH="$fixture_root/bin:/usr/bin:/bin" tools/haskell-quality-report.sh)"
 
-printf '%s' "$report_output" | rg -q 'productionHotspot - 12'
-printf '%s' "$report_output" | rg -q 'helperHotspot - 9'
-if printf '%s' "$report_output" | rg -q 'spec - 120'; then
+printf '%s' "$report_output" | grep -qE 'productionHotspot - 12'
+printf '%s' "$report_output" | grep -qE 'helperHotspot - 9'
+if printf '%s' "$report_output" | grep -qE 'spec - 120'; then
   printf '%s\n' 'quality report did not exclude top-level Hspec spec' >&2
   exit 1
 fi
-printf '%s' "$report_output" | rg -q 'Either \(Left/Right\)'
-printf '%s' "$report_output" | rg -q 'Custom \(Rejected/Accepted\)'
-printf '%s' "$report_output" | rg -q 'Manual effect-rail lifting review candidates'
-printf '%s' "$report_output" | rg -q 'Repeat.hs.*withExceptT Wrap \(ExceptT action\)'
-printf '%s' "$report_output" | rg -q 'Repeated production string literals \(3\+ uses; advisory\)'
-printf '%s' "$report_output" | rg -q '3[[:space:]]+"repeat"'
-printf '%s' "$report_output" | rg -q 'Module-health report: production \(advisory\)'
-printf '%s' "$report_output" | rg -q 'Module-health report: test \(advisory\)'
-printf '%s' "$report_output" | rg -q 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'
-printf '%s' "$report_output" | rg -q 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+1[[:space:]]+2'
-printf '%s' "$report_output" | rg -q 'packages/core/test/Spec.hs'
-printf '%s' "$report_output" | rg -q 'Alpha -> Beta -> Alpha'
-if printf '%s' "$report_output" | rg -q 'Vendor.hs'; then
+printf '%s' "$report_output" | grep -qE 'Either \(Left/Right\)'
+printf '%s' "$report_output" | grep -qE 'Custom \(Rejected/Accepted\)'
+printf '%s' "$report_output" | grep -qE 'Manual effect-rail lifting review candidates'
+printf '%s' "$report_output" | grep -qE 'Repeat.hs.*withExceptT Wrap \(ExceptT action\)'
+printf '%s' "$report_output" | grep -qE 'Repeated production string literals \(3\+ uses; advisory\)'
+printf '%s' "$report_output" | grep -qE '3[[:space:]]+"repeat"'
+printf '%s' "$report_output" | grep -qE 'Module-health report: production \(advisory\)'
+printf '%s' "$report_output" | grep -qE 'Module-health report: test \(advisory\)'
+printf '%s' "$report_output" | grep -qE 'lines.*decls.*imports.*exports.*arity.*fan-out.*fan-in'
+printf '%s' "$report_output" | grep -qE 'Alpha[[:space:]]+4[[:space:]]+2[[:space:]]+1[[:space:]]+2[[:space:]]+2[[:space:]]+1[[:space:]]+2'
+printf '%s' "$report_output" | grep -qE 'packages/core/test/Spec.hs'
+printf '%s' "$report_output" | grep -qE 'Alpha -> Beta -> Alpha'
+if printf '%s' "$report_output" | grep -qE 'Vendor.hs'; then
   printf '%s\n' 'quality report did not exclude vendored code' >&2
   exit 1
 fi
 
-test "$(rg -c -- '--min 11' "$argon_calls")" -eq 2
-test "$(rg -c -- '--min 8' "$argon_calls")" -eq 2
+test "$(grep -cF -- '--min 11' "$argon_calls")" -eq 2
+test "$(grep -cF -- '--min 8' "$argon_calls")" -eq 2
 
 printf '%s\n' 'Haskell quality report fixture checks passed.'
