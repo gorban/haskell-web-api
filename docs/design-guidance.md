@@ -372,10 +372,10 @@ route select the existing scoped multipart consumer exactly once; its storage ad
 ownership remain AD policy, so the endpoint does not create a new upload lifecycle or default to
 local files.
 
-`runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the composition points that run a
-declared route-family application against a real running (or locally test-served) server, not just a
-bare `Wai.Application` in a unit test: `runServer` and `withLocalTestServer` are now defined as the `id`
-middleware case of each. [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload`
+`runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the raw-WAI composition points
+for a declared route-family application against a real running (or locally test-served) server, not
+just a bare `Wai.Application` in a unit test. Typed applications instead use `runServer` and
+`withLocalTestServer`, which apply their declared request policy as the `id`-middleware case. [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload`
 page (`App.MultipartUpload`) is the compiled, tested demonstration of the whole native-upload slice —
 migrated 2026-08-13 onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`, the second
 application (after `examples/custom-api`) off the legacy `apiEndpointMiddleware`, so its own
@@ -503,10 +503,13 @@ instead of threaded separately into a shared handler), its two declarations use
 `ApiNoRequestBody`/`ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits`, and its
 CSRF-gated per-part multipart callback is unchanged except for calling the endpoint's own
 `withApiMultipartRequest` scoped consumer instead of `withMultipartRequestBodyWithStorage` directly —
-the same underlying scanner and storage adapter either way. `App.App`'s `multipartUploadApplication ::
-NativeUploadState -> Wai.Application` keeps its exact public signature (both the Unit and real-browser
-E2E suites call it directly), now built via `simpleSite` + `buildSiteApplication` + `toWaiApplication`
-instead of `apiEndpointMiddleware` wrapping a hand-written `notFoundApplication`. All 14 Unit tests and
+the same underlying scanner and storage adapter either way. `App.App`'s `multipartUploadApplication`
+builds the typed `Application` via `simpleSite` + `buildSiteApplication`; its executable-only WAI
+adapter is private. The Unit suite renders it through `toWaiApplication`, while the real-browser E2E
+suite passes the typed value to `withLocalTestServer`, so that test listener applies the site's same
+request-head, transport, and concurrency policies. This avoids pretending an opaque WAI function carries
+policy metadata or adding a second raw-WAI policy composition API. It replaced
+`apiEndpointMiddleware` wrapping a hand-written `notFoundApplication`. All 14 Unit tests and
 both real-browser E2E scenarios passed unchanged except one: a request to an undeclared path now
 receives the framework's standard response security headers (CSP, `X-Content-Type-Options`, etc.) on
 its `404`, because it now renders through the same `Site`/`toWaiApplication` pipeline as every other

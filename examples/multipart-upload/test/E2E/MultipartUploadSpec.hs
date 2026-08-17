@@ -6,7 +6,7 @@
 import App.App (multipartUploadApplication)
 import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, newNativeUploadState)
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb (LocalTestServer (..), withLocalTestServerForApplication)
+import HarchWeb (LocalTestServer (..), withLocalTestServer)
 
 spec =
   describe "multipart-upload real-browser behavior" $ do
@@ -51,4 +51,4 @@ withBrowserAndUploadServer action = do
       Left loadError -> expectationFailure loadError >> fail "unreachable"
       Right config -> pure config
   uploadState <- newNativeUploadState
-  withLocalTestServerForApplication (multipartUploadApplication uploadState) (\server -> action browser server uploadState)
+  withLocalTestServer (multipartUploadApplication uploadState) (\server -> action browser server uploadState)

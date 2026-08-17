@@ -54,7 +54,10 @@ withLocalTestServer webApplication useLocalServer = do
 -- | Serve an already-built 'Wai.Application' over a real loopback HTTP
 -- listener for the lifetime of the callback, e.g. one an application built
 -- directly with 'toWaiApplication' and its own 'HarchWeb.Site.Site'. Prefer
--- 'withLocalTestServer' when no such composition is needed.
+-- 'withLocalTestServer' when a typed application is available. This raw-WAI
+-- helper deliberately uses transport defaults: an opaque function carries no
+-- 'HarchWeb.RequestPolicyConfig' to apply. Do not use it as a substitute for
+-- policy-parity testing.
 withLocalTestServerForApplication :: Wai.Application -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServerForApplication =
   withLocalTestServerWithRequestHeadLimits unboundedRequestHeadLimits warpDefaultRequestTransportLimits

@@ -14,6 +14,7 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import HarchWeb qualified
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -184,7 +185,7 @@ newUploadApplication = fst <$> newUploadApplicationWithState
 newUploadApplicationWithState :: IO (Wai.Application, NativeUploadState)
 newUploadApplicationWithState = do
   state <- newNativeUploadState
-  pure (multipartUploadApplication state, state)
+  pure (HarchWeb.toWaiApplication (multipartUploadApplication state), state)
 
 currentCsrfToken :: Wai.Application -> IO Text
 currentCsrfToken application = do
