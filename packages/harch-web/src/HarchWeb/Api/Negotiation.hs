@@ -40,12 +40,12 @@ data AcceptedRange = AcceptedRange
 -- malformed entry is dropped rather than failing the whole header.
 parseAcceptHeader :: Text -> [AcceptedRange]
 parseAcceptHeader headerValue =
-  Maybe.mapMaybe parseAcceptEntry (Text.splitOn "," headerValue)
+  Maybe.mapMaybe parseAcceptEntry (splitOutsideQuotedString ',' headerValue)
 
 parseAcceptEntry :: Text -> Maybe AcceptedRange
 parseAcceptEntry entry =
   let (mediaRangeText, parameterSection) = Text.breakOn ";" (Text.strip entry)
-      parameterTexts = maybe [] (Text.splitOn ";") (Text.stripPrefix ";" parameterSection)
+      parameterTexts = maybe [] (splitOutsideQuotedString ';') (Text.stripPrefix ";" parameterSection)
    in do
         (typeText, subtypeText) <- parseMediaRange (Text.strip mediaRangeText)
         (mediaParameters, quality) <- acceptParameters parameterTexts
@@ -56,6 +56,23 @@ parseAcceptEntry entry =
               acceptedRangeParameters = mediaParameters,
               acceptedRangeQuality = quality
             }
+
+-- | Split a list-valued header component without treating a delimiter inside
+-- an RFC quoted-string as syntax. Backslash-escaped characters retain their
+-- original spelling for the parameter-value parser, but cannot end the quoted
+-- string while this scanner decides component boundaries.
+splitOutsideQuotedString :: Char -> Text -> [Text]
+splitOutsideQuotedString delimiter = go False False Text.empty
+  where
+    go !inQuotes !escaped current remaining =
+      case Text.uncons remaining of
+        Nothing -> [current]
+        Just (nextCharacter, rest)
+          | escaped -> go inQuotes False (Text.snoc current nextCharacter) rest
+          | nextCharacter == '\\' && inQuotes -> go inQuotes True (Text.snoc current nextCharacter) rest
+          | nextCharacter == '"' -> go (not inQuotes) False (Text.snoc current nextCharacter) rest
+          | nextCharacter == delimiter && not inQuotes -> current : go False False Text.empty rest
+          | otherwise -> go inQuotes False (Text.snoc current nextCharacter) rest
 
 -- | Parameters before @q@ describe the media range and constrain matching.
 -- Parameters after it are RFC 9110 accept extensions, so they cannot make a

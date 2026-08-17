@@ -1416,6 +1416,12 @@ spec =
         parseAcceptHeader "text/plain; charset=\"UTF-8\";q=0.5;level=1"
           `shouldBe` [AcceptedRange "text" "plain" [("charset", "utf-8")] 0.5]
 
+      it "keeps quoted commas, semicolons, and escaped quotes inside one Accept parameter" $
+        parseAcceptHeader "text/plain; note=\"first, second; \\\"quoted\\\"\";q=0.2, application/json"
+          `shouldBe` [ AcceptedRange "text" "plain" [("note", "first, second; \\\"quoted\\\"")] 0.2,
+                       AcceptedRange "application" "json" [] 1.0
+                     ]
+
       it "drops a malformed quality value and malformed media range" $
         expectAll
           ( (parseAcceptHeader "text/plain;q=nope" `shouldBe` [])
