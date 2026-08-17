@@ -4,8 +4,25 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 coverage_script="$repo_root/generate-code-coverage.sh"
+coverage_wrapper="$repo_root/tools/run-code-coverage-check.sh"
+ci_workflow="$repo_root/.github/workflows/ci.yml"
 fixture_root="$(mktemp -d)"
 trap 'rm -rf "$fixture_root"' EXIT
+
+if ! grep -Fq '"$repo_root/tools/test-generate-code-coverage.sh"' "$coverage_wrapper"; then
+  printf '%s\n' 'Coverage wrapper does not run the coverage gate fixture checks.' >&2
+  exit 1
+fi
+
+if ! grep -Fq 'tools/run-code-coverage-check.sh' "$ci_workflow"; then
+  printf '%s\n' 'CI does not invoke the shared coverage wrapper.' >&2
+  exit 1
+fi
+
+if grep -Fq './generate-code-coverage.sh' "$ci_workflow"; then
+  printf '%s\n' 'CI still contains a separate coverage gate implementation.' >&2
+  exit 1
+fi
 
 expect_failure() {
   local description="$1"

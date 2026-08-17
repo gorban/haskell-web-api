@@ -2,8 +2,10 @@
 
 The optimized build and coverage build are diagnostic boundaries, not merely test runs. Use
 `tools/run-optimized-build-check.sh` followed by `tools/run-code-coverage-check.sh` locally. CI
-runs the optimized diagnostic gate before the long coverage command, then applies the same warning
-classifier to coverage output before formatting or integration work.
+runs those same wrappers before formatting or integration work; it does not maintain a second
+coverage pipeline in YAML. The coverage wrapper first executes the coverage-gate fixture suite,
+then captures the real coverage output and applies the same warning classifier, so a local run and
+a CI run prove the same failure contract.
 
 Both commands require LLVM `ld.lld` and pass `-fuse-ld=lld` to GHC's native linker invocation. This
 removes the GNU `ld.bfd` dynamic-closure-symbol warning rather than suppressing it. CI installs

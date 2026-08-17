@@ -141,57 +141,12 @@ jobs:
       - name: Run tests with coverage
         if: steps.optimized_build.outcome == 'success'
         id: coverage
-        shell: bash
         run: |
-          # Fail on first non-zero exit code, including intermediate piped commands
-          set -euo pipefail
-
-          # Exercise the coverage script's failure contract before spending the
-          # full coverage run on a change that could silently weaken the gate.
-          tools/test-generate-code-coverage.sh
-
-          # Capture coverage's exit code so the diagnostic classifier can inspect
-          # the complete build output before either quality gate fails the job.
-          coverage_exit=0
-          coverage_log="$(mktemp)"
-          set +e
-          ./generate-code-coverage.sh 2>&1 | tee "$coverage_log"
-          pipeline_status=("${PIPESTATUS[@]}")
-          coverage_exit="${pipeline_status[0]}"
-          tee_exit="${pipeline_status[1]}"
-          set -e
-          if [ "$tee_exit" != 0 ]; then
-            coverage_exit="$tee_exit"
-          fi
-          diagnostic_exit=0
-          tools/check-build-diagnostics.sh "$coverage_log" || diagnostic_exit=$?
-
-          # Store exit code for later
-          echo "exit_code=$coverage_exit" >> "$GITHUB_OUTPUT"
-          echo "diagnostic_exit=$diagnostic_exit" >> "$GITHUB_OUTPUT"
-
-          # Let the dedicated gates below report the coverage or diagnostic failure.
-
-      - name: Check build diagnostics
-        if: steps.coverage.outcome == 'success'
-        id: check_build_diagnostics
-        run: |
-          exit "${{ steps.coverage.outputs.diagnostic_exit }}"
-
-      - name: Check coverage result
-        if: steps.check_build_diagnostics.outcome == 'success'
-        id: check_coverage_result
-        shell: bash
-        run: |
-          exit_code="${{ steps.coverage.outputs.exit_code }}"
-          if [ "$exit_code" != "0" ]; then
-            echo "::error::Coverage script failed with exit code $exit_code"
-            exit "$exit_code"
-          fi
+          tools/run-code-coverage-check.sh
 
       - name: Prepare coverage report for GitHub Pages
         id: prepare_coverage_report
-        if: github.ref == 'refs/heads/main' && steps.check_coverage_result.outcome == 'success'
+        if: github.ref == 'refs/heads/main' && steps.coverage.outcome == 'success'
         run: |
           set -euo pipefail
 
@@ -241,13 +196,13 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Install formatting and Ormolu test tools
-        if: steps.check_coverage_result.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
         id: install_formatting_tools
         run: |
           .github/scripts/install-formatting-tools.sh
 
       - name: Formatting checks
-        if: steps.check_coverage_result.outcome == 'success' && (steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped')
+        if: steps.coverage.outcome == 'success' && (steps.install_formatting_tools.outcome == 'success' || steps.install_formatting_tools.outcome == 'skipped')
         id: formatting_checks
         run: |
           .github/scripts/formatting-checks.sh
@@ -259,7 +214,7 @@ jobs:
           tools/check-vscode-ormolu-formatter.sh
 
       - name: Run integration and E2E tests
-        if: steps.check_coverage_result.outcome == 'success'
+        if: steps.coverage.outcome == 'success'
         id: run_tests_skip_unit
         run: |
           cabal test all -O2 --ghc-options=-optl-fuse-ld=lld --test-options="--skip Unit"
@@ -285,8 +240,7 @@ jobs:
             steps.deployment.outcome == 'failure' ||
             steps.formatting_checks.outcome == 'failure' ||
             steps.vscode_ormolu_formatter_checks.outcome == 'failure' ||
-            steps.run_tests_skip_unit.outcome == 'failure' ||
-            steps.check_coverage_result.outcome == 'failure'
+            steps.run_tests_skip_unit.outcome == 'failure'
           )
         uses: actions/cache/save@v5
         with:
