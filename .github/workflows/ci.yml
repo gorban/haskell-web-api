@@ -126,8 +126,14 @@ jobs:
           cabal update
           cabal install --ignore-project hspec-discover
 
-      - name: Seed PostgreSQL test database
+      - name: Check package manifests
         if: steps.install_test_tools.outcome == 'success' || steps.install_test_tools.outcome == 'skipped'
+        id: cabal_check
+        run: |
+          tools/check-cabal-packages.sh
+
+      - name: Seed PostgreSQL test database
+        if: steps.cabal_check.outcome == 'success'
         id: seed_postgres
         run: |
           cabal run haskell-web-api-db -- migrate-and-seed

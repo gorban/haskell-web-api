@@ -47,6 +47,7 @@ Jaeger, and LLVM `ld.lld` prerequisites are available, then seed the test databa
 
 ```sh
 cabal run haskell-web-api-db -- migrate-and-seed
+./tools/check-cabal-packages.sh
 ./tools/run-optimized-build-check.sh
 ./tools/run-code-coverage-check.sh
 ./.github/scripts/formatting-checks.sh

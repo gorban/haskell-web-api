@@ -67,7 +67,7 @@ COPY packages/core/core.cabal packages/core/
 COPY packages/harch-web/harch-web.cabal packages/harch-web/
 COPY packages/hspec-expectations-match/hspec-expectations-match.cabal packages/hspec-expectations-match/
 COPY packages/test-core/test-core.cabal packages/test-core/
-COPY packages/web-api/web-api.cabal packages/web-api/
+COPY packages/web-api/haskell-web-api.cabal packages/web-api/
 
 # Download dependencies (cacheable layer)
 RUN <<EOF
