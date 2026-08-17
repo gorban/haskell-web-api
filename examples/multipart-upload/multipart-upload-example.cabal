@@ -18,11 +18,11 @@ library
   hs-source-dirs: src
   build-depends:
     base ^>=4.22.0.0,
-    bytestring,
-    harch-web,
-    http-types,
-    text,
-    wai,
+    bytestring ^>=0.12.2.0,
+    harch-web ^>=0.1.2.0,
+    http-types ^>=0.12.5,
+    text ^>=2.1.3,
+    wai ^>=3.2.5,
 
 executable multipart-upload-example
   import: common
@@ -35,8 +35,8 @@ executable multipart-upload-example
 
   build-depends:
     base ^>=4.22.0.0,
-    multipart-upload-example,
-    warp,
+    multipart-upload-example ^>=0.1.0.0,
+    warp ^>=3.4.12,
 
 test-suite multipart-upload-example-tests
   import: common
@@ -52,14 +52,14 @@ test-suite multipart-upload-example-tests
     -with-rtsopts=-N
   build-depends:
     base ^>=4.22.0.0,
-    bytestring,
-    harch-web,
-    hspec,
-    http-types,
-    multipart-upload-example,
-    temporary,
-    test-core,
-    text,
-    wai,
+    bytestring ^>=0.12.2.0,
+    harch-web ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    http-types ^>=0.12.5,
+    multipart-upload-example ^>=0.1.0.0,
+    temporary ^>=1.3,
+    test-core ^>=0.1.2.0,
+    text ^>=2.1.3,
+    wai ^>=3.2.5,
   build-tool-depends:
-    test-core:spec-preprocessor
+    test-core:spec-preprocessor ^>=0.1.2.0

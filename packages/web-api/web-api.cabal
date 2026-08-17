@@ -42,12 +42,12 @@ extra-doc-files: CHANGELOG.md
 custom-setup
   setup-depends:
     base ^>=4.22.0.0,
-    Cabal,
-    Cabal-syntax,
-    core,
-    directory,
-    filepath,
-    process,
+    Cabal ^>=3.16.0.0,
+    Cabal-syntax ^>=3.16.0.0,
+    core ^>=0.1.2.0,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    process ^>=1.6.26.1,
 
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
 -- extra-source-files:
@@ -116,22 +116,22 @@ library
   -- other-extensions:
   -- Other library packages from which modules are imported.
   build-depends:
-    aeson,
+    aeson ^>=2.3.1.0,
     base ^>=4.22.0.0,
-    bytestring,
-    core,
-    cryptonite,
-    directory,
-    harch-web,
-    http-types,
-    mtl,
-    postgresql-libpq,
-    process,
-    stm,
-    text,
-    time,
-    transformers,
-    wai,
+    bytestring ^>=0.12.2.0,
+    core ^>=0.1.2.0,
+    cryptonite ^>=0.30,
+    directory ^>=1.3.10.0,
+    harch-web ^>=0.1.2.0,
+    http-types ^>=0.12.5,
+    mtl ^>=2.3.1,
+    postgresql-libpq ^>=0.11.0.0,
+    process ^>=1.6.26.1,
+    stm ^>=2.5.3.1,
+    text ^>=2.1.3,
+    time ^>=1.15,
+    transformers ^>=0.6.1.2,
+    wai ^>=3.2.5,
 
   -- Directories containing source files.
   hs-source-dirs: src
@@ -152,7 +152,7 @@ executable haskell-web-api
   -- Other library packages from which modules are imported.
   build-depends:
     base ^>=4.22.0.0,
-    haskell-web-api,
+    haskell-web-api ^>=0.1.2.0,
 
   -- Directories containing source files.
   hs-source-dirs: app
@@ -162,7 +162,7 @@ executable haskell-web-api-db
   main-is: DatabaseSetupMain.hs
   build-depends:
     base ^>=4.22.0.0,
-    haskell-web-api,
+    haskell-web-api ^>=0.1.2.0,
 
   hs-source-dirs: app
 
@@ -188,10 +188,10 @@ test-suite haskell-web-api-tests
   build-tool-depends:
     -- Discovers hspec *Spec.hs tests
     -- Our spec-preprocessor to fill in {-# SPEC #-} headers
-    haskell-web-api:haskell-web-api,
-    haskell-web-api:haskell-web-api-db,
-    hspec-discover:hspec-discover,
-    test-core:spec-preprocessor,
+    haskell-web-api:haskell-web-api ^>=0.1.2.0,
+    haskell-web-api:haskell-web-api-db ^>=0.1.2.0,
+    hspec-discover:hspec-discover ^>=2.11.17,
+    test-core:spec-preprocessor ^>=0.1.2.0,
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs
@@ -202,20 +202,20 @@ test-suite haskell-web-api-tests
     -- For testing framework:
     -- For running the executable in tests:
     base ^>=4.22.0.0,
-    bytestring,
-    core,
-    cryptonite,
-    directory,
-    filepath,
-    harch-web,
-    haskell-web-api,
-    hspec,
-    http-types,
-    network,
-    postgresql-libpq,
-    process,
-    template-haskell,
-    temporary,
-    test-core,
-    text,
-    wai,
+    bytestring ^>=0.12.2.0,
+    core ^>=0.1.2.0,
+    cryptonite ^>=0.30,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    harch-web ^>=0.1.2.0,
+    haskell-web-api ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    http-types ^>=0.12.5,
+    network ^>=3.2.8.0,
+    postgresql-libpq ^>=0.11.0.0,
+    process ^>=1.6.26.1,
+    template-haskell ^>=2.24.0.0,
+    temporary ^>=1.3,
+    test-core ^>=0.1.2.0,
+    text ^>=2.1.3,
+    wai ^>=3.2.5,

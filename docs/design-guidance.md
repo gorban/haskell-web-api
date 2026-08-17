@@ -783,6 +783,19 @@ newtype would duplicate it without improving composition or preventing an additi
 Observability remains explicitly numeric: `responseStatusCode` extracts `Http.statusCode` only when
 constructing the low-cardinality HTTP server attribute.
 
+### Follow-up decision — CJ: published dependency bounds (2026-08-17)
+
+**Decision: put PVP `^>=` bounds on every direct dependency in each project-owned package
+manifest; do not substitute a repository-only freeze file.** Dependency compatibility is part of a
+published package's contract, while `cabal.project` constrains only this checkout and would leave a
+Hackage consumer of an older release exposed to later incompatible APIs. The lower bounds are the
+versions in the current successful build plan; PVP supplies the corresponding compatibility ceiling.
+This applies uniformly to library, executable, test, custom-setup, and build-tool dependencies, so
+the package can be configured reproducibly as a whole. The vendored
+`hspec-expectations-match` manifest retains its upstream bounds rather than being rewritten as a
+project API decision. Future dependency upgrades must deliberately update the relevant lower bound
+and pass the complete release gate, rather than silently widening an old release's solver range.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

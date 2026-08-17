@@ -25,10 +25,10 @@ custom-setup
   setup-depends:
     base ^>=4.22.0.0,
     Cabal-hooks ==3.16.*,
-    core,
-    directory,
-    filepath,
-    transformers,
+    core ^>=0.1.2.0,
+    directory ^>=1.3.10.0,
+    filepath ^>=1.5.4.0,
+    transformers ^>=0.6.1.2,
 
 common common
   ghc-options: -Wall
@@ -59,12 +59,12 @@ library
   hs-source-dirs: src
   build-depends:
     base ^>=4.22.0.0,
-    bytestring,
-    directory,
-    harch-web,
-    http-types,
-    text,
-    wai,
+    bytestring ^>=0.12.2.0,
+    directory ^>=1.3.10.0,
+    harch-web ^>=0.1.2.0,
+    http-types ^>=0.12.5,
+    text ^>=2.1.3,
+    wai ^>=3.2.5,
 
 executable two-pages-example
   import: common
@@ -77,9 +77,9 @@ executable two-pages-example
 
   build-depends:
     base ^>=4.22.0.0,
-    harch-web,
-    text,
-    two-pages-example,
+    harch-web ^>=0.1.2.0,
+    text ^>=2.1.3,
+    two-pages-example ^>=0.1.0.0,
 
 test-suite two-pages-example-tests
   import: common
@@ -96,14 +96,14 @@ test-suite two-pages-example-tests
 
   build-depends:
     base ^>=4.22.0.0,
-    bytestring,
-    harch-web,
-    hspec,
-    http-types,
-    test-core,
-    text,
-    two-pages-example,
-    wai,
+    bytestring ^>=0.12.2.0,
+    harch-web ^>=0.1.2.0,
+    hspec ^>=2.11.17,
+    http-types ^>=0.12.5,
+    test-core ^>=0.1.2.0,
+    text ^>=2.1.3,
+    two-pages-example ^>=0.1.0.0,
+    wai ^>=3.2.5,
 
   build-tool-depends:
-    test-core:spec-preprocessor
+    test-core:spec-preprocessor ^>=0.1.2.0
