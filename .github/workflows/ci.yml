@@ -196,7 +196,7 @@ jobs:
         uses: actions/deploy-pages@v4
 
       - name: Install formatting and Ormolu test tools
-        if: steps.coverage.outcome == 'success' && steps.cabal_cache.outputs.cache-hit != 'true'
+        if: steps.coverage.outcome == 'success'
         id: install_formatting_tools
         run: |
           .github/scripts/install-formatting-tools.sh
