@@ -23,14 +23,7 @@ import WebApi.Route
 data DatabaseError
   = HomePageDataError Text
   | SecondPageDataError Text
-  deriving (Eq)
-
-instance Show DatabaseError where
-  showsPrec precedence databaseError =
-    showParen (precedence > 10) $
-      case databaseError of
-        HomePageDataError message -> showString "HomePageDataError " . shows message
-        SecondPageDataError message -> showString "SecondPageDataError " . shows message
+  deriving (Eq, Show)
 
 newtype HomePageData = HomePageData
   { homePageDataSummary :: Text

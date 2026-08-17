@@ -18,14 +18,14 @@ data RegistrationForm = RegistrationForm
     registrationFormMessage :: Maybe Text,
     registrationFormIsError :: Bool
   }
-  deriving (Eq)
+  deriving (Eq, Show)
 
 data VerificationForm = VerificationForm
   { verificationFormToken :: Text,
     verificationFormMessage :: Maybe Text,
     verificationFormIsError :: Bool
   }
-  deriving (Eq)
+  deriving (Eq, Show)
 
 data PendingProfileForm = PendingProfileForm
   { pendingProfileFormEmail :: Text,
@@ -33,7 +33,7 @@ data PendingProfileForm = PendingProfileForm
     pendingProfileFormIsError :: Bool,
     pendingProfileFormResendLabel :: Text
   }
-  deriving (Eq)
+  deriving (Eq, Show)
 
 data MfaEnrollmentForm = MfaEnrollmentForm
   { mfaEnrollmentFormSecret :: Maybe Text,
@@ -43,12 +43,26 @@ data MfaEnrollmentForm = MfaEnrollmentForm
   }
   deriving (Eq)
 
+-- | MFA setup values are rendered to the page exactly once, but must never
+-- enter diagnostics through a derived 'Show' instance.  Keep the public form
+-- state inspectable while redacting the secret and one-time recovery codes.
+instance Show MfaEnrollmentForm where
+  showsPrec precedence MfaEnrollmentForm {mfaEnrollmentFormMessage, mfaEnrollmentFormIsError} =
+    showParen
+      (precedence > 10)
+      ( showString "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = "
+          . shows mfaEnrollmentFormMessage
+          . showString ", mfaEnrollmentFormIsError = "
+          . shows mfaEnrollmentFormIsError
+          . showChar '}'
+      )
+
 data LoginForm = LoginForm
   { loginFormEmail :: Text,
     loginFormMessage :: Maybe Text,
     loginFormIsError :: Bool
   }
-  deriving (Eq)
+  deriving (Eq, Show)
 
 emptyRegistrationForm :: RegistrationForm
 emptyRegistrationForm = RegistrationForm Text.empty Text.empty Text.empty Nothing False

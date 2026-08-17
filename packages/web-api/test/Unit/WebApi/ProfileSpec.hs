@@ -173,7 +173,7 @@ spec =
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
       expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
 
-    it "keeps every profile page model comparable and printable" $ do
+    it "compares every rendered profile identity field and keeps models printable" $ do
       let signInAction = CallToAction "Sign in" LoginRoute "/login"
           registrationAction = CallToAction "Create account" RegistrationRoute "/register"
           signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
@@ -189,32 +189,24 @@ spec =
               (authenticatedModel, "AuthenticatedProfilePage"),
               (unavailableModel, "UnavailableProfilePage")
             ]
-      mapM_ (assertProfilePageModel . fst) models
       mapM_ assertProfilePageModelShow models
       expectAll
         ( (ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False)
-            :| [ equalValues pendingModel pendingModelWithIdentity
+            :| [ (pendingModel /= pendingModelWithIdentity)
                    `shouldBe` True,
-                 equalValues authenticatedModel authenticatedModelWithIdentity
+                 (authenticatedModel /= authenticatedModelWithIdentity)
                    `shouldBe` True,
-                 notEqualValues pendingModel authenticatedModel
+                 (pendingModel /= authenticatedModel)
                    `shouldBe` True,
-                 equalValues
-                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
+                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
+                   == PendingProfileForm "person@example.test" Nothing False "Resend verification email"
                    `shouldBe` True,
-                 equalValues
-                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-                   (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
-                   `shouldBe` False,
-                 equalValues
-                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-                   (PendingProfileForm "person@example.test" Nothing True "Resend verification email")
-                   `shouldBe` False,
-                 equalValues
-                   (PendingProfileForm "person@example.test" Nothing False "Resend verification email")
-                   (PendingProfileForm "person@example.test" Nothing False "Send again")
-                   `shouldBe` False,
+                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
+                   /= PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email"
+                   `shouldBe` True,
+                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
+                   /= PendingProfileForm "person@example.test" Nothing True "Resend verification email"
+                   `shouldBe` True,
                  (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
                    `shouldBe` True,
                  renderPendingProfileRegion defaultRequestContext UpdateProfileTarget (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
@@ -228,14 +220,6 @@ assertProfileResult action matches = do
   if matches result
     then pure ()
     else expectationFailure "unexpected profile-resolution result"
-
-equalValues :: (Eq value) => value -> value -> Bool
-equalValues = (==)
-{-# NOINLINE equalValues #-}
-
-notEqualValues :: (Eq value) => value -> value -> Bool
-notEqualValues = (/=)
-{-# NOINLINE notEqualValues #-}
 
 profileResponse :: AccountWorkflow -> WebApi.Route.AppRequestContext -> IO (HarchWeb.Response AppRoute WebApi.Route.AppRequestContext)
 profileResponse workflow requestContext =
@@ -294,13 +278,9 @@ profileFailureAttributes errorType =
     Observability.ObservabilityAttribute "app.surface" (Observability.TextAttribute "page")
   ]
 
-assertProfilePageModel :: ProfilePageModel -> Expectation
-assertProfilePageModel profilePageModel =
-  ProfilePage profilePageModel == ProfilePage profilePageModel `shouldBe` True
-
 assertProfilePageModelShow :: (ProfilePageModel, Text) -> Expectation
 assertProfilePageModelShow (profilePageModel, expectedPrefix) =
-  Text.pack (show (ProfilePage profilePageModel)) `shouldSatisfy` Text.isPrefixOf expectedPrefix
+  Text.pack (show (ProfilePage profilePageModel)) `shouldSatisfy` Text.isPrefixOf ("ProfilePage (" <> expectedPrefix)
 
 containsAll :: [Text] -> Text -> Bool
 containsAll expectedFragments actualBody = all (`Text.isInfixOf` actualBody) expectedFragments

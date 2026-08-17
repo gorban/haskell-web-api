@@ -56,7 +56,7 @@ import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrati
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.Api.Endpoints (noApiRequestFields)
 import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRuntimeApp, buildRuntimeAppWithDatabaseBuilder, runWithConfig, runtimeRequestObservabilityReporter, unavailableAccountWorkflow)
@@ -3456,7 +3456,11 @@ spec = do
               }
       assertSameProfilePageModel spanishProfileModel spanishProfileModelCopy
       show (ProfilePage spanishProfileModel)
-        `shouldSatisfy` (Text.isPrefixOf "SignedOutProfilePage" . Text.pack)
+        `shouldSatisfy` (Text.isPrefixOf "ProfilePage (SignedOutProfilePage" . Text.pack)
+      show spanishProfileModel
+        `shouldSatisfy` (Text.isPrefixOf "SignedOutProfilePage {profileHeading = \"Perfil\"" . Text.pack)
+      show [spanishProfileModel]
+        `shouldSatisfy` (Text.isPrefixOf "[SignedOutProfilePage {profileHeading = \"Perfil\"" . Text.pack)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -3520,14 +3524,47 @@ spec = do
       if VerificationForm "token" Nothing False /= VerificationForm "token" (Just "error") True then pure () else expectationFailure "verification forms must compare their state"
       if MfaEnrollmentForm Nothing [] Nothing False /= MfaEnrollmentForm Nothing [] (Just "error") True then pure () else expectationFailure "MFA forms must compare their state"
       if LoginForm "person@example.test" Nothing False /= LoginForm "other@example.test" Nothing False then pure () else expectationFailure "login forms must compare their email values"
-      show (RegistrationPage RegisterAccountTarget (RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False))
+      let registrationForm = RegistrationForm "person_01" "person@example.test" "Person Example" Nothing False
+          verificationForm = VerificationForm "token" (Just "ready") False
+          pendingProfileForm = PendingProfileForm "person@example.test" (Just "ready") False "Resend verification email"
+          mfaEnrollmentForm = MfaEnrollmentForm (Just "SECRET&VALUE") ["RECOVERY-CODE"] (Just "Ready") False
+          loginForm = LoginForm "person@example.test" Nothing False
+      show registrationForm
+        `shouldBe` "RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False}"
+      show [registrationForm]
+        `shouldBe` "[RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False}]"
+      show verificationForm
+        `shouldBe` "VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False}"
+      show [verificationForm]
+        `shouldBe` "[VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False}]"
+      show pendingProfileForm
+        `shouldBe` "PendingProfileForm {pendingProfileFormEmail = \"person@example.test\", pendingProfileFormMessage = Just \"ready\", pendingProfileFormIsError = False, pendingProfileFormResendLabel = \"Resend verification email\"}"
+      show [pendingProfileForm]
+        `shouldBe` "[PendingProfileForm {pendingProfileFormEmail = \"person@example.test\", pendingProfileFormMessage = Just \"ready\", pendingProfileFormIsError = False, pendingProfileFormResendLabel = \"Resend verification email\"}]"
+      let printedMfaEnrollment = Text.pack (show mfaEnrollmentForm)
+      printedMfaEnrollment
+        `shouldBe` "MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}"
+      showsPrec 11 mfaEnrollmentForm ""
+        `shouldBe` "(MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
+      show [mfaEnrollmentForm]
+        `shouldBe` "[MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False}]"
+      show loginForm
+        `shouldBe` "LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False}"
+      show [loginForm]
+        `shouldBe` "[LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False}]"
+      show (RegistrationPage RegisterAccountTarget registrationForm)
         `shouldBe` "RegistrationPage RegisterAccountTarget (RegistrationForm {registrationFormUsername = \"person_01\", registrationFormEmail = \"person@example.test\", registrationFormDisplayName = \"Person Example\", registrationFormMessage = Nothing, registrationFormIsError = False})"
-      show (EmailVerificationPage VerifyEmailTarget (VerificationForm "token" (Just "ready") False))
+      show (EmailVerificationPage VerifyEmailTarget verificationForm)
         `shouldBe` "EmailVerificationPage VerifyEmailTarget (VerificationForm {verificationFormToken = \"token\", verificationFormMessage = Just \"ready\", verificationFormIsError = False})"
-      show (MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False))
-        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget Nothing False"
-      show (LoginPage LoginAccountTarget (LoginForm "person@example.test" Nothing False))
-        `shouldBe` "LoginPage LoginAccountTarget \"person@example.test\" Nothing False"
+      let printedMfaEnrollmentPage = Text.pack (show (MfaEnrollmentPage EnrollMfaTarget mfaEnrollmentForm))
+      printedMfaEnrollmentPage
+        `shouldBe` "MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm {mfaEnrollmentFormSecret = <redacted>, mfaEnrollmentFormRecoveryCodes = <redacted>, mfaEnrollmentFormMessage = Just \"Ready\", mfaEnrollmentFormIsError = False})"
+      printedMfaEnrollment `shouldSatisfy` (not . Text.isInfixOf "SECRET&VALUE")
+      printedMfaEnrollment `shouldSatisfy` (not . Text.isInfixOf "RECOVERY-CODE")
+      printedMfaEnrollmentPage `shouldSatisfy` (not . Text.isInfixOf "SECRET&VALUE")
+      printedMfaEnrollmentPage `shouldSatisfy` (not . Text.isInfixOf "RECOVERY-CODE")
+      show (LoginPage LoginAccountTarget loginForm)
+        `shouldBe` "LoginPage LoginAccountTarget (LoginForm {loginFormEmail = \"person@example.test\", loginFormMessage = Nothing, loginFormIsError = False})"
       show (LogoutPage LogoutAccountTarget) `shouldBe` "LogoutPage LogoutAccountTarget"
       renderRegistrationPage (defaultRequestContext {requestLocale = Spanish}) Spanish (RegistrationForm "person_01\" onclick=\"bad" "person@example.test\" onclick=\"bad" "Person & Example" (Just "Ready <now>") False)
         `shouldSatisfy` \html ->
