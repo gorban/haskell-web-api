@@ -321,7 +321,7 @@ writeIfChanged outputPath output = do
 
 stableHash :: String -> String
 stableHash source =
-  let hashValue = foldl updateHash 14695981039346656037 source
+  let hashValue = foldl' updateHash 14695981039346656037 source
    in showHex hashValue ""
   where
     updateHash :: Word64 -> Char -> Word64

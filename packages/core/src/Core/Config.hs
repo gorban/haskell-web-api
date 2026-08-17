@@ -21,8 +21,8 @@ where
 import Control.Exception (IOException, displayException, evaluate, try)
 import Data.Char (isDigit)
 import Data.Foldable (asum)
-import Data.List (nub, sort)
 import Data.Maybe (mapMaybe)
+import Data.Set qualified as Set
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
@@ -147,7 +147,7 @@ parseHeaders key value =
 
 declaredIndices :: Text -> [(Text, Text)] -> [Int]
 declaredIndices entryPrefix =
-  sort . nub . mapMaybe (extractIndexedKey entryPrefix . fst)
+  Set.toAscList . Set.fromList . mapMaybe (extractIndexedKey entryPrefix . fst)
 
 extractIndexedKey :: Text -> Text -> Maybe Int
 extractIndexedKey entryPrefix entryKey =

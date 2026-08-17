@@ -16,10 +16,11 @@ where
 
 import Crypto.Random.Entropy (getEntropy)
 import Data.ByteString qualified as ByteString
+import Data.ByteString.Base16 qualified as Base16
 import Data.Char (isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Word (Word8)
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Password
   ( Password,
     PasswordHash,
@@ -69,13 +70,7 @@ passwordFor :: RecoveryCode -> Password
 passwordFor (RecoveryCode code) = mkPassword code
 
 renderCode :: ByteString.ByteString -> Text
-renderCode = Text.pack . concatMap renderByte . ByteString.unpack
-
-renderByte :: Word8 -> String
-renderByte byte = [hexDigit (byte `div` 16), hexDigit (byte `mod` 16)]
-
-hexDigit :: Word8 -> Char
-hexDigit value = "0123456789ABCDEF" !! fromIntegral value
+renderCode = Text.toUpper . TextEncoding.decodeLatin1 . Base16.encode
 
 isHexDigit :: Char -> Bool
 isHexDigit character = isDigit character || ('A' <= character && character <= 'F')

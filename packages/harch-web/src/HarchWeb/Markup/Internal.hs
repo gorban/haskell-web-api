@@ -23,6 +23,8 @@ where
 
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Lazy qualified as LazyText
+import Data.Text.Lazy.Builder qualified as Builder
 
 newtype Html = Html
   { htmlNodes :: [Node]
@@ -106,39 +108,42 @@ booleanAttribute :: AttributeName -> Attribute
 booleanAttribute name = Attribute name Nothing
 
 renderHtml :: Html -> Text
-renderHtml (Html nodes) = Text.concat (map renderNode nodes)
+renderHtml (Html nodes) = LazyText.toStrict (Builder.toLazyText (foldMap renderNode nodes))
 
-renderNode :: Node -> Text
+renderNode :: Node -> Builder.Builder
 renderNode node =
   case node of
     ElementNode tag attributes children ->
       "<"
-        <> tagText tag
-        <> Text.concat (map renderAttribute attributes)
+        <> Builder.fromText (tagText tag)
+        <> foldMap renderAttribute attributes
         <> ">"
-        <> Text.concat (map renderNode children)
+        <> foldMap renderNode children
         <> "</"
-        <> tagText tag
+        <> Builder.fromText (tagText tag)
         <> ">"
     VoidElementNode tag attributes ->
-      "<" <> tagText tag <> Text.concat (map renderAttribute attributes) <> ">"
+      "<" <> Builder.fromText (tagText tag) <> foldMap renderAttribute attributes <> ">"
     TextNode value -> escapeHtmlText value
-    TrustedNode trustedHtml -> trustedHtmlText trustedHtml
+    TrustedNode trustedHtml -> Builder.fromText (trustedHtmlText trustedHtml)
 
-renderAttribute :: Attribute -> Text
+renderAttribute :: Attribute -> Builder.Builder
 renderAttribute (Attribute name maybeValue) =
   case maybeValue of
     Just value ->
-      " " <> attributeNameText name <> "=\"" <> escapeHtmlAttribute value <> "\""
-    Nothing -> " " <> attributeNameText name
+      " " <> Builder.fromText (attributeNameText name) <> "=\"" <> escapeHtmlAttribute value <> "\""
+    Nothing -> " " <> Builder.fromText (attributeNameText name)
 
-escapeHtmlText :: Text -> Text
-escapeHtmlText = Text.concatMap escapeCharacter
+escapeHtmlText :: Text -> Builder.Builder
+escapeHtmlText = escapeHtml
 
-escapeHtmlAttribute :: Text -> Text
-escapeHtmlAttribute = Text.concatMap escapeCharacter
+escapeHtmlAttribute :: Text -> Builder.Builder
+escapeHtmlAttribute = escapeHtml
 
-escapeCharacter :: Char -> Text
+escapeHtml :: Text -> Builder.Builder
+escapeHtml = Text.foldr (\character rendered -> escapeCharacter character <> rendered) mempty
+
+escapeCharacter :: Char -> Builder.Builder
 escapeCharacter character =
   case character of
     '&' -> "&amp;"
@@ -147,4 +152,4 @@ escapeCharacter character =
     '\"' -> "&quot;"
     -- Numeric references were supported by legacy HTML parsers that did not support `&apos;`.
     '\'' -> "&#39;"
-    _ -> Text.singleton character
+    _ -> Builder.singleton character
