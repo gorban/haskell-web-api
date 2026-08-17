@@ -437,11 +437,13 @@ spec = do
         action config terminationPath
 
     awaitFile path =
-      -- CI can take several seconds to schedule Node while the coverage build
-      -- is compiling other package setup code.  This is only a startup
-      -- synchronization bound; once the runner records the initialize command
-      -- the test still interrupts the worker immediately.
-      timeout 15000000 (waitForFile path)
+      -- The clean coverage build can leave the hosted runner briefly starved
+      -- while Node is scheduled.  This is only a startup synchronization
+      -- bound; once the runner records the initialize command the test still
+      -- interrupts the worker immediately.  Keep the bound comfortably above
+      -- the observed CI scheduling delay so it cannot race the test's
+      -- cancellation assertion.
+      timeout 60000000 (waitForFile path)
 
     waitForFile path = do
       exists <- doesFileExist path
