@@ -25,7 +25,7 @@ if [ "$format_root" = "$repo_root" ]; then
   "$repo_root/tools/test-formatting-checks.sh"
 fi
 
-required_commands=(cabal-gild hlint ormolu dos2unix rg)
+required_commands=(cabal-gild hlint ormolu dos2unix)
 missing_commands=()
 
 for command_name in "${required_commands[@]}"; do

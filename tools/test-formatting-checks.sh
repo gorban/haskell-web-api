@@ -30,7 +30,7 @@ expect_failure() {
     printf 'Formatting check unexpectedly accepted %s.\n' "$description" >&2
     exit 1
   fi
-  if ! printf '%s' "$output" | rg -Fq "$expected_message"; then
+  if ! printf '%s' "$output" | grep -Fq "$expected_message"; then
     printf 'Formatting check did not explain %s.\n' "$description" >&2
     exit 1
   fi
