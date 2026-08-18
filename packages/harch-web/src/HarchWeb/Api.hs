@@ -52,7 +52,6 @@ module HarchWeb.Api
     apiRouteDefinitionWithContextNeverFailingWithFieldFailure,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
-    matchedApiRouteEndpointOrDie,
     at,
     ApiHttpResponse (..),
     apiHttpResponseToProtocolResponse,

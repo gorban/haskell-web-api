@@ -11,6 +11,7 @@ import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (isHexDigit)
 import Data.Either (fromRight)
+import Data.Functor.Compose (Compose (..))
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List (find, isInfixOf, isPrefixOf, isSuffixOf)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -885,9 +886,9 @@ spec = do
   describe "HarchWeb.Action" $ do
     it "prints codec paths and methods from the same declarations used for parsing and form markup" $ do
       let prefixedContext = defaultContext {testContextPathPrefix = "/app"}
-          renderedForm = renderHtml (actionForm testActionCodec prefixedContext "save" defaultActionFormAttributes [text "Save"])
-      Action.actionPath testActionCodec prefixedContext "save" `shouldBe` "/app/known"
-      Action.actionMethod testActionCodec "save" `shouldBe` Action.ActionPost
+          renderedForm = renderHtml (renderActionForm (actionForm testActionCodec prefixedContext "save" defaultActionFormAttributes [text "Save"]))
+      Action.actionPath testActionCodec prefixedContext "save" `shouldBe` Just "/app/known"
+      Action.actionMethod testActionCodec "save" `shouldBe` Just Action.ActionPost
       expectAll
         ( (Text.isInfixOf "data-harch-action-method=\"post\"" renderedForm `shouldBe` True)
             :| [ Text.isInfixOf "data-harch-action-capabilities=\"exclusive-client-handler\"" renderedForm `shouldBe` True,
@@ -903,8 +904,8 @@ spec = do
           nativeFallback = NativeActionFallback "/native-subscribe" FormPost "csrf-token"
           capabilities = [HandlerSafeRetry, ConditionalLeaveConfirmation, IdempotentMutationRetry idempotency, NativeFallback nativeFallback]
           nativeAttributes = defaultActionFormAttributes {actionFormCapabilities = capabilities}
-          nativeForm = renderHtml (actionForm testActionCodec defaultContext "save" nativeAttributes [])
-          nativeGetForm = renderHtml (actionForm testActionCodec defaultContext "read" nativeAttributes [])
+          nativeForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" nativeAttributes []))
+          nativeGetForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "read" nativeAttributes []))
       expectAll
         ( (Text.isInfixOf "method=\"post\"" nativeForm `shouldBe` True)
             :| [ Text.isInfixOf "method=\"post\"" nativeGetForm `shouldBe` True,
@@ -938,7 +939,7 @@ spec = do
           idempotencyA = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "a")
           idempotencyB = fromMaybe (error "expected a valid test idempotency key") (actionIdempotency "b")
           getAttributes = defaultActionFormAttributes {actionFormCapabilities = [NativeFallback getFallback]}
-          getForm = renderHtml (actionForm testActionCodec defaultContext "save" getAttributes [])
+          getForm = renderHtml (renderActionForm (actionForm testActionCodec defaultContext "save" getAttributes []))
       expectAll
         ( (FormGet `shouldBe` FormGet)
             :| [ FormGet `shouldNotBe` FormPost,
@@ -985,9 +986,9 @@ spec = do
                  Action.decodeAction methodCodec (payload "PUT" "/put" []) `shouldBe` Action.DecodedClientAction "put",
                  Action.decodeAction methodCodec (payload "PATCH" "/patch" []) `shouldBe` Action.DecodedClientAction "patch",
                  Action.decodeAction methodCodec (payload "DELETE" "/delete" []) `shouldBe` Action.DecodedClientAction "delete",
-                 Action.actionPath methodCodec (defaultContext {testContextPathPrefix = "/app"}) "dynamic" `shouldBe` "/app/dynamic",
+                 Action.actionPath methodCodec (defaultContext {testContextPathPrefix = "/app"}) "dynamic" `shouldBe` Just "/app/dynamic",
                  Action.decodeAction methodCodec (payload "POST" "/app/dynamic" [("name", "Ada")]) `shouldBe` Action.DecodedClientAction "Ada",
-                 Action.actionPath singleCodec defaultContext "single" `shouldBe` "/single",
+                 Action.actionPath singleCodec defaultContext "single" `shouldBe` Just "/single",
                  Action.decodeAction singleCodec (payload "POST" "/single" []) `shouldBe` Action.DecodedClientAction "single",
                  Action.decodeAction (Action.emptyActionCodec :: Action.ActionCodec Text TestContext Text) (payload "POST" "/missing" []) `shouldBe` Action.UnrecognizedClientAction,
                  Action.DuplicateActionField "name" /= Action.InvalidActionField "name" `shouldBe` True,
@@ -1014,7 +1015,8 @@ spec = do
             [ Action.DecodedClientAction "saved",
               Action.UnrecognizedClientAction,
               Action.MethodNotAllowedClientAction (Action.ActionGet :| [Action.ActionPost]),
-              Action.MalformedClientAction (Action.MissingActionField "name" :| [Action.InvalidActionField "name"])
+              Action.MalformedClientAction (Action.MissingActionField "name" :| [Action.InvalidActionField "name"]),
+              Action.InvalidClientActionDecoder
             ]
       expectAll
         ( (methods == methods `shouldBe` True)
@@ -1077,11 +1079,11 @@ spec = do
             Action.ClientActionPayload methodValue path fields Nothing Nothing defaultContext
           nonEmptyValue fieldText = if Text.null fieldText then Nothing else Just fieldText
       expectAll
-        ( (map (Action.actionPath staticCodec defaultContext) ["get", "post", "put", "patch", "delete"] `shouldBe` ["/get", "/post", "/put", "/patch", "/delete"])
-            :| [ map (Action.actionMethod staticCodec) ["get", "post", "put", "patch", "delete"] `shouldBe` [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete],
+        ( (map (Action.actionPath staticCodec defaultContext) ["get", "post", "put", "patch", "delete"] `shouldBe` map Just ["/get", "/post", "/put", "/patch", "/delete"])
+            :| [ map (Action.actionMethod staticCodec) ["get", "post", "put", "patch", "delete"] `shouldBe` map Just [Action.ActionGet, Action.ActionPost, Action.ActionPut, Action.ActionPatch, Action.ActionDelete],
                  Action.decodeAction duplicateMethodCodec (actionPayload "PATCH" "/same" []) `shouldBe` Action.MethodNotAllowedClientAction (Action.ActionGet :| [Action.ActionPost, Action.ActionPut]),
                  show (Action.decodeAction duplicateMethodCodec (actionPayload "PATCH" "/same" [])) `shouldBe` "MethodNotAllowedClientAction (ActionGet :| [ActionPost,ActionPut])",
-                 map (Action.actionPath dynamicMethodCodec defaultContext) ["put", "patch", "delete"] `shouldBe` ["/put", "/patch", "/delete"],
+                 map (Action.actionPath dynamicMethodCodec defaultContext) ["put", "patch", "delete"] `shouldBe` map Just ["/put", "/patch", "/delete"],
                  Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "Ada")]) `shouldBe` Action.DecodedClientAction (Just "Ada"),
                  Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "")]) `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "name" :| []),
                  Action.decodeAction optionalCodec (actionPayload "POST" "/optional" [("name", "Ada"), ("name", "Grace")]) `shouldBe` Action.MalformedClientAction (Action.DuplicateActionField "name" :| []),
@@ -1091,7 +1093,7 @@ spec = do
                ]
         )
 
-    it "rejects undeclared codec targets and renders a PUT-declared action safely through its native fallback" $ do
+    it "returns explicit undeclared-target results and renders a PUT-declared action safely through its native fallback" $ do
       let emptyCodec :: Action.ActionCodec Text TestContext Text
           emptyCodec = Action.emptyActionCodec
           unsupportedCodec :: Action.ActionCodec Text TestContext Text
@@ -1102,19 +1104,31 @@ spec = do
             defaultActionFormAttributes
               { actionFormCapabilities = [NativeFallback (NativeActionFallback "/native" FormPost "csrf-token")]
               }
-      missingPath <- try (evaluate (Text.length (Action.actionPath emptyCodec defaultContext "missing"))) :: IO (Either SomeException Int)
-      missingMethod <- try (evaluate (Action.actionMethod emptyCodec "missing")) :: IO (Either SomeException Action.ActionMethod)
-      let unsupportedForm = renderHtml (actionForm unsupportedCodec defaultContext "put" nativeAttributes [])
+      let undeclaredForm = renderHtml (renderActionForm (actionForm emptyCodec defaultContext "missing" nativeAttributes [text "Preserved input"]))
+          unsupportedForm = renderHtml (renderActionForm (actionForm unsupportedCodec defaultContext "put" nativeAttributes []))
       expectAll
-        ( (either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingPath `shouldBe` True)
-            :| [ either (Text.isInfixOf "client action target is not declared by this codec" . Text.pack . displayException) (const False) missingMethod `shouldBe` True,
+        ( (Action.actionPath emptyCodec defaultContext "missing" `shouldBe` Nothing)
+            :| [ Action.actionMethod emptyCodec "missing" `shouldBe` Nothing,
+                 Text.isInfixOf "data-harch-action-configuration-error" undeclaredForm `shouldBe` True,
+                 Text.isInfixOf "Preserved input" undeclaredForm `shouldBe` True,
+                 Text.isInfixOf "data-harch-action=\"true\"" undeclaredForm `shouldBe` False,
                  Text.isInfixOf "data-harch-action-method=\"put\"" unsupportedForm `shouldBe` True,
                  Text.isInfixOf "action=\"/native\" method=\"post\"" unsupportedForm `shouldBe` True
                ]
         )
 
     it "matches declared paths and methods, and reports unknown paths or the allowed methods precisely" $ do
-      let payload methodValue path =
+      let invalidDecoder :: Action.ActionDecoder Text
+          invalidDecoder = Compose (const (Compose ([], Nothing)))
+          invalidCodec =
+            fromRight (error "invalid test action codec") $
+              Action.actionCodec [Action.action () (Action.post "/invalid") invalidDecoder]
+          errorWithValueDecoder :: Action.ActionDecoder Text
+          errorWithValueDecoder = Compose (const (Compose ([Action.InvalidActionField "email"], Just "ignored")))
+          errorWithValueCodec =
+            fromRight (error "invalid test action codec") $
+              Action.actionCodec [Action.action () (Action.post "/error-with-value") errorWithValueDecoder]
+          payload methodValue path =
             Action.ClientActionPayload
               { Action.clientActionMethod = methodValue,
                 Action.clientActionPath = path,
@@ -1127,6 +1141,8 @@ spec = do
       Action.decodeAction testActionCodec (payload "GET" "/known") `shouldBe` Action.DecodedClientAction "read"
       Action.decodeAction testActionCodec (payload "PUT" "/known") `shouldBe` Action.MethodNotAllowedClientAction (Action.ActionPost :| [Action.ActionGet])
       Action.decodeAction testActionCodec (payload "POST" "/missing") `shouldBe` Action.UnrecognizedClientAction
+      Action.decodeAction invalidCodec (payload "POST" "/invalid") `shouldBe` Action.InvalidClientActionDecoder
+      Action.decodeAction errorWithValueCodec (payload "POST" "/error-with-value") `shouldBe` Action.MalformedClientAction (Action.InvalidActionField "email" :| [])
 
     it "accumulates field errors deterministically and supports required, optional, defaulted, and parsed values" $ do
       let validationCodec =
@@ -2596,7 +2612,7 @@ spec = do
       Wai.responseStatus response `shouldBe` Http.status404
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "application/json; charset=utf-8")
 
-    it "maps codec unknown, method, malformed, and domain action outcomes to safe protocol responses" $ do
+    it "maps codec unknown, method, malformed, invalid-decoder, and domain action outcomes to safe protocol responses" $ do
       loggedActionFailures <- newIORef []
       let actionApplication =
             sampleApplication
@@ -2617,6 +2633,13 @@ spec = do
                     ),
                 reportApplicationLog = \entry -> modifyIORef' loggedActionFailures (<> [entry])
               }
+          invalidDecoder :: Action.ActionDecoder Text
+          invalidDecoder = Compose (const (Compose ([], Nothing)))
+          invalidDecoderCodec =
+            fromRight (error "invalid test action codec") $
+              Action.actionCodec [Action.action () (Action.post "/invalid") invalidDecoder]
+          invalidDecoderApplication =
+            actionApplication {decodeClientAction = Action.decodeAction invalidDecoderCodec}
           requestFor methodValue path bodyChunks =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk bodyChunks)
@@ -2634,10 +2657,12 @@ spec = do
       unknownChunks <- newIORef ["_harch_csrf=csrf-token"]
       wrongMethodChunks <- newIORef ["_harch_csrf=csrf-token"]
       malformedChunks <- newIORef ["_harch_csrf=csrf-token"]
+      invalidDecoderChunks <- newIORef ["_harch_csrf=csrf-token"]
       domainChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token"]
       unknownResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["missing"] unknownChunks)
       wrongMethodResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "PUT" ["known"] wrongMethodChunks)
       malformedResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["known"] malformedChunks)
+      invalidDecoderResponse <- performWaiRequest (toWaiApplication invalidDecoderApplication) (requestFor "POST" ["invalid"] invalidDecoderChunks)
       domainResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["known"] domainChunks)
       Wai.responseStatus unknownResponse `shouldBe` Http.status404
       Wai.responseStatus wrongMethodResponse `shouldBe` Http.status405
@@ -2645,7 +2670,10 @@ spec = do
       readResponseBody wrongMethodResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
       Wai.responseStatus malformedResponse `shouldBe` Http.status400
       readResponseBody malformedResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
+      Wai.responseStatus invalidDecoderResponse `shouldBe` Http.status500
+      readResponseBody invalidDecoderResponse `shouldReturn` "{\"patches\":[],\"focusId\":null}"
       fmap (any (Text.isInfixOf "client action decode failure: malformed")) (readIORef loggedActionFailures) `shouldReturn` True
+      fmap (any (Text.isInfixOf "client action decode failure: invalid decoder")) (readIORef loggedActionFailures) `shouldReturn` True
       Wai.responseStatus domainResponse `shouldBe` Http.status422
 
     it "renders typed redirects with the location header and standard response metadata" $ do

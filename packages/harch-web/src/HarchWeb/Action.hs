@@ -1,6 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Declarative, bidirectional client-action endpoint codecs.
+--
+-- Decision record (2026-08-18): extend 'ActionCodec', the existing owner of
+-- action declaration, rendering lookup, and dispatch; do not add a parallel
+-- control registry. A target lookup is now total ('Maybe'), and
+-- 'HarchWeb.Controls.actionForm' turns an absent target into an explicit
+-- rendering result rather than an exception or an invisible empty fragment.
+-- A third-party decoder can still manufacture the former @([], Nothing)@
+-- convention, so 'decodeAction' evaluates and normalizes the decoder result
+-- to the stable 'InvalidClientActionDecoder' value rather than throwing. This keeps an
+-- undeclared control from claiming capture readiness while preserving its
+-- authored content for an accessible configuration diagnostic.
 module HarchWeb.Action
   ( ActionCodec,
     ActionCodecError (..),
@@ -46,7 +57,7 @@ where
 import Data.Functor.Compose (Compose (..), getCompose)
 import Data.List (nub)
 import Data.List.NonEmpty (NonEmpty (..), nonEmpty)
-import Data.Maybe (fromJust, listToMaybe)
+import Data.Maybe (listToMaybe)
 import Data.Text (Text)
 
 -- | Methods supported by the client-action protocol. Forms can author POST
@@ -95,6 +106,7 @@ data ClientActionDecodeResult action
   | UnrecognizedClientAction
   | MethodNotAllowedClientAction (NonEmpty ActionMethod)
   | MalformedClientAction (NonEmpty ClientActionParseError)
+  | InvalidClientActionDecoder
   deriving (Eq, Show)
 
 data ActionCodecError
@@ -111,6 +123,10 @@ data ActionEndpoint target context action = ActionEndpoint target (ActionPath co
 
 newtype ActionCodec target context action = ActionCodec [ActionEndpoint target context action]
 
+-- | An applicative action decoder. Its public result is normalized by
+-- 'decodeAction': malformed fields carry their non-empty stable errors, and
+-- a third-party decoder that violates the internal @([], Nothing)@ convention
+-- becomes 'InvalidClientActionDecoder' rather than an exception.
 type ActionDecoder action = Compose ((->) [(Text, Text)]) (Compose ((,) [ClientActionParseError]) Maybe) action
 
 newtype FormField value = FormField ([(Text, Text)] -> ([ClientActionParseError], Maybe value))
@@ -144,17 +160,18 @@ singleActionCodec target path decoder = ActionCodec [action target path decoder]
 emptyActionCodec :: ActionCodec target context action
 emptyActionCodec = ActionCodec []
 
-actionPath :: (Eq target) => ActionCodec target context action -> context -> target -> Text
+-- | Look up the rendered path of a declared target. An absent target is an
+-- ordinary construction/configuration result, never a server exception.
+actionPath :: (Eq target) => ActionCodec target context action -> context -> target -> Maybe Text
 actionPath (ActionCodec endpoints) context target =
-  case [renderActionPath endpointActionPath context | ActionEndpoint endpointTargetValue endpointActionPath _ <- endpoints, endpointTargetValue == target] of
-    path : _ -> path
-    [] -> error "client action target is not declared by this codec"
+  renderActionPath <$> actionTargetPath endpoints target <*> pure context
 
-actionMethod :: (Eq target) => ActionCodec target context action -> target -> ActionMethod
+-- | Look up the method of a declared target. Pair this with 'actionPath' or
+-- use 'HarchWeb.Controls.actionForm', which makes an undeclared target an
+-- explicit rendering result.
+actionMethod :: (Eq target) => ActionCodec target context action -> target -> Maybe ActionMethod
 actionMethod (ActionCodec endpoints) target =
-  case [actionPathMethod endpointActionPath | ActionEndpoint endpointTargetValue endpointActionPath _ <- endpoints, endpointTargetValue == target] of
-    methodValue : _ -> methodValue
-    [] -> error "client action target is not declared by this codec"
+  actionPathMethod <$> actionTargetPath endpoints target
 
 decodeAction :: ActionCodec target context action -> ClientActionPayload context -> ClientActionDecodeResult action
 decodeAction (ActionCodec endpoints) payload =
@@ -166,9 +183,11 @@ decodeAction (ActionCodec endpoints) payload =
         ActionEndpoint _ _ decoder : _ ->
           case runActionDecoder decoder (clientActionFields payload) of
             (parseErrors, decodedAction) ->
-              case nonEmpty parseErrors of
-                Just parseErrorValues -> decodedAction `seq` MalformedClientAction parseErrorValues
-                Nothing -> DecodedClientAction (fromJust decodedAction)
+              case decodedAction of
+                Nothing ->
+                  maybe InvalidClientActionDecoder MalformedClientAction (nonEmpty parseErrors)
+                Just actionValue ->
+                  maybe (DecodedClientAction actionValue) MalformedClientAction (nonEmpty parseErrors)
 
 matchesActionPath :: ClientActionPayload context -> ActionEndpoint target context action -> Bool
 matchesActionPath payload (ActionEndpoint _ endpointActionPath _) =
@@ -225,11 +244,11 @@ formField fieldName valueDecoder =
     case [fieldValue | (name, fieldValue) <- fields, name == fieldName] of
       [fieldValue] ->
         maybe
-          ([InvalidActionField fieldName], Nothing)
+          ([InvalidActionField fieldName], noFieldValue)
           (\value -> ([], Just value))
           (runFieldValue valueDecoder fieldValue)
-      [] -> ([MissingActionField fieldName], Nothing)
-      _ -> ([DuplicateActionField fieldName], Nothing)
+      [] -> ([MissingActionField fieldName], noFieldValue)
+      _ -> ([DuplicateActionField fieldName], noFieldValue)
 
 required :: FormField value -> ActionDecoder value
 required (FormField decode) = actionDecoder decode
@@ -242,8 +261,8 @@ optional (FormField decode) =
   actionDecoder $ \fields ->
     case decode fields of
       ([], Just value) -> ([], Just (Just value))
-      ([MissingActionField _], Nothing) -> ([], Just Nothing)
-      (parseErrors, _) -> (parseErrors, Nothing)
+      ([MissingActionField _], Nothing) -> ([], Just noFieldValue)
+      (parseErrors, _) -> (parseErrors, noFieldValue)
 
 singleOrDefault :: value -> FormField value -> ActionDecoder value
 singleOrDefault defaultValue (FormField decode) =
@@ -252,6 +271,20 @@ singleOrDefault defaultValue (FormField decode) =
       ([], Just value) -> ([], Just value)
       ([MissingActionField _], Nothing) -> ([], Just defaultValue)
       parseErrors -> parseErrors
+
+-- | The absent parsed value shared by failed field decoders and by a valid
+-- optional field that was not supplied. Sharing it documents that both cases
+-- use the same value-level absence while their error lists distinguish them.
+noFieldValue :: Maybe value
+noFieldValue = Nothing
+
+actionTargetPath :: (Eq target) => [ActionEndpoint target context action] -> target -> Maybe (ActionPath context)
+actionTargetPath endpoints target =
+  listToMaybe
+    [ endpointActionPath
+    | ActionEndpoint endpointTargetValue endpointActionPath _ <- endpoints,
+      endpointTargetValue == target
+    ]
 
 textValue :: FieldValue Text
 textValue = FieldValue Just

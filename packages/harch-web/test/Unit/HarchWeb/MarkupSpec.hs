@@ -148,7 +148,7 @@ spec = do
             |]
           renderedLink = renderHtml (pageLink controlRouteHref (ControlRoute "control") [text "Continue"])
           renderedActionForm = renderHtml quotedActionForm
-          renderedEmptyActionForm = renderHtml (actionForm controlActionCodec () "/actions/subscribe" defaultActionFormAttributes [])
+          renderedEmptyActionForm = renderHtml (renderActionForm (actionForm controlActionCodec () "/actions/subscribe" defaultActionFormAttributes []))
       expectAll
         ( (Text.isInfixOf "aria-label=\"Subscription\"" renderedActionForm `shouldBe` True)
             :| [ Text.isInfixOf "data-harch-action-method=\"post\"" renderedActionForm `shouldBe` True,

@@ -8,6 +8,7 @@
 module HarchWeb.Controls
   ( ActionCapability (..),
     ActionFormAttributes (..),
+    ActionFormRendering,
     ActionIdempotency,
     ActionRecoveryCopy (..),
     FormMethod (..),
@@ -18,6 +19,7 @@ module HarchWeb.Controls
     defaultActionFormAttributes,
     defaultActionRecoveryCopy,
     pageLink,
+    renderActionForm,
   )
 where
 
@@ -26,6 +28,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Action
   ( ActionCodec,
+    ActionMethod,
     actionMethod,
     actionMethodText,
     actionPath,
@@ -130,15 +133,37 @@ pageLink renderPageTarget target =
     anchorTag
     [href (renderPageTarget target), dataAttribute "page-link" "true"]
 
-actionForm :: (Eq target) => ActionCodec target context action -> context -> target -> ActionFormAttributes -> [Html] -> Html
+actionForm :: (Eq target) => ActionCodec target context action -> context -> target -> ActionFormAttributes -> [Html] -> ActionFormRendering
 actionForm codec context target attributes children =
+  case (actionPath codec context target, actionMethod codec target) of
+    (Just targetPath, Just targetMethod) -> CapturingActionForm (renderCapturingActionForm targetPath targetMethod attributes children)
+    _ -> UndeclaredActionForm (renderUndeclaredActionForm children)
+
+-- | A rendered action control is either capture-ready, or an explicit
+-- configuration result. Keeping this separate from 'Html' prevents a caller
+-- from accidentally treating an undeclared action target as a usable form.
+-- 'renderActionForm' preserves the supplied content and displays an
+-- accessible configuration failure; it never emits capture attributes for an
+-- undeclared target.
+data ActionFormRendering
+  = CapturingActionForm Html
+  | UndeclaredActionForm Html
+
+renderActionForm :: ActionFormRendering -> Html
+renderActionForm actionFormRendering =
+  case actionFormRendering of
+    CapturingActionForm renderedForm -> renderedForm
+    UndeclaredActionForm renderedFallback -> renderedFallback
+
+renderCapturingActionForm :: Text -> ActionMethod -> ActionFormAttributes -> [Html] -> Html
+renderCapturingActionForm targetPath targetMethod attributes children =
   element
     formTag
     ( maybe [] (pure . ariaLabel) (actionFormAriaLabel attributes)
         <> [ dataFlag "harch-control",
              dataAttribute "harch-action" "true",
-             dataAttribute "harch-action-path" (actionPath codec context target),
-             dataAttribute "harch-action-method" (Text.toLower (actionMethodText (actionMethod codec target))),
+             dataAttribute "harch-action-path" targetPath,
+             dataAttribute "harch-action-method" (Text.toLower (actionMethodText targetMethod)),
              dataAttribute "harch-action-capabilities" (renderCapabilities (actionFormCapabilities attributes))
            ]
         <> maybe [] (pure . dataAttribute "harch-action-idempotency-key" . actionIdempotencyKey) idempotency
@@ -147,7 +172,7 @@ actionForm codec context target attributes children =
              dataAttribute "harch-action-delayed-copy" (actionDelayedCopy recoveryCopy),
              dataAttribute "harch-action-recoverable-copy" (actionRecoverableCopy recoveryCopy),
              dataAttribute "harch-action-cancelled-copy" (actionCancelledCopy recoveryCopy),
-             formAction (formTarget codec context target nativeFallback),
+             formAction (formTarget targetPath nativeFallback),
              method (nativeMethod nativeFallback)
            ]
     )
@@ -162,6 +187,16 @@ actionForm codec context target attributes children =
     recoveryCopy = actionFormRecoveryCopy attributes
     nativeFallback = nativeFallbackFor attributes
     idempotency = idempotencyFor attributes
+
+renderUndeclaredActionForm :: [Html] -> Html
+renderUndeclaredActionForm children =
+  fragment
+    [ element
+        paragraphTag
+        [role "alert", dataFlag "harch-action-configuration-error"]
+        [text "This action is unavailable because its target is not declared."],
+      fragment children
+    ]
 
 actionStatus :: ActionFormAttributes -> Html
 actionStatus attributes =
@@ -202,8 +237,8 @@ idempotencyFor :: ActionFormAttributes -> Maybe ActionIdempotency
 idempotencyFor attributes =
   listToMaybe [idempotency | IdempotentMutationRetry idempotency <- actionFormCapabilities attributes]
 
-formTarget :: (Eq target) => ActionCodec target context action -> context -> target -> Maybe NativeActionFallback -> Text
-formTarget codec context target = maybe (actionPath codec context target) nativeActionFallbackPath
+formTarget :: Text -> Maybe NativeActionFallback -> Text
+formTarget targetPath = maybe targetPath nativeActionFallbackPath
 
 nativeMethod :: Maybe NativeActionFallback -> Text
 nativeMethod = maybe "dialog" (formMethodText . nativeActionFallbackMethod)

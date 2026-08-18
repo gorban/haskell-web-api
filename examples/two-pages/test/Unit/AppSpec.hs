@@ -217,7 +217,7 @@ spec =
                    routeHref (Api LiveDataEvents) `shouldBe` "/live-data/events",
                    routeHref (Custom NativeSubscriptionFallback) `shouldBe` "/native-subscribe",
                    ExampleRoutes.twoPageActionContext `shouldBe` (),
-                   ExampleRoutes.twoPageActionPath () `shouldBe` "/actions/subscribe",
+                   ExampleRoutes.twoPageActionPath () `shouldBe` Just "/actions/subscribe",
                    routeHref (Page PageNotFound) `shouldBe` "/404",
                    twoPageNavigationPath (NavigationPage HomePage) `shouldBe` "/",
                    twoPageNavigationPath (NavigationPreview previewSlug) `shouldBe` "/preview/summer-release",

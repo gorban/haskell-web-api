@@ -30,5 +30,11 @@ data ActionFormProps = ActionFormProps
   }
 
 actionForm :: ActionFormProps -> [HarchWeb.Html] -> HarchWeb.Html
-actionForm ActionFormProps {action, ariaLabel} =
-  (Controls.actionForm twoPageActions $! twoPageActionContext) action Controls.defaultActionFormAttributes {Controls.actionFormAriaLabel = Just ariaLabel}
+actionForm ActionFormProps {action, ariaLabel} children =
+  Controls.renderActionForm
+    ( (Controls.actionForm twoPageActions $! twoPageActionContext)
+        action
+        Controls.defaultActionFormAttributes
+          {Controls.actionFormAriaLabel = Just ariaLabel}
+        children
+    )

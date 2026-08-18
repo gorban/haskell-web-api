@@ -353,6 +353,9 @@ dispatchRoutedRequest
                           MalformedClientAction _ ->
                             pure
                               (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
+                          InvalidClientActionDecoder ->
+                            pure
+                              (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
                           DecodedClientAction action -> do
                             maybeActionResponse <-
                               handleClientAction

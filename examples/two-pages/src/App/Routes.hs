@@ -121,7 +121,7 @@ routeHref route =
     Custom (PreviewPage previewSlug) -> "/preview/" <> previewSlugText previewSlug
     Custom NativeSubscriptionFallback -> "/native-subscribe"
 
-twoPageActionPath :: TwoPageActionTarget -> Text
+twoPageActionPath :: TwoPageActionTarget -> Maybe Text
 twoPageActionPath = actionPath twoPageActions $! twoPageActionContext
 
 twoPageActionContext :: ()

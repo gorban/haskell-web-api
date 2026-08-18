@@ -12,14 +12,12 @@ module HarchWeb.Api.Endpoint.Family
     apiRouteDefinitionWithContextNeverFailingWithFieldFailure,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
-    matchedApiRouteEndpointOrDie,
   )
 where
 
 import Data.List (find, nub)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.List.NonEmpty qualified as NonEmpty
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -179,29 +177,36 @@ apiRouteEndpointFamilyDefinition endpoints (ApiPath pathText) =
     { routeNavigationLabel = Nothing,
       routeMethods = apiPathRouteMethods endpoints pathText,
       routeResponse = \request _ ->
-        case filter (endpointAtPath pathText) endpoints of
-          [] -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
-          _ : _ ->
-            case matchedApiRouteEndpointOrDie endpoints pathText (requestMethodTextFromWai request) of
-              SomeApiRouteEndpoint endpoint -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
+        case NonEmpty.nonEmpty (filter (endpointAtPath pathText) endpoints) of
+          Nothing -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (ApiHttpResponse HttpTypes.status404 [] Nothing)))
+          Just pathEndpoints ->
+            case matchedApiRouteEndpoint pathEndpoints (requestMethodTextFromWai request) of
+              Nothing -> pure (HarchWeb.ProtocolResponseResult (apiHttpResponseToProtocolResponse (methodNotAllowedResponse pathEndpoints)))
+              Just (SomeApiRouteEndpoint endpoint) -> HarchWeb.ProtocolResponseResult <$> runApiRouteEndpoint endpoint request
     }
 
--- | Resolve the endpoint a path and already-validated method must select.
--- Reaching either error means the family codec and its route definition were
--- built from inconsistent tables, a wiring defect rather than a request
--- outcome.
-matchedApiRouteEndpointOrDie :: [SomeApiRouteEndpoint] -> Text -> Text -> SomeApiRouteEndpoint
-matchedApiRouteEndpointOrDie endpoints requestPath requestMethod =
-  case filter (endpointAtPath requestPath) endpoints of
-    [] -> error ("HarchWeb.Api.Endpoint: no endpoint declared at " <> Text.unpack requestPath)
-    pathEndpoints ->
-      case find (endpointHasMethod requestMethod) pathEndpoints of
-        Just endpoint -> endpoint
-        Nothing
-          | requestMethod == "HEAD" -> fromMaybe methodNotDeclared (find (endpointHasMethod "GET") pathEndpoints)
-          | otherwise -> methodNotDeclared
-      where
-        methodNotDeclared = error ("HarchWeb.Api.Endpoint: " <> Text.unpack requestMethod <> " is not declared at " <> Text.unpack requestPath)
+-- | Resolve a method within a path that is already known to have at least one
+-- declaration. The shared dispatcher normally makes 'Nothing' unreachable;
+-- keeping it explicit lets the family definition remain total when embedded
+-- directly or wired incorrectly.
+matchedApiRouteEndpoint :: NonEmpty SomeApiRouteEndpoint -> Text -> Maybe SomeApiRouteEndpoint
+matchedApiRouteEndpoint pathEndpoints requestMethod =
+  case find (endpointHasMethod requestMethod) endpointList of
+    Just endpoint -> Just endpoint
+    Nothing
+      | requestMethod == "HEAD" -> find (endpointHasMethod "GET") endpointList
+      | otherwise -> Nothing
+  where
+    endpointList = NonEmpty.toList pathEndpoints
+
+methodNotAllowedResponse :: NonEmpty SomeApiRouteEndpoint -> ApiHttpResponse
+methodNotAllowedResponse pathEndpoints =
+  ApiHttpResponse
+    HttpTypes.status405
+    [("Allow", apiHeaderValueLiteral (Text.intercalate ", " (map (apiMethodText . endpointMethod) (NonEmpty.toList pathEndpoints))))]
+    Nothing
+  where
+    endpointMethod (SomeApiRouteEndpoint endpoint) = apiRouteEndpointMethod endpoint
 
 requestMethodTextFromWai :: Wai.Request -> Text
 requestMethodTextFromWai request = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode (Wai.requestMethod request)

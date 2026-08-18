@@ -414,9 +414,9 @@ combine more than two. `HarchWeb.Api.Endpoint.apiRouteEndpointFamilyCodec` adapt
 endpoint's declared `ApiPath`; `routeMethods` reports every method declared at that path so `HEAD`/
 `OPTIONS`/405 keep deriving from the one shared `HarchWeb.Routing` implementation, not a
 second copy), and `apiRouteEndpointFamilyDefinition` supplies the matching `RouteDefinition`. When
-its path has a declared endpoint, it selects the one whose declared method matches the real request
-via `matchedApiRouteEndpointOrDie` — reachable only by a framework wiring defect there (an
-inconsistent endpoint table between the codec and the definition), since every request method
+its path has a declared endpoint, it selected the one whose declared method matched the real request
+via the then-partial `matchedApiRouteEndpointOrDie` — reachable only by a framework wiring defect
+there (an inconsistent endpoint table between the codec and the definition), since every request method
 `routeResponse` sees for a *declared* path has already been validated against this same family's
 `routeMethods` by the shared dispatcher before `routeResponse` runs.
 
@@ -424,13 +424,13 @@ This closes the primitive gap named in "A closed route-family registry ... remai
 
 ### Follow-up decision — standalone family not-found and the custom-api migration (2026-08-13)
 
-**Fix, not a new decision: `apiRouteEndpointFamilyDefinition` must not call
-`matchedApiRouteEndpointOrDie` for a path with no declared endpoint.** Migrating
+**Fix, not a new decision: `apiRouteEndpointFamilyDefinition` must not call its then-partial
+endpoint matcher for a path with no declared endpoint.** Migrating
 `examples/custom-api` onto `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` (below)
 surfaced a real defect the primitive's own tests never exercised: `apiRouteEndpointFamilyCodec`'s
 `notFoundRequest` resolves every unmatched path to the same synthetic `ApiPath ""` route, which has
 no declared endpoint, but `apiRouteEndpointFamilyDefinition`'s `routeResponse` unconditionally
-called `matchedApiRouteEndpointOrDie` for whatever path it was given — including that synthetic one
+called its then-partial endpoint matcher for whatever path it was given — including that synthetic one
 — throwing an uncaught `error` instead of rendering a `404`. Every landed test combined the family
 with a catch-all second family via `combineRouteCodecs`, whose own not-found route absorbs the
 not-found case before `apiRouteEndpointFamilyDefinition` ever sees the synthetic path, which is why
@@ -440,8 +440,8 @@ does not have this exposure even before any migration: its own `ApiNotFound`/`Pa
 constructors are real, declared members of its route table with their own `RouteDefinition`, not a
 codec-synthesized sentinel outside the table. Fixed by having `apiRouteEndpointFamilyDefinition`
 check for a declared endpoint at its given path first and render an ordinary API `404` directly when
-none exists, before ever calling `matchedApiRouteEndpointOrDie` — which keeps that function's
-existing "wiring defect" framing accurate for its remaining, narrower call site. A new Unit test
+none exists, before ever reaching the matcher. The former matcher was subsequently deleted by BP; a
+new Unit test
 drives `apiRouteEndpointFamilyDefinition`'s `routeResponse` on the codec's own `notFoundRequest`
 route end to end (not just the pure `RouteCodec` value) to keep this path covered.
 
@@ -529,7 +529,7 @@ application in the repo — only `HarchWeb.Api`'s own facade re-export and `Harc
 `ApiSpec.hs` tests still call them. Per this document's "Treat this framework as a versioned foundation"
 posture, that makes deleting both a legitimate breaking change rather than something requiring a
 migration path — but actually doing so (auditing exactly what can be deleted versus what
-`matchedApiRouteEndpointOrDie` still shares, updating both export lists, deleting the now-pointless
+the then-public endpoint matcher still shares, updating both export lists, deleting the now-pointless
 dedicated tests, and updating every doc that still describes the compatibility helpers as current) is
 real follow-up work of its own, tracked under AK, not completed as part of this migration.
 
@@ -562,13 +562,13 @@ not a testing gap.** Running the full CI-equivalent coverage gate against the de
 `$!`/`seq`/fake work, each gap was root-caused rather than papered over:
 
 - `ApiRouteMatch`'s `TypedApiRouteMethodNotAllowed`/`TypedApiRouteOptions` branches inside
-  `matchApiRouteMethod` were **genuinely dead**, not merely untested: `matchedApiRouteEndpointOrDie` is
+  `matchApiRouteMethod` were **genuinely dead**, not merely untested: the then-partial endpoint matcher was
   their only consumer, and it already treats every non-`Matched`/`MatchedHead` outcome identically (an
   `error` naming the wiring defect) — so distinguishing "method not allowed" from "OPTIONS" was complexity
   with no surviving behavioral difference, left over from when the deleted legacy dispatcher rendered `405`
   and `204`/`Allow` differently for the same `ApiRouteMatch` value. Fix: deleted `ApiRouteMatch` and
   `matchApiRouteMethod` outright and inlined the one remaining match/HEAD-fallback/die decision directly
-  into `matchedApiRouteEndpointOrDie` — restructuring the code per this document's guidance, not adding a
+  into that matcher — restructuring the code per this document's guidance, not adding a
   test for a branch nothing can ever reach.
 - The remaining gap, after that restructuring, was three lazily-unforced sub-expressions, not a tooling
   artifact: HPC's per-expression box for a `case` branch or function body ticks when that code path is
@@ -579,13 +579,13 @@ not a testing gap.** Running the full CI-equivalent coverage gate against the de
   the status, never forcing the other two `ProtocolResponse` fields), `TextEncodingError.lenientDecode`
   passed to `decodeUtf8With` inside `requestMethodTextFromWai` (never forced because no test ever sent a
   non-UTF-8 request method through the typed family dispatcher, so `decodeUtf8With`'s error-recovery callback
-  was never invoked), and `methodNotDeclared` inside `matchedApiRouteEndpointOrDie`'s `HEAD`-with-no-`GET`
+  was never invoked), and `methodNotDeclared` inside the former endpoint matcher's `HEAD`-with-no-`GET`
   fallback (never forced because no test sent `HEAD` to a path whose only declared endpoint was `POST`).
   All three were real behavior the deleted "apiRouteEndpointMiddleware" test block had covered from the
   other side (a WAI-level 404/405 assertion) before this migration's predecessor commit removed it — genuine
   coverage losses, not tool quirks. Fix: three real tests, not forced ticks — extended the not-found test to
   assert empty headers/body, and added dedicated tests for a malformed non-UTF-8 method and a `HEAD` request
-  against a `POST`-only table, each `shouldThrow` on `matchedApiRouteEndpointOrDie`'s own defensive `error`.
+  against a `POST`-only table, each previously asserting the former matcher's defensive `error`.
 - The same deleted "legacy API endpoint compatibility" test block had been the only place exercising
   `ApiMethod` and `ApiPath`'s derived `Eq`/`Show` (including `showList`, the method a derived `Show`
   instance also generates but which nothing else in the codebase calls) directly, comparing every pair of
@@ -607,7 +607,7 @@ module should re-run `tools/haskell-quality-report.sh` rather than assume the si
 Re-examining a `.Family` module split now that only one dispatch path remains (the earlier "shared by
 legacy and typed-middleware" obstacle is gone): the blocker AK's original investigation named independently
 of that sharing — `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`/
-`matchedApiRouteEndpointOrDie` and their supporting matchers (`endpointAtPath`, `endpointHasMethod`,
+the former endpoint matcher and its supporting matchers (`endpointAtPath`, `endpointHasMethod`,
 `declaredMethods`) all need to pattern-match the `ApiPath` newtype's constructor, which
 `HarchWeb.Api.Endpoint`'s export list deliberately keeps private (`ApiPath` the type, not `ApiPath(..)`) —
 still applies verbatim, but is no longer required work now that the module-health metric itself is
@@ -790,6 +790,27 @@ internal reorganization, not a public API change, and needed no `CHANGELOG.md` e
 `HarchWeb.Security` is now 556 lines / 30 exports; `HarchWeb.Security.RequestLimits` is 243 lines / 19
 exports. Full CI-equivalent pipeline passed with zero test changes, since the moved code's behavior
 and existing coverage carried over unchanged.
+
+### Follow-up decision — BP: total action-target and API-family matching (2026-08-18)
+
+**Decision: extend the existing `ActionCodec` and route-family interpreter (option 1), rather
+than adding a second action registry or treating configuration defects as server exceptions.** An
+action's path, method, decoder, form rendering, and server dispatch already belong to
+`ActionCodec`; a separate proof/registry would duplicate the declaration table and reintroduce a
+drift point. `actionPath` and `actionMethod` therefore report an absent target as `Nothing`, while
+`Controls.actionForm` returns an explicit `ActionFormRendering` value. Rendering that result
+preserves the authored child content and emits an accessible configuration diagnostic, but never
+emits the capture markers that would claim an undeclared action is ready. This makes the required
+application choice visible in the type at every SSR component boundary instead of silently
+dropping the control. `ActionDecoder` retains its composable applicative representation and
+normalizes its only malformed third-party convention, `([], Nothing)`, to the stable
+`InvalidClientActionDecoder` result rather than throwing, while retaining accumulated parse errors.
+
+The API route-family's matcher is now private and total as well: after the family definition has
+proved a path has a non-empty endpoint set, matching its real request method returns `Maybe`; the
+only defensive mismatch response is a typed `405` with the same declaration-derived `Allow` value.
+The shared route dispatcher remains the normal owner of 404/405/HEAD/OPTIONS policy, so this is a
+totality guard for direct or inconsistent invocation, not a parallel dispatcher.
 
 ### Follow-up decision — DV: typed HTTP response statuses (2026-08-17)
 

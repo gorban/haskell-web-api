@@ -121,23 +121,25 @@ homePage routeRequest =
 
 nativeSubscriptionFallbackForm :: Html
 nativeSubscriptionFallbackForm =
-  (Controls.actionForm twoPageActions $! twoPageActionContext)
-    ()
-    Controls.defaultActionFormAttributes
-      { Controls.actionFormAriaLabel = Just "Native fallback subscription",
-        Controls.actionFormCapabilities =
-          [ Controls.NativeFallback
-              Controls.NativeActionFallback
-                { Controls.nativeActionFallbackPath = "/native-subscribe",
-                  Controls.nativeActionFallbackMethod = Controls.FormPost,
-                  Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
-                }
-          ]
-      }
-    [ element labelTag [labelFor (literalElementId "native-subscription-email")] [text "Native fallback email address"],
-      element inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"] [],
-      element buttonTag [inputType "submit"] [text "Submit with native fallback"]
-    ]
+  Controls.renderActionForm
+    ( (Controls.actionForm twoPageActions $! twoPageActionContext)
+        ()
+        Controls.defaultActionFormAttributes
+          { Controls.actionFormAriaLabel = Just "Native fallback subscription",
+            Controls.actionFormCapabilities =
+              [ Controls.NativeFallback
+                  Controls.NativeActionFallback
+                    { Controls.nativeActionFallbackPath = "/native-subscribe",
+                      Controls.nativeActionFallbackMethod = Controls.FormPost,
+                      Controls.nativeActionFallbackCsrfToken = "two-pages-native-fallback"
+                    }
+              ]
+          }
+        [ element labelTag [labelFor (literalElementId "native-subscription-email")] [text "Native fallback email address"],
+          element inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"] [],
+          element buttonTag [inputType "submit"] [text "Submit with native fallback"]
+        ]
+    )
 
 nativeSubscriptionFallbackPage :: RouteRequest TwoPageRoute () -> IO (Page TwoPageRoute ())
 nativeSubscriptionFallbackPage routeRequest =

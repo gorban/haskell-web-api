@@ -198,12 +198,14 @@ pendingProfileRegion context target form =
       HarchWeb.element
         HarchWeb.divTag
         [HarchWeb.dataAttribute "profile-resend" "true"]
-        [ Controls.actionForm
-            accountActions
-            context
-            target
-            Controls.defaultActionFormAttributes
-            [hiddenInput "intent" "resend-verification", submitButton (pendingProfileFormResendLabel form)]
+        [ Controls.renderActionForm
+            ( Controls.actionForm
+                accountActions
+                context
+                target
+                Controls.defaultActionFormAttributes
+                [hiddenInput "intent" "resend-verification", submitButton (pendingProfileFormResendLabel form)]
+            )
         ]
     ]
 
@@ -280,7 +282,7 @@ pageSection :: Text -> Text -> HarchWeb.Html -> HarchWeb.Html
 pageSection page heading content = HarchWeb.element HarchWeb.sectionTag [HarchWeb.dataAttribute "page" page] [HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text heading], content]
 
 actionForm :: AppRequestContext -> AccountActionTarget -> [HarchWeb.Html] -> HarchWeb.Html
-actionForm context target = Controls.actionForm accountActions context target Controls.defaultActionFormAttributes
+actionForm context target = Controls.renderActionForm . Controls.actionForm accountActions context target Controls.defaultActionFormAttributes
 
 accountRegion :: Text -> [HarchWeb.Html] -> HarchWeb.Region
 accountRegion identifier = HarchWeb.region (HarchWeb.mkRegionId (HarchWeb.literalElementId identifier)) HarchWeb.sectionTag [HarchWeb.ariaLive "polite"]

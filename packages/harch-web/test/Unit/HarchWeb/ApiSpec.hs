@@ -216,26 +216,19 @@ spec =
         headResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
         apiRouteResponseBody headResponse `shouldBe` "ReadStatus"
 
-      it "raises immediately when no endpoint is declared at the given path" $
-        evaluate (matchedApiRouteEndpointOrDie testEndpointTable "/api/missing" "GET" `seq` ())
-          `shouldThrow` \case
-            ErrorCall message -> "no endpoint declared at /api/missing" `isInfixOf` message
-
-      it "raises immediately when the given method is not declared at the given path" $
-        evaluate (matchedApiRouteEndpointOrDie testEndpointTable "/api/status" "DELETE" `seq` ())
-          `shouldThrow` \case
-            ErrorCall message -> "DELETE is not declared at /api/status" `isInfixOf` message
-
-      it "raises immediately when HEAD is requested for a path with no declared GET" $
+      it "renders stable 405 responses for a method outside the route definition's declared policy" $ do
+        deleteResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "DELETE", Wai.rawPathInfo = "/api/status"})
         let postOnlyTable = [SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/post-only") "WriteOnly")]
-         in runApiRouteEndpointGroup postOnlyTable (at "/api/post-only") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
-              `shouldThrow` \case
-                ErrorCall message -> "HEAD is not declared at /api/post-only" `isInfixOf` message
-
-      it "leniently decodes a malformed, non-UTF-8 request method before failing to match it to a declared endpoint" $
-        runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
-          `shouldThrow` \case
-            ErrorCall message -> "is not declared at /api/status" `isInfixOf` message
+        headResponse <- runApiRouteEndpointGroup postOnlyTable (at "/api/post-only") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
+        malformedMethodResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
+        expectAll
+          ( (apiRouteResponseStatus deleteResponse `shouldBe` HttpTypes.status405)
+              :| [ apiRouteResponseStatus headResponse `shouldBe` HttpTypes.status405,
+                   apiRouteResponseStatus malformedMethodResponse `shouldBe` HttpTypes.status405,
+                   apiRouteResponseHeaders deleteResponse `shouldBe` [("Allow", "GET, POST")],
+                   apiRouteResponseBody deleteResponse `shouldBe` ""
+                 ]
+          )
 
       it "retains comparable, printable endpoint values" $
         let methods = [ApiGet, ApiPost, ApiPut, ApiPatch, ApiDelete]
