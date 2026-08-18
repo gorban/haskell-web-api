@@ -4,14 +4,31 @@
 module HarchWeb.Api.Multipart.Storage.Internal
   ( MultipartStorage (..),
     MultipartStagedUpload (..),
+    UntrustedFilename,
+    untrustedFilenameFromText,
+    untrustedFilenameText,
   )
 where
 
 import Data.ByteString (ByteString)
 import Data.Text (Text)
 
+-- | Filename metadata supplied by a multipart client.  This deliberately has
+-- no validation constructor: a client filename is display metadata, not a
+-- portable filesystem path or object key.  Only the parser may introduce the
+-- value; adapters must make an explicit call to 'untrustedFilenameText'
+-- before handing it to a storage-specific naming policy.
+newtype UntrustedFilename = UntrustedFilename Text
+  deriving (Eq)
+
+untrustedFilenameFromText :: Text -> UntrustedFilename
+untrustedFilenameFromText = UntrustedFilename
+
+untrustedFilenameText :: UntrustedFilename -> Text
+untrustedFilenameText (UntrustedFilename filename) = filename
+
 data MultipartStorage stored = MultipartStorage
-  { beginMultipartUpload :: Text -> IO (MultipartStagedUpload stored),
+  { beginMultipartUpload :: UntrustedFilename -> IO (MultipartStagedUpload stored),
     discardCompletedMultipartUpload :: Maybe (stored -> IO ())
   }
 

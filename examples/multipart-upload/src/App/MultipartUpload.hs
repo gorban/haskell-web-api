@@ -67,6 +67,7 @@ import HarchWeb.Api.Multipart
     discardMultipartUpload,
     inMemoryMultipartStorage,
     rejectMultipartPart,
+    untrustedFilenameText,
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
@@ -175,7 +176,6 @@ data UploadOutcome
 -- memory only for this request; this example explicitly discards accepted
 -- uploads. An application that needs durable ownership must promote an
 -- upload through its selected storage adapter instead.
---
 consumeUpload :: NativeUploadState -> ApiMultipartRequest InMemoryUpload -> IO UploadOutcome
 consumeUpload state multipartRequestBody = do
   csrfValidatedReference <- newIORef False
@@ -194,7 +194,7 @@ consumeUpload state multipartRequestBody = do
           then do
             discardMultipartUpload upload
             atomicModifyIORef' (nativeUploadDiscardCountReference state) (\count -> (count + 1, ()))
-            Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
+            Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted (untrustedFilenameText filename) byteCount), ()))
           else do
             atomicModifyIORef' csrfRejectedReference (const (True, ()))
             rejectMultipartPart

@@ -5,6 +5,8 @@
 module HarchWeb.Api.Multipart.Storage
   ( MultipartStorage,
     MultipartStagedUpload,
+    UntrustedFilename,
+    untrustedFilenameText,
     multipartStorage,
     multipartStagedUpload,
     InMemoryUpload,
@@ -17,20 +19,27 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.IORef qualified as IORef
 import Data.Text (Text)
-import HarchWeb.Api.Multipart.Storage.Internal (MultipartStagedUpload, MultipartStorage)
+import HarchWeb.Api.Multipart.Storage.Internal (MultipartStagedUpload, MultipartStorage, UntrustedFilename)
 import HarchWeb.Api.Multipart.Storage.Internal qualified as Internal
 
 -- | Construct an application-selected storage adapter. The callback receives
--- untrusted filename metadata only as a naming hint; it must not use it as a
--- filesystem path or object key without application validation.
+-- untrusted filename metadata only as a naming hint. It must explicitly call
+-- 'untrustedFilenameText' before applying a storage-specific naming policy;
+-- it must never use that text directly as a filesystem path or object key.
 multipartStorage ::
-  (Text -> IO (MultipartStagedUpload stored)) ->
+  (UntrustedFilename -> IO (MultipartStagedUpload stored)) ->
   -- | Discard a completed upload that has not been deliberately adopted.
   -- 'Nothing' is valid only when completed values own no releasable resource,
   -- as with the built-in in-memory adapter.
   Maybe (stored -> IO ()) ->
   MultipartStorage stored
 multipartStorage = Internal.MultipartStorage
+
+-- | Reveal client-supplied filename metadata for display or a
+-- storage-specific sanitisation policy. This is deliberately the only public
+-- escape hatch: the value is never a safe filesystem path or object key.
+untrustedFilenameText :: UntrustedFilename -> Text
+untrustedFilenameText = Internal.untrustedFilenameText
 
 -- | Construct a request-scoped staged upload for 'multipartStorage'. The
 -- multipart parser, rather than the application callback, owns its append,

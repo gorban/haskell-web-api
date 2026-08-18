@@ -9,6 +9,13 @@
 -- an application-selected storage adapter. RFC 5987\/6266 extended @filename*=@ parameters are not
 -- supported, only the common quoted-string form.
 --
+-- Decision (2026-08-18): client filenames remain unvalidated metadata, not
+-- paths. The parser carries them as opaque 'UntrustedFilename' values across
+-- both the callback and adapter boundary; an adapter must explicitly reveal
+-- text before applying its own storage naming policy. Byte and item budgets
+-- likewise use opaque non-negative types so a malformed integer configuration
+-- cannot turn a resource limit into an accidental unbounded admission.
+--
 -- The scanner never buffers more of a part's body than the length of the
 -- boundary delimiter: once a prefix of the buffered bytes is confirmed not to
 -- be part of the next delimiter, it is emitted immediately as a
@@ -23,6 +30,14 @@ module HarchWeb.Api.Multipart
     finishMultipartScanner,
     MultipartFieldDisposition (..),
     parseMultipartFieldDisposition,
+    MultipartByteLimit,
+    multipartByteLimit,
+    multipartByteLimitFromInt,
+    multipartByteLimitValue,
+    MultipartItemLimit,
+    multipartItemLimit,
+    multipartItemLimitFromInt,
+    multipartItemLimitValue,
     MultipartLimits (..),
     defaultMultipartLimits,
     MultipartScopedPart (..),
@@ -31,6 +46,8 @@ module HarchWeb.Api.Multipart
     discardMultipartUpload,
     MultipartStorage,
     MultipartStagedUpload,
+    UntrustedFilename,
+    untrustedFilenameText,
     multipartStorage,
     multipartStagedUpload,
     InMemoryUpload,
@@ -65,6 +82,7 @@ import HarchWeb.Api.Multipart.Storage
 import HarchWeb.Api.Multipart.Storage.Internal qualified as MultipartStorage
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
+import Numeric.Natural (Natural)
 
 -- Kept eta-expanded (not point-free), and reused for both header and field
 -- body bytes, so HPC ticks the decode call on every invocation rather than
@@ -72,6 +90,40 @@ import Network.Wai qualified as Wai
 {-# ANN decodeLeniently ("HLint: ignore Eta reduce" :: String) #-}
 decodeLeniently :: ByteString -> Text
 decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
+
+-- | A non-negative byte budget for multipart parsing and retained request
+-- data. A 'Natural' input makes a negative literal unrepresentable; use
+-- 'multipartByteLimitFromInt' at an integer configuration boundary.
+newtype MultipartByteLimit = MultipartByteLimit Natural
+  deriving (Eq, Show)
+
+multipartByteLimit :: Natural -> MultipartByteLimit
+multipartByteLimit = MultipartByteLimit
+
+multipartByteLimitFromInt :: Int -> Maybe MultipartByteLimit
+multipartByteLimitFromInt byteCount
+  | byteCount >= 0 = Just (MultipartByteLimit (fromIntegral byteCount))
+  | otherwise = Nothing
+
+multipartByteLimitValue :: MultipartByteLimit -> Natural
+multipartByteLimitValue (MultipartByteLimit byteCount) = byteCount
+
+-- | A non-negative multipart part, field, or file count budget. A count of
+-- zero is useful: it expresses that the corresponding kind of part is not
+-- accepted at this endpoint.
+newtype MultipartItemLimit = MultipartItemLimit Natural
+  deriving (Eq, Show)
+
+multipartItemLimit :: Natural -> MultipartItemLimit
+multipartItemLimit = MultipartItemLimit
+
+multipartItemLimitFromInt :: Int -> Maybe MultipartItemLimit
+multipartItemLimitFromInt itemCount
+  | itemCount >= 0 = Just (MultipartItemLimit (fromIntegral itemCount))
+  | otherwise = Nothing
+
+multipartItemLimitValue :: MultipartItemLimit -> Natural
+multipartItemLimitValue (MultipartItemLimit itemCount) = itemCount
 
 -- | Bounds applied while consuming a multipart body: its total streamed byte
 -- count, how much preamble and each part's headers the parser may retain, how
@@ -82,14 +134,14 @@ decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDec
 -- an application can cap either kind of part on its own, e.g. a form with
 -- many small fields but at most one attachment.
 data MultipartLimits = MultipartLimits
-  { multipartLimitsMaxBodyBytes :: Int,
-    multipartLimitsMaxPreambleBytes :: Int,
-    multipartLimitsMaxPartHeaderBytes :: Int,
-    multipartLimitsMaxFieldBytes :: Int,
-    multipartLimitsMaxFileBytes :: Int,
-    multipartLimitsMaxParts :: Int,
-    multipartLimitsMaxFieldCount :: Int,
-    multipartLimitsMaxFileCount :: Int
+  { multipartLimitsMaxBodyBytes :: MultipartByteLimit,
+    multipartLimitsMaxPreambleBytes :: MultipartByteLimit,
+    multipartLimitsMaxPartHeaderBytes :: MultipartByteLimit,
+    multipartLimitsMaxFieldBytes :: MultipartByteLimit,
+    multipartLimitsMaxFileBytes :: MultipartByteLimit,
+    multipartLimitsMaxParts :: MultipartItemLimit,
+    multipartLimitsMaxFieldCount :: MultipartItemLimit,
+    multipartLimitsMaxFileCount :: MultipartItemLimit
   }
   deriving (Eq, Show)
 
@@ -98,14 +150,14 @@ data MultipartLimits = MultipartLimits
 defaultMultipartLimits :: MultipartLimits
 defaultMultipartLimits =
   MultipartLimits
-    { multipartLimitsMaxBodyBytes = 32 * 1024 * 1024,
-      multipartLimitsMaxPreambleBytes = 8 * 1024,
-      multipartLimitsMaxPartHeaderBytes = 16 * 1024,
-      multipartLimitsMaxFieldBytes = 1024 * 1024,
-      multipartLimitsMaxFileBytes = 25 * 1024 * 1024,
-      multipartLimitsMaxParts = 100,
-      multipartLimitsMaxFieldCount = 100,
-      multipartLimitsMaxFileCount = 20
+    { multipartLimitsMaxBodyBytes = multipartByteLimit (32 * 1024 * 1024),
+      multipartLimitsMaxPreambleBytes = multipartByteLimit (8 * 1024),
+      multipartLimitsMaxPartHeaderBytes = multipartByteLimit (16 * 1024),
+      multipartLimitsMaxFieldBytes = multipartByteLimit (1024 * 1024),
+      multipartLimitsMaxFileBytes = multipartByteLimit (25 * 1024 * 1024),
+      multipartLimitsMaxParts = multipartItemLimit 100,
+      multipartLimitsMaxFieldCount = multipartItemLimit 100,
+      multipartLimitsMaxFileCount = multipartItemLimit 20
     }
 
 -- | One fully-consumed part: either a plain field's decoded value, kept in
@@ -113,14 +165,14 @@ defaultMultipartLimits =
 -- completed value and byte count.
 data MultipartPartWith stored
   = MultipartFieldPart Text Text
-  | MultipartFilePart Text Text stored Int
+  | MultipartFilePart Text UntrustedFilename stored Int
 
 -- | A file part visible only while a multipart callback is running. Its
 -- upload must be deliberately promoted or is discarded when that callback
 -- scope finishes.
 data MultipartScopedPart stored
   = MultipartScopedFieldPart Text Text
-  | MultipartScopedFilePart Text Text (MultipartUpload stored) Int
+  | MultipartScopedFilePart Text UntrustedFilename (MultipartUpload stored) Int
 
 data MultipartUpload stored = MultipartUpload
   { multipartUploadStoredValue :: stored,
@@ -191,7 +243,7 @@ rejectMultipartPart = pure (Left MultipartMalformedBody)
 -- for an n-byte field within the same declared field-size limit.
 data PartAccumulator stored
   = FieldAccumulator Text [ByteString] Int
-  | FileAccumulator Text Text (MultipartStagedUpload stored) Int
+  | FileAccumulator Text UntrustedFilename (MultipartStagedUpload stored) Int
 
 discardActiveMultipartUpload :: IORef.IORef (Maybe (MultipartStagedUpload stored)) -> IO ()
 discardActiveMultipartUpload activeUploadReference = do
@@ -253,8 +305,8 @@ consumeMultipartBodyWithActive activeUploadReference storage limits boundary rea
         ( driveMultipartConsumer
             consumer
             ( newBoundedMultipartScanner
-                (multipartLimitsMaxPreambleBytes limits)
-                (multipartLimitsMaxPartHeaderBytes limits)
+                (multipartByteLimitAsInt (multipartLimitsMaxPreambleBytes limits))
+                (multipartByteLimitAsInt (multipartLimitsMaxPartHeaderBytes limits))
                 boundary
             )
             Nothing
@@ -354,7 +406,7 @@ applyMultipartEvent consumer event currentPart partCounts =
   case (event, currentPart) of
     (MultipartPartStarted headerBlock, Nothing) -> do
       let limits = multipartConsumerLimits consumer
-      when (multipartPartCountsTotal partCounts >= multipartLimitsMaxParts limits) (throwError MultipartTooManyParts)
+      when (reachedMultipartItemLimit (multipartPartCountsTotal partCounts) (multipartLimitsMaxParts limits)) (throwError MultipartTooManyParts)
       accumulator <- startMultipartPart consumer partCounts headerBlock
       pure (ContinueMultipartConsumption (Just accumulator) (incrementMultipartPartCounts accumulator partCounts))
     (MultipartPartBodyChunk bodyBytes, Just accumulator) -> do
@@ -382,24 +434,25 @@ startMultipartPart consumer partCounts headerBlock =
           case multipartFieldFilename disposition of
             Nothing -> do
               when
-                (multipartPartCountsFields partCounts >= multipartLimitsMaxFieldCount (multipartConsumerLimits consumer))
+                (reachedMultipartItemLimit (multipartPartCountsFields partCounts) (multipartLimitsMaxFieldCount (multipartConsumerLimits consumer)))
                 (throwError MultipartTooManyFields)
               pure (FieldAccumulator fieldName [] 0)
             Just filename -> do
               when
-                (multipartPartCountsFiles partCounts >= multipartLimitsMaxFileCount (multipartConsumerLimits consumer))
+                (reachedMultipartItemLimit (multipartPartCountsFiles partCounts) (multipartLimitsMaxFileCount (multipartConsumerLimits consumer)))
                 (throwError MultipartTooManyFiles)
               let storage = multipartConsumerStorage consumer
+                  untrustedFilename = MultipartStorage.untrustedFilenameFromText filename
               -- An async exception landing between the upload starting and its
               -- reference being recorded would leave it visible to neither
               -- 'discardActiveMultipartUpload' nor 'discardUnclaimed', orphaning
               -- it in the storage adapter; mask_ makes the two one atomic step.
               stagedUpload <-
                 liftIO . Exception.mask_ $ do
-                  stagedUpload <- MultipartStorage.beginMultipartUpload storage $! filename
+                  stagedUpload <- MultipartStorage.beginMultipartUpload storage untrustedFilename
                   IORef.writeIORef (multipartConsumerActiveUploadReference consumer) (Just stagedUpload)
                   pure stagedUpload
-              pure (FileAccumulator fieldName filename stagedUpload 0)
+              pure (FileAccumulator fieldName untrustedFilename stagedUpload 0)
 
 appendMultipartPartBytes ::
   MultipartConsumer stored ->
@@ -427,9 +480,17 @@ appendMultipartPartBytes consumer accumulator bodyBytes =
           liftIO (MultipartStorage.appendMultipartUpload stagedUpload bodyBytes)
           pure (FileAccumulator fieldName filename stagedUpload (bytesWritten + ByteString.length bodyBytes))
 
-exceedsMultipartLimit :: Int -> Int -> Int -> Bool
+exceedsMultipartLimit :: MultipartByteLimit -> Int -> Int -> Bool
 exceedsMultipartLimit maximumBytes current increment =
-  toInteger current + toInteger increment > toInteger maximumBytes
+  toInteger current + toInteger increment > toInteger (multipartByteLimitValue maximumBytes)
+
+multipartByteLimitAsInt :: MultipartByteLimit -> Int
+multipartByteLimitAsInt maximumBytes =
+  fromInteger (min (toInteger (maxBound :: Int)) (toInteger (multipartByteLimitValue maximumBytes)))
+
+reachedMultipartItemLimit :: Int -> MultipartItemLimit -> Bool
+reachedMultipartItemLimit current maximumItems =
+  toInteger current >= toInteger (multipartItemLimitValue maximumItems)
 
 finalizeMultipartPart :: MultipartConsumer stored -> PartAccumulator stored -> IO (MultipartPartWith stored)
 finalizeMultipartPart consumer accumulator =
@@ -507,7 +568,7 @@ multipartRequestBoundary limits request = do
   contentType <- maybe (Left MultipartInvalidContentType) Right (lookup Http.hContentType (Wai.requestHeaders request))
   boundary <- multipartBoundaryFromContentType contentType
   case lookup Http.hContentLength (Wai.requestHeaders request) >>= parseContentLength of
-    Just declaredBytes | declaredBytes > fromIntegral (multipartLimitsMaxBodyBytes limits) -> Left MultipartDeclaredBodyTooLarge
+    Just declaredBytes | toInteger declaredBytes > toInteger (multipartByteLimitValue (multipartLimitsMaxBodyBytes limits)) -> Left MultipartDeclaredBodyTooLarge
     _ -> Right boundary
 
 parseContentLength :: ByteString -> Maybe Integer

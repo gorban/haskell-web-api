@@ -13,6 +13,7 @@ import Data.IORef qualified as IORef
 import Data.List (mapAccumL)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Api.Multipart
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
@@ -155,7 +156,7 @@ storageFromOpener :: (Text -> IO (FilePath, Handle)) -> MultipartStorage FilePat
 storageFromOpener openUploadFile =
   multipartStorage
     ( \filename -> do
-        (path, handle) <- openUploadFile filename
+        (path, handle) <- openUploadFile (untrustedFilenameText filename)
         pure $
           multipartStagedUpload
             (ByteString.hPut handle)
@@ -168,6 +169,12 @@ data ObservedPart
   = ObservedField Text Text
   | ObservedFile Text Text ByteString Int
   deriving (Eq, Show)
+
+testByteLimit :: Int -> MultipartByteLimit
+testByteLimit = multipartByteLimit . fromIntegral
+
+testItemLimit :: Int -> MultipartItemLimit
+testItemLimit = multipartItemLimit . fromIntegral
 
 runConsume :: MultipartLimits -> [ByteString] -> IO (Either MultipartConsumeError [ObservedPart])
 runConsume limits chunks = do
@@ -183,7 +190,7 @@ runConsume limits chunks = do
         case maybeUpload of
           Nothing -> pure (Left MultipartMalformedBody)
           Just inMemoryUpload -> do
-            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName filename (inMemoryUploadBytes inMemoryUpload) byteCount :)
+            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
             pure (Right ())
   case result of
     Left consumeError -> pure (Left consumeError)
@@ -202,7 +209,7 @@ runRequestConsume limits request = do
         case maybeUpload of
           Nothing -> pure (Left MultipartMalformedBody)
           Just inMemoryUpload -> do
-            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName filename (inMemoryUploadBytes inMemoryUpload) byteCount :)
+            IORef.modifyIORef' observedPartsReference (ObservedFile fieldName (untrustedFilenameText filename) (inMemoryUploadBytes inMemoryUpload) byteCount :)
             pure (Right ())
   case result of
     Left consumeError -> pure (Left consumeError)
@@ -218,10 +225,10 @@ shouldReject action expectedError = do
 testLimits :: MultipartLimits
 testLimits =
   defaultMultipartLimits
-    { multipartLimitsMaxBodyBytes = 4096,
-      multipartLimitsMaxFieldBytes = 1024,
-      multipartLimitsMaxFileBytes = 1024,
-      multipartLimitsMaxParts = 3
+    { multipartLimitsMaxBodyBytes = testByteLimit 4096,
+      multipartLimitsMaxFieldBytes = testByteLimit 1024,
+      multipartLimitsMaxFileBytes = testByteLimit 1024,
+      multipartLimitsMaxParts = testItemLimit 3
     }
 
 singleFieldBody :: ByteString
@@ -443,10 +450,11 @@ spec =
           result <-
             withMultipartBodyWith (storageFromOpener openUploadFile) testLimits boundaryToken readChunk $ \case
               MultipartScopedFieldPart "field1" "value1" -> pure (Right ())
-              MultipartScopedFilePart "file1" "a.txt" upload byteCount -> do
-                promoted <- promoteMultipartUpload upload
-                IORef.writeIORef promotedReference ((,byteCount) <$> promoted)
-                pure (Right ())
+              MultipartScopedFilePart "file1" filename upload byteCount
+                | untrustedFilenameText filename == "a.txt" -> do
+                    promoted <- promoteMultipartUpload upload
+                    IORef.writeIORef promotedReference ((,byteCount) <$> promoted)
+                    pure (Right ())
               _ -> pure (Left MultipartMalformedBody)
           promoted <- IORef.readIORef promotedReference
           case (result, promoted) of
@@ -457,6 +465,55 @@ spec =
                     :| [byteCount `shouldBe` ByteString.length "file content here"]
                 )
             other -> expectationFailure ("unexpected result: " <> show other)
+
+      it "keeps client filenames opaque until a storage adapter explicitly reveals metadata" $ do
+        filenameReference <- IORef.newIORef []
+        revealedFilenameReference <- IORef.newIORef []
+        callbackFilenameReference <- IORef.newIORef Nothing
+        chunksReference <- IORef.newIORef []
+        let untrustedFilename :: Text
+            untrustedFilename = "../unsafe.txt"
+            untrustedFilenameBody =
+              "--"
+                <> boundaryToken
+                <> "\r\nContent-Disposition: form-data; name=\"file1\"; filename=\""
+                <> TextEncoding.encodeUtf8 untrustedFilename
+                <> "\"\r\n\r\nfile content here\r\n--"
+                <> boundaryToken
+                <> "--\r\n"
+        readChunk <- chunkReader [untrustedFilenameBody]
+        let storage =
+              multipartStorage
+                ( \filename -> do
+                    IORef.modifyIORef' filenameReference (filename :)
+                    IORef.modifyIORef' revealedFilenameReference (untrustedFilenameText filename :)
+                    pure $
+                      multipartStagedUpload
+                        (\chunk -> IORef.modifyIORef' chunksReference (chunk :))
+                        (pure ())
+                        (IORef.modifyIORef' chunksReference (const []))
+                )
+                Nothing
+        result <-
+          withMultipartBodyWith storage defaultMultipartLimits boundaryToken readChunk $ \case
+            MultipartScopedFieldPart {} -> pure (Right ())
+            MultipartScopedFilePart _ filename _upload _ -> do
+              IORef.writeIORef callbackFilenameReference (Just filename)
+              pure (Right ())
+        receivedFilenames <- IORef.readIORef filenameReference
+        revealedFilenames <- IORef.readIORef revealedFilenameReference
+        maybeCallbackFilename <- IORef.readIORef callbackFilenameReference
+        case (receivedFilenames, maybeCallbackFilename) of
+          ([storageFilename], Just callbackFilename) ->
+            expectAll
+              ( (result `shouldBe` Right ())
+                  :| [ untrustedFilenameText storageFilename `shouldBe` untrustedFilename,
+                       revealedFilenames `shouldBe` [untrustedFilename],
+                       storageFilename == callbackFilename `shouldBe` True,
+                       storageFilename /= callbackFilename `shouldBe` False
+                     ]
+              )
+          other -> expectationFailure ("unexpected filename metadata: " <> show (fmap untrustedFilenameText (snd other), fmap untrustedFilenameText (fst other)))
 
       it "discards an earlier completed file when a later part is malformed" $
         withTestUploadOpener $ \openUploadFile -> do
@@ -567,18 +624,18 @@ spec =
 
       it "rejects a streamed body whose aggregate bytes exceed the configured limit" $
         shouldReject
-          (runConsume (testLimits {multipartLimitsMaxBodyBytes = ByteString.length twoPartBody - 1}) [twoPartBody])
+          (runConsume (testLimits {multipartLimitsMaxBodyBytes = testByteLimit (ByteString.length twoPartBody - 1)}) [twoPartBody])
           MultipartBodyTooLarge
 
       it "rejects an oversized preamble while retaining only a boundary suffix" $
         shouldReject
-          (runConsume (testLimits {multipartLimitsMaxPreambleBytes = 4}) ["too much preamble"])
+          (runConsume (testLimits {multipartLimitsMaxPreambleBytes = testByteLimit 4}) ["too much preamble"])
           MultipartPreambleTooLarge
 
       it "rejects a preamble that exceeds its limit in the chunk containing the first boundary" $
         shouldReject
           ( runConsume
-              (testLimits {multipartLimitsMaxPreambleBytes = 4})
+              (testLimits {multipartLimitsMaxPreambleBytes = testByteLimit 4})
               ["too much preamble--" <> boundaryToken <> "--\r\n"]
           )
           MultipartPreambleTooLarge
@@ -586,7 +643,7 @@ spec =
       it "rejects an incomplete part header block that exceeds its retained-byte limit" $
         shouldReject
           ( runConsume
-              (testLimits {multipartLimitsMaxPartHeaderBytes = 4})
+              (testLimits {multipartLimitsMaxPartHeaderBytes = testByteLimit 4})
               ["--" <> boundaryToken <> "\r\n" <> ByteString.take 5 fieldPartHeaders]
           )
           MultipartPartHeadersTooLarge
@@ -605,7 +662,7 @@ spec =
       it "rejects a complete part header block that exceeds its retained-byte limit" $
         shouldReject
           ( runConsume
-              (testLimits {multipartLimitsMaxPartHeaderBytes = ByteString.length fieldPartHeaders - 1})
+              (testLimits {multipartLimitsMaxPartHeaderBytes = testByteLimit (ByteString.length fieldPartHeaders - 1)})
               ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n"]
           )
           MultipartPartHeadersTooLarge
@@ -618,7 +675,7 @@ spec =
                 IORef.writeIORef spooledPathReference (Just path)
                 pure (path, handle)
               firstChunk = "--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\npartial file contents"
-              limits = testLimits {multipartLimitsMaxBodyBytes = ByteString.length firstChunk}
+              limits = testLimits {multipartLimitsMaxBodyBytes = testByteLimit (ByteString.length firstChunk)}
           readChunk <- chunkReader [firstChunk, " more bytes"]
           result <- withMultipartBodyWith (storageFromOpener trackedOpener) limits boundaryToken readChunk (const (pure (Right ())))
           maybeSpooledPath <- IORef.readIORef spooledPathReference
@@ -646,7 +703,7 @@ spec =
                 <> "--"
                 <> boundaryToken
                 <> "--\r\n"
-         in shouldReject (runConsume (testLimits {multipartLimitsMaxFieldCount = 1}) [twoFieldParts]) MultipartTooManyFields
+         in shouldReject (runConsume (testLimits {multipartLimitsMaxFieldCount = testItemLimit 1}) [twoFieldParts]) MultipartTooManyFields
 
       it "rejects a body that declares more files than the configured file-count limit, independent of the field count" $
         let twoFileParts =
@@ -663,7 +720,7 @@ spec =
                 <> "--"
                 <> boundaryToken
                 <> "--\r\n"
-         in shouldReject (runConsume (testLimits {multipartLimitsMaxFileCount = 1}) [twoFileParts]) MultipartTooManyFiles
+         in shouldReject (runConsume (testLimits {multipartLimitsMaxFileCount = testItemLimit 1}) [twoFileParts]) MultipartTooManyFiles
 
       it "rejects a field value that grows past the configured limit" $
         let largeFieldBody =
@@ -757,6 +814,34 @@ spec =
                      ]
               )
 
+      it "keeps every multipart byte and item limit non-negative" $
+        expectAll
+          ( (multipartByteLimitFromInt (-1) `shouldBe` Nothing)
+              :| [ multipartItemLimitFromInt (-1) `shouldBe` Nothing,
+                   multipartByteLimitValue (multipartByteLimit 7) `shouldBe` 7,
+                   multipartItemLimitValue (multipartItemLimit 3) `shouldBe` 3,
+                   multipartByteLimitFromInt 0 `shouldBe` Just (multipartByteLimit 0),
+                   multipartItemLimitFromInt 0 `shouldBe` Just (multipartItemLimit 0)
+                 ]
+          )
+
+      it "keeps typed multipart limits comparable and printable" $
+        let byteLimit = multipartByteLimit 7
+            otherByteLimit = multipartByteLimit 8
+            itemLimit = multipartItemLimit 3
+            otherItemLimit = multipartItemLimit 4
+         in expectAll
+              ( (byteLimit == byteLimit `shouldBe` True)
+                  :| [ byteLimit /= otherByteLimit `shouldBe` True,
+                       show byteLimit `shouldSatisfy` (not . null),
+                       showList [byteLimit] "" `shouldSatisfy` (not . null),
+                       itemLimit == itemLimit `shouldBe` True,
+                       itemLimit /= otherItemLimit `shouldBe` True,
+                       show itemLimit `shouldSatisfy` (not . null),
+                       showList [itemLimit] "" `shouldSatisfy` (not . null)
+                     ]
+              )
+
     describe "withMultipartRequestBodyWith" $ do
       it "parses only a strict multipart media type with one valid boundary" $
         expectAll
@@ -823,7 +908,7 @@ spec =
       it "rejects declared oversized bodies, including values beyond machine integer range, before reading" $ do
         bodyReadReference <- IORef.newIORef False
         hugeBodyReadReference <- IORef.newIORef False
-        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = 10}
+        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = testByteLimit 10}
             readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
             hugeReadChunk = IORef.writeIORef hugeBodyReadReference True >> pure twoPartBody
             request = multipartRequest readChunk [(Http.hContentLength, "11")]
@@ -848,7 +933,7 @@ spec =
           let storage =
                 multipartStorage
                   ( \filename -> do
-                      (path, handle) <- openUploadFile filename
+                      (path, handle) <- openUploadFile (untrustedFilenameText filename)
                       pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
                   )
                   (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
@@ -866,7 +951,7 @@ spec =
           let storage =
                 multipartStorage
                   ( \filename -> do
-                      (path, handle) <- openUploadFile filename
+                      (path, handle) <- openUploadFile (untrustedFilenameText filename)
                       pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
                   )
                   (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
@@ -889,7 +974,7 @@ spec =
                 pure (Right ())
               MultipartScopedFilePart fieldName filename upload byteCount -> do
                 fieldName `shouldBe` "file1"
-                filename `shouldBe` "a.txt"
+                untrustedFilenameText filename `shouldBe` "a.txt"
                 promoted <- promoteMultipartUpload upload
                 IORef.writeIORef promotedReference promoted
                 byteCount `shouldBe` ByteString.length "file content here"
@@ -910,7 +995,7 @@ spec =
           let storage =
                 multipartStorage
                   ( \filename -> do
-                      (path, handle) <- openUploadFile filename
+                      (path, handle) <- openUploadFile (untrustedFilenameText filename)
                       pure (multipartStagedUpload (ByteString.hPut handle) (hClose handle >> pure path) (hClose handle >> removeFile path))
                   )
                   (Just (\path -> IORef.writeIORef discardedReference True >> removeFile path))
@@ -932,7 +1017,7 @@ spec =
                 IORef.modifyIORef' seenPartsRef (ObservedField fieldName value :)
                 pure (Right ())
               MultipartScopedFilePart fieldName filename _upload byteCount -> do
-                IORef.modifyIORef' seenPartsRef (ObservedFile fieldName filename ByteString.empty byteCount :)
+                IORef.modifyIORef' seenPartsRef (ObservedFile fieldName (untrustedFilenameText filename) ByteString.empty byteCount :)
                 pure (Right ())
           seenParts <- reverse <$> IORef.readIORef seenPartsRef
           expectAll
@@ -1009,7 +1094,7 @@ spec =
               pure (Right ())
             MultipartScopedFilePart fieldName filename upload byteCount -> do
               fieldName `shouldBe` "file1"
-              filename `shouldBe` "a.txt"
+              untrustedFilenameText filename `shouldBe` "a.txt"
               byteCount `shouldBe` ByteString.length "file content here"
               discardMultipartUpload upload
               pure (Right ())
@@ -1050,7 +1135,7 @@ spec =
                 IORef.modifyIORef' seenPartsRef (ObservedField fieldName value :)
                 pure (Right ())
               MultipartScopedFilePart fieldName filename _upload byteCount -> do
-                IORef.modifyIORef' seenPartsRef (ObservedFile fieldName filename ByteString.empty byteCount :)
+                IORef.modifyIORef' seenPartsRef (ObservedFile fieldName (untrustedFilenameText filename) ByteString.empty byteCount :)
                 pure (Right ())
           seenParts <- reverse <$> IORef.readIORef seenPartsRef
           expectAll
@@ -1079,7 +1164,7 @@ spec =
 
       it "applies the declared-size limit before calling a streaming callback" $ do
         bodyReadReference <- IORef.newIORef False
-        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = 10}
+        let limits = defaultMultipartLimits {multipartLimitsMaxBodyBytes = testByteLimit 10}
             readChunk = IORef.writeIORef bodyReadReference True >> pure twoPartBody
             request = multipartRequest readChunk [(Http.hContentLength, "11")]
         result <- withMultipartRequestBodyWith limits request (const (pure (Right ())))
