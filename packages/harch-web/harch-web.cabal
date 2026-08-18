@@ -94,6 +94,9 @@ library
     HarchWeb.Acme.Protocol.Types
     HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Api.Endpoint
+    HarchWeb.Api.Endpoint.Family
+    HarchWeb.Api.Endpoint.Internal
+    HarchWeb.Api.Endpoint.Runtime
     HarchWeb.Api.MediaType
     HarchWeb.Api.Multipart.Disposition
     HarchWeb.Api.Multipart.Scanner

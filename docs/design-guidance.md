@@ -611,6 +611,21 @@ still applies verbatim, but is no longer required work now that the module-healt
 satisfied: a `.Family` split remains available as a future readability improvement, not a follow-up this
 document tracks as owed.
 
+### Follow-up decision — endpoint module-health split (2026-08-18)
+
+**Decision: split the existing endpoint boundary internally, not by adding an endpoint abstraction or
+exposing `ApiPath`.** The subsequent total-handler addition grew `HarchWeb.Api.Endpoint` to 704 lines and
+22 imports, re-opening the repository's non-facade module-health signal. The boundary and public API remain
+correct: the missing capability was ownership separation, not another routing surface. The public
+`HarchWeb.Api.Endpoint` module is therefore now a facade over three private collaborators:
+`Endpoint.Internal` owns the representations and the deliberately non-exported `ApiPath` constructor,
+`Endpoint.Family` owns the one `RouteCodec`/`RouteDefinition` family adapter and its defensive invariant
+check, and `Endpoint.Runtime` owns request-body decoding and protocol-response interpretation. This follows
+the extend-existing-boundary rule: callers still use exactly one route-family dispatcher, while the private
+family interpreter can inspect the abstract public path without widening the public API. The split is not a
+relocation of a compatibility surface and does not create a second WAI dispatcher. Focused endpoint tests,
+the full 100% coverage gate, and the module-health report are the required proof of this structural change.
+
 ### Follow-up decision — AC's web-api gap is a single-dispatcher extension, not a family (2026-08-13)
 
 **Decision: extend `web-api`'s existing single `AppRoute`/`routeCodec` dispatcher via
