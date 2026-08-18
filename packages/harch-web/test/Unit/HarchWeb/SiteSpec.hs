@@ -30,6 +30,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Site
   ( RouteDefinition (..),
     Site (..),
+    apiOnlySite,
     buildSiteApplication,
     simpleSite,
   )
@@ -120,6 +121,35 @@ spec = do
       HarchWeb.reportRequestObservability siteApplication requestObservability `shouldReturn` ()
       HarchWeb.reportConnectionObservability siteApplication connectionObservability `shouldReturn` ()
       HarchWeb.reportApplicationLog siteApplication "sample-log" `shouldReturn` ()
+
+    it "gives API-only sites a complete SSR fallback without page navigation runtime" $ do
+      let apiSite = apiOnlySite "sample-api" (SampleContext "") sampleRouteCodec sampleRouteDefinition
+          apiApplication = buildSiteApplication apiSite
+          fallbackPage =
+            Page
+              { pageTitle = "Fallback",
+                pageRoute = HomeRoute,
+                pageContext = SampleContext "",
+                pageBody = HarchWeb.text "fallback",
+                pageBootstrapHooks = []
+              }
+          document = HarchWeb.pageShell apiApplication fallbackPage
+      expectAll
+        ( (siteName apiSite `shouldBe` "sample-api")
+            :| [ siteDefaultRequestContext apiSite `shouldBe` SampleContext "",
+                 siteNavigationRuntime apiSite `shouldBe` Nothing,
+                 siteNavigationRoutes apiSite `shouldBe` [],
+                 HarchWeb.appName apiApplication `shouldBe` "sample-api",
+                 HarchWeb.defaultRequestContext apiApplication `shouldBe` SampleContext "",
+                 parseRoute (HarchWeb.routeCodec apiApplication) (SampleContext "") "/api/status"
+                   `shouldBe` Just (RouteRequest StatusApiRoute (SampleContext "")),
+                 HarchWeb.renderDocumentForTests document
+                   `shouldBe` "<!DOCTYPE html><html><head><title>Fallback</title></head><body><nav data-navigation-region=\"primary\"></nav><main id=\"main\" data-navigation-content=\"true\">fallback</main></body></html>"
+               ]
+        )
+      HarchWeb.renderResponse apiApplication (RouteRequest StatusApiRoute (SampleContext "")) >>= \case
+        BodyResponse response -> HarchWeb.responseBody response `shouldBe` "{\"status\":\"ok\"}"
+        _ -> expectationFailure "expected API-only site to render its protocol route"
 
     it "derives navigation items from labeled site routes and keeps route rendering prefix-aware" $ do
       let siteApplication = buildSiteApplication sampleSite

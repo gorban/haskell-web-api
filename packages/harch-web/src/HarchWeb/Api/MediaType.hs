@@ -5,6 +5,7 @@
 module HarchWeb.Api.MediaType
   ( ApiMediaType,
     apiMediaType,
+    requireApiMediaType,
     apiMediaTypeText,
     jsonMediaType,
     plainTextMediaType,
@@ -37,6 +38,16 @@ newtype ApiMediaType = ApiMediaType Text
 apiMediaType :: Text -> Maybe ApiMediaType
 apiMediaType value =
   ApiMediaType <$> normalizeMediaType value
+
+-- | Validate a startup-time, application-declared media type or fail with a
+-- precise configuration error. Request headers must continue to use
+-- 'apiMediaType' and handle rejection as ordinary input; this helper is only
+-- for declarations an application cannot sensibly continue without.
+requireApiMediaType :: Text -> ApiMediaType
+requireApiMediaType value =
+  case apiMediaType value of
+    Just mediaType -> mediaType
+    Nothing -> error ("HarchWeb.Api.MediaType: invalid declared media type: " <> Text.unpack value)
 
 apiMediaTypeText :: ApiMediaType -> Text
 apiMediaTypeText (ApiMediaType value) = value

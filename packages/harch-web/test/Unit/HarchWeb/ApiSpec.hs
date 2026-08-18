@@ -35,6 +35,7 @@ testEndpointTable =
   [ SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/status") "ReadStatus"),
     SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/status") "WriteStatus"),
     SomeApiRouteEndpoint (testEndpoint ApiGet (at "/api/second") "ReadSecond"),
+    SomeApiRouteEndpoint neverFailingEndpoint,
     SomeApiRouteEndpoint streamEndpoint
   ]
 
@@ -48,6 +49,16 @@ testEndpoint method path responseText =
     (textResponseEncoder :| [])
     (const (pure (Right (apiResponse responseText))))
     (const (apiResponse "unreachable"))
+
+neverFailingEndpoint :: ApiRouteEndpoint () () domainFailure Text
+neverFailingEndpoint =
+  apiRouteEndpointAtNeverFailing
+    ApiGet
+    (at "/api/total")
+    noRequestFields
+    ApiNoRequestBody
+    (textResponseEncoder :| [])
+    (const (pure (apiResponse "Total")))
 
 streamEndpoint :: ApiRouteEndpoint () () () ()
 streamEndpoint =
@@ -197,6 +208,10 @@ spec =
               :| [apiRouteResponseBody postResponse `shouldBe` "WriteStatus"]
           )
 
+      it "runs a never-failing endpoint without inventing a domain-failure renderer" $ do
+        response <- runApiRouteEndpointGroup testEndpointTable (at "/api/total") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/total"})
+        apiRouteResponseBody response `shouldBe` "Total"
+
       it "resolves HEAD to the declared GET endpoint's handler, same as the shared dispatcher's HEAD synthesis" $ do
         headResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
         apiRouteResponseBody headResponse `shouldBe` "ReadStatus"
@@ -272,6 +287,9 @@ spec =
             (const (apiResponse "unreachable"))
         )
         `shouldBe` at ""
+
+    it "runs the named no-request-fields codec without errors" $
+      runRequestCodec noRequestFields (ApiRequestData [] [] [] []) `shouldBe` ([], Just ())
 
     describe "apiHeaderValue" $ do
       it "accepts a value without control characters or surrounding whitespace" $
@@ -1120,12 +1138,17 @@ spec =
                    apiMediaTypeText htmlMediaType `shouldBe` "text/html",
                    testMediaType "application/json" == testMediaType "application/json" `shouldBe` True,
                    testMediaType "application/json" /= testMediaType "text/plain" `shouldBe` True,
+                   requireApiMediaType " Application/JSON " `shouldBe` testMediaType "application/json",
                    show (testMediaType "application/json") `shouldSatisfy` (not . null),
                    showList [testMediaType "application/json", testMediaType "text/plain"] "" `shouldSatisfy` (not . null),
                    apiMediaType "not-a-media-type" `shouldBe` Nothing,
                    apiMediaType "text" `shouldBe` Nothing
                  ]
           )
+
+      it "fails clearly when an application declares an invalid required media type" $
+        evaluate (requireApiMediaType "not-a-media-type") `shouldThrow` \case
+          ErrorCall message -> "invalid declared media type: not-a-media-type" `isInfixOf` message
 
       it "decodes a JSON body when Content-Type matches" $
         selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "application/json") "42"

@@ -231,6 +231,9 @@ singleFieldBody =
 spec :: Spec
 spec =
   describe "HarchWeb.Api.Multipart" $ do
+    it "rejects a callback part with the parser-owned generic rejection" $
+      rejectMultipartPart `shouldReturn` Left MultipartMalformedBody
+
     it "scans a two-part body delivered as a single chunk" $
       normalizeEvents (runScanner boundaryToken [twoPartBody]) `shouldBe` expectedTwoPartEvents
 

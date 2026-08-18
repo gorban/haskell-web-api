@@ -95,4 +95,22 @@ expect_report_success 'a purely declarative HPC report with no counters' "$zero_
 expect_report_success 'an HPC report with a valid empty alternative category' "$mixed_zero_total_report"
 expect_report_failure 'an HPC report with a nonzero numerator and zero total' "$invalid_zero_total_report"
 
+test_hpc_dir='dist-newstyle/build/x86_64-linux/ghc-9.14.1/custom-api-0.1.0.0/t/custom-api-tests/opt/hpc/vanilla'
+resolved_package_dir="$($coverage_script --package-version-dir-fixture "$test_hpc_dir" custom-api)"
+if [ "$resolved_package_dir" != 'custom-api-0.1.0.0' ]; then
+  printf 'coverage package path resolved to %s instead of the production namespace\n' "$resolved_package_dir" >&2
+  exit 1
+fi
+
+test_support_report='dist-newstyle/build/x86_64-linux/ghc-9.14.1/test-core-0.1.2.0/t/test-core-tests/opt/hpc/vanilla/html/hpc_index.html'
+example_report='dist-newstyle/build/x86_64-linux/ghc-9.14.1/multipart-upload-example-0.1.0.0/t/multipart-upload-example-tests/opt/hpc/vanilla/html/hpc_index.html'
+if "$coverage_script" --consolidated-report-fixture "$test_support_report"; then
+  printf '%s\n' 'consolidated coverage unexpectedly includes the test-support report.' >&2
+  exit 1
+fi
+if ! "$coverage_script" --consolidated-report-fixture "$example_report"; then
+  printf '%s\n' 'consolidated coverage unexpectedly omits an example report.' >&2
+  exit 1
+fi
+
 printf '%s\n' 'Coverage gate fixture checks passed.'

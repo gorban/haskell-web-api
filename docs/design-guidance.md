@@ -504,8 +504,10 @@ instead of threaded separately into a shared handler), its two declarations use
 CSRF-gated per-part multipart callback is unchanged except for calling the endpoint's own
 `withApiMultipartRequest` scoped consumer instead of `withMultipartRequestBodyWithStorage` directly —
 the same underlying scanner and storage adapter either way. `App.App`'s `multipartUploadApplication`
-builds the typed `Application` via `simpleSite` + `buildSiteApplication`; its executable-only WAI
-adapter is private. The Unit suite renders it through `toWaiApplication`, while the real-browser E2E
+builds the typed `Application` via `apiOnlySite` + `buildSiteApplication`; that site boundary keeps one
+shared route dispatcher, disables page-navigation runtime, and retains a minimal complete-SSR fallback
+if a future route renders a page. Its executable-only WAI adapter is private. The Unit suite renders it
+through `toWaiApplication`, while the real-browser E2E
 suite passes the typed value to `withLocalTestServer`, so that test listener applies the site's same
 request-head, transport, and concurrency policies. This avoids pretending an opaque WAI function carries
 policy metadata or adding a second raw-WAI policy composition API. It replaced

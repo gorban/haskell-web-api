@@ -100,6 +100,55 @@ runtime_coverage_filter_args() {
   esac
 }
 
+# The test-suite HPC directory is nested below the package directory, e.g.
+# @.../ghc-9.14.1/custom-api-0.1.0.0/t/custom-api-tests/opt/hpc/vanilla@.
+# Do not mistake @custom-api-tests@ for the package namespace: its MIX files
+# are named @custom-api-0.1.0.0-inplace@ and an include filter for the test
+# component silently produces an empty (0/0) HTML report.
+package_version_dir_from_hpc_dir() {
+  local hpc_dir="$1"
+  local package_name="$2"
+  local candidate="$hpc_dir"
+  local parent
+
+  while [ "$candidate" != "/" ]; do
+    parent="$(dirname "$candidate")"
+    if [[ "$(basename "$parent")" == ghc-* && "$(basename "$candidate")" == "$package_name"-* ]]; then
+      printf '%s\n' "$(basename "$candidate")"
+      return 0
+    fi
+    candidate="$parent"
+  done
+  return 1
+}
+
+package_version_dir_from_path() {
+  local path="$1"
+  local candidate="$path"
+  local parent
+
+  while [ "$candidate" != "/" ]; do
+    parent="$(dirname "$candidate")"
+    if [[ "$(basename "$parent")" == ghc-* ]]; then
+      printf '%s\n' "$(basename "$candidate")"
+      return 0
+    fi
+    candidate="$parent"
+  done
+  return 1
+}
+
+consolidated_report_is_included() {
+  local report="$1"
+
+  # TestCore is test support, not a shippable library or tested example. Keep
+  # its unit coverage run, but do not display or aggregate its empty report.
+  case "$report" in
+    */test-core-*/hpc/vanilla/html/hpc_index.html) return 1 ;;
+    *) return 0 ;;
+  esac
+}
+
 coverage_gate_fixture() {
   local project_fraction="$1"
   local aggregate_percentage="$2"
@@ -132,6 +181,24 @@ if [ "${1:-}" = "--coverage-report-fixture" ]; then
     exit 2
   fi
   report_coverage_is_complete "$2"
+  exit
+fi
+
+if [ "${1:-}" = "--package-version-dir-fixture" ]; then
+  if [ "$#" != 3 ]; then
+    printf 'usage: %s --package-version-dir-fixture <hpc-dir> <package-name>\n' "$0" >&2
+    exit 2
+  fi
+  package_version_dir_from_hpc_dir "$2" "$3"
+  exit
+fi
+
+if [ "${1:-}" = "--consolidated-report-fixture" ]; then
+  if [ "$#" != 2 ]; then
+    printf 'usage: %s --consolidated-report-fixture <hpc-report-path>\n' "$0" >&2
+    exit 2
+  fi
+  consolidated_report_is_included "$2"
   exit
 fi
 
@@ -314,7 +381,10 @@ EOF
 
     pkg_hpc_dir=$(find dist-newstyle -path "*/$pkg-*/opt/hpc/vanilla" -type d -print | head -n1)
     if [ -n "$pkg_hpc_dir" ]; then
-      pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$pkg_hpc_dir")")")")"
+      if ! pkg_version_dir="$(package_version_dir_from_hpc_dir "$pkg_hpc_dir" "$pkg")"; then
+        printf 'Could not derive the package-version directory for coverage package %s.\n' "$pkg" >&2
+        exit 1
+      fi
       coverage_hpc_args=()
       while IFS= read -r mix_dir; do
         coverage_hpc_args+=("--hpcdir=$coverage_root/$mix_dir")
@@ -397,6 +467,7 @@ aggregate_total=(0 0 0)
 report_count=0
 while IFS= read -r report; do
   [ -z "$report" ] && continue
+  consolidated_report_is_included "$report" || continue
   report_count=$((report_count + 1))
   echo "<iframe src='${report#$repoRoot/}'></iframe><br/>" >> hpc_index.html
   snippet=$(
@@ -448,9 +519,11 @@ SCRIPT
   report_sed_tmp="$(mktemp "$temp_root/report.sed.XXXXXX")"
   sed "1,/<\/body>/s@</body>@$snippet@" "$report" > "$report_sed_tmp"
   mv "$report_sed_tmp" "$report"
-  pkg_version_dir="$(basename "$(dirname "$(dirname "$(dirname "$(dirname "$(dirname "$report")")")")")")"
+  if ! pkg_version_dir="$(package_version_dir_from_path "$report")"; then
+    printf 'Could not derive the package-version directory for report %s.\n' "$report" >&2
+    exit 1
+  fi
   package_name="${pkg_version_dir%%-[0-9]*}"
-
   mapfile -t fractions < <(report_coverage_fractions "$report")
 
   for idx in "${!categories[@]}"; do

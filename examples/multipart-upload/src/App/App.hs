@@ -2,6 +2,7 @@
 
 module App.App
   ( multipartUploadApplication,
+    multipartUploadSite,
     newMultipartUploadApplication,
   )
 where
@@ -33,26 +34,10 @@ multipartUploadWaiApplication = HarchWeb.toWaiApplication . multipartUploadAppli
 
 multipartUploadSite :: NativeUploadState -> Site.Site ApiPath () ()
 multipartUploadSite state =
-  Site.simpleSite
+  Site.apiOnlySite
     "multipart-upload-example"
     ()
     (apiRouteEndpointFamilyCodec endpoints)
-    (const multipartUploadUnusedPageShell)
-    []
     (apiRouteEndpointFamilyDefinition endpoints)
   where
     endpoints = nativeUploadEndpoints state
-
--- | No declared endpoint ever renders a 'HarchWeb.Page', so no route
--- reaches this shell; it exists only to satisfy 'Site.simpleSite's type.
-multipartUploadUnusedPageShell :: HarchWeb.PageShell ApiPath ()
-multipartUploadUnusedPageShell =
-  HarchWeb.PageShell
-    { HarchWeb.shellBodyAttributes = [],
-      HarchWeb.shellNavigationAttributes = [],
-      HarchWeb.shellNavigationItems = [],
-      HarchWeb.shellMainId = "main",
-      HarchWeb.shellMainAttributes = [],
-      HarchWeb.shellStylesheets = [],
-      HarchWeb.shellRuntimeDescriptors = []
-    }

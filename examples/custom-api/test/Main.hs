@@ -10,6 +10,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (atomicModifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -55,6 +56,10 @@ jsonRequestChunks requestMethod requestPath bodyChunks = do
 
 main :: IO ()
 main = hspec $ describe "Unit.App.Api.Declarative" $ do
+  it "exposes an API-only site composition root with its declared name and empty context" $ do
+    Site.siteName declarativeApiSite `shouldBe` "custom-api"
+    Site.siteDefaultRequestContext declarativeApiSite `shouldBe` ()
+
   describe "GET /api/greeting" $ do
     it "renders JSON by default" $ do
       response <- performWaiRequest application Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/greeting"}

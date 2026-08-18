@@ -3,6 +3,7 @@
 module HarchWeb.Site
   ( RouteDefinition (..),
     Site (..),
+    apiOnlySite,
     buildSiteApplication,
     pageRoute,
     simpleSite,
@@ -104,6 +105,35 @@ simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefiniti
         Observability.forceConnectionObservability connectionObservability `seq` pure (),
       siteReportApplicationLog = \logEntry ->
         logEntry `seq` pure ()
+    }
+
+-- | Compose a site whose route table contains protocol endpoints only. It
+-- extends the ordinary 'Site' boundary rather than adding a second
+-- dispatcher: the supplied codec and definition remain the complete
+-- method/path table. API-only sites have no navigation runtime or navigation
+-- routes. If a future route accidentally renders a page, the internal shell
+-- still renders a minimal complete SSR document instead of failing.
+apiOnlySite ::
+  Text ->
+  context ->
+  RouteCodec route context ->
+  (route -> RouteDefinition route context) ->
+  Site route () context
+apiOnlySite name defaultContext codec routeDefinition =
+  (simpleSite name defaultContext codec (const apiOnlyFallbackPageShell) [] routeDefinition)
+    { siteNavigationRuntime = Nothing
+    }
+
+apiOnlyFallbackPageShell :: PageShell route context
+apiOnlyFallbackPageShell =
+  PageShell
+    { shellBodyAttributes = [],
+      shellNavigationAttributes = [],
+      shellNavigationItems = [],
+      shellMainId = "main",
+      shellMainAttributes = [],
+      shellStylesheets = [],
+      shellRuntimeDescriptors = []
     }
 
 pageRoute ::

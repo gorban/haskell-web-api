@@ -44,27 +44,29 @@ import HarchWeb.Api
   ( ApiEndpointRequest (..),
     ApiMethod (ApiGet, ApiPost),
     ApiMultipartRequest,
-    ApiMultipartRequestError (..),
+    ApiMultipartRequestError (ApiMultipartRequestFailed),
     ApiRequestBody (..),
     ApiResponse (..),
     ApiResponseEncoder,
     ApiRouteEndpoint,
     SomeApiRouteEndpoint (..),
     apiResponse,
-    apiRouteEndpointAt,
+    apiRouteEndpointAtNeverFailing,
     apiUtf8ContentType,
     at,
     bytesResponseEncoder,
     htmlMediaType,
+    noRequestFields,
     withApiMultipartRequest,
   )
 import HarchWeb.Api.Multipart
   ( InMemoryUpload,
-    MultipartConsumeError (..),
+    MultipartConsumeError (MultipartMalformedBody),
     MultipartScopedPart (..),
     defaultMultipartLimits,
     discardMultipartUpload,
     inMemoryMultipartStorage,
+    rejectMultipartPart,
   )
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Session (CsrfToken, csrfTokenText, generateCsrfToken, mkCsrfToken, validateCsrfToken)
@@ -84,12 +86,8 @@ data NativeUploadState = NativeUploadState
     nativeUploadDiscardCountReference :: IORef Int
   }
 
--- The `$!` on an already-WHNF `Nothing` has no runtime effect; it exists so
--- HPC ticks this call on every invocation instead of treating the closed
--- literal as a once-shared CAF reference.
-{-# ANN newNativeUploadState ("HLint: ignore Redundant $!" :: String) #-}
 newNativeUploadState :: IO NativeUploadState
-newNativeUploadState = NativeUploadState <$> (newIORef $! Nothing) <*> (newIORef $! 0)
+newNativeUploadState = NativeUploadState <$> newIORef Nothing <*> newIORef 0
 
 -- | Returns how many accepted uploads this example deliberately discarded.
 -- Production applications can instead promote an upload through their chosen
@@ -113,27 +111,25 @@ nativeUploadEndpoints state =
 htmlResponseEncoders :: NonEmpty (ApiResponseEncoder ByteString.ByteString)
 htmlResponseEncoders = bytesResponseEncoder (apiUtf8ContentType htmlMediaType) :| []
 
-showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () () () ByteString.ByteString
+showUploadFormEndpoint :: NativeUploadState -> ApiRouteEndpoint () () domainFailure ByteString.ByteString
 showUploadFormEndpoint state =
-  apiRouteEndpointAt
+  apiRouteEndpointAtNeverFailing
     ApiGet
     (at nativeUploadPath)
-    (pure ())
+    noRequestFields
     ApiNoRequestBody
     htmlResponseEncoders
-    (\_endpointRequest -> Right <$> (issueUploadToken state >>= renderUploadFormPage))
-    (const (apiResponse ByteString.empty))
+    (\_endpointRequest -> issueUploadToken state >>= renderUploadFormPage)
 
-submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) () ByteString.ByteString
+submitUploadEndpoint :: NativeUploadState -> ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) domainFailure ByteString.ByteString
 submitUploadEndpoint state =
-  apiRouteEndpointAt
+  apiRouteEndpointAtNeverFailing
     ApiPost
     (at nativeUploadPath)
-    (pure ())
+    noRequestFields
     (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
     htmlResponseEncoders
-    (\endpointRequest -> Right <$> handleUploadSubmission state (apiEndpointRequestBody endpointRequest))
-    (const (apiResponse ByteString.empty))
+    (\endpointRequest -> handleUploadSubmission state (apiEndpointRequestBody endpointRequest))
 
 issueUploadToken :: NativeUploadState -> IO CsrfToken
 issueUploadToken state = do
@@ -163,13 +159,13 @@ handleUploadSubmission state multipartRequestBody = do
     -- Every 'MultipartConsumeError' (media type, declared size limits,
     -- malformed structure, truncation) renders the same way here: the
     -- distinction is exercised by "HarchWeb.Api.Multipart"'s unit suite.
-    UploadRejected _consumeError -> errorPage HttpTypes.status400 "This upload was invalid."
+    UploadRejected -> errorPage HttpTypes.status400 "This upload was invalid."
 
 data UploadOutcome
   = UploadAccepted Text Int
   | UploadCsrfRejected
   | UploadMissingFile
-  | UploadRejected MultipartConsumeError
+  | UploadRejected
 
 -- | Drives the endpoint's already-opened scoped multipart consumer with a
 -- callback that rejects the whole body -- before any later part, including a
@@ -180,11 +176,6 @@ data UploadOutcome
 -- uploads. An application that needs durable ownership must promote an
 -- upload through its selected storage adapter instead.
 --
--- The `$!` applications below (on already-WHNF constructor arguments like
--- 'MultipartMalformedBody') exist so HPC ticks each on every invocation
--- instead of treating it as a once-shared reference; they have no runtime
--- effect.
-{-# ANN consumeUpload ("HLint: ignore Redundant $!" :: String) #-}
 consumeUpload :: NativeUploadState -> ApiMultipartRequest InMemoryUpload -> IO UploadOutcome
 consumeUpload state multipartRequestBody = do
   csrfValidatedReference <- newIORef False
@@ -196,7 +187,7 @@ consumeUpload state multipartRequestBody = do
         claimed <- claimUploadToken state suppliedTokenText
         if claimed
           then Right () <$ atomicModifyIORef' csrfValidatedReference (const (True, ()))
-          else (Left $! MultipartMalformedBody) <$ atomicModifyIORef' csrfRejectedReference (const (True, ()))
+          else rejectMultipartPart <* atomicModifyIORef' csrfRejectedReference (const (True, ()))
       MultipartScopedFilePart _fieldName filename upload byteCount -> do
         csrfValidated <- atomicModifyIORef' csrfValidatedReference (\validated -> (validated, validated))
         if csrfValidated
@@ -206,17 +197,13 @@ consumeUpload state multipartRequestBody = do
             Right () <$ atomicModifyIORef' acceptedReference (const (Just (UploadAccepted filename byteCount), ()))
           else do
             atomicModifyIORef' csrfRejectedReference (const (True, ()))
-            pure (Left $! MultipartMalformedBody)
+            rejectMultipartPart
       MultipartScopedFieldPart _ _ -> pure (Right ())
   case consumeResult of
-    Left (ApiMultipartRequestFailed multipartError) -> do
+    Left (ApiMultipartRequestFailed MultipartMalformedBody) -> do
       csrfRejected <- atomicModifyIORef' csrfRejectedReference (\rejected -> (rejected, rejected))
-      pure (if csrfRejected then UploadCsrfRejected else UploadRejected $! multipartError)
-    -- Unreachable: this handler calls 'withApiMultipartRequest' exactly once
-    -- per request. Treated the same as a rejected body rather than crashing,
-    -- since a caller-observable duplicate-consumption bug should still fail
-    -- the request safely.
-    Left ApiMultipartRequestAlreadyConsumed -> pure (UploadRejected MultipartMalformedBody)
+      pure (if csrfRejected then UploadCsrfRejected else UploadRejected)
+    Left _ -> pure UploadRejected
     Right () -> do
       maybeAccepted <- atomicModifyIORef' acceptedReference (\accepted -> (accepted, accepted))
       pure (fromMaybe UploadMissingFile maybeAccepted)

@@ -12,6 +12,7 @@ module HarchWeb.Api.Request
     ApiFieldValue,
     RequestField,
     RequestCodec,
+    noRequestFields,
     apiTextValue,
     parseApiField,
     queryField,
@@ -140,6 +141,13 @@ parseApiField = ApiFieldValue
 newtype RequestField value = RequestField (ApiRequestData -> ([ApiRequestParseError], Maybe value))
 
 type RequestCodec value = Compose ((->) ApiRequestData) (Compose ((,) [ApiRequestParseError]) Maybe) value
+
+-- | A named declaration for endpoints that intentionally decode no query,
+-- header, cookie, or form fields. It communicates that the empty input is
+-- part of the endpoint contract without repeating a raw unit codec at every
+-- declaration site.
+noRequestFields :: RequestCodec ()
+noRequestFields = pure ()
 
 requestCodec :: (ApiRequestData -> ([ApiRequestParseError], Maybe value)) -> RequestCodec value
 requestCodec decode = Compose (Compose . decode)

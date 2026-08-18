@@ -34,6 +34,7 @@ module HarchWeb.Api.Endpoint
     apiMethodText,
     apiRouteEndpoint,
     apiRouteEndpointAt,
+    apiRouteEndpointAtNeverFailing,
     apiRouteEndpointPath,
     apiRouteDefinition,
     apiRouteDefinitionWithContext,
@@ -114,14 +115,21 @@ at = ApiPath
 -- interpretation, and response representations.
 data ApiRouteEndpoint fields body domainFailure response where
   ApiRouteEndpoint ::
-    { apiRouteEndpointPath :: ApiPath,
-      apiRouteEndpointMethod :: ApiMethod,
-      apiRouteEndpointFields :: RequestCodec fields,
-      apiRouteEndpointBody :: ApiRequestBody body,
-      apiRouteEndpointEncoders :: NonEmpty (ApiResponseEncoder response),
-      apiRouteEndpointHandler :: ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response)),
-      apiRouteEndpointFailureResponse :: domainFailure -> ApiResponse response
-    } ->
+    ApiPath ->
+    ApiMethod ->
+    RequestCodec fields ->
+    ApiRequestBody body ->
+    NonEmpty (ApiResponseEncoder response) ->
+    (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+    (domainFailure -> ApiResponse response) ->
+    ApiRouteEndpoint fields body domainFailure response
+  ApiRouteEndpointNeverFailing ::
+    ApiPath ->
+    ApiMethod ->
+    RequestCodec fields ->
+    ApiRequestBody body ->
+    NonEmpty (ApiResponseEncoder response) ->
+    (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
     ApiRouteEndpoint fields body domainFailure response
 
 -- | An endpoint table may contain declarations with different request, body,
@@ -222,6 +230,32 @@ apiRouteEndpointAt ::
   (domainFailure -> ApiResponse response) ->
   ApiRouteEndpoint fields body domainFailure response
 apiRouteEndpointAt method path = ApiRouteEndpoint path method
+
+-- | Construct an endpoint whose handler has no domain-failure rail. Prefer
+-- this over inventing an unreachable error value and failure renderer: it
+-- makes the endpoint's total behavior explicit and leaves no impossible
+-- branch for an application or its tests to pretend to exercise.
+apiRouteEndpointAtNeverFailing ::
+  ApiMethod ->
+  ApiPath ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  ApiRouteEndpoint fields body domainFailure response
+apiRouteEndpointAtNeverFailing method path = ApiRouteEndpointNeverFailing path method
+
+apiRouteEndpointPath :: ApiRouteEndpoint fields body domainFailure response -> ApiPath
+apiRouteEndpointPath endpoint =
+  case endpoint of
+    ApiRouteEndpoint path _ _ _ _ _ _ -> path
+    ApiRouteEndpointNeverFailing path _ _ _ _ _ -> path
+
+apiRouteEndpointMethod :: ApiRouteEndpoint fields body domainFailure response -> ApiMethod
+apiRouteEndpointMethod endpoint =
+  case endpoint of
+    ApiRouteEndpoint _ method _ _ _ _ _ -> method
+    ApiRouteEndpointNeverFailing _ method _ _ _ _ -> method
 
 -- | Convert a declaration into one entry in a 'RouteDefinition' table. The
 -- server has already selected the route and method before this runs, so it
@@ -401,12 +435,11 @@ matchedApiRouteEndpointOrDie endpoints requestPath requestMethod =
 
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint =
-  runApiRouteEndpointHandler
-    (apiRouteEndpointFields endpoint)
-    (apiRouteEndpointBody endpoint)
-    (apiRouteEndpointEncoders endpoint)
-    (apiRouteEndpointHandler endpoint)
-    (apiRouteEndpointFailureResponse endpoint)
+  case endpoint of
+    ApiRouteEndpoint _ _ fields body encoders handler failureResponse ->
+      runApiRouteEndpointHandler fields body encoders handler failureResponse
+    ApiRouteEndpointNeverFailing _ _ fields body encoders handler ->
+      runApiRouteEndpointHandlerNeverFailing fields body encoders handler
 
 -- | The runtime dispatch 'ApiRouteEndpoint' declarations share: decode the
 -- declared body and fields, then hand both to a continuation that already

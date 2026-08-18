@@ -37,6 +37,7 @@ module HarchWeb.Api.Multipart
     inMemoryMultipartStorage,
     inMemoryUploadBytes,
     MultipartConsumeError (..),
+    rejectMultipartPart,
     multipartBoundaryFromContentType,
     withMultipartBodyWith,
     withMultipartRequestBodyWithStorage,
@@ -173,6 +174,13 @@ data MultipartConsumeError
     -- 'multipartLimitsMaxBodyBytes' before any body chunk was read.
     MultipartDeclaredBodyTooLarge
   deriving (Eq, Show)
+
+-- | Reject the current part from an application callback when application
+-- validation has determined that the multipart request cannot continue.
+-- The parser owns the concrete protocol error; callers need not manufacture
+-- a parser-failure constructor merely to stop later parts from being read.
+rejectMultipartPart :: IO (Either MultipartConsumeError ())
+rejectMultipartPart = pure (Left MultipartMalformedBody)
 
 -- | 'FieldAccumulator' keeps a field's body as reversed chunks plus a
 -- running byte count, concatenated once in 'finalizeMultipartPart', rather

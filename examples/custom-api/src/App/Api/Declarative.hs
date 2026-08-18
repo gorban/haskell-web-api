@@ -17,13 +17,15 @@
 -- decision record in docs/design-guidance.md.
 --
 -- The endpoint table owns the whole application's routing, so this example
--- has no page routes and its 'HarchWeb.Site.Site' carries a 'HarchWeb.PageShell'
--- that no route ever renders; a real application supplies its own instead.
+-- uses 'HarchWeb.Site.apiOnlySite'. That small extension of the shared site
+-- boundary has no parallel API dispatcher and keeps a safe minimal SSR
+-- fallback inside the framework should a future page route be added.
 module App.Api.Declarative
   ( GreetingRequest (..),
     GreetingResponse (..),
     declarativeApiEndpoints,
     declarativeApiApplication,
+    declarativeApiSite,
   )
 where
 
@@ -50,27 +52,11 @@ declarativeApiEndpoints =
 
 declarativeApiSite :: Site.Site ApiPath () ()
 declarativeApiSite =
-  Site.simpleSite
+  Site.apiOnlySite
     "custom-api"
     ()
     (apiRouteEndpointFamilyCodec declarativeApiEndpoints)
-    (const declarativeApiUnusedPageShell)
-    []
     (apiRouteEndpointFamilyDefinition declarativeApiEndpoints)
-
--- | No declared endpoint ever renders a 'HarchWeb.Page', so no route
--- reaches this shell; it exists only to satisfy 'Site.simpleSite's type.
-declarativeApiUnusedPageShell :: HarchWeb.PageShell ApiPath ()
-declarativeApiUnusedPageShell =
-  HarchWeb.PageShell
-    { HarchWeb.shellBodyAttributes = [],
-      HarchWeb.shellNavigationAttributes = [],
-      HarchWeb.shellNavigationItems = [],
-      HarchWeb.shellMainId = "main",
-      HarchWeb.shellMainAttributes = [],
-      HarchWeb.shellStylesheets = [],
-      HarchWeb.shellRuntimeDescriptors = []
-    }
 
 declarativeApiApplication :: Wai.Application
 declarativeApiApplication = HarchWeb.toWaiApplication (Site.buildSiteApplication declarativeApiSite)
@@ -130,52 +116,52 @@ customGreetingEncoder =
 -- literal (one non-empty @type\/subtype@ pair), so 'apiMediaType' cannot
 -- actually reject it here; the alternative is unreachable.
 greetingMediaType :: ApiMediaType
-greetingMediaType =
-  case apiMediaType "text/x-greeting" of
-    Just mediaType -> mediaType
-    Nothing -> error "App.Api.Declarative: \"text/x-greeting\" is a valid bare media type"
+greetingMediaType = requireApiMediaType "text/x-greeting"
 
-readGreetingEndpoint :: ApiRouteEndpoint () () () GreetingResponse
+readGreetingEndpoint :: ApiRouteEndpoint () () domainFailure GreetingResponse
 readGreetingEndpoint =
-  apiRouteEndpointAt
+  apiRouteEndpointAtNeverFailing
     ApiGet
     (at "/api/greeting")
-    (pure ())
+    noRequestFields
     ApiNoRequestBody
     greetingEncoders
-    (\_endpointRequest -> pure (Right (apiResponse (greetingFor "World"))))
-    (const (apiResponse (greetingFor "unreachable")))
+    (\_endpointRequest -> pure (apiResponse (greetingFor "World")))
 
-submitGreetingEndpoint :: ApiRouteEndpoint () GreetingRequest () GreetingResponse
+submitGreetingEndpoint :: ApiRouteEndpoint () GreetingRequest domainFailure GreetingResponse
 submitGreetingEndpoint =
-  apiRouteEndpointAt
+  apiRouteEndpointAtNeverFailing
     ApiPost
     (at "/api/greeting")
-    (pure ())
+    noRequestFields
     (ApiBufferedRequestBody RejectMissingContentType maxGreetingBodyBytes [greetingRequestBodyDecoder])
     greetingEncoders
-    (pure . Right . apiResponse . greetingFor . requestedName . apiEndpointRequestBody)
-    (const (apiResponse (greetingFor "unreachable")))
+    (pure . apiResponse . greetingFor . requestedName . apiEndpointRequestBody)
 
 maxGreetingBodyBytes :: Int
 maxGreetingBodyBytes = 16 * 1024
 
-uploadAvatarEndpoint :: ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) () Text
+uploadAvatarEndpoint :: ApiRouteEndpoint () (ApiMultipartRequest InMemoryUpload) AvatarUploadFailure Text
 uploadAvatarEndpoint =
   apiRouteEndpointAt
     ApiPost
     (at "/api/avatar")
-    (pure ())
+    noRequestFields
     (ApiMultipartRequestBody inMemoryMultipartStorage defaultMultipartLimits)
     (textResponseEncoder :| [])
     handleAvatarUpload
-    (const (apiResponse "invalid multipart body"))
+    avatarUploadFailureResponse
+
+data AvatarUploadFailure = InvalidAvatarUpload
+
+avatarUploadFailureResponse :: AvatarUploadFailure -> ApiResponse Text
+avatarUploadFailureResponse InvalidAvatarUpload = apiResponse "invalid multipart body"
 
 -- | Counts parts and deliberately discards every upload: this compiled
 -- demonstration never promotes a file, matching the AD storage-ownership
 -- discipline (an application that wants to keep an upload must promote it
 -- explicitly through its chosen adapter instead).
-handleAvatarUpload :: ApiEndpointRequest () (ApiMultipartRequest InMemoryUpload) -> IO (Either () (ApiResponse Text))
+handleAvatarUpload :: ApiEndpointRequest () (ApiMultipartRequest InMemoryUpload) -> IO (Either AvatarUploadFailure (ApiResponse Text))
 handleAvatarUpload endpointRequest = do
   partCountReference <- IORef.newIORef (0 :: Int)
   result <-
@@ -185,4 +171,4 @@ handleAvatarUpload endpointRequest = do
   partCount <- IORef.readIORef partCountReference
   pure $ case result of
     Right () -> Right (apiResponse (Text.pack (show partCount) <> " part(s) received"))
-    Left _consumeError -> Left ()
+    Left _consumeError -> Left InvalidAvatarUpload

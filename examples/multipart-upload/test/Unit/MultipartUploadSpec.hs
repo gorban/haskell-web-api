@@ -3,7 +3,7 @@
 
 module Unit.MultipartUploadSpec (spec) where
 
-import App.App (multipartUploadApplication, newMultipartUploadApplication)
+import App.App (multipartUploadApplication, multipartUploadSite, newMultipartUploadApplication)
 import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, nativeUploadPath, newNativeUploadState)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
@@ -15,6 +15,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
@@ -24,6 +25,11 @@ import TestCore.CustomAssertions (expectAll)
 spec :: Spec
 spec =
   describe "Unit.App.MultipartUpload" $ do
+    it "exposes an API-only site composition root with its declared name and empty context" $ do
+      state <- newNativeUploadState
+      Site.siteName (multipartUploadSite state) `shouldBe` "multipart-upload-example"
+      Site.siteDefaultRequestContext (multipartUploadSite state) `shouldBe` ()
+
     it "renders the shared endpoint table's own 404 for a path it does not own, with the same response security headers as every other route" $ do
       application <- newMultipartUploadApplication
       uploadResponse <- performWaiRequest application getRequest
@@ -44,7 +50,8 @@ spec =
         body <- readResponseBody response
         expectAll
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status200)
-              :| [ Text.isInfixOf "<form action=\"/native-upload\" method=\"POST\" enctype=\"multipart/form-data\" aria-label=\"Upload a file\">" body `shouldBe` True,
+              :| [ lookup "Content-Type" (Wai.responseHeaders response) `shouldBe` Just "text/html; charset=utf-8",
+                   Text.isInfixOf "<form action=\"/native-upload\" method=\"POST\" enctype=\"multipart/form-data\" aria-label=\"Upload a file\">" body `shouldBe` True,
                    Text.isInfixOf "<input type=\"hidden\" name=\"_harch_csrf\" value=\"" body `shouldBe` True,
                    Text.isInfixOf "<input id=\"native-upload-file\" name=\"upload\" type=\"file\" required>" body `shouldBe` True,
                    Text.isInfixOf "data-harch-action" body `shouldBe` False
@@ -104,6 +111,14 @@ spec =
               :| [Text.isInfixOf "Your upload form had expired." body `shouldBe` True]
           )
 
+      it "rejects a token before any upload form has issued one" $ do
+        application <- newUploadApplication
+        response <-
+          performRequest
+            application
+            (multipartRequest (csrfPart (Text.replicate 32 "x") <> filePart "hello.txt" "file bytes" <> closingBoundary))
+        Wai.responseStatus response `shouldBe` HttpTypes.status403
+
       it "rejects a file that arrives with no CSRF field at all, even though it was already spooled" $ do
         application <- newUploadApplication
         _ <- currentCsrfToken application
@@ -146,6 +161,21 @@ spec =
         expectAll
           ( (Wai.responseStatus response `shouldBe` HttpTypes.status400)
               :| [Text.isInfixOf "This upload was invalid." body `shouldBe` True]
+          )
+
+      it "does not mistake a malformed delimiter after a valid CSRF field for CSRF rejection" $ do
+        application <- newUploadApplication
+        csrfToken <- currentCsrfToken application
+        response <-
+          performRequest
+            application
+            (multipartRequest (csrfPart csrfToken <> "--" <> boundaryToken <> "XYZ"))
+        body <- readResponseBody response
+        expectAll
+          ( (Wai.responseStatus response `shouldBe` HttpTypes.status400)
+              :| [ Text.isInfixOf "This upload was invalid." body `shouldBe` True,
+                   Text.isInfixOf "Your upload form had expired." body `shouldBe` False
+                 ]
           )
 
       it "invalidates an earlier token once a newer form has been issued" $ do
