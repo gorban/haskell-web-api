@@ -20,8 +20,11 @@ module HarchWeb.Api.Endpoint.Internal
     RequestBodyReadFailure (..),
     ApiRequestBody (..),
     apiRouteEndpoint,
+    apiRouteEndpointWithFieldFailure,
     apiRouteEndpointAt,
+    apiRouteEndpointAtWithFieldFailure,
     apiRouteEndpointAtNeverFailing,
+    apiRouteEndpointAtNeverFailingWithFieldFailure,
     apiRouteEndpointPath,
     apiRouteEndpointMethod,
   )
@@ -77,6 +80,7 @@ data ApiRouteEndpoint fields body domainFailure response where
     RequestCodec fields ->
     ApiRequestBody body ->
     NonEmpty (ApiResponseEncoder response) ->
+    Maybe ([ApiRequestParseError] -> ApiResponse response) ->
     (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
     (domainFailure -> ApiResponse response) ->
     ApiRouteEndpoint fields body domainFailure response
@@ -86,6 +90,7 @@ data ApiRouteEndpoint fields body domainFailure response where
     RequestCodec fields ->
     ApiRequestBody body ->
     NonEmpty (ApiResponseEncoder response) ->
+    Maybe ([ApiRequestParseError] -> ApiResponse response) ->
     (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
     ApiRouteEndpoint fields body domainFailure response
 
@@ -172,6 +177,23 @@ apiRouteEndpoint ::
   ApiRouteEndpoint fields body domainFailure response
 apiRouteEndpoint method = apiRouteEndpointAt method (at "")
 
+-- | Like 'apiRouteEndpoint', but the declaration renders accumulated field
+-- errors instead of the legacy generic protocol response.  Keeping the
+-- errors at the declaration boundary preserves their source and field names
+-- without leaking a transport concern into the handler's domain-failure rail.
+-- The runtime fixes this response's status at 400, since field decoding is a
+-- client request failure rather than an application outcome.
+apiRouteEndpointWithFieldFailure ::
+  ApiMethod ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint fields body domainFailure response
+apiRouteEndpointWithFieldFailure method = apiRouteEndpointAtWithFieldFailure method (at "")
+
 -- | Construct a typed endpoint that owns a concrete path. The route-table
 -- adapter can use 'apiRouteEndpoint' while the application route codec
 -- remains the authoritative path owner.
@@ -184,7 +206,22 @@ apiRouteEndpointAt ::
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAt method path = ApiRouteEndpoint path method
+apiRouteEndpointAt method path fields body encoders =
+  ApiRouteEndpoint path method fields body encoders Nothing
+
+-- | Path-owning variant of 'apiRouteEndpointWithFieldFailure'.
+apiRouteEndpointAtWithFieldFailure ::
+  ApiMethod ->
+  ApiPath ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
+  (domainFailure -> ApiResponse response) ->
+  ApiRouteEndpoint fields body domainFailure response
+apiRouteEndpointAtWithFieldFailure method path fields body encoders fieldFailure =
+  ApiRouteEndpoint path method fields body encoders (Just fieldFailure)
 
 -- | Construct an endpoint whose handler has no domain-failure rail. Prefer
 -- this over inventing an unreachable error value and failure renderer: it
@@ -197,16 +234,30 @@ apiRouteEndpointAtNeverFailing ::
   NonEmpty (ApiResponseEncoder response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   ApiRouteEndpoint fields body domainFailure response
-apiRouteEndpointAtNeverFailing method path = ApiRouteEndpointNeverFailing path method
+apiRouteEndpointAtNeverFailing method path fields body encoders =
+  ApiRouteEndpointNeverFailing path method fields body encoders Nothing
+
+-- | Total-handler variant of 'apiRouteEndpointAtWithFieldFailure'.
+apiRouteEndpointAtNeverFailingWithFieldFailure ::
+  ApiMethod ->
+  ApiPath ->
+  RequestCodec fields ->
+  ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  ([ApiRequestParseError] -> ApiResponse response) ->
+  (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
+  ApiRouteEndpoint fields body domainFailure response
+apiRouteEndpointAtNeverFailingWithFieldFailure method path fields body encoders fieldFailure =
+  ApiRouteEndpointNeverFailing path method fields body encoders (Just fieldFailure)
 
 apiRouteEndpointPath :: ApiRouteEndpoint fields body domainFailure response -> ApiPath
 apiRouteEndpointPath endpoint =
   case endpoint of
-    ApiRouteEndpoint path _ _ _ _ _ _ -> path
-    ApiRouteEndpointNeverFailing path _ _ _ _ _ -> path
+    ApiRouteEndpoint path _ _ _ _ _ _ _ -> path
+    ApiRouteEndpointNeverFailing path _ _ _ _ _ _ -> path
 
 apiRouteEndpointMethod :: ApiRouteEndpoint fields body domainFailure response -> ApiMethod
 apiRouteEndpointMethod endpoint =
   case endpoint of
-    ApiRouteEndpoint _ method _ _ _ _ _ -> method
-    ApiRouteEndpointNeverFailing _ method _ _ _ _ -> method
+    ApiRouteEndpoint _ method _ _ _ _ _ _ -> method
+    ApiRouteEndpointNeverFailing _ method _ _ _ _ _ -> method

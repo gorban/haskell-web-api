@@ -40,10 +40,10 @@ import Network.Wai qualified as Wai
 runApiRouteEndpoint :: ApiRouteEndpoint fields body domainFailure response -> Wai.Request -> IO ProtocolResponse
 runApiRouteEndpoint endpoint =
   case endpoint of
-    ApiRouteEndpoint _ _ fields body encoders handler failureResponse ->
-      runApiRouteEndpointHandler fields body encoders handler failureResponse
-    ApiRouteEndpointNeverFailing _ _ fields body encoders handler ->
-      runApiRouteEndpointHandlerNeverFailing fields body encoders handler
+    ApiRouteEndpoint _ _ fields body encoders fieldFailure handler failureResponse ->
+      runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResponse
+    ApiRouteEndpointNeverFailing _ _ fields body encoders fieldFailure handler ->
+      runApiRouteEndpointHandlerNeverFailing fields body encoders fieldFailure handler
 
 -- | Decode one declared body and its fields before passing them to the
 -- response continuation. Protocol parse failures are interpreted exactly at
@@ -52,10 +52,12 @@ runDecodedApiRequest ::
   ApiRequestData ->
   RequestCodec fields ->
   ApiRequestBody body ->
+  NonEmpty (ApiResponseEncoder response) ->
+  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
   (fields -> body -> IO ProtocolResponse) ->
   Wai.Request ->
   IO ProtocolResponse
-runDecodedApiRequest requestData fields body onDecoded request =
+runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded request =
   decodeBody body
   where
     decodeBody requestBody =
@@ -77,15 +79,21 @@ runDecodedApiRequest requestData fields body onDecoded request =
         bodyValue <- newBody
         onDecoded decodedFields bodyValue
 
-    decodeInitialFields onDecodedFields =
-      case runRequestCodec fields requestData of
-        ([], Just decodedFields) -> onDecodedFields decodedFields
-        _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
+    decodeInitialFields = decodeRequestFields requestData
 
     decodeFormFields decodedForm fieldsData =
-      case runRequestCodec fields fieldsData of
-        ([], Just decodedFields) -> onDecoded decodedFields decodedForm
-        _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
+      decodeRequestFields fieldsData (`onDecoded` decodedForm)
+
+    decodeRequestFields fieldsData onDecodedFields =
+      case fieldFailure of
+        Nothing ->
+          case runRequestCodec fields fieldsData of
+            ([], Just decodedFields) -> onDecodedFields decodedFields
+            _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
+        Just responseFor ->
+          case runRequestCodec fields fieldsData of
+            ([], Just decodedFields) -> onDecodedFields decodedFields
+            (parseErrors, _) -> pure (fieldFailureResponse responseFor parseErrors)
 
     decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
       bodyResult <- readRequestBodyUpTo maximumBytes request
@@ -97,6 +105,12 @@ runDecodedApiRequest requestData fields body onDecoded request =
             ApiMalformedBody -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request body is malformed.")
             ApiDecodedBody decodedBody -> onDecodedBody decodedBody
 
+    fieldFailureResponse responseFor parseErrors =
+      renderEndpointResult
+        encoders
+        requestData
+        ((responseFor parseErrors) {apiEndpointResponseStatus = HttpTypes.status400})
+
 -- | Takes exactly the pieces this needs rather than a full
 -- 'ApiRouteEndpoint', so a context-aware route definition has no unused
 -- path or method to construct.
@@ -104,12 +118,13 @@ runApiRouteEndpointHandler ::
   RequestCodec fields ->
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
+  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (Either domainFailure (ApiResponse response))) ->
   (domainFailure -> ApiResponse response) ->
   Wai.Request ->
   IO ProtocolResponse
-runApiRouteEndpointHandler fields body encoders handler failureResponse request =
-  runDecodedApiRequest requestData fields body runHandler request
+runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResponse request =
+  runDecodedApiRequest requestData fields body encoders fieldFailure runHandler request
   where
     requestData = apiRequestDataFromWaiRequest request
 
@@ -123,11 +138,12 @@ runApiRouteEndpointHandlerNeverFailing ::
   RequestCodec fields ->
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
+  Maybe ([ApiRequestParseError] -> ApiResponse response) ->
   (ApiEndpointRequest fields body -> IO (ApiResponse response)) ->
   Wai.Request ->
   IO ProtocolResponse
-runApiRouteEndpointHandlerNeverFailing fields body encoders handler request =
-  runDecodedApiRequest requestData fields body runHandler request
+runApiRouteEndpointHandlerNeverFailing fields body encoders fieldFailure handler request =
+  runDecodedApiRequest requestData fields body encoders fieldFailure runHandler request
   where
     requestData = apiRequestDataFromWaiRequest request
 

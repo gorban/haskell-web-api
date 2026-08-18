@@ -378,11 +378,12 @@ spec =
     describe "apiRouteDefinition" $ do
       let requiredQuery = requiredField (queryField "q" apiTextValue)
           successfulEndpoint =
-            apiRouteEndpoint
+            apiRouteEndpointWithFieldFailure
               ApiPost
               requiredQuery
               ApiNoRequestBody
               (textResponseEncoder :| [])
+              (apiResponse . Text.pack . show)
               ( \endpointRequest ->
                   case apiEndpointRequestBody endpointRequest of
                     () -> pure (Right (apiResponse (apiEndpointRequestFields endpointRequest)))
@@ -415,9 +416,65 @@ spec =
         remainingChunks <- readIORef chunksReference
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
-              :| [ apiRouteResponseBody response `shouldBe` "API request fields were rejected.",
+              :| [ apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"q\"]",
                    remainingChunks `shouldBe` ["not consumed"]
                  ]
+          )
+
+      it "gives a field-failure renderer every accumulated error in declaration order" $ do
+        let accumulatingEndpoint =
+              apiRouteEndpointWithFieldFailure
+                ApiGet
+                ( (,)
+                    <$> requiredField (queryField "query" apiTextValue)
+                    <*> requiredField (headerField (apiHeaderName "x-token") apiTextValue)
+                )
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (apiResponse . Text.pack . show)
+                (const (pure (Right (apiResponse "unreachable"))))
+                (\() -> apiResponse "unreachable")
+        response <- runApiRoute accumulatingEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteEndpointPath accumulatingEndpoint `shouldBe` at "")
+              :| [ apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
+                   apiRouteResponseBody response
+                     `shouldBe` "[MissingApiField ApiQuerySource \"query\",MissingApiField ApiHeaderSource \"x-token\"]"
+                 ]
+          )
+
+      it "lets a total handler declaration render typed field failures" $ do
+        let totalEndpoint =
+              apiRouteEndpointAtNeverFailingWithFieldFailure
+                ApiGet
+                (at "/api/total-field-failure")
+                (requiredField (queryField "query" apiTextValue))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (apiResponse . Text.pack . show)
+                (const (pure (apiResponse "unreachable")))
+        response <- runApiRoute totalEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteEndpointPath totalEndpoint `shouldBe` at "/api/total-field-failure")
+              :| [ routeMethods (apiRouteDefinition totalEndpoint) `shouldBe` [HarchWeb.RouteGet],
+                   apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
+                   apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]"
+                 ]
+          )
+
+      it "retains the generic field response for the legacy total constructor" $ do
+        let legacyEndpoint =
+              apiRouteEndpointAtNeverFailing
+                ApiGet
+                (at "/api/legacy-total-field-failure")
+                (requiredField (queryField "query" apiTextValue))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (const (pure (apiResponse "unreachable")))
+        response <- runApiRoute legacyEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
+              :| [apiRouteResponseBody response `shouldBe` "API request fields were rejected."]
           )
 
       it "runs a no-body endpoint after typed field decoding" $ do
@@ -905,7 +962,7 @@ spec =
           failingContextAwareEndpointDefinition =
             apiRouteDefinitionWithContext
               ApiGet
-              (pure ())
+              (requiredField (queryField "query" apiTextValue))
               ApiNoRequestBody
               (textResponseEncoder :| [])
               (const (const (pure (Left ()))))
@@ -930,10 +987,44 @@ spec =
           )
 
       it "interprets an expected domain failure at the endpoint boundary just like apiRouteDefinition" $ do
-        response <- routeResponse failingContextAwareEndpointDefinition Wai.defaultRequest (RouteRequest () ())
+        response <- routeResponse failingContextAwareEndpointDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "present")]}) (RouteRequest () ())
         expectAll
           ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status422)
               :| [apiRouteResponseBody response `shouldBe` "context-aware domain failure"]
+          )
+
+      it "retains the generic field response for a legacy context route" $ do
+        response <- routeResponse failingContextAwareEndpointDefinition Wai.defaultRequest (RouteRequest () ())
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
+              :| [apiRouteResponseBody response `shouldBe` "API request fields were rejected."]
+          )
+
+      it "lets a context-aware declaration render its typed field failures" $ do
+        let fieldFailureDefinition =
+              apiRouteDefinitionWithContextWithFieldFailure
+                ApiGet
+                (requiredField (queryField "query" apiTextValue))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (apiResponse . Text.pack . show)
+                ( \contextValue endpointRequest ->
+                    case apiEndpointRequestFields endpointRequest of
+                      "domain" -> pure (Left ())
+                      fieldValue -> pure (Right (apiResponse (contextValue <> ":" <> fieldValue)))
+                )
+                (\() -> apiResponse "context failure")
+        response <- routeResponse fieldFailureDefinition Wai.defaultRequest (RouteRequest () "context")
+        acceptedResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "accepted")]}) (RouteRequest () "context")
+        domainFailureResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "domain")]}) (RouteRequest () "context")
+        expectAll
+          ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
+              :| [ routeMethods fieldFailureDefinition `shouldBe` [HarchWeb.RouteGet],
+                   apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
+                   apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
+                   apiRouteResponseBody acceptedResponse `shouldBe` "context:accepted",
+                   apiRouteResponseBody domainFailureResponse `shouldBe` "context failure"
+                 ]
           )
 
     describe "apiRouteDefinitionWithContextNeverFailing" $ do
@@ -967,6 +1058,33 @@ spec =
           ( (apiRouteResponseStatus firstResponse `shouldBe` HttpTypes.status200)
               :| [ apiRouteResponseBody firstResponse `shouldBe` "first:hello:world",
                    apiRouteResponseBody secondResponse `shouldBe` "second:hi:there"
+                 ]
+          )
+
+      it "retains the generic field response for a legacy total context route" $ do
+        response <- runWithContext "context" Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
+              :| [apiRouteResponseBody response `shouldBe` "API request fields were rejected."]
+          )
+
+      it "lets a total context-aware declaration render typed field failures" $ do
+        let fieldFailureDefinition =
+              apiRouteDefinitionWithContextNeverFailingWithFieldFailure
+                ApiGet
+                (requiredField (queryField "query" apiTextValue))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (apiResponse . Text.pack . show)
+                (\contextValue endpointRequest -> pure (apiResponse (contextValue <> ":" <> apiEndpointRequestFields endpointRequest)))
+        response <- routeResponse fieldFailureDefinition Wai.defaultRequest (RouteRequest () "context")
+        acceptedResponse <- routeResponse fieldFailureDefinition (Wai.defaultRequest {Wai.queryString = [("query", Just "accepted")]}) (RouteRequest () "context")
+        expectAll
+          ( (routeNavigationLabel fieldFailureDefinition `shouldBe` Nothing)
+              :| [ routeMethods fieldFailureDefinition `shouldBe` [HarchWeb.RouteGet],
+                   apiRouteResponseStatus response `shouldBe` HttpTypes.status400,
+                   apiRouteResponseBody response `shouldBe` "[MissingApiField ApiQuerySource \"query\"]",
+                   apiRouteResponseBody acceptedResponse `shouldBe` "context:accepted"
                  ]
           )
 
