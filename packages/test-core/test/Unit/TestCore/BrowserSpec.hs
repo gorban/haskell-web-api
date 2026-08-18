@@ -104,7 +104,7 @@ spec = do
 
   describe "runBrowserScenario" $ do
     it "terminates the runner when initialization is interrupted asynchronously" $
-      withCancellableFakeRunner $ \config terminationPath -> do
+      withCancellableFakeRunner $ \config enteredPath -> do
         completion <- newEmptyMVar
         workerThread <-
           forkIO $ do
@@ -112,11 +112,10 @@ spec = do
             putMVar completion result
         let interruptWorker = killThread workerThread
         ( do
-            awaitFile (terminationPath <> ".entered") `shouldReturn` Just ()
+            awaitFile enteredPath `shouldReturn` Just ()
             interruptWorker
             completionResult <- timeout 1000000 (takeMVar completion)
             completionResult `shouldSatisfy` interruptedByThreadKilled
-            awaitFile terminationPath `shouldReturn` Just ()
           )
           `finally` interruptWorker
 
@@ -427,14 +426,14 @@ spec = do
     withCancellableFakeRunner action =
       withSystemTempDirectory "browser-runner-cancellation" $ \tempDirectory -> do
         let runnerPath = tempDirectory </> "runner.js"
-            terminationPath = tempDirectory </> "terminated"
+            enteredPath = tempDirectory </> "entered"
             config =
               defaultPlaywrightBrowserConfig
-                { browserRunnerArguments = [runnerPath, "hang-initialize", terminationPath],
+                { browserRunnerArguments = [runnerPath, "hang-initialize", enteredPath],
                   browserTimeoutMilliseconds = 250
                 }
         writeFile runnerPath fakeRunnerSource
-        action config terminationPath
+        action config enteredPath
 
     awaitFile path =
       -- The clean coverage build can leave the hosted runner briefly starved
@@ -467,7 +466,7 @@ spec = do
         [ "const fs = require('node:fs');",
           "const readline = require('node:readline');",
           "const mode = process.argv[2];",
-          "const terminationPath = process.argv[3];",
+          "const enteredPath = process.argv[3];",
           "let textAttempts = 0;",
           "const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });",
           "function reply(id, status, value, message, artifacts = []) {",
@@ -475,13 +474,14 @@ spec = do
           "}",
           "function rawReply(value) { process.stdout.write(JSON.stringify(value) + '\\n'); }",
           "if (mode === 'hang-initialize') {",
-          "  process.on('SIGTERM', () => { fs.writeFileSync(terminationPath, 'terminated'); process.exit(0); });",
-          "  setTimeout(() => process.exit(0), 15000).unref();",
+          "  // Keep the child alive if stdin closes: the Haskell cleanup must",
+          "  // terminate it for the interrupted worker to finish.",
+          "  setInterval(() => {}, 60000);",
           "}",
           "(async () => {",
           "  for await (const line of lines) {",
           "    const request = JSON.parse(line);",
-          "    if (mode === 'hang-initialize' && request.command === 'initialize') { fs.writeFileSync(terminationPath + '.entered', 'entered'); continue; }",
+          "    if (mode === 'hang-initialize' && request.command === 'initialize') { fs.writeFileSync(enteredPath, 'entered'); continue; }",
           "    if (mode === 'init-error' && request.command === 'initialize') { reply(request.id, 'error', null, 'initialization failed'); continue; }",
           "    if (mode === 'malformed' && request.command === 'visit') { process.stdout.write('{invalid\\n'); continue; }",
           "    if (mode === 'wrong-protocol' && request.command === 'visit') { rawReply({ protocol: 2, id: request.id, status: 'ok', value: null }); continue; }",
