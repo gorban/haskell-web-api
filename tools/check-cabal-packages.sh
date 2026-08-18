@@ -19,6 +19,11 @@ package_directories=(
   packages/test-core
   packages/web-api
 )
+simple_setup_packages=(
+  packages/core
+  packages/harch-web
+  packages/test-core
+)
 
 for support_file in "${core_test_support_files[@]}"; do
   source_file="$repo_root/packages/test-core/$support_file"
@@ -28,6 +33,23 @@ for support_file in "${core_test_support_files[@]}"; do
     exit 1
   fi
 done
+
+for package_directory in "${simple_setup_packages[@]}"; do
+  manifest=$(find "$repo_root/$package_directory" -maxdepth 1 -name '*.cabal' -type f -print -quit)
+  if ! grep -q '^build-type: Simple$' "$manifest"; then
+    printf 'Package must use Cabal Simple build type after Custom-setup removal: %s\n' "$package_directory" >&2
+    exit 1
+  fi
+done
+
+web_api_manifest="$repo_root/packages/web-api/haskell-web-api.cabal"
+if ! grep -Fxq 'build-type: Hooks' "$web_api_manifest" \
+  || ! grep -Fxq '    Cabal-hooks ==3.16.*,' "$web_api_manifest" \
+  || [ ! -f "$repo_root/packages/web-api/Setup.hs" ] \
+  || [ ! -f "$repo_root/packages/web-api/SetupHooks.hs" ]; then
+  printf '%s\n' 'web-api must use its checked-in Cabal Hooks setup implementation.' >&2
+  exit 1
+fi
 
 for package_directory in "${package_directories[@]}"; do
   printf 'Checking package manifest: %s\n' "$package_directory"

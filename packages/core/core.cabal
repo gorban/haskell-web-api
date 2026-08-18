@@ -34,16 +34,9 @@ maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
-
-custom-setup
-  setup-depends:
-    base ^>=4.22.0.0,
-    Cabal ^>=3.16.0.0,
-    directory ^>=1.3.10.0,
-    filepath ^>=1.5.4.0,
 
 common common
   -- Common warning flags.
@@ -61,7 +54,6 @@ library
     Core.Control.Error
     Core.PageRoutes.Generator
     Core.Prelude
-    Core.Setup
     Core.Setup.ContainerRuntime
     Core.Setup.DatabaseAutostart
     Core.Setup.Prerequisite
@@ -101,7 +93,8 @@ executable harch-page-routes
 -- Internal spec-preprocessor that compiles test-core sources directly.
 -- This avoids the package-level cycle that would occur if core-tests
 -- depended on test-core:spec-preprocessor.
--- Sources are copied from test-core by Setup.hs at configure time.
+-- Sources are a checked-in test-core snapshot, verified by
+-- tools/check-cabal-packages.sh to avoid the package-level dependency cycle.
 executable core-spec-preprocessor
   import: common
   main-is: SpecPreprocessor.hs
@@ -124,7 +117,7 @@ test-suite core-tests
   import: common
   -- Common test suite settings.
   type: exitcode-stdio-1.0
-  -- Include test-core/src (copied by Setup.hs) to get TestCore.Prelude and
+  -- Include the checked-in test-core snapshot to get TestCore.Prelude and
   -- TestCore.CustomAssertions without creating a package-level dependency cycle.
   hs-source-dirs:
     test

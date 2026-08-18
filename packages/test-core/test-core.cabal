@@ -44,7 +44,7 @@ maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Simple
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
 -- Extra source files to be distributed with the package, such as examples, or a tutorial module.
@@ -52,11 +52,6 @@ extra-source-files:
   playwright-runner/package-lock.json
   playwright-runner/package.json
   playwright-runner/runner.cjs
-
-custom-setup
-  setup-depends:
-    base ^>=4.22.0.0,
-    core ^>=0.1.2.0,
 
 common common
   -- Common warning flags.
@@ -120,16 +115,6 @@ executable spec-preprocessor
 
   -- Directories containing source files.
   hs-source-dirs: app
-
-executable test-core
-  -- This dummy executable is required so we can have a "build-type: Custom" package,
-  -- and so other packages can depend on this package without getting errors like:
-  -- Unknown build target 'exe:test-core'.
-  -- There is no executable component 'test-core'.
-  import: common
-  main-is: Dummy.hs
-  hs-source-dirs: app
-  build-depends: base ^>=4.22.0.0
 
 test-suite test-core-tests
   import: common

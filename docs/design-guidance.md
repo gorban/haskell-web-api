@@ -796,6 +796,26 @@ the package can be configured reproducibly as a whole. The vendored
 project API decision. Future dependency upgrades must deliberately update the relevant lower bound
 and pass the complete release gate, rather than silently widening an old release's solver range.
 
+### Follow-up decision — CM: remove Custom setup hooks (2026-08-18)
+
+**Decision: use Cabal's existing build-tool dependency graph for `core`, `harch-web`, and
+`test-core`, and use `Hooks` only for `web-api`'s genuinely separate database lifecycle.** The
+first three Custom setups had become identical manual calls to Cabal's build hook before testing.
+Their `build-tool-depends` declarations already express the real prerequisite relationship, so
+keeping a parallel setup-time build path duplicates ownership and hides that dependency from Cabal.
+They now use `build-type: Simple`, with no `Setup.hs`; the obsolete dummy `test-core` executable and
+the `Core.Setup` forwarding module are removed too. The `test-core` source used by `core` is a
+checked-in snapshot, verified by the package-manifest gate, rather than an old setup-time copy.
+
+`web-api` is different: its optional local database autostart is a package lifecycle operation, not
+a component dependency. Cabal Hooks has no Custom-style test hook, so the migration deliberately
+does **not** recreate one. Its pre-configure hook records whether the existing prerequisite checker
+actually started a database; the post-build hook runs migrations only after Cabal builds the already
+declared `haskell-web-api-db` executable. This retains the opt-in workflow without claiming a
+second build order. The manifest gate asserts the three Simple packages and the checked-in Hooks
+implementation, while the complete test/coverage gate proves Cabal resolves and runs every declared
+test tool.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

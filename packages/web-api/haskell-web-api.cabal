@@ -35,7 +35,7 @@ maintainer: 1393236+gorban@users.noreply.github.com
 -- A copyright notice.
 copyright: (c) David Bruck
 category: Web
-build-type: Custom
+build-type: Hooks
 -- Extra doc files to be distributed with the package, such as a CHANGELOG or a README.
 extra-doc-files: CHANGELOG.md
 
@@ -43,6 +43,7 @@ custom-setup
   setup-depends:
     base ^>=4.22.0.0,
     Cabal ^>=3.16.0.0,
+    Cabal-hooks ==3.16.*,
     Cabal-syntax ^>=3.16.0.0,
     core ^>=0.1.2.0,
     directory ^>=1.3.10.0,
