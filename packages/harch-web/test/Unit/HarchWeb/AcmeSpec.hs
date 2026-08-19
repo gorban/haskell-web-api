@@ -582,7 +582,15 @@ spec = do
         withFakeOpenSslExecutable fixturePrivateKeyPath $ \_scriptPath -> do
           generateAcmeAccountKey (runtimeAcmePlanWith inProcessConfig) accountKeyPath
           ByteString.readFile accountKeyPath `shouldReturn` "FAKE ACCOUNT KEY\n"
-          generateAcmeCertificateRequest (runtimeAcmePlanWith inProcessConfig) ["example.com", "www.example.com"] privateKeyPath csrConfigPath csrPemPath csrDerPath
+          generateAcmeCertificateRequest
+            (runtimeAcmePlanWith inProcessConfig)
+            ["example.com", "www.example.com"]
+            AcmeCertificateRequestPaths
+              { acmeCsrPrivateKeyPath = privateKeyPath,
+                acmeCsrConfigPath = csrConfigPath,
+                acmeCsrPemPath = csrPemPath,
+                acmeCsrDerPath = csrDerPath
+              }
           doesFileExist privateKeyPath `shouldReturn` True
           ByteString.readFile csrDerPath `shouldReturn` "FAKE DER"
           loadAcmeJwk (runtimeAcmePlanWith inProcessConfig) accountKeyPath
@@ -593,9 +601,33 @@ spec = do
             `shouldReturn` "fake-bytes"
           buildAcmeKeyAuthorization (runtimeAcmePlanWith inProcessConfig) (AcmeJwk "AQAB" "obLD1OX2BxgpOktcbX6PkA") "token"
             `shouldReturn` "token.ZmFrZS1ieXRlcw"
-          body <- buildAcmeJwsBody (runtimeAcmePlanWith inProcessConfig) accountKeyPath (AcmeRequestJwk (AcmeJwk "AQAB" "obLD1OX2BxgpOktcbX6PkA")) "nonce-1" "https://acme.example/order" "{}"
+          jwsBodyManager <- HttpClient.newManager HttpClient.defaultManagerSettings
+          let jwsBodyContext =
+                AcmeDirectoryContext
+                  { acmeContextBindPlan = runtimeAcmePlanWith inProcessConfig,
+                    acmeContextManager = jwsBodyManager,
+                    acmeContextDirectory = AcmeDirectoryResponse {acmeNewNonceUrl = "", acmeNewAccountUrl = "", acmeNewOrderUrl = ""},
+                    acmeContextAccountKeyPath = accountKeyPath
+                  }
+          body <-
+            buildAcmeJwsBody
+              jwsBodyContext
+              "nonce-1"
+              AcmeJwsRequestBody
+                { acmeJwsRequestAuth = AcmeRequestJwk (AcmeJwk "AQAB" "obLD1OX2BxgpOktcbX6PkA"),
+                  acmeJwsRequestUrl = "https://acme.example/order",
+                  acmeJwsRequestPayload = "{}"
+                }
           parseJsonValue body `shouldSatisfy` isRightValue
-          kidBody <- buildAcmeJwsBody (runtimeAcmePlanWith inProcessConfig) accountKeyPath (AcmeRequestKid "kid-1") "nonce-2" "https://acme.example/account" ""
+          kidBody <-
+            buildAcmeJwsBody
+              jwsBodyContext
+              "nonce-2"
+              AcmeJwsRequestBody
+                { acmeJwsRequestAuth = AcmeRequestKid "kid-1",
+                  acmeJwsRequestUrl = "https://acme.example/account",
+                  acmeJwsRequestPayload = ""
+                }
           parseJsonValue kidBody `shouldSatisfy` isRightValue
 
     it "covers JWK error handling for missing or invalid moduli" $
@@ -636,28 +668,28 @@ spec = do
           `shouldReturn` "nonce-1"
         withSystemTempDirectory "harch-web-acme-http" $ \tempDirectory -> do
           let accountKeyPath = tempDirectory </> "account-key.pem"
+              acmeContext = AcmeDirectoryContext plan manager directory accountKeyPath
+              session = AcmeAccountSession acmeContext "kid-1"
           withFakeOpenSslExecutable accountKeyPath $ \_ -> do
             writeFile accountKeyPath "fake-account-key"
             response <-
               performAcmeJwsRequest
-                plan
-                manager
-                directory
-                accountKeyPath
+                acmeContext
                 "account creation"
-                (AcmeRequestKid "kid-1")
-                (serverBaseUrl server <> "/capture")
-                "{}"
-                (Just "application/json")
-                [200]
+                AcmeJwsRequestBody
+                  { acmeJwsRequestAuth = AcmeRequestKid "kid-1",
+                    acmeJwsRequestUrl = serverBaseUrl server <> "/capture",
+                    acmeJwsRequestPayload = "{}"
+                  }
+                AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Just "application/json", acmeJwsExpectedStatusCodes = [200]}
             responseHeaderText "X-Seen-Accept" response `shouldBe` Just "application/json"
             responseHeaderText "Missing" response `shouldBe` Nothing
             renderAcmeResponseBody response `shouldBe` "{\"status\":\"ok\"}"
             decodeAcmeJsonResponse plan "capture" parseAcmeDirectoryResponse response
               `shouldThrow` errorContaining "Failed to decode ACME capture response"
-            createAcmeAccount plan manager directory accountKeyPath (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
+            createAcmeAccount acmeContext (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
               `shouldReturn` (serverBaseUrl server <> "/account/1")
-            createAcmeOrder plan manager directory accountKeyPath "kid-1" ["example.com"]
+            createAcmeOrder session ["example.com"]
               `shouldReturn` ( serverBaseUrl server <> "/order/1",
                                AcmeOrderResponse
                                  { acmeOrderStatus = "ready",
@@ -667,21 +699,17 @@ spec = do
                                  }
                              )
             preparedChallenge <-
-              prepareAcmeAuthorization plan manager directory accountKeyPath "kid-1" (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz/1")
+              prepareAcmeAuthorization session (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz/1")
             preparedChallenge
               `shouldSatisfy` isPreparedChallengeFor (serverBaseUrl server <> "/challenge/1")
             activeAcmeChallengeDomain (preparedAcmeChallengeRegistration preparedChallenge) `shouldBe` "example.com"
             activeAcmeChallengeToken (preparedAcmeChallengeRegistration preparedChallenge) `shouldBe` "token"
-            triggerAcmeChallenge plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/challenge/1")
-            finalizeAcmeOrder plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/finalize/1") "csr"
-            fetchAcmeCertificate plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/cert/1")
+            triggerAcmeChallenge session (serverBaseUrl server <> "/challenge/1")
+            finalizeAcmeOrder session (serverBaseUrl server <> "/finalize/1") "csr"
+            fetchAcmeCertificate session (serverBaseUrl server <> "/cert/1")
               `shouldReturn` "PEM CERT"
             pollAcmeOrder
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-ready")
               ["ready"]
               `shouldReturn` AcmeOrderResponse
@@ -691,11 +719,7 @@ spec = do
                   acmeOrderCertificateUrl = Nothing
                 }
             pollAcmeOrder
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-valid")
               ["valid"]
               `shouldReturn` AcmeOrderResponse
@@ -707,11 +731,7 @@ spec = do
             pollAcmeOrderWithRetries
               1
               0
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-pending-ready")
               ["ready"]
               `shouldReturn` AcmeOrderResponse
@@ -723,11 +743,7 @@ spec = do
             pollAcmeOrderWithRetries
               1
               0
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-processing-valid")
               ["valid"]
               `shouldReturn` AcmeOrderResponse
@@ -739,11 +755,7 @@ spec = do
             pollAcmeOrderWithRetries
               1
               0
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-waiting-ready")
               ["ready"]
               `shouldReturn` AcmeOrderResponse
@@ -765,6 +777,10 @@ spec = do
                 }
         withSystemTempDirectory "harch-web-acme-http-errors" $ \tempDirectory -> do
           let accountKeyPath = tempDirectory </> "account-key.pem"
+              acmeContext = AcmeDirectoryContext plan manager directory accountKeyPath
+              session = AcmeAccountSession acmeContext "kid-1"
+              sessionWithUrl urlOverride =
+                AcmeAccountSession (acmeContext {acmeContextDirectory = urlOverride directory}) "kid-1"
           withFakeOpenSslExecutable accountKeyPath $ \_ -> do
             writeFile accountKeyPath "fake-account-key"
             fetchAcmeNonce plan manager (serverBaseUrl server <> "/new-nonce-missing")
@@ -802,7 +818,7 @@ spec = do
             expectIOExceptionContainsAll
               (decodeAcmeJsonResponse plan "invalid decode" parseAcmeDirectoryResponse captureResponse)
               ["Failed to decode ACME invalid decode response for listener on 127.0.0.1:5443", ".\nbody:\n{\"status\":\"ok\"}"]
-            createAcmeAccount plan manager directory accountKeyPath (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
+            createAcmeAccount acmeContext (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
               `shouldReturn` (serverBaseUrl server <> "/account/1")
             let missingAccountDirectory =
                   directory
@@ -812,85 +828,58 @@ spec = do
                   directory
                     { acmeNewOrderUrl = serverBaseUrl server <> "/new-order-missing-location"
                     }
-            createAcmeAccount plan manager missingAccountDirectory accountKeyPath (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
+            createAcmeAccount acmeContext {acmeContextDirectory = missingAccountDirectory} (AcmeJwk "AQAB" "modulus") ["mailto:ops@example.com"]
               `shouldThrow` errorContaining "did not return an account location header"
-            createAcmeOrder plan manager missingOrderDirectory accountKeyPath "kid-1" ["example.com"]
+            createAcmeOrder (sessionWithUrl (const missingOrderDirectory)) ["example.com"]
               `shouldThrow` errorContaining "did not return an order location header"
             createAcmeAccount
-              plan
-              manager
-              directory {acmeNewAccountUrl = serverBaseUrl server <> "/status-500"}
-              accountKeyPath
+              acmeContext {acmeContextDirectory = directory {acmeNewAccountUrl = serverBaseUrl server <> "/status-500"}}
               (AcmeJwk "AQAB" "modulus")
               ["mailto:ops@example.com"]
               `shouldThrow` errorContaining "account creation"
             createAcmeOrder
-              plan
-              manager
-              directory {acmeNewOrderUrl = serverBaseUrl server <> "/status-500"}
-              accountKeyPath
-              "kid-1"
+              (sessionWithUrl (\baseDirectory -> baseDirectory {acmeNewOrderUrl = serverBaseUrl server <> "/status-500"}))
               ["example.com"]
               `shouldThrow` errorContaining "ACME new order for listener"
             createAcmeOrder
-              plan
-              manager
-              directory {acmeNewOrderUrl = serverBaseUrl server <> "/new-order-bad-json"}
-              accountKeyPath
-              "kid-1"
+              (sessionWithUrl (\baseDirectory -> baseDirectory {acmeNewOrderUrl = serverBaseUrl server <> "/new-order-bad-json"}))
               ["example.com"]
               `shouldThrow` errorContaining "Failed to decode ACME new order response"
-            prepareAcmeAuthorization plan manager directory accountKeyPath "kid-1" (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz-no-http01")
+            prepareAcmeAuthorization session (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz-no-http01")
               `shouldThrow` errorContaining "did not provide an http-01 challenge"
-            prepareAcmeAuthorization plan manager directory accountKeyPath "kid-1" (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/status-500")
+            prepareAcmeAuthorization session (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/status-500")
               `shouldThrow` errorContaining "authorization fetch"
-            prepareAcmeAuthorization plan manager directory accountKeyPath "kid-1" (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz-bad-json")
+            prepareAcmeAuthorization session (AcmeJwk "AQAB" "modulus") (serverBaseUrl server <> "/authz-bad-json")
               `shouldThrow` errorContaining "Failed to decode ACME authorization fetch response"
-            triggerAcmeChallenge plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/status-500")
+            triggerAcmeChallenge session (serverBaseUrl server <> "/status-500")
               `shouldThrow` errorContaining "challenge acknowledgement"
-            finalizeAcmeOrder plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/status-500") "csr"
+            finalizeAcmeOrder session (serverBaseUrl server <> "/status-500") "csr"
               `shouldThrow` errorContaining "order finalization"
             pollAcmeOrder
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-invalid")
               ["ready"]
               `shouldThrow` errorContaining "TCP port 80 is reachable from the public internet for http-01 validation"
             pollAcmeOrder
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-invalid")
               ["ready"]
               `shouldThrow` errorContaining "Timeout during connect"
             pollAcmeOrderWithRetries
               0
               0
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-pending-ready")
               ["ready"]
               `shouldThrow` errorContaining "Last status: pending"
             pollAcmeOrderWithRetries
               0
               0
-              plan
-              manager
-              directory
-              accountKeyPath
-              "kid-1"
+              session
               (serverBaseUrl server <> "/order-processing-valid")
               ["ready"]
               `shouldThrow` errorContaining "Last status: processing"
-            fetchAcmeCertificate plan manager directory accountKeyPath "kid-1" (serverBaseUrl server <> "/status-500")
+            fetchAcmeCertificate session (serverBaseUrl server <> "/status-500")
               `shouldThrow` errorContaining "certificate fetch"
 
 instance Eq ActiveAcmeChallenge where

@@ -15,7 +15,6 @@ module HarchWeb.Acme.Protocol.Client
 where
 
 import Control.Exception (SomeException, try)
-import Data.ByteString qualified as ByteString
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -24,26 +23,24 @@ import HarchWeb.Acme.Certbot.Runtime (RuntimeAcmeBindPlan (..))
 import HarchWeb.Acme.Crypto (acmeJwkThumbprintBytes, base64urlText)
 import HarchWeb.Acme.Json (JsonValue, jsonObjectBytes, jsonStringBytes, parseJsonValue)
 import HarchWeb.Acme.OpenSsl (openSslSha256, signOpenSslRs256)
-import HarchWeb.Acme.Protocol.Types (AcmeDirectoryResponse (..), AcmeJwk (..), AcmeRequestAuth (..))
+import HarchWeb.Acme.Protocol.Types (AcmeDirectoryContext (..), AcmeDirectoryResponse (..), AcmeJwk (..), AcmeJwsRequestBody (..), AcmeJwsResponseExpectation (..), AcmeRequestAuth (..))
 import HarchWeb.Server.Config (ListenerEndpoint (..))
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types qualified as Http
 
 performAcmeJwsRequest ::
-  RuntimeAcmeBindPlan ->
-  HttpClient.Manager ->
-  AcmeDirectoryResponse ->
-  FilePath ->
+  AcmeDirectoryContext ->
   String ->
-  AcmeRequestAuth ->
-  Text ->
-  LazyByteString.ByteString ->
-  Maybe ByteString.ByteString ->
-  [Int] ->
+  AcmeJwsRequestBody ->
+  AcmeJwsResponseExpectation ->
   IO (HttpClient.Response LazyByteString.ByteString)
-performAcmeJwsRequest !runtimeAcmePlan manager directory accountKeyPath !actionLabel requestAuth endpointUrl payload maybeAcceptHeader expectedStatusCodes = do
+performAcmeJwsRequest context !actionLabel requestBodyInput responseExpectation = do
+  let runtimeAcmePlan = acmeContextBindPlan context
+      manager = acmeContextManager context
+      directory = acmeContextDirectory context
+      endpointUrl = acmeJwsRequestUrl requestBodyInput
   nonce <- fetchAcmeNonce runtimeAcmePlan manager (acmeNewNonceUrl directory)
-  requestBody <- buildAcmeJwsBody runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload
+  requestBody <- buildAcmeJwsBody context nonce requestBodyInput
   baseRequest <- HttpClient.parseRequest (Text.unpack endpointUrl)
   let request =
         baseRequest
@@ -51,9 +48,9 @@ performAcmeJwsRequest !runtimeAcmePlan manager directory accountKeyPath !actionL
             HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody,
             HttpClient.requestHeaders =
               [("Content-Type", "application/jose+json")]
-                <> maybe [] (\acceptHeader -> [("Accept", acceptHeader)]) maybeAcceptHeader
+                <> maybe [] (\acceptHeader -> [("Accept", acceptHeader)]) (acmeJwsAcceptHeader responseExpectation)
           }
-  performAcmeRequest runtimeAcmePlan manager actionLabel request expectedStatusCodes
+  performAcmeRequest runtimeAcmePlan manager actionLabel request (acmeJwsExpectedStatusCodes responseExpectation)
 
 fetchAcmeNonce :: RuntimeAcmeBindPlan -> HttpClient.Manager -> Text -> IO Text
 fetchAcmeNonce !runtimeAcmePlan manager nonceUrl = do
@@ -74,9 +71,14 @@ fetchAcmeNonce !runtimeAcmePlan manager nonceUrl = do
     pure
     (responseHeaderText "Replay-Nonce" response)
 
-buildAcmeJwsBody :: RuntimeAcmeBindPlan -> FilePath -> AcmeRequestAuth -> Text -> Text -> LazyByteString.ByteString -> IO LazyByteString.ByteString
-buildAcmeJwsBody !runtimeAcmePlan accountKeyPath requestAuth nonce endpointUrl payload = do
-  let protectedBytes =
+buildAcmeJwsBody :: AcmeDirectoryContext -> Text -> AcmeJwsRequestBody -> IO LazyByteString.ByteString
+buildAcmeJwsBody !context nonce requestBodyInput = do
+  let runtimeAcmePlan = acmeContextBindPlan context
+      accountKeyPath = acmeContextAccountKeyPath context
+      requestAuth = acmeJwsRequestAuth requestBodyInput
+      endpointUrl = acmeJwsRequestUrl requestBodyInput
+      payload = acmeJwsRequestPayload requestBodyInput
+      protectedBytes =
         LazyByteString.toStrict $
           jsonObjectBytes
             ( [ ("alg", jsonStringBytes "RS256"),

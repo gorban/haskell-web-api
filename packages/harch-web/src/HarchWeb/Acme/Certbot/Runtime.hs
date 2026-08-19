@@ -73,6 +73,18 @@ data RuntimeAcmeBindPlan = RuntimeAcmeBindPlan
     runtimeAcmeListenerConfig :: AcmeConfig
   }
 
+-- | The temporary certbot working directories, all derived from one state
+-- directory. Grouping them stops a positional call site from transposing,
+-- for example, 'certbotConfigDirectory' (holding the ACME account private
+-- key) with 'certbotWebrootDirectory' (served publicly over HTTP).
+data CertbotDirectories = CertbotDirectories
+  { certbotStateDirectory :: FilePath,
+    certbotConfigDirectory :: FilePath,
+    certbotWorkDirectory :: FilePath,
+    certbotLogsDirectory :: FilePath,
+    certbotWebrootDirectory :: FilePath
+  }
+
 runtimeAcmeBindPlans :: ServerStartupPlan -> [RuntimeAcmeBindPlan]
 runtimeAcmeBindPlans startupPlan =
   [ RuntimeAcmeBindPlan
@@ -142,6 +154,14 @@ prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan cert
       workDirectory = stateDirectory </> "work"
       logsDirectory = stateDirectory </> "logs"
       webrootDirectory = stateDirectory </> "webroot"
+      directories =
+        CertbotDirectories
+          { certbotStateDirectory = stateDirectory,
+            certbotConfigDirectory = configDirectory,
+            certbotWorkDirectory = workDirectory,
+            certbotLogsDirectory = logsDirectory,
+            certbotWebrootDirectory = webrootDirectory
+          }
   mapM_
     (createDirectoryIfMissing True)
     [configDirectory, workDirectory, logsDirectory, webrootDirectory </> ".well-known" </> "acme-challenge"]
@@ -157,7 +177,7 @@ prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan cert
     ( unregisterCertbotAcmeChallengeWebroot webrootDirectory
         >> applicationLogger ("ACME certbot webroot unregistered for listener " <> endpointText)
     )
-    (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory)
+    (runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories)
   let certificateDirectory = configDirectory </> "live" </> Text.unpack certificateName
       certificatePath = certificateDirectory </> "fullchain.pem"
       privateKeyPath = certificateDirectory </> "privkey.pem"
@@ -176,12 +196,14 @@ prepareCertbotManualTlsBindPlanWithLogger applicationLogger runtimeAcmePlan cert
       stateDirectory
     )
 
-runCertbotAcmeChallengeWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig stateDirectory configDirectory workDirectory logsDirectory webrootDirectory = do
+runCertbotAcmeChallengeWithLogger :: (Text -> IO ()) -> RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> IO ()
+runCertbotAcmeChallengeWithLogger applicationLogger runtimeAcmePlan certbotConfig directories = do
   let endpointText = Text.pack (renderListenerEndpoint (runtimeAcmeEndpoint runtimeAcmePlan))
+      stateDirectory = certbotStateDirectory directories
+      logsDirectory = certbotLogsDirectory directories
   applicationLogger ("Launching certbot for ACME listener on " <> endpointText)
   let commandArguments =
-        certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory
+        certbotRuntimeArguments runtimeAcmePlan certbotConfig directories
   processResult <-
     try (readCreateProcessWithExitCode (proc (certbotExecutable certbotConfig) commandArguments) "") ::
       IO (Either IOException (ExitCode, String, String))
@@ -239,15 +261,15 @@ tailTextLines lineCount textValue =
   where
     textLines = lines textValue
 
-certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> FilePath -> FilePath -> FilePath -> FilePath -> [String]
-certbotRuntimeArguments runtimeAcmePlan certbotConfig configDirectory workDirectory logsDirectory webrootDirectory =
+certbotRuntimeArguments :: RuntimeAcmeBindPlan -> CertbotConfig -> CertbotDirectories -> [String]
+certbotRuntimeArguments runtimeAcmePlan certbotConfig directories =
   map Text.unpack (certbotCommandArguments certbotConfig)
     <> map Text.unpack (certbotArguments certbotConfig)
     <> certbotNonInteractiveArguments certbotConfig
     <> certbotAgreeTosArguments certbotConfig
     <> certbotAuthenticatorArguments certbotConfig
-    <> certbotWebrootPathArguments certbotConfig webrootDirectory
-    <> ["--config-dir", configDirectory, "--work-dir", workDirectory, "--logs-dir", logsDirectory]
+    <> certbotWebrootPathArguments certbotConfig (certbotWebrootDirectory directories)
+    <> ["--config-dir", certbotConfigDirectory directories, "--work-dir", certbotWorkDirectory directories, "--logs-dir", certbotLogsDirectory directories]
     <> certbotHttp01PortArguments runtimeAcmePlan
     <> certbotDirectoryUrlArguments runtimeAcmePlan
     <> certbotContactEmailArguments runtimeAcmePlan certbotConfig

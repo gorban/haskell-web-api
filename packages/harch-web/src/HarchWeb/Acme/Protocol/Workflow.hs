@@ -41,10 +41,14 @@ import HarchWeb.Acme.Protocol.Decode
     parseAcmeOrderResponse,
   )
 import HarchWeb.Acme.Protocol.Types
-  ( AcmeAuthorizationResponse (..),
+  ( AcmeAccountSession (..),
+    AcmeAuthorizationResponse (..),
     AcmeChallengeResponse (..),
+    AcmeDirectoryContext (..),
     AcmeDirectoryResponse (..),
     AcmeJwk,
+    AcmeJwsRequestBody (..),
+    AcmeJwsResponseExpectation (..),
     AcmeOrderIdentifier (..),
     AcmeOrderResponse (..),
     AcmeRequestAuth (..),
@@ -59,24 +63,24 @@ fetchAcmeDirectory !runtimeAcmePlan manager = do
   response <- performAcmeRequest runtimeAcmePlan manager "directory fetch" request [200]
   decodeAcmeJsonResponse runtimeAcmePlan "directory fetch" parseAcmeDirectoryResponse response
 
-createAcmeAccount :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> AcmeJwk -> [Text] -> IO Text
-createAcmeAccount !runtimeAcmePlan manager directory accountKeyPath accountJwk contacts = do
+createAcmeAccount :: AcmeDirectoryContext -> AcmeJwk -> [Text] -> IO Text
+createAcmeAccount context accountJwk contacts = do
+  let runtimeAcmePlan = acmeContextBindPlan context
+      directory = acmeContextDirectory context
   response <-
     performAcmeJwsRequest
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
+      context
       "account creation"
-      (AcmeRequestJwk accountJwk)
-      (acmeNewAccountUrl directory)
-      ( jsonObjectBytes
-          [ ("termsOfServiceAgreed", jsonBoolBytes True),
-            ("contact", jsonArrayBytes (map jsonStringBytes contacts))
-          ]
-      )
-      Nothing
-      [200, 201]
+      AcmeJwsRequestBody
+        { acmeJwsRequestAuth = AcmeRequestJwk accountJwk,
+          acmeJwsRequestUrl = acmeNewAccountUrl directory,
+          acmeJwsRequestPayload =
+            jsonObjectBytes
+              [ ("termsOfServiceAgreed", jsonBoolBytes True),
+                ("contact", jsonArrayBytes (map jsonStringBytes contacts))
+              ]
+        }
+      AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200, 201]}
   maybe
     ( ioError . userError $
         "ACME account creation for listener on "
@@ -86,31 +90,32 @@ createAcmeAccount !runtimeAcmePlan manager directory accountKeyPath accountJwk c
     pure
     (responseHeaderText "Location" response)
 
-createAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> [Text] -> IO (Text, AcmeOrderResponse)
-createAcmeOrder !runtimeAcmePlan manager directory accountKeyPath accountKid domains = do
+createAcmeOrder :: AcmeAccountSession -> [Text] -> IO (Text, AcmeOrderResponse)
+createAcmeOrder session domains = do
+  let context = acmeSessionContext session
+      runtimeAcmePlan = acmeContextBindPlan context
+      directory = acmeContextDirectory context
   response <-
     performAcmeJwsRequest
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
+      context
       "new order"
-      (AcmeRequestKid accountKid)
-      (acmeNewOrderUrl directory)
-      ( jsonObjectBytes
-          [ ( "identifiers",
-              jsonArrayBytes
-                [ jsonObjectBytes
-                    [ ("type", jsonStringBytes "dns"),
-                      ("value", jsonStringBytes domain)
+      AcmeJwsRequestBody
+        { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+          acmeJwsRequestUrl = acmeNewOrderUrl directory,
+          acmeJwsRequestPayload =
+            jsonObjectBytes
+              [ ( "identifiers",
+                  jsonArrayBytes
+                    [ jsonObjectBytes
+                        [ ("type", jsonStringBytes "dns"),
+                          ("value", jsonStringBytes domain)
+                        ]
+                    | domain <- domains
                     ]
-                | domain <- domains
-                ]
-            )
-          ]
-      )
-      Nothing
-      [200, 201]
+                )
+              ]
+        }
+      AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200, 201]}
   orderUrl <-
     maybe
       ( ioError . userError $
@@ -123,20 +128,20 @@ createAcmeOrder !runtimeAcmePlan manager directory accountKeyPath accountKid dom
   createdOrder <- decodeAcmeJsonResponse runtimeAcmePlan "new order" parseAcmeOrderResponse response
   pure (orderUrl, createdOrder)
 
-prepareAcmeAuthorization :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> AcmeJwk -> Text -> IO PreparedAcmeChallenge
-prepareAcmeAuthorization !runtimeAcmePlan manager directory accountKeyPath accountKid accountJwk authorizationUrl = do
+prepareAcmeAuthorization :: AcmeAccountSession -> AcmeJwk -> Text -> IO PreparedAcmeChallenge
+prepareAcmeAuthorization session accountJwk authorizationUrl = do
+  let context = acmeSessionContext session
+      runtimeAcmePlan = acmeContextBindPlan context
   response <-
     performAcmeJwsRequest
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
+      context
       "authorization fetch"
-      (AcmeRequestKid accountKid)
-      authorizationUrl
-      LazyByteString.empty
-      Nothing
-      [200]
+      AcmeJwsRequestBody
+        { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+          acmeJwsRequestUrl = authorizationUrl,
+          acmeJwsRequestPayload = LazyByteString.empty
+        }
+      AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200]}
   authorization <- decodeAcmeJsonResponse runtimeAcmePlan "authorization fetch" parseAcmeAuthorizationResponse response
   challenge <-
     maybe
@@ -159,53 +164,47 @@ prepareAcmeAuthorization !runtimeAcmePlan manager directory accountKeyPath accou
         preparedAcmeChallengeUrl = acmeChallengeUrl challenge
       }
 
-triggerAcmeChallenge :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> IO ()
-triggerAcmeChallenge !runtimeAcmePlan manager directory accountKeyPath accountKid challengeUrl =
+triggerAcmeChallenge :: AcmeAccountSession -> Text -> IO ()
+triggerAcmeChallenge session challengeUrl =
   void
     ( performAcmeJwsRequest
-        runtimeAcmePlan
-        manager
-        directory
-        accountKeyPath
+        (acmeSessionContext session)
         "challenge acknowledgement"
-        (AcmeRequestKid accountKid)
-        challengeUrl
-        (jsonObjectBytes [])
-        Nothing
-        [200]
+        AcmeJwsRequestBody
+          { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+            acmeJwsRequestUrl = challengeUrl,
+            acmeJwsRequestPayload = jsonObjectBytes []
+          }
+        AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200]}
     )
 
-pollAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> [Text] -> IO AcmeOrderResponse
-pollAcmeOrder !runtimeAcmePlan =
-  pollAcmeOrderWithRetries 60 1000000 runtimeAcmePlan
+pollAcmeOrder :: AcmeAccountSession -> Text -> [Text] -> IO AcmeOrderResponse
+pollAcmeOrder =
+  pollAcmeOrderWithRetries 60 1000000
 
 pollAcmeOrderWithRetries ::
   Int ->
   Int ->
-  RuntimeAcmeBindPlan ->
-  HttpClient.Manager ->
-  AcmeDirectoryResponse ->
-  FilePath ->
-  Text ->
+  AcmeAccountSession ->
   Text ->
   [Text] ->
   IO AcmeOrderResponse
-pollAcmeOrderWithRetries !maxAttempts !retryDelayMicros !runtimeAcmePlan manager directory accountKeyPath accountKid orderUrl wantedStatuses =
+pollAcmeOrderWithRetries !maxAttempts !retryDelayMicros session orderUrl wantedStatuses =
   go maxAttempts
   where
+    context = acmeSessionContext session
+    runtimeAcmePlan = acmeContextBindPlan context
     go !remainingAttempts = do
       response <-
         performAcmeJwsRequest
-          runtimeAcmePlan
-          manager
-          directory
-          accountKeyPath
+          context
           "order fetch"
-          (AcmeRequestKid accountKid)
-          orderUrl
-          LazyByteString.empty
-          Nothing
-          [200]
+          AcmeJwsRequestBody
+            { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+              acmeJwsRequestUrl = orderUrl,
+              acmeJwsRequestPayload = LazyByteString.empty
+            }
+          AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200]}
       order <- decodeAcmeJsonResponse runtimeAcmePlan "order fetch" parseAcmeOrderResponse response
       if acmeOrderStatus order `elem` wantedStatuses
         then pure order
@@ -230,36 +229,32 @@ pollAcmeOrderWithRetries !maxAttempts !retryDelayMicros !runtimeAcmePlan manager
                     <> " did not reach the expected status. Last status: "
                     <> Text.unpack statusText
 
-finalizeAcmeOrder :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> ByteString.ByteString -> IO ()
-finalizeAcmeOrder !runtimeAcmePlan manager directory accountKeyPath accountKid finalizeUrl csrDerBytes =
+finalizeAcmeOrder :: AcmeAccountSession -> Text -> ByteString.ByteString -> IO ()
+finalizeAcmeOrder session finalizeUrl csrDerBytes =
   void
     ( performAcmeJwsRequest
-        runtimeAcmePlan
-        manager
-        directory
-        accountKeyPath
+        (acmeSessionContext session)
         "order finalization"
-        (AcmeRequestKid accountKid)
-        finalizeUrl
-        (jsonObjectBytes [("csr", jsonStringBytes (base64urlText csrDerBytes))])
-        Nothing
-        [200]
+        AcmeJwsRequestBody
+          { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+            acmeJwsRequestUrl = finalizeUrl,
+            acmeJwsRequestPayload = jsonObjectBytes [("csr", jsonStringBytes (base64urlText csrDerBytes))]
+          }
+        AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Nothing, acmeJwsExpectedStatusCodes = [200]}
     )
 
-fetchAcmeCertificate :: RuntimeAcmeBindPlan -> HttpClient.Manager -> AcmeDirectoryResponse -> FilePath -> Text -> Text -> IO LazyByteString.ByteString
-fetchAcmeCertificate !runtimeAcmePlan manager directory accountKeyPath accountKid certificateUrl = do
+fetchAcmeCertificate :: AcmeAccountSession -> Text -> IO LazyByteString.ByteString
+fetchAcmeCertificate session certificateUrl = do
   response <-
     performAcmeJwsRequest
-      runtimeAcmePlan
-      manager
-      directory
-      accountKeyPath
+      (acmeSessionContext session)
       "certificate fetch"
-      (AcmeRequestKid accountKid)
-      certificateUrl
-      LazyByteString.empty
-      (Just "application/pem-certificate-chain")
-      [200]
+      AcmeJwsRequestBody
+        { acmeJwsRequestAuth = AcmeRequestKid (acmeSessionAccountKid session),
+          acmeJwsRequestUrl = certificateUrl,
+          acmeJwsRequestPayload = LazyByteString.empty
+        }
+      AcmeJwsResponseExpectation {acmeJwsAcceptHeader = Just "application/pem-certificate-chain", acmeJwsExpectedStatusCodes = [200]}
   pure (HttpClient.responseBody response)
 
 mailtoAcmeContact :: Text -> Text

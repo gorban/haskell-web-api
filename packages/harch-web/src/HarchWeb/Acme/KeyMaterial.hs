@@ -3,7 +3,8 @@
 
 -- | Private ACME account-key, certificate-request, and JWK material operations.
 module HarchWeb.Acme.KeyMaterial
-  ( acmeCertificateRequestConfig,
+  ( AcmeCertificateRequestPaths (..),
+    acmeCertificateRequestConfig,
     generateAcmeAccountKey,
     generateAcmeCertificateRequest,
     loadAcmeJwk,
@@ -23,9 +24,19 @@ generateAcmeAccountKey :: RuntimeAcmeBindPlan -> FilePath -> IO ()
 generateAcmeAccountKey !runtimeAcmePlan accountKeyPath =
   runOpenSslCommand runtimeAcmePlan ["genrsa", "-out", accountKeyPath, "4096"]
 
-generateAcmeCertificateRequest :: RuntimeAcmeBindPlan -> [Text] -> FilePath -> FilePath -> FilePath -> FilePath -> IO ()
-generateAcmeCertificateRequest !runtimeAcmePlan domains privateKeyPath csrConfigPath csrPemPath csrDerPath = do
-  writeFile csrConfigPath (acmeCertificateRequestConfig domains)
+-- | The four CSR-generation file paths. Grouping them stops a positional call
+-- site from transposing, for example, 'acmeCsrConfigPath' with
+-- 'acmeCsrPemPath'.
+data AcmeCertificateRequestPaths = AcmeCertificateRequestPaths
+  { acmeCsrPrivateKeyPath :: FilePath,
+    acmeCsrConfigPath :: FilePath,
+    acmeCsrPemPath :: FilePath,
+    acmeCsrDerPath :: FilePath
+  }
+
+generateAcmeCertificateRequest :: RuntimeAcmeBindPlan -> [Text] -> AcmeCertificateRequestPaths -> IO ()
+generateAcmeCertificateRequest !runtimeAcmePlan domains paths = do
+  writeFile (acmeCsrConfigPath paths) (acmeCertificateRequestConfig domains)
   runOpenSslCommand
     runtimeAcmePlan
     [ "req",
@@ -34,15 +45,15 @@ generateAcmeCertificateRequest !runtimeAcmePlan domains privateKeyPath csrConfig
       "rsa:2048",
       "-nodes",
       "-keyout",
-      privateKeyPath,
+      acmeCsrPrivateKeyPath paths,
       "-out",
-      csrPemPath,
+      acmeCsrPemPath paths,
       "-config",
-      csrConfigPath
+      acmeCsrConfigPath paths
     ]
   runOpenSslCommand
     runtimeAcmePlan
-    ["req", "-in", csrPemPath, "-outform", "DER", "-out", csrDerPath]
+    ["req", "-in", acmeCsrPemPath paths, "-outform", "DER", "-out", acmeCsrDerPath paths]
 
 acmeCertificateRequestConfig :: [Text] -> String
 acmeCertificateRequestConfig domains =

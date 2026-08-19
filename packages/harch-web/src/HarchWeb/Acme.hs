@@ -7,12 +7,17 @@
 -- applications should generally start with 'AcmeConfig', 'AcmeChallengeStore',
 -- and the workflow functions.
 module HarchWeb.Acme
-  ( AcmeAuthorizationResponse (..),
+  ( AcmeAccountSession (..),
+    AcmeAuthorizationResponse (..),
+    AcmeCertificateRequestPaths (..),
     AcmeChallengeResponse (..),
     AcmeChallengeStore (..),
     AcmeConfig (..),
+    AcmeDirectoryContext (..),
     AcmeDirectoryResponse (..),
     AcmeJwk (..),
+    AcmeJwsRequestBody (..),
+    AcmeJwsResponseExpectation (..),
     AcmeOrderIdentifier (..),
     AcmeOrderResponse (..),
     AcmeRequestAuth (..),
@@ -132,7 +137,8 @@ import HarchWeb.Acme.Json
     unicodeJsonCharacterParser,
   )
 import HarchWeb.Acme.KeyMaterial
-  ( acmeCertificateRequestConfig,
+  ( AcmeCertificateRequestPaths (..),
+    acmeCertificateRequestConfig,
     generateAcmeAccountKey,
     generateAcmeCertificateRequest,
     loadAcmeJwk,
@@ -156,10 +162,14 @@ import HarchWeb.Acme.Protocol.Decode
     parseAcmeOrderResponse,
   )
 import HarchWeb.Acme.Protocol.Types
-  ( AcmeAuthorizationResponse (..),
+  ( AcmeAccountSession (..),
+    AcmeAuthorizationResponse (..),
     AcmeChallengeResponse (..),
+    AcmeDirectoryContext (..),
     AcmeDirectoryResponse (..),
     AcmeJwk (..),
+    AcmeJwsRequestBody (..),
+    AcmeJwsResponseExpectation (..),
     AcmeOrderIdentifier (..),
     AcmeOrderResponse (..),
     AcmeRequestAuth (..),
