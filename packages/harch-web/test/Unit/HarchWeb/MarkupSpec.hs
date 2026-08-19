@@ -18,6 +18,15 @@ import Unit.HarchWeb.MarkupRejection (rejectedMarkup)
 turkishInitialComponent :: Html
 turkishInitialComponent = [harch|<Account.İtem itemLabel="Unicode component" />|]
 
+primeSuffixedInterpolation :: Html
+primeSuffixedInterpolation =
+  let renderedValue' = text "prime-suffixed"
+   in [harch|{renderedValue'}|]
+
+characterLiteralInterpolation :: Html
+characterLiteralInterpolation =
+  [harch|{if '}' == '}' then text "character literal" else text "unreachable"}|]
+
 duplicateNamedPropertyRejected :: Bool
 duplicateNamedPropertyRejected =
   $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" heroTitle=\"Second\" />")
@@ -83,6 +92,12 @@ spec = do
                 voidElement inputTag [elementId emailId, name "email", inputType "email", autocomplete "email", required]
               ]
       renderHtml quoted `shouldBe` renderHtml direct
+
+    it "accepts prime-suffixed identifiers and character literals in expressions" $
+      expectAll
+        ( (renderHtml primeSuffixedInterpolation `shouldBe` "prime-suffixed")
+            :| [renderHtml characterLiteralInterpolation `shouldBe` "character literal"]
+        )
 
     it "supports opaque markup equality and diagnostics without exposing its representation" $ do
       let firstHtml = element paragraphTag [dataAttribute "kind" "first"] [text "first"]

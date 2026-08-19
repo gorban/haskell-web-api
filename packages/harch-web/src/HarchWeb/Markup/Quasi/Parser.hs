@@ -234,14 +234,39 @@ parseBracedExpression initialState = do
         '"' : _ -> do
           (quoted, afterQuoted) <- parseDelimited '"' state
           go depth (reverse quoted <> accumulated) afterQuoted
-        '\'' : _ -> do
-          (quoted, afterQuoted) <- parseDelimited '\'' state
-          go depth (reverse quoted <> accumulated) afterQuoted
+        '\'' : _
+          | startsCharacterLiteral accumulated state -> do
+              (quoted, afterQuoted) <- parseDelimited '\'' state
+              go depth (reverse quoted <> accumulated) afterQuoted
+          | otherwise -> go depth ('\'' : accumulated) (advanceCharacter '\'' state)
         '{' : _ -> go (depth + 1) ('{' : accumulated) (advanceCharacter '{' state)
         '}' : _
           | depth == 1 -> Right (expressionPosition, reverse accumulated, advanceCharacter '}' state)
           | otherwise -> go (depth - 1) ('}' : accumulated) (advanceCharacter '}' state)
         character : _ -> go depth (character : accumulated) (advanceCharacter character state)
+
+startsCharacterLiteral :: String -> ParseState -> Bool
+startsCharacterLiteral accumulated state =
+  case accumulated of
+    previousCharacter : _
+      | identifierCanEndWith previousCharacter -> False
+    _ -> hasCharacterLiteralTerminator (drop 1 (parseRemaining state))
+
+identifierCanEndWith :: Char -> Bool
+identifierCanEndWith character = isAlphaNum character || character == '_' || character == '\''
+
+hasCharacterLiteralTerminator :: String -> Bool
+hasCharacterLiteralTerminator = go
+  where
+    go remaining =
+      case remaining of
+        [] -> False
+        '\\' : _ : afterEscape -> go afterEscape
+        ['\\'] -> False
+        '\'' : _ -> True
+        '}' : '\'' : _ -> True
+        '}' : _ -> False
+        _ : afterCharacter -> go afterCharacter
 
 parseDelimited :: Char -> ParseState -> Either ParseError (String, ParseState)
 parseDelimited delimiter initialState = do
