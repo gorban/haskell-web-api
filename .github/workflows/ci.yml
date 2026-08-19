@@ -80,9 +80,31 @@ jobs:
       - name: Install system tools
         if: steps.setup_node.outcome == 'success'
         id: dos2unix
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y dos2unix lld postgresql-client
+          set -euo pipefail
+
+          apt_options=(
+            -o Acquire::Retries=2
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+          )
+
+          for attempt in 1 2 3; do
+            if timeout --foreground 3m sudo apt-get "${apt_options[@]}" update; then
+              break
+            fi
+
+            if [ "$attempt" -eq 3 ]; then
+              echo "apt-get update failed after ${attempt} attempts." >&2
+              exit 1
+            fi
+
+            echo "apt-get update attempt ${attempt} failed; retrying in 10 seconds." >&2
+            sleep 10
+          done
+
+          timeout --foreground 5m sudo apt-get "${apt_options[@]}" install -y dos2unix lld postgresql-client
 
       - name: Install Playwright Chromium
         if: steps.dos2unix.outcome == 'success'
