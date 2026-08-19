@@ -246,13 +246,12 @@ nativeMethod = maybe "dialog" (formMethodText . nativeActionFallbackMethod)
 nativeCsrfField :: Maybe NativeActionFallback -> [Html]
 nativeCsrfField =
   maybe [] $ \fallback ->
-    [ element
+    [ voidElement
         inputTag
         [ inputType "hidden",
           name "_harch_csrf",
           value (nativeActionFallbackCsrfToken fallback)
         ]
-        []
     ]
 
 renderCapabilities :: [ActionCapability] -> Text

@@ -9,13 +9,15 @@ module HarchWeb.Markup.Implementation
     Region,
     RegionId,
     RegionPatch,
-    Tag,
+    NormalTag,
     TrustedHtml,
+    VoidTag,
     anchorTag,
     ariaLabel,
     ariaLive,
     autocomplete,
     buttonTag,
+    breakTag,
     className,
     codeTag,
     dataAttribute,
@@ -27,6 +29,8 @@ module HarchWeb.Markup.Implementation
     fragment,
     headingOneTag,
     headingTwoTag,
+    horizontalRuleTag,
+    imageTag,
     formTag,
     formAction,
     href,
@@ -40,6 +44,7 @@ module HarchWeb.Markup.Implementation
     literalElementId,
     listItemTag,
     listTag,
+    metaTag,
     maxLength,
     method,
     minLength,
@@ -71,11 +76,12 @@ import HarchWeb.Markup.Internal
     AttributeName (..),
     ElementId,
     Html,
+    NormalTag (..),
     Region (..),
     RegionId,
     RegionPatch,
-    Tag (..),
     TrustedHtml,
+    VoidTag (..),
     attribute,
     booleanAttribute,
     element,
@@ -182,55 +188,67 @@ literalElementId = Internal.ElementId
 mkRegionId :: ElementId -> RegionId
 mkRegionId = Internal.RegionId
 
-divTag :: Tag
-divTag = Tag "div"
+divTag :: NormalTag
+divTag = NormalTag "div"
 
-anchorTag :: Tag
-anchorTag = Tag "a"
+anchorTag :: NormalTag
+anchorTag = NormalTag "a"
 
-buttonTag :: Tag
-buttonTag = Tag "button"
+buttonTag :: NormalTag
+buttonTag = NormalTag "button"
 
-formTag :: Tag
-formTag = Tag "form"
+formTag :: NormalTag
+formTag = NormalTag "form"
 
-headingOneTag :: Tag
-headingOneTag = Tag "h1"
+headingOneTag :: NormalTag
+headingOneTag = NormalTag "h1"
 
-headingTwoTag :: Tag
-headingTwoTag = Tag "h2"
+headingTwoTag :: NormalTag
+headingTwoTag = NormalTag "h2"
 
-inputTag :: Tag
-inputTag = Tag "input"
+inputTag :: VoidTag
+inputTag = VoidTag "input"
 
-labelTag :: Tag
-labelTag = Tag "label"
+labelTag :: NormalTag
+labelTag = NormalTag "label"
 
-listItemTag :: Tag
-listItemTag = Tag "li"
+listItemTag :: NormalTag
+listItemTag = NormalTag "li"
 
-listTag :: Tag
-listTag = Tag "ul"
+listTag :: NormalTag
+listTag = NormalTag "ul"
 
-codeTag :: Tag
-codeTag = Tag "code"
+codeTag :: NormalTag
+codeTag = NormalTag "code"
 
-selectTag :: Tag
-selectTag = Tag "select"
+selectTag :: NormalTag
+selectTag = NormalTag "select"
 
-optionTag :: Tag
-optionTag = Tag "option"
+optionTag :: NormalTag
+optionTag = NormalTag "option"
 
-paragraphTag :: Tag
-paragraphTag = Tag "p"
+paragraphTag :: NormalTag
+paragraphTag = NormalTag "p"
 
-sectionTag :: Tag
-sectionTag = Tag "section"
+sectionTag :: NormalTag
+sectionTag = NormalTag "section"
+
+breakTag :: VoidTag
+breakTag = VoidTag "br"
+
+horizontalRuleTag :: VoidTag
+horizontalRuleTag = VoidTag "hr"
+
+imageTag :: VoidTag
+imageTag = VoidTag "img"
+
+metaTag :: VoidTag
+metaTag = VoidTag "meta"
 
 trustedHtml :: TrustedHtml -> Html
 trustedHtml trustedValue = Internal.Html [Internal.TrustedNode trustedValue]
 
-region :: RegionId -> Tag -> [Attribute] -> [Html] -> Region
+region :: RegionId -> NormalTag -> [Attribute] -> [Html] -> Region
 region identifier rootTag attributes children =
   Region
     { regionIdentifier = identifier,

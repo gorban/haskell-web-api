@@ -63,6 +63,7 @@ import HarchWeb
     text,
     toHtml,
     value,
+    voidElement,
   )
 import HarchWeb.Controls qualified as Controls
 import HarchWeb.Site (RouteDefinition)
@@ -136,7 +137,7 @@ nativeSubscriptionFallbackForm =
               ]
           }
         [ element labelTag [labelFor (literalElementId "native-subscription-email")] [text "Native fallback email address"],
-          element inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"] [],
+          voidElement inputTag [elementId (literalElementId "native-subscription-email"), name "email", inputType "email", value "fallback@example.com"],
           element buttonTag [inputType "submit"] [text "Submit with native fallback"]
         ]
     )

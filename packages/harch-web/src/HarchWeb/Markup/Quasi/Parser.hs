@@ -27,7 +27,7 @@ data ParseState = ParseState
   }
 
 data MarkupNode
-  = NativeNode Position String [MarkupAttribute] [MarkupNode]
+  = NativeNode Position String Bool [MarkupAttribute] [MarkupNode]
   | ComponentNode Position String [MarkupAttribute] [MarkupNode]
   | RegionNode Position String
   | InterpolationNode Position String
@@ -85,11 +85,11 @@ parseNode initialState = do
     NativeTag tagConstructor isVoid ->
       case (isVoid, selfClosing) of
         (True, False) -> parseFailure initialState ("void element <" <> tagName <> "> must be self-closing")
-        (True, True) -> Right (NativeNode nodePosition tagConstructor attributes [], afterAttributes)
+        (True, True) -> Right (NativeNode nodePosition tagConstructor True attributes [], afterAttributes)
         (False, True) -> parseFailure initialState ("native element <" <> tagName <> "> cannot be self-closing")
         (False, False) -> do
           (children, afterChildren) <- parseChildren (Just tagName) afterAttributes
-          Right (NativeNode nodePosition tagConstructor attributes children, afterChildren)
+          Right (NativeNode nodePosition tagConstructor False attributes children, afterChildren)
     ComponentTag componentName
       | tagName == "Region" -> parseRegionNode initialState attributes selfClosing afterAttributes
       | selfClosing -> Right (ComponentNode nodePosition componentName attributes [], afterAttributes)
@@ -112,10 +112,11 @@ data TagKind
 
 tagKind :: String -> TagKind
 tagKind tagName =
-  case tagName of
-    firstCharacter : _
-      | isLower firstCharacter -> NativeTag (nativeTagConstructor tagName) (tagName == "input")
-    _ -> ComponentTag (componentFunctionName tagName)
+  let tagConstructor = nativeTagConstructor tagName
+   in case tagName of
+        firstCharacter : _
+          | isLower firstCharacter -> NativeTag tagConstructor (tagConstructor `elem` voidTagConstructors)
+        _ -> ComponentTag (componentFunctionName tagName)
 
 nativeTagConstructor :: String -> String
 nativeTagConstructor tagName = fromMaybe "" (lookup tagName nativeTagConstructors)
@@ -124,20 +125,27 @@ nativeTagConstructors :: [(String, String)]
 nativeTagConstructors =
   [ ("a", "anchorTag"),
     ("button", "buttonTag"),
+    ("br", "breakTag"),
     ("code", "codeTag"),
     ("div", "divTag"),
     ("form", "formTag"),
     ("h1", "headingOneTag"),
     ("h2", "headingTwoTag"),
+    ("hr", "horizontalRuleTag"),
+    ("img", "imageTag"),
     ("input", "inputTag"),
     ("label", "labelTag"),
     ("li", "listItemTag"),
+    ("meta", "metaTag"),
     ("option", "optionTag"),
     ("p", "paragraphTag"),
     ("section", "sectionTag"),
     ("select", "selectTag"),
     ("ul", "listTag")
   ]
+
+voidTagConstructors :: [String]
+voidTagConstructors = ["breakTag", "horizontalRuleTag", "imageTag", "inputTag", "metaTag"]
 
 componentFunctionName :: String -> String
 componentFunctionName componentName =

@@ -912,6 +912,7 @@ spec = do
                  Text.isInfixOf "action=\"/native-subscribe\" method=\"post\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "data-harch-action-path=\"/known\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "name=\"_harch_csrf\" value=\"csrf-token\"" nativeForm `shouldBe` True,
+                 Text.isInfixOf "</input>" nativeForm `shouldBe` False,
                  Text.isInfixOf "data-harch-action-idempotency-key=\"mutation-1\"" nativeForm `shouldBe` True,
                  Text.isInfixOf "handler-safe-retry,conditional-leave-confirmation,idempotent-mutation-retry,native-fallback" nativeForm `shouldBe` True,
                  actionReadyCopy defaultActionRecoveryCopy `shouldBe` "Ready.",

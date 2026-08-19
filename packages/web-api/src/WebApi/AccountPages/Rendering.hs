@@ -296,7 +296,7 @@ hiddenInput name value = HarchWeb.voidElement HarchWeb.inputTag [HarchWeb.name n
 inputWithId :: Text -> [HarchWeb.Attribute] -> HarchWeb.Html
 inputWithId identifier attributes = HarchWeb.voidElement HarchWeb.inputTag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
 
-elementWithId :: HarchWeb.Tag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
+elementWithId :: HarchWeb.NormalTag -> Text -> [HarchWeb.Attribute] -> [HarchWeb.Html] -> HarchWeb.Html
 elementWithId tag identifier attributes = HarchWeb.element tag (HarchWeb.elementId (HarchWeb.literalElementId identifier) : attributes)
 
 labelWithFor :: Text -> Text -> HarchWeb.Html

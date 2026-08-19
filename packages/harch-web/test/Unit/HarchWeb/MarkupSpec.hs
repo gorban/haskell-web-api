@@ -117,6 +117,19 @@ spec = do
                ]
         )
 
+    it "keeps normal and void tag values comparable and diagnosable" $
+      expectAll
+        ( (Markup.divTag == Markup.divTag `shouldBe` True)
+            :| [ Markup.divTag /= Markup.sectionTag `shouldBe` True,
+                 Markup.breakTag == Markup.breakTag `shouldBe` True,
+                 Markup.breakTag /= Markup.imageTag `shouldBe` True,
+                 show Markup.divTag `shouldBe` "NormalTag {normalTagText = \"div\"}",
+                 show Markup.breakTag `shouldBe` "VoidTag {voidTagText = \"br\"}",
+                 length (show [Markup.divTag]) `shouldSatisfy` (> 0),
+                 length (show [Markup.breakTag]) `shouldSatisfy` (> 0)
+               ]
+        )
+
     it "escapes literal and Text interpolation while composing Html interpolation safely" $ do
       let interpolatedText = "<reviewed>" :: Text.Text
           safeChild = element codeTag [] [text "safe"]
@@ -312,6 +325,16 @@ spec = do
       case (Markup.mkElementId "email", Markup.mkElementId "form") of
         (Just emailElementId, Just formElementId) -> do
           let patch = Markup.replaceRegion (Markup.region (Markup.mkRegionId formElementId) Markup.divTag [] [])
+              renderedVoidTags =
+                Markup.renderHtml
+                  ( Markup.fragment
+                      [ Markup.voidElement Markup.breakTag [],
+                        Markup.voidElement Markup.horizontalRuleTag [],
+                        Markup.voidElement Markup.imageTag [],
+                        Markup.voidElement Markup.metaTag []
+                      ]
+                  )
+              quotedVoidTags = [harch|<br /><hr /><img /><meta />|]
               renderedHtml =
                 Markup.renderHtml
                   ( Markup.fragment
@@ -361,6 +384,8 @@ spec = do
           Markup.regionPatchId patch `shouldBe` "form"
           Markup.regionPatchHtml patch `shouldBe` "<div id=\"form\" data-harch-region=\"true\"></div>"
           Markup.renderHtml (Markup.element Markup.divTag [Markup.elementId (Markup.literalElementId "literal")] []) `shouldBe` "<div id=\"literal\"></div>"
+          renderedVoidTags `shouldBe` "<br><hr><img><meta>"
+          Markup.renderHtml quotedVoidTags `shouldBe` renderedVoidTags
           renderedHtml
             `shouldBe` "<form id=\"form\" action=\"/register\" method=\"post\" enctype=\"multipart/form-data\" data-harch-action=\"true\" data-busy aria-label=\"Registration\" aria-live=\"polite\" role=\"form\"><h1>Register</h1><h2>Details</h2><label for=\"email\">Email</label><input id=\"email\" class=\"harch-account-field\" type=\"email\" inputmode=\"email\" autocomplete=\"email\" name=\"email\" value=\"ada@example.test\" minlength=\"3\" maxlength=\"255\" required><select><option value=\"en\">English</option></select><ul><li><code>code</code></li></ul><p>Paragraph</p><section>Section</section><a href=\"/next\">Next</a><button>Submit</button></form>"
         _ -> expectationFailure "expected literal element IDs to be valid"

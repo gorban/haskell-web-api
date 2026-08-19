@@ -9,8 +9,9 @@ module HarchWeb.Markup.Internal
     Region (..),
     RegionId (..),
     RegionPatch (..),
-    Tag (..),
+    NormalTag (..),
     TrustedHtml (..),
+    VoidTag (..),
     attribute,
     booleanAttribute,
     element,
@@ -37,13 +38,18 @@ instance Show Html where
   show = show . renderHtml
 
 data Node
-  = ElementNode Tag [Attribute] [Node]
-  | VoidElementNode Tag [Attribute]
+  = ElementNode NormalTag [Attribute] [Node]
+  | VoidElementNode VoidTag [Attribute]
   | TextNode Text
   | TrustedNode TrustedHtml
 
-newtype Tag = Tag
-  { tagText :: Text
+newtype NormalTag = NormalTag
+  { normalTagText :: Text
+  }
+  deriving (Eq, Show)
+
+newtype VoidTag = VoidTag
+  { voidTagText :: Text
   }
   deriving (Eq, Show)
 
@@ -77,7 +83,7 @@ newtype TrustedHtml = TrustedHtml
 
 data Region = Region
   { regionIdentifier :: RegionId,
-    regionRootTag :: Tag,
+    regionRootTag :: NormalTag,
     regionAttributes :: [Attribute],
     regionChildren :: [Html]
   }
@@ -94,11 +100,11 @@ text value = Html [TextNode value]
 fragment :: [Html] -> Html
 fragment children = Html (concatMap htmlNodes children)
 
-element :: Tag -> [Attribute] -> [Html] -> Html
+element :: NormalTag -> [Attribute] -> [Html] -> Html
 element tag attributes children =
   Html [ElementNode tag attributes (concatMap htmlNodes children)]
 
-voidElement :: Tag -> [Attribute] -> Html
+voidElement :: VoidTag -> [Attribute] -> Html
 voidElement tag attributes = Html [VoidElementNode tag attributes]
 
 attribute :: AttributeName -> Text -> Attribute
@@ -115,15 +121,15 @@ renderNode node =
   case node of
     ElementNode tag attributes children ->
       "<"
-        <> Builder.fromText (tagText tag)
+        <> Builder.fromText (normalTagText tag)
         <> foldMap renderAttribute attributes
         <> ">"
         <> foldMap renderNode children
         <> "</"
-        <> Builder.fromText (tagText tag)
+        <> Builder.fromText (normalTagText tag)
         <> ">"
     VoidElementNode tag attributes ->
-      "<" <> Builder.fromText (tagText tag) <> foldMap renderAttribute attributes <> ">"
+      "<" <> Builder.fromText (voidTagText tag) <> foldMap renderAttribute attributes <> ">"
     TextNode value -> escapeHtmlText value
     TrustedNode trustedHtml -> Builder.fromText (trustedHtmlText trustedHtml)
 

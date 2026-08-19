@@ -35,8 +35,8 @@ lowerNodes nodes = traverse lowerNode nodes <&> (AppE (VarE (mkName "fragment"))
 lowerNode :: MarkupNode -> Q Exp
 lowerNode node =
   case node of
-    NativeNode position tagConstructor attributes children ->
-      lowerNativeNode position tagConstructor attributes children
+    NativeNode position tagConstructor isVoid attributes children ->
+      lowerNativeNode position tagConstructor isVoid attributes children
     ComponentNode position componentName attributes children ->
       lowerComponentNode position componentName attributes children
     RegionNode position expressionSource ->
@@ -45,15 +45,15 @@ lowerNode node =
       AppE (VarE (mkName "toHtml")) <$> parseExpression position expressionSource
     LiteralNode literal -> pure (AppE (VarE (mkName "text")) (textLiteral literal))
 
-lowerNativeNode :: Position -> String -> [MarkupAttribute] -> [MarkupNode] -> Q Exp
-lowerNativeNode position tagConstructor attributes children = do
+lowerNativeNode :: Position -> String -> Bool -> [MarkupAttribute] -> [MarkupNode] -> Q Exp
+lowerNativeNode position tagConstructor isVoid attributes children = do
   tagExpression <- namedValue position tagConstructor
   attributeExpressions <- traverse lowerAttribute attributes
   childExpressions <- traverse lowerNode children
-  case tagConstructor of
-    "inputTag" ->
+  if isVoid
+    then
       pure (AppE (AppE (VarE (mkName "voidElement")) tagExpression) (ListE attributeExpressions))
-    _ ->
+    else
       pure
         ( AppE
             (AppE (AppE (VarE (mkName "element")) tagExpression) (ListE attributeExpressions))
