@@ -37,11 +37,13 @@ import Network.HTTP.Types qualified as Http
 import WebApi.Account
   ( AccountProfile (..),
     AccountStoreError,
+    RegistrationEnvironment (..),
     RegistrationError (..),
+    RegistrationRequest (..),
     RegistrationResult (..),
     ResendVerificationError (..),
     confirmEmailVerificationAt,
-    registerAccountWithIdentityAtWithPasswordHasher,
+    registerAccount,
     resendEmailVerificationAt,
   )
 import WebApi.AccountPages.Actions.Common
@@ -113,19 +115,23 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
   workflow <- accountWorkflow
   liftIO $ do
     now <- accountWorkflowClock workflow
-    registerAccountWithIdentityAtWithPasswordHasher
-      (accountWorkflowPasswordHasher workflow)
-      Password.defaultPasswordHashingPolicy
-      (accountWorkflowStore workflow)
-      (accountWorkflowEmailDelivery workflow)
-      (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
-      (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
-      now
-      emailVerificationLifetimeNanoseconds
-      (Just username)
-      (nonEmptyText displayNameValue)
-      emailAddress
-      (Password.mkPassword passwordValue)
+    registerAccount
+      RegistrationEnvironment
+        { registrationPasswordHasher = accountWorkflowPasswordHasher workflow,
+          registrationHashingPolicy = Password.defaultPasswordHashingPolicy,
+          registrationStore = accountWorkflowStore workflow,
+          registrationDelivery = accountWorkflowEmailDelivery workflow,
+          registrationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
+          registrationVerificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
+          registrationNow = now,
+          registrationLifetime = emailVerificationLifetimeNanoseconds
+        }
+      RegistrationRequest
+        { registrationEmail = emailAddress,
+          registrationPassword = Password.mkPassword passwordValue,
+          registrationUsername = Just username,
+          registrationDisplayName = nonEmptyText displayNameValue
+        }
 
 parseRegistrationForm ::
   AccountActionRequest ->

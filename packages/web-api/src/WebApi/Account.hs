@@ -6,14 +6,13 @@ module WebApi.Account
     AccountProfile (..),
     AccountProfileStore (..),
     PendingAccount (..),
+    RegistrationEnvironment (..),
+    RegistrationRequest (..),
     ResendVerificationError (..),
     RegistrationError (..),
     RegistrationResult (..),
     confirmEmailVerificationAt,
-    registerAccountAt,
-    registerAccountAtWithPasswordHasher,
-    registerAccountWithIdentityAt,
-    registerAccountWithIdentityAtWithPasswordHasher,
+    registerAccount,
     resendEmailVerificationAt,
   )
 where
@@ -47,7 +46,6 @@ import HarchWeb.Password
   ( Password,
     PasswordHash,
     PasswordHashingPolicy,
-    hashPassword,
   )
 import HarchWeb.Username (Username)
 
@@ -104,66 +102,34 @@ data ResendVerificationError
   | ResendVerificationNoLongerPending
   deriving (Eq, Show)
 
-registerAccountAt ::
-  PasswordHashingPolicy ->
-  AccountStore ->
-  EmailDelivery ->
-  EmailLocale ->
-  (EmailVerificationToken -> Text) ->
-  Word64 ->
-  Word64 ->
-  EmailAddress ->
-  Password ->
-  IO (Either RegistrationError RegistrationResult)
-registerAccountAt =
-  registerAccountAtWithPasswordHasher hashPassword
+-- | What is being registered: the applicant-supplied identity and
+-- credential. Grouping these stops a positional call site from, for
+-- example, swapping the optional display name for the required email.
+data RegistrationRequest = RegistrationRequest
+  { registrationEmail :: EmailAddress,
+    registrationPassword :: Password,
+    registrationUsername :: Maybe Username,
+    registrationDisplayName :: Maybe Text
+  }
 
-registerAccountAtWithPasswordHasher ::
-  (PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)) ->
-  PasswordHashingPolicy ->
-  AccountStore ->
-  EmailDelivery ->
-  EmailLocale ->
-  (EmailVerificationToken -> Text) ->
-  Word64 ->
-  Word64 ->
-  EmailAddress ->
-  Password ->
-  IO (Either RegistrationError RegistrationResult)
-registerAccountAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime =
-  registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime Nothing Nothing
+-- | The dependencies and clock a registration attempt runs against.
+-- Grouping these lets one call construct a single value instead of
+-- threading eight independent, same-shaped-in-places arguments; a caller
+-- that wants only @HarchWeb.Password.hashPassword@ can build this once and
+-- reuse it, replacing the old default-hasher convenience functions.
+data RegistrationEnvironment = RegistrationEnvironment
+  { registrationPasswordHasher :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash),
+    registrationHashingPolicy :: PasswordHashingPolicy,
+    registrationStore :: AccountStore,
+    registrationDelivery :: EmailDelivery,
+    registrationLocale :: EmailLocale,
+    registrationVerificationUrl :: EmailVerificationToken -> Text,
+    registrationNow :: Word64,
+    registrationLifetime :: Word64
+  }
 
-registerAccountWithIdentityAt ::
-  PasswordHashingPolicy ->
-  AccountStore ->
-  EmailDelivery ->
-  EmailLocale ->
-  (EmailVerificationToken -> Text) ->
-  Word64 ->
-  Word64 ->
-  Maybe Username ->
-  Maybe Text ->
-  EmailAddress ->
-  Password ->
-  IO (Either RegistrationError RegistrationResult)
-registerAccountWithIdentityAt =
-  registerAccountWithIdentityAtWithPasswordHasher hashPassword
-
-registerAccountWithIdentityAtWithPasswordHasher ::
-  (PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash)) ->
-  PasswordHashingPolicy ->
-  AccountStore ->
-  EmailDelivery ->
-  EmailLocale ->
-  (EmailVerificationToken -> Text) ->
-  Word64 ->
-  Word64 ->
-  Maybe Username ->
-  Maybe Text ->
-  EmailAddress ->
-  Password ->
-  IO (Either RegistrationError RegistrationResult)
-registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPolicy accountStore emailDelivery locale renderVerificationUrl now verificationLifetime maybeUsername maybeDisplayName emailAddress password =
+registerAccount :: RegistrationEnvironment -> RegistrationRequest -> IO (Either RegistrationError RegistrationResult)
+registerAccount environment request =
   runExceptT $ do
     expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
     (passwordHash, accountId, token) <-
@@ -174,8 +140,8 @@ registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPo
           PendingAccount
             { pendingAccountId = accountId,
               pendingAccountEmail = emailAddress,
-              pendingAccountUsername = maybeUsername,
-              pendingAccountDisplayName = maybeDisplayName,
+              pendingAccountUsername = registrationUsername request,
+              pendingAccountDisplayName = registrationDisplayName request,
               pendingAccountPasswordHash = passwordHash,
               pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
               pendingAccountCreatedAtNanoseconds = now
@@ -186,6 +152,17 @@ registerAccountWithIdentityAtWithPasswordHasher passwordHasher passwordHashingPo
         deliverVerificationEmail RegistrationDeliveryFailed emailDelivery locale emailAddress renderVerificationUrl token
         pure (RegistrationCreated accountId)
       else pure RegistrationAlreadyRegistered
+  where
+    passwordHasher = registrationPasswordHasher environment
+    passwordHashingPolicy = registrationHashingPolicy environment
+    accountStore = registrationStore environment
+    emailDelivery = registrationDelivery environment
+    locale = registrationLocale environment
+    renderVerificationUrl = registrationVerificationUrl environment
+    now = registrationNow environment
+    verificationLifetime = registrationLifetime environment
+    emailAddress = registrationEmail request
+    password = registrationPassword request
 
 confirmEmailVerificationAt :: AccountStore -> Word64 -> EmailVerificationToken -> IO (Either AccountStoreError EmailVerificationValidation)
 confirmEmailVerificationAt accountStore now token =

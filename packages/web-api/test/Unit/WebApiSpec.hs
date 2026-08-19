@@ -56,7 +56,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationError (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccountAt, registerAccountAtWithPasswordHasher, registerAccountWithIdentityAt, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccount, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.Api.Endpoints (noApiRequestFields)
@@ -464,6 +464,34 @@ testPasswordHashingPolicy =
   fromMaybe
     (error "Expected valid test password hashing policy")
     (Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1))
+
+registrationEnvironmentAt ::
+  (Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash)) ->
+  AccountStore ->
+  Email.EmailDelivery ->
+  Word64 ->
+  Word64 ->
+  RegistrationEnvironment
+registrationEnvironmentAt passwordHasher accountStore emailDelivery now verificationLifetime =
+  RegistrationEnvironment
+    { registrationPasswordHasher = passwordHasher,
+      registrationHashingPolicy = testPasswordHashingPolicy,
+      registrationStore = accountStore,
+      registrationDelivery = emailDelivery,
+      registrationLocale = Email.EmailEnglish,
+      registrationVerificationUrl = const "https://account.example.test/verify",
+      registrationNow = now,
+      registrationLifetime = verificationLifetime
+    }
+
+registrationRequestOf :: Email.EmailAddress -> RegistrationRequest
+registrationRequestOf emailAddress =
+  RegistrationRequest
+    { registrationEmail = emailAddress,
+      registrationPassword = Password.mkPassword "correct horse battery staple",
+      registrationUsername = Nothing,
+      registrationDisplayName = Nothing
+    }
 
 requiredAccountId :: Text -> Account.AccountId
 requiredAccountId value =
@@ -3071,16 +3099,23 @@ spec = do
           emailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
           emailAddress = requiredEmailAddress "person@example.test"
       registrationResult <-
-        registerAccountAt
-          testPasswordHashingPolicy
-          accountStore
-          emailDelivery
-          Email.EmailSpanish
-          (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token)
-          100
-          200
-          emailAddress
-          (Password.mkPassword "correct horse battery staple")
+        registerAccount
+          RegistrationEnvironment
+            { registrationPasswordHasher = Password.hashPassword,
+              registrationHashingPolicy = testPasswordHashingPolicy,
+              registrationStore = accountStore,
+              registrationDelivery = emailDelivery,
+              registrationLocale = Email.EmailSpanish,
+              registrationVerificationUrl = \token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token,
+              registrationNow = 100,
+              registrationLifetime = 200
+            }
+          RegistrationRequest
+            { registrationEmail = emailAddress,
+              registrationPassword = Password.mkPassword "correct horse battery staple",
+              registrationUsername = Nothing,
+              registrationDisplayName = Nothing
+            }
       pendingAccounts <- readIORef pendingAccountsReference
       deliveredMessages <- readIORef deliveredMessagesReference
       createdAccountId <-
@@ -3114,18 +3149,23 @@ spec = do
           username = fromMaybe (error "expected username") (Username.mkUsername "person_01")
           emailAddress = requiredEmailAddress "person@example.test"
       assertRegistrationResult
-        ( registerAccountWithIdentityAt
-            testPasswordHashingPolicy
-            accountStore
-            (Email.EmailDelivery (\_ -> pure ()))
-            Email.EmailEnglish
-            (const "https://account.example.test/verify")
-            100
-            200
-            (Just username)
-            (Just "Person Example")
-            emailAddress
-            (Password.mkPassword "correct horse battery staple")
+        ( registerAccount
+            RegistrationEnvironment
+              { registrationPasswordHasher = Password.hashPassword,
+                registrationHashingPolicy = testPasswordHashingPolicy,
+                registrationStore = accountStore,
+                registrationDelivery = Email.EmailDelivery (\_ -> pure ()),
+                registrationLocale = Email.EmailEnglish,
+                registrationVerificationUrl = const "https://account.example.test/verify",
+                registrationNow = 100,
+                registrationLifetime = 200
+              }
+            RegistrationRequest
+              { registrationEmail = emailAddress,
+                registrationPassword = Password.mkPassword "correct horse battery staple",
+                registrationUsername = Just username,
+                registrationDisplayName = Just "Person Example"
+              }
         )
         (\case Right (RegistrationCreated _) -> True; _ -> False)
       pendingAccounts <- readIORef pendingAccountsReference
@@ -3147,7 +3187,7 @@ spec = do
           emailAddress = requiredEmailAddress "person@example.test"
           accountId = requiredAccountId "account_01"
       assertRegistrationResult
-        (registerAccountAtWithPasswordHasher (\_ _ -> pure Nothing) testPasswordHashingPolicy accountStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt (\_ _ -> pure Nothing) accountStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Left RegistrationPasswordHashingFailed -> True; _ -> False)
       pendingAccountsReference <- newIORef []
       let successfulStore =
@@ -3158,7 +3198,7 @@ spec = do
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
       assertRegistrationResult
-        (registerAccountAtWithPasswordHasher Password.hashPassword testPasswordHashingPolicy successfulStore (Email.EmailDelivery (\_ -> pure ())) Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt Password.hashPassword successfulStore (Email.EmailDelivery (\_ -> pure ())) 100 200) (registrationRequestOf emailAddress))
         (\case Right (RegistrationCreated _) -> True; _ -> False)
       readIORef pendingAccountsReference >>= \case
         [pendingAccount] -> do
@@ -3202,10 +3242,10 @@ spec = do
               }
           unavailableStore = existingStore {createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
       assertRegistrationResult
-        (registerAccountAt testPasswordHashingPolicy existingStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt Password.hashPassword existingStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Right RegistrationAlreadyRegistered -> True; _ -> False)
       assertRegistrationResult
-        (registerAccountAt testPasswordHashingPolicy unavailableStore emailDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt Password.hashPassword unavailableStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Left (RegistrationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
       readIORef deliveredMessagesReference `shouldReturn` []
 
@@ -3259,11 +3299,11 @@ spec = do
           failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
           emailAddress = requiredEmailAddress "person@example.test"
       assertRegistrationResult
-        (registerAccountAt testPasswordHashingPolicy accountStore failingDelivery Email.EmailEnglish (const "https://account.example.test/verify") 100 200 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Left (RegistrationDeliveryFailed message) -> "SMTP unavailable" `Text.isInfixOf` message; _ -> False)
       length <$> readIORef pendingAccountsReference `shouldReturn` 1
       assertRegistrationResult
-        (registerAccountAt testPasswordHashingPolicy accountStore failingDelivery Email.EmailEnglish (const "https://account.example.test/verify") maxBound 1 emailAddress (Password.mkPassword "correct horse battery staple"))
+        (registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery maxBound 1) (registrationRequestOf emailAddress))
         (\case Left RegistrationClockOverflow -> True; _ -> False)
 
     it "validates and atomically consumes a matching verification token" $ do
