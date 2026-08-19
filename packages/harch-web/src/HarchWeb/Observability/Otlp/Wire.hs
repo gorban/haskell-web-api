@@ -2,7 +2,8 @@
 
 -- | Private OTLP JSON wire representation.
 module HarchWeb.Observability.Otlp.Wire
-  ( otlpErrorStatusFields,
+  ( OtlpSpanKind (..),
+    otlpErrorStatusFields,
     otlpTraceBodyFromSpan,
   )
 where
@@ -14,6 +15,20 @@ import Data.Word (Word64)
 import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)
 import HarchWeb.Observability.Types qualified as Observability
 
+-- | Closed OTLP protocol vocabulary. This is private to the wire adapter, so
+-- framework sources cannot interchange arbitrary protocol strings.
+data OtlpSpanKind
+  = OtlpServerSpan
+  | OtlpInternalSpan
+  | OtlpClientSpan
+
+otlpSpanKindText :: OtlpSpanKind -> Text
+otlpSpanKindText spanKind =
+  case spanKind of
+    OtlpServerSpan -> "SPAN_KIND_SERVER"
+    OtlpInternalSpan -> "SPAN_KIND_INTERNAL"
+    OtlpClientSpan -> "SPAN_KIND_CLIENT"
+
 otlpTraceBodyFromSpan ::
   Text ->
   Text ->
@@ -23,9 +38,9 @@ otlpTraceBodyFromSpan ::
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
-  Text ->
+  OtlpSpanKind ->
   [(Text, LazyByteString.ByteString)] ->
-  [(Text, Text, Word64, Word64, Observability.RequestSpan)] ->
+  [(Text, OtlpSpanKind, Word64, Word64, Observability.RequestSpan)] ->
   LazyByteString.ByteString
 otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceState startTimeUnixNano endTimeUnixNano requestSpan rootSpanKind statusFields childSpans =
   jsonObjectBytes
@@ -103,7 +118,7 @@ otlpSpanObject ::
   Text ->
   Maybe Text ->
   Maybe Text ->
-  Text ->
+  OtlpSpanKind ->
   Word64 ->
   Word64 ->
   Observability.RequestSpan ->
@@ -114,7 +129,7 @@ otlpSpanObject traceId spanId maybeParentSpanId maybeTraceState spanKind startTi
     ( [ ("traceId", jsonStringBytes traceId),
         ("spanId", jsonStringBytes spanId),
         ("name", jsonStringBytes (Observability.requestSpanDisplayName requestSpan)),
-        ("kind", jsonStringBytes spanKind),
+        ("kind", jsonStringBytes (otlpSpanKindText spanKind)),
         ("startTimeUnixNano", jsonStringBytes (Text.pack (show startTimeUnixNano))),
         ("endTimeUnixNano", jsonStringBytes (Text.pack (show endTimeUnixNano))),
         ( "attributes",

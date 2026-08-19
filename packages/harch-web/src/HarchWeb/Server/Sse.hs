@@ -25,7 +25,8 @@ eventStreamResponse =
         responseContentType = serverSentEventContentType,
         responseBody = Text.empty,
         responseObservabilityAttributes = [],
-        responseLogEntries = []
+        responseLogEntries = [],
+        responseDatabaseOperations = []
       }
 
 serverSentEventSourceFromList :: [ServerSentEvent] -> IO ServerSentEventSource

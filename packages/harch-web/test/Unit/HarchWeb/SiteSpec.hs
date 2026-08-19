@@ -239,7 +239,8 @@ spec = do
                                     responseContentType = "application/json",
                                     responseBody = "{\"status\":\"ok\"}",
                                     responseObservabilityAttributes = [],
-                                    responseLogEntries = []
+                                    responseLogEntries = [],
+                                    responseDatabaseOperations = []
                                   }
                             )
                       }
@@ -371,7 +372,8 @@ apiRouteDefinition =
                     responseContentType = "application/json",
                     responseBody = "{\"status\":\"ok\"}",
                     responseObservabilityAttributes = [],
-                    responseLogEntries = []
+                    responseLogEntries = [],
+                    responseDatabaseOperations = []
                   }
             )
     }

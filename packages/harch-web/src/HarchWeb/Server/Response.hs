@@ -27,6 +27,7 @@ import HarchWeb.Action
     ClientActionIdempotencyKey,
     ClientActionPayload (..),
   )
+import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Document (Page)
 import HarchWeb.Markup (RegionPatch)
 import HarchWeb.Observability qualified as Observability
@@ -41,12 +42,18 @@ import Network.Wai qualified as Wai
 -- with the 'http-types' status type instead of adding a framework wrapper.
 -- It is the established representation at the WAI boundary; numeric status
 -- codes are extracted only for observability attributes.
+--
+-- Decision record (BW, 2026-08-19): database work extends this existing
+-- response boundary as typed 'DatabaseOperation' values. It is projected to
+-- OTLP child spans only by the exporter; generic attributes remain generic
+-- attributes and are never reparsed as a second, order-dependent protocol.
 data ResponseBody = ResponseBody
   { responseStatus :: Http.Status,
     responseContentType :: Text,
     responseBody :: Text,
     responseObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    responseLogEntries :: [Text]
+    responseLogEntries :: [Text],
+    responseDatabaseOperations :: [DatabaseOperation]
   }
   deriving (Eq, Show)
 
@@ -64,7 +71,8 @@ data ProtocolResponse = ProtocolResponse
     protocolResponseHeaders :: Http.ResponseHeaders,
     protocolResponseBody :: ProtocolResponseBody,
     protocolResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    protocolResponseLogEntries :: [Text]
+    protocolResponseLogEntries :: [Text],
+    protocolResponseDatabaseOperations :: [DatabaseOperation]
   }
 
 -- | A protocol response may be strict bytes or a one-shot WAI stream. A
@@ -81,6 +89,7 @@ instance Eq ProtocolResponse where
       && equalProtocolBodies (protocolResponseBody left) (protocolResponseBody right)
       && protocolResponseObservabilityAttributes left == protocolResponseObservabilityAttributes right
       && protocolResponseLogEntries left == protocolResponseLogEntries right
+      && protocolResponseDatabaseOperations left == protocolResponseDatabaseOperations right
 
 equalProtocolBodies :: ProtocolResponseBody -> ProtocolResponseBody -> Bool
 equalProtocolBodies left right =
@@ -127,7 +136,8 @@ newtype ServerSentEventSource = ServerSentEventSource
 
 data ResponseDiagnostics = ResponseDiagnostics
   { diagnosticObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    diagnosticLogEntries :: [Text]
+    diagnosticLogEntries :: [Text],
+    diagnosticDatabaseOperations :: [DatabaseOperation]
   }
 
 -- | A typed application-owned request middleware. Middleware runs after

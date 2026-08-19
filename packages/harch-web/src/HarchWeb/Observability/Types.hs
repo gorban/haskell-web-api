@@ -27,12 +27,14 @@ module HarchWeb.Observability.Types
     planObservabilityStartup,
     requestObservabilityAttributes,
     requestSpanName,
+    withDatabaseOperations,
     withRequestTraceContext,
   )
 where
 
 import Data.Text (Text)
 import Data.Text qualified as Text
+import HarchWeb.Database (DatabaseOperation (..))
 
 data ObservabilityAttributeValue
   = TextAttribute Text
@@ -120,7 +122,12 @@ data RequestTraceContext = RequestTraceContext
 data RequestObservability = RequestObservability
   { observabilityRequestSpan :: RequestSpan,
     observabilityHttpServerMetrics :: HttpServerMetrics,
-    observabilityTraceContext :: Maybe RequestTraceContext
+    observabilityTraceContext :: Maybe RequestTraceContext,
+    -- | Structured response-side database work. It remains separate from
+    -- generic span attributes until the OTLP exporter projects it as child
+    -- spans, so attribute order or unrelated attributes cannot change its
+    -- meaning.
+    observabilityDatabaseOperations :: [DatabaseOperation]
   }
   deriving (Eq, Show)
 
@@ -209,7 +216,8 @@ buildRequestObservability method scheme requestPath routePath statusCode respons
                 activeRequestsMetricName = "http.server.active_requests",
                 httpServerMetricAttributes = metricSafeAttributes attributes
               },
-          observabilityTraceContext = Nothing
+          observabilityTraceContext = Nothing,
+          observabilityDatabaseOperations = []
         }
 
 -- | Metric label cardinality must remain bounded. Request paths, network
@@ -234,6 +242,15 @@ withRequestTraceContext traceContext requestObservability =
     { observabilityTraceContext = Just traceContext
     }
 
+-- | Attach typed database work to an otherwise complete request observation.
+-- The response boundary calls this after it has collected response metadata;
+-- OTLP projection owns the later child-span encoding.
+withDatabaseOperations :: [DatabaseOperation] -> RequestObservability -> RequestObservability
+withDatabaseOperations databaseOperations requestObservability =
+  requestObservability
+    { observabilityDatabaseOperations = databaseOperations
+    }
+
 buildConnectionObservability :: Text -> [ObservabilityAttribute] -> ConnectionObservability
 buildConnectionObservability displayName attributes =
   ConnectionObservability
@@ -248,7 +265,20 @@ forceRequestObservability :: RequestObservability -> ()
 forceRequestObservability requestObservability =
   forceRequestSpan (observabilityRequestSpan requestObservability) `seq`
     forceHttpServerMetrics (observabilityHttpServerMetrics requestObservability) `seq`
-      forceTraceContext (observabilityTraceContext requestObservability)
+      forceTraceContext (observabilityTraceContext requestObservability) `seq`
+        forceDatabaseOperations (observabilityDatabaseOperations requestObservability)
+
+forceDatabaseOperations :: [DatabaseOperation] -> ()
+forceDatabaseOperations databaseOperations =
+  case databaseOperations of
+    [] -> ()
+    databaseOperation : remainingOperations ->
+      Text.length (databaseOperationSystem databaseOperation) `seq`
+        Text.length (databaseOperationName databaseOperation) `seq`
+          Text.length (databaseQueryTemplate databaseOperation) `seq`
+            databaseOperationStartedAtNanoseconds databaseOperation `seq`
+              databaseOperationEndedAtNanoseconds databaseOperation `seq`
+                forceDatabaseOperations remainingOperations
 
 forceConnectionObservability :: ConnectionObservability -> ()
 forceConnectionObservability =

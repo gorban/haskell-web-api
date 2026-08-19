@@ -175,7 +175,8 @@ nativeFallbackBodyTooLarge requestContext =
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback request body is too large.",
         responseObservabilityAttributes = [],
-        responseLogEntries = []
+        responseLogEntries = [],
+        responseDatabaseOperations = []
       }
 
 nativeFallbackTooManyFields :: () -> MiddlewareResult ()
@@ -187,7 +188,8 @@ nativeFallbackTooManyFields requestContext =
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback request has too many form fields.",
         responseObservabilityAttributes = [],
-        responseLogEntries = []
+        responseLogEntries = [],
+        responseDatabaseOperations = []
       }
 
 nativeFallbackCsrfRejected :: () -> MiddlewareResult ()
@@ -199,7 +201,8 @@ nativeFallbackCsrfRejected requestContext =
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "Native fallback CSRF validation failed.",
         responseObservabilityAttributes = [],
-        responseLogEntries = []
+        responseLogEntries = [],
+        responseDatabaseOperations = []
       }
 
 nativeFallbackCsrfToken :: Wai.Request -> Maybe ByteString.ByteString

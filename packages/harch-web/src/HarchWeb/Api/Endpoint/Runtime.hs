@@ -196,7 +196,8 @@ renderEndpointResult encoders requestData responseValue =
           protocolResponseHeaders = endpointProtocolResponseHeaders responseValue selectedEncoder,
           protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode selectedEncoder (apiEndpointResponseValue responseValue)),
           protocolResponseObservabilityAttributes = apiEndpointResponseObservabilityAttributes responseValue,
-          protocolResponseLogEntries = apiEndpointResponseLogEntries responseValue
+          protocolResponseLogEntries = apiEndpointResponseLogEntries responseValue,
+          protocolResponseDatabaseOperations = apiEndpointResponseDatabaseOperations responseValue
         }
       where
         selectedEncoder = responseEncoderFor selectedContentType encoders
@@ -258,7 +259,8 @@ apiHttpResponseToProtocolResponse httpResponse =
       protocolResponseHeaders = [(CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 (apiHeaderValueText value)) | (name, value) <- apiHttpResponseHeaders httpResponse],
       protocolResponseBody = ProtocolResponseBytes (maybe ByteString.empty apiResponseBodyBytes (apiHttpResponseBody httpResponse)),
       protocolResponseObservabilityAttributes = [],
-      protocolResponseLogEntries = []
+      protocolResponseLogEntries = [],
+      protocolResponseDatabaseOperations = []
     }
 
 -- | Render one API response body through the shared protocol response
@@ -274,5 +276,6 @@ apiResponseBodyToProtocolResponse body =
             ],
       protocolResponseBody = ProtocolResponseBytes (apiResponseBodyBytes body),
       protocolResponseObservabilityAttributes = [],
-      protocolResponseLogEntries = []
+      protocolResponseLogEntries = [],
+      protocolResponseDatabaseOperations = []
     }

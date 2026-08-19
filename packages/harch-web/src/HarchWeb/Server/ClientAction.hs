@@ -124,7 +124,8 @@ clientActionProtocolErrorResponse protocolError =
           responseContentType = "application/json; charset=utf-8",
           responseBody = "{\"patches\":[],\"focusId\":null}",
           responseObservabilityAttributes = clientActionErrorObservabilityAttributes details,
-          responseLogEntries = clientActionErrorLogEntries details
+          responseLogEntries = clientActionErrorLogEntries details,
+          responseDatabaseOperations = []
         }
 
 data ClientActionProtocolErrorDetails = ClientActionProtocolErrorDetails
@@ -194,7 +195,8 @@ clientActionResponseBody actionResponse =
       responseContentType = "application/json; charset=utf-8",
       responseBody = renderClientActionResponse actionResponse,
       responseObservabilityAttributes = clientActionObservabilityAttributes actionResponse,
-      responseLogEntries = clientActionLogEntries actionResponse
+      responseLogEntries = clientActionLogEntries actionResponse,
+      responseDatabaseOperations = []
     }
 
 renderClientActionResponse :: ClientActionResponse -> Text

@@ -11,6 +11,7 @@ import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
 import Data.Word (Word64)
+import HarchWeb.Database qualified as Database
 import HarchWeb.Observability.Otlp qualified as Otlp
 import HarchWeb.Observability.Otlp.Wire qualified as OtlpWire
 import HarchWeb.Observability.Types qualified as Observability
@@ -48,9 +49,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           (timedOtlpChildSpan startTimeUnixNano rootDurationNanoseconds)
           childSpanIds
           childSpans
-      rootSpan =
-        withoutDatabaseOperationAttributes
-          (Observability.observabilityRequestSpan requestObservability)
+      rootSpan = Observability.observabilityRequestSpan requestObservability
   let requestBody =
         OtlpWire.otlpTraceBodyFromSpan
           serviceName
@@ -61,7 +60,7 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           startTimeUnixNano
           endTimeUnixNano
           rootSpan
-          "SPAN_KIND_SERVER"
+          OtlpWire.OtlpServerSpan
           (otlpRequestSpanStatusFields requestObservability)
           timedChildSpans
   Otlp.sendOtlpTraceRequest exporter requestBody
@@ -85,7 +84,7 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
           startTimeUnixNano
           endTimeUnixNano
           (Observability.observabilityConnectionSpan connectionObservability)
-          "SPAN_KIND_INTERNAL"
+          OtlpWire.OtlpInternalSpan
           OtlpWire.otlpErrorStatusFields
           []
   Otlp.sendOtlpTraceRequest exporter requestBody
@@ -93,7 +92,7 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
 minimumOtlpSpanDurationNanoseconds :: Word64
 minimumOtlpSpanDurationNanoseconds = 1000
 
-requestFallbackDurationNanoseconds :: [(Text, Observability.RequestSpan)] -> Word64
+requestFallbackDurationNanoseconds :: [(OtlpWire.OtlpSpanKind, Observability.RequestSpan)] -> Word64
 requestFallbackDurationNanoseconds childSpans =
   minimumOtlpSpanDurationNanoseconds * fromIntegral (max 1 (length childSpans + 1))
 
@@ -104,7 +103,7 @@ nonNegativeStartTime :: Word64 -> Word64 -> Word64
 nonNegativeStartTime endTimeUnixNano durationNanos =
   endTimeUnixNano - min endTimeUnixNano durationNanos
 
-timedOtlpChildSpan :: Word64 -> Word64 -> Text -> (Text, Observability.RequestSpan) -> (Text, Text, Word64, Word64, Observability.RequestSpan)
+timedOtlpChildSpan :: Word64 -> Word64 -> Text -> (OtlpWire.OtlpSpanKind, Observability.RequestSpan) -> (Text, OtlpWire.OtlpSpanKind, Word64, Word64, Observability.RequestSpan)
 timedOtlpChildSpan rootStartTimeUnixNano rootDurationNanoseconds childSpanId (childSpanKind, childSpan) =
   ( childSpanId,
     childSpanKind,
@@ -137,7 +136,7 @@ requestSpanIntAttribute attributeName requestSpan =
       attributeValue >= 0
     ]
 
-requestRuntimePhaseChildSpans :: Observability.RequestObservability -> [(Text, Observability.RequestSpan)]
+requestRuntimePhaseChildSpans :: Observability.RequestObservability -> [(OtlpWire.OtlpSpanKind, Observability.RequestSpan)]
 requestRuntimePhaseChildSpans requestObservability =
   mapMaybe
     (\(displayName, phaseName, copiedAttributeNames) -> runtimePhaseChildSpan displayName phaseName copiedAttributeNames)
@@ -155,7 +154,7 @@ requestRuntimePhaseChildSpans requestObservability =
         [] -> Nothing
         timingAttributes ->
           Just
-            ( "SPAN_KIND_INTERNAL",
+            ( OtlpWire.OtlpInternalSpan,
               Observability.RequestSpan
                 { Observability.requestSpanDisplayName = displayName,
                   Observability.requestSpanAttributes =
@@ -193,110 +192,41 @@ attributesNamed expectedName attributes =
     Observability.attributeName attribute == expectedName
   ]
 
-requestDatabaseChildSpans :: Observability.RequestObservability -> [(Text, Observability.RequestSpan)]
+requestDatabaseChildSpans :: Observability.RequestObservability -> [(OtlpWire.OtlpSpanKind, Observability.RequestSpan)]
 requestDatabaseChildSpans requestObservability =
-  databaseChildSpansFromAttributes requestStartMonotonicNanoseconds rootAttributes
+  [ (OtlpWire.OtlpClientSpan, databaseOperationChildSpan requestStartMonotonicNanoseconds databaseOperation)
+  | databaseOperation <- Observability.observabilityDatabaseOperations requestObservability
+  ]
   where
-    rootSpan = Observability.observabilityRequestSpan requestObservability
-    rootAttributes = Observability.requestSpanAttributes rootSpan
     requestStartMonotonicNanoseconds =
-      requestSpanIntAttribute "harch.request.start_monotonic_ns" rootSpan
+      requestSpanIntAttribute
+        "harch.request.start_monotonic_ns"
+        (Observability.observabilityRequestSpan requestObservability)
 
-withoutDatabaseOperationAttributes :: Observability.RequestSpan -> Observability.RequestSpan
-withoutDatabaseOperationAttributes requestSpan =
-  requestSpan
-    { Observability.requestSpanAttributes =
-        filter
-          (not . isDatabaseOperationAttribute)
-          (Observability.requestSpanAttributes requestSpan)
-    }
-
-isDatabaseOperationAttribute :: Observability.ObservabilityAttribute -> Bool
-isDatabaseOperationAttribute attribute =
-  Observability.attributeName attribute
-    `elem` [ "db.system",
-             "db.operation.name",
-             "db.query.template",
-             "db.operation.start_monotonic_ns",
-             "db.operation.duration_ns"
-           ]
-
-databaseChildSpansFromAttributes :: Maybe Word64 -> [Observability.ObservabilityAttribute] -> [(Text, Observability.RequestSpan)]
-databaseChildSpansFromAttributes requestStartMonotonicNanoseconds =
-  go
-  where
-    go currentAttributes =
-      case currentAttributes of
-        [] -> []
-        systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
-          : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
-          : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
-          : startedAtAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.start_monotonic_ns", Observability.attributeValue = Observability.IntAttribute _}
-          : durationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.duration_ns", Observability.attributeValue = Observability.IntAttribute _}
-          : remainingAttributes ->
-            ( "SPAN_KIND_CLIENT",
-              databaseOperationChildSpan
-                requestStartMonotonicNanoseconds
-                operationName
-                systemAttribute
-                operationAttribute
-                queryAttribute
-                [startedAtAttribute, durationAttribute]
-            )
-              : go remainingAttributes
-        systemAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.system", Observability.attributeValue = Observability.TextAttribute _}
-          : operationAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.operation.name", Observability.attributeValue = Observability.TextAttribute operationName}
-          : queryAttribute@Observability.ObservabilityAttribute {Observability.attributeName = "db.query.template", Observability.attributeValue = Observability.TextAttribute _}
-          : remainingAttributes ->
-            ( "SPAN_KIND_CLIENT",
-              databaseOperationChildSpan requestStartMonotonicNanoseconds operationName systemAttribute operationAttribute queryAttribute []
-            )
-              : go remainingAttributes
-        _ : remainingAttributes ->
-          go remainingAttributes
-
-databaseOperationChildSpan ::
-  Maybe Word64 ->
-  Text ->
-  Observability.ObservabilityAttribute ->
-  Observability.ObservabilityAttribute ->
-  Observability.ObservabilityAttribute ->
-  [Observability.ObservabilityAttribute] ->
+databaseOperationChildSpan :: Maybe Word64 -> Database.DatabaseOperation -> Observability.RequestSpan
+databaseOperationChildSpan requestStartMonotonicNanoseconds databaseOperation =
   Observability.RequestSpan
-databaseOperationChildSpan requestStartMonotonicNanoseconds operationName systemAttribute operationAttribute queryAttribute timingAttributes =
-  Observability.RequestSpan
-    { Observability.requestSpanDisplayName =
-        "DB " <> operationName,
+    { Observability.requestSpanDisplayName = "DB " <> Database.databaseOperationName databaseOperation,
       Observability.requestSpanAttributes =
-        [systemAttribute, operationAttribute, queryAttribute]
-          <> databaseOperationTimingAttributes requestStartMonotonicNanoseconds timingAttributes
+        [ textObservabilityAttribute "db.system" (Database.databaseOperationSystem databaseOperation),
+          textObservabilityAttribute "db.operation.name" (Database.databaseOperationName databaseOperation),
+          textObservabilityAttribute "db.query.template" (Database.databaseQueryTemplate databaseOperation)
+        ]
+          <> databaseOperationTimingAttributes requestStartMonotonicNanoseconds databaseOperation
     }
 
-databaseOperationTimingAttributes :: Maybe Word64 -> [Observability.ObservabilityAttribute] -> [Observability.ObservabilityAttribute]
-databaseOperationTimingAttributes requestStartMonotonicNanoseconds timingAttributes =
-  case (requestStartMonotonicNanoseconds, attributeIntValue "db.operation.start_monotonic_ns" timingAttributes, attributeIntValue "db.operation.duration_ns" timingAttributes) of
-    (Just requestStartedAt, Just operationStartedAt, Just operationDuration) ->
+databaseOperationTimingAttributes :: Maybe Word64 -> Database.DatabaseOperation -> [Observability.ObservabilityAttribute]
+databaseOperationTimingAttributes requestStartMonotonicNanoseconds databaseOperation =
+  case (requestStartMonotonicNanoseconds, Database.databaseOperationStartedAtNanoseconds databaseOperation, Database.databaseOperationEndedAtNanoseconds databaseOperation) of
+    (Just requestStartedAt, Just operationStartedAt, Just operationEndedAt) ->
       [ intObservabilityAttribute
           "harch.span.start_offset_ns"
           (fromIntegral (operationStartedAt - min requestStartedAt operationStartedAt)),
         intObservabilityAttribute
           "harch.span.duration_ns"
-          (fromIntegral operationDuration)
+          (fromIntegral (operationEndedAt - min operationStartedAt operationEndedAt))
       ]
     _ -> []
-
-attributeIntValue :: Text -> [Observability.ObservabilityAttribute] -> Maybe Word64
-attributeIntValue expectedName attributes =
-  listToMaybe
-    [ fromIntegral attributeValue
-    | Observability.ObservabilityAttribute
-        { Observability.attributeName = currentName,
-          Observability.attributeValue = Observability.IntAttribute attributeValue
-        } <-
-        attributes,
-      currentName == expectedName,
-      attributeValue >= 0
-    ]
 
 otlpRequestSpanStatusFields :: Observability.RequestObservability -> [(Text, LazyByteString.ByteString)]
 otlpRequestSpanStatusFields requestObservability =

@@ -43,6 +43,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
 import HarchWeb.Api.MediaType
+import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as HttpTypes
 import Network.HTTP.Types.URI qualified as HttpUri
@@ -77,12 +78,14 @@ data ApiBodyOutcome request
 -- server's existing 'HarchWeb.Server.Response.ProtocolResponse' observability
 -- fields, never the response body, matching how a page's own
 -- 'HarchWeb.Server.Response.ResponseBody' already carries the same two
--- fields for the non-API dispatch path.
+-- fields for the non-API dispatch path. Database operations use that same
+-- typed response boundary and become OTLP child spans only in the exporter.
 data ApiResponse response = ApiResponse
   { apiEndpointResponseStatus :: HttpTypes.Status,
     apiEndpointResponseHeaders :: [(Text, ApiHeaderValue)],
     apiEndpointResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
     apiEndpointResponseLogEntries :: [Text],
+    apiEndpointResponseDatabaseOperations :: [DatabaseOperation],
     apiEndpointResponseValue :: response
   }
 
@@ -132,6 +135,7 @@ apiResponse responseValue =
       apiEndpointResponseHeaders = [],
       apiEndpointResponseObservabilityAttributes = [],
       apiEndpointResponseLogEntries = [],
+      apiEndpointResponseDatabaseOperations = [],
       apiEndpointResponseValue = responseValue
     }
 

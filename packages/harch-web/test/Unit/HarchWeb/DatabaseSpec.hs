@@ -38,7 +38,8 @@ sampleDatabaseEffect =
 displayNameOperation :: DatabaseOperation
 displayNameOperation =
   DatabaseOperation
-    { databaseOperationName = "load-display-name",
+    { databaseOperationSystem = "postgresql",
+      databaseOperationName = "load-display-name",
       databaseQueryTemplate = "SELECT display_name FROM account WHERE id = ?;",
       databaseOperationStartedAtNanoseconds = Just 10,
       databaseOperationEndedAtNanoseconds = Just 20
@@ -47,7 +48,8 @@ displayNameOperation =
 loginCountOperation :: DatabaseOperation
 loginCountOperation =
   DatabaseOperation
-    { databaseOperationName = "load-login-count",
+    { databaseOperationSystem = "postgresql",
+      databaseOperationName = "load-login-count",
       databaseQueryTemplate = "SELECT login_count FROM account WHERE id = ?;",
       databaseOperationStartedAtNanoseconds = Nothing,
       databaseOperationEndedAtNanoseconds = Nothing
@@ -107,8 +109,8 @@ spec = do
             :| [ databaseResultOperations result `shouldBe` [loginCountOperation],
                  result == result `shouldBe` True,
                  result /= otherResult `shouldBe` True,
-                 show result `shouldBe` "DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}",
-                 show [result] `shouldBe` "[DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}]"
+                 show result `shouldBe` "DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}",
+                 show [result] `shouldBe` "[DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}]"
                ]
         )
 
@@ -121,14 +123,15 @@ spec = do
               }
           differentQuery = loginCountOperation
       expectAll
-        ( (databaseOperationName displayNameOperation `shouldBe` "load-display-name")
-            :| [ databaseQueryTemplate displayNameOperation `shouldBe` "SELECT display_name FROM account WHERE id = ?;",
+        ( (databaseOperationSystem displayNameOperation `shouldBe` "postgresql")
+            :| [ databaseOperationName displayNameOperation `shouldBe` "load-display-name",
+                 databaseQueryTemplate displayNameOperation `shouldBe` "SELECT display_name FROM account WHERE id = ?;",
                  databaseOperationStartedAtNanoseconds displayNameOperation `shouldBe` Just 10,
                  databaseOperationEndedAtNanoseconds displayNameOperation `shouldBe` Just 20,
                  displayNameOperation == sameQueryWithDifferentTiming `shouldBe` True,
                  displayNameOperation == differentQuery `shouldBe` False,
                  displayNameOperation /= differentQuery `shouldBe` True,
-                 show displayNameOperation `shouldBe` "DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}",
-                 show [displayNameOperation] `shouldBe` "[DatabaseOperation {databaseOperationName = \"load-display-name\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}]"
+                 show displayNameOperation `shouldBe` "DatabaseOperation {databaseOperationName = \"load-display-name\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}",
+                 show [displayNameOperation] `shouldBe` "[DatabaseOperation {databaseOperationName = \"load-display-name\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT display_name FROM account WHERE id = ?;\"}]"
                ]
         )

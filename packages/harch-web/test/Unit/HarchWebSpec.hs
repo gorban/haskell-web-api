@@ -21,6 +21,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb hiding (requestMethod, requestPath)
 import HarchWeb.Action qualified as Action
+import HarchWeb.Database qualified as Database
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Security qualified as Security
@@ -537,7 +538,8 @@ renderSampleResponse request =
             responseContentType = "text/plain; charset=utf-8",
             responseBody = queryString,
             responseObservabilityAttributes = [],
-            responseLogEntries = []
+            responseLogEntries = [],
+            responseDatabaseOperations = []
           }
     DataRoute ->
       BodyResponse
@@ -546,7 +548,8 @@ renderSampleResponse request =
             responseContentType = "application/json",
             responseBody = "{\"route\":\"data\"}",
             responseObservabilityAttributes = [],
-            responseLogEntries = []
+            responseLogEntries = [],
+            responseDatabaseOperations = []
           }
     EventStreamRoute ->
       BodyResponse
@@ -555,7 +558,8 @@ renderSampleResponse request =
             responseContentType = "text/plain; charset=utf-8",
             responseBody = "event stream not configured",
             responseObservabilityAttributes = [],
-            responseLogEntries = []
+            responseLogEntries = [],
+            responseDatabaseOperations = []
           }
     MissingRoute -> PageResponse (sampleMissingPage request)
 
@@ -1644,7 +1648,7 @@ spec = do
           resolvedNavigationItem = ResolvedNavigationItem {navigationLabel = "Known", navigationRoute = KnownRoute, navigationHref = "/known", navigationIsActive = True}
           document = Document {documentTitle = "Known", documentBodyAttributes = [attribute], documentNavigationAttributes = [navigationAttribute], documentNavigation = [resolvedNavigationItem], documentMainId = "app-main", documentMainAttributes = [mainAttribute], documentMainContent = trustedMarkup "<h1>Known</h1>", documentBootstrapHooks = ["known-page"], documentStylesheets = [stylesheetValue], documentRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [stylesheetValue], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
-          responseBodyValue = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+          responseBodyValue = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           clientActionPayload =
             ClientActionPayload
               { clientActionMethod = "POST",
@@ -1687,7 +1691,8 @@ spec = do
               responseContentType = "application/javascript; charset=utf-8",
               responseBody = "console.log('nav');",
               responseObservabilityAttributes = [],
-              responseLogEntries = []
+              responseLogEntries = [],
+              responseDatabaseOperations = []
             }
       navigationRuntimeResponse navigationRuntime "/assets/missing.js" `shouldBe` Nothing
       navigationRuntimePath defaultNavigationRuntime `shouldBe` "/assets/navigation.js"
@@ -1798,10 +1803,10 @@ spec = do
           otherDocument = Document {documentTitle = "Missing", documentBodyAttributes = [otherAttribute], documentNavigationAttributes = [otherNavigationAttribute], documentNavigation = [otherResolvedNavigationItem], documentMainId = "other-main", documentMainAttributes = [otherMainAttribute], documentMainContent = trustedMarkup "<h1>Missing</h1>", documentBootstrapHooks = [], documentStylesheets = [], documentRuntimeDescriptors = []}
           shell = PageShell {shellBodyAttributes = [attribute], shellNavigationAttributes = [navigationAttribute], shellNavigationItems = [navigationItem], shellMainId = "app-main", shellMainAttributes = [mainAttribute], shellStylesheets = [], shellRuntimeDescriptors = [DeferredModule "navigation" "/assets/navigation.js"]}
           otherShell = PageShell {shellBodyAttributes = [otherAttribute], shellNavigationAttributes = [otherNavigationAttribute], shellNavigationItems = [otherNavigationItem], shellMainId = "other-main", shellMainAttributes = [otherMainAttribute], shellStylesheets = [], shellRuntimeDescriptors = []}
-          body = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
-          otherBody = ResponseBody {responseStatus = Http.status200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"]}
-          pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"]}
-          otherPageMetadata = ResponseBody {responseStatus = Http.status503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"]}
+          body = ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
+          otherBody = ResponseBody {responseStatus = Http.status200, responseContentType = "text/html", responseBody = "<h1>OK</h1>", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR sample"], responseDatabaseOperations = []}
+          pageMetadata = ResponseBody {responseStatus = Http.status500, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [Observability.ObservabilityAttribute {Observability.attributeName = "exception.type", Observability.attributeValue = Observability.TextAttribute "SampleError"}], responseLogEntries = ["ERROR page"], responseDatabaseOperations = []}
+          otherPageMetadata = ResponseBody {responseStatus = Http.status503, responseContentType = "text/html; charset=utf-8", responseBody = "", responseObservabilityAttributes = [], responseLogEntries = ["ERROR other page"], responseDatabaseOperations = []}
           pageResponse :: Response TestRoute TestContext
           pageResponse = PageResponse page
           otherPageResponse :: Response TestRoute TestContext
@@ -1911,24 +1916,24 @@ spec = do
         )
       (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
-      show body `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}"
-      show [body] `shouldBe` "[ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}]"
+      show body `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}"
+      show [body] `shouldBe` "[ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}]"
       (pageMetadata == pageMetadata) `shouldBe` True
       (pageMetadata /= otherPageMetadata) `shouldBe` True
-      show pageMetadata `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}"
+      show pageMetadata `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}"
       (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (pageResponseWithMetadata == pageResponseWithMetadata) `shouldBe` True
       (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
-      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
+      show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
       (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
-      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})"
+      show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})"
       (redirectResponseValue == redirectResponseValue) `shouldBe` True
       (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
-      show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []}) \"/spaces\""
-      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"]}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/spaces\""
+      show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
       (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
       show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
@@ -2004,7 +2009,7 @@ spec = do
 
     it "can render non-page responses for future API routes" $
       renderResponse sampleApplication (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = []}
+        `shouldReturn` BodyResponse ResponseBody {responseStatus = Http.status202, responseContentType = "application/json", responseBody = "{\"route\":\"data\"}", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
 
     it "renders a direct route with WAI's empty request rather than ambient transport state" $ do
       observedRequest <- newIORef Nothing
@@ -2012,10 +2017,10 @@ spec = do
             sampleApplication
               { renderRequestResponse = \request _ -> do
                   writeIORef observedRequest (Just request)
-                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] []))
+                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [] []))
               }
       renderResponse applicationWithRequestProbe (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})
-        `shouldReturn` BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [])
+        `shouldReturn` BodyResponse (ResponseBody Http.status200 "text/plain" "probe" [] [] [])
       capturedRequest <- readIORef observedRequest
       fmap Wai.rawPathInfo capturedRequest `shouldBe` Just ""
 
@@ -2193,7 +2198,7 @@ spec = do
   describe "runRequestMiddlewarePipeline" $ do
     it "runs in declaration order, carries context forward, and stops after a halt" $ do
       visitedMiddleware <- newIORef ([] :: [Text])
-      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           continuedResult = ContinueMiddleware spanishContext
           haltedResult = HaltMiddleware spanishContext responseBodyValue
           enrichMiddleware =
@@ -2220,9 +2225,9 @@ spec = do
       continuedResult == haltedResult `shouldBe` False
       continuedResult /= haltedResult `shouldBe` True
       show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"})"
-      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})"
-      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
-      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = []})]"
+      show haltedResult `shouldBe` "HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})"
+      show [continuedResult, haltedResult] `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
+      showList [continuedResult, haltedResult] "" `shouldBe` "[ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}),HaltMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"}) (ResponseBody {responseStatus = Status {statusCode = 401, statusMessage = \"Unauthorized\"}, responseContentType = \"text/plain; charset=utf-8\", responseBody = \"Sign in required\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
 
   describe "toWaiApplication" $ do
     it "fails closed if a page response reaches rendering without its CSP nonce" $ do
@@ -2247,7 +2252,7 @@ spec = do
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
 
     it "halts dynamic requests without bypassing framework response headers" $ do
-      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = []}
+      let responseBodyValue = ResponseBody {responseStatus = Http.status401, responseContentType = "text/plain; charset=utf-8", responseBody = "Sign in required", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}
           middlewareApplication =
             sampleApplication
               { applicationRequestMiddleware =
@@ -2555,7 +2560,7 @@ spec = do
             sampleApplication
               { renderRequestResponse = \request routeRequest -> do
                   atomicModifyIORef' routedRequests (\requests -> (requests <> [(Wai.requestMethod request, requestRoute routeRequest)], ()))
-                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "recorded" [] []))
+                  pure (BodyResponse (ResponseBody Http.status200 "text/plain" "recorded" [] [] []))
               }
           requestFor requestMethodValue path = Wai.defaultRequest {Wai.requestMethod = requestMethodValue, Wai.rawPathInfo = path}
       notFoundResponse <- performWaiRequest (toWaiApplication recordingApplication) (requestFor "GET" "/missing")
@@ -2587,6 +2592,7 @@ spec = do
             :| [ responseContentType responseBodyValue `shouldBe` "application/json; charset=utf-8",
                  responseObservabilityAttributes responseBodyValue `shouldBe` [observabilityAttribute],
                  responseLogEntries responseBodyValue `shouldBe` ["private action diagnostic"],
+                 responseDatabaseOperations responseBodyValue `shouldBe` [],
                  encodedResponse `shouldSatisfy` Text.isInfixOf "},{",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\\"",
                  encodedResponse `shouldSatisfy` Text.isInfixOf "\\\\",
@@ -2698,7 +2704,8 @@ spec = do
                 protocolResponseHeaders = [(Http.hContentType, "application/example"), ("X-Example", "present")],
                 protocolResponseBody = ProtocolResponseBytes "\NUL\SOH\STX",
                 protocolResponseObservabilityAttributes = [Observability.ObservabilityAttribute "example.outcome" (Observability.TextAttribute "created")],
-                protocolResponseLogEntries = ["example response"]
+                protocolResponseLogEntries = ["example response"],
+                protocolResponseDatabaseOperations = []
               }
           renderedResponse = ProtocolResponseResult protocolResponse :: Response TestRoute TestContext
           protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
@@ -2709,7 +2716,8 @@ spec = do
                 protocolResponseHeaders = [(Http.hContentType, "application/example")],
                 protocolResponseBody = ProtocolResponseBytes "changed",
                 protocolResponseObservabilityAttributes = [],
-                protocolResponseLogEntries = []
+                protocolResponseLogEntries = [],
+                protocolResponseDatabaseOperations = []
               }
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
       body <- readResponseBody response
@@ -2746,7 +2754,8 @@ spec = do
                   protocolResponseHeaders = [(Http.hContentType, "application/octet-stream")],
                   protocolResponseBody = ProtocolResponseStream streamBody,
                   protocolResponseObservabilityAttributes = [],
-                  protocolResponseLogEntries = []
+                  protocolResponseLogEntries = [],
+                  protocolResponseDatabaseOperations = []
                 } ::
               Response TestRoute TestContext
           protocolApplication = sampleApplication {renderRequestResponse = \_ _ -> pure renderedResponse}
@@ -2757,7 +2766,8 @@ spec = do
                   protocolResponseHeaders = [(Http.hContentType, "application/octet-stream")],
                   protocolResponseBody = ProtocolResponseBytes "first-second",
                   protocolResponseObservabilityAttributes = [],
-                  protocolResponseLogEntries = []
+                  protocolResponseLogEntries = [],
+                  protocolResponseDatabaseOperations = []
                 } ::
               Response TestRoute TestContext
       response <- performWaiRequest (toWaiApplication protocolApplication) (waiRequest ["known"])
@@ -2775,8 +2785,8 @@ spec = do
       eventSource <- serverSentEventSourceFromList []
       sameEventSource <- serverSentEventSourceFromList [ServerSentEvent Nothing Nothing "later"]
       otherEventSource <- serverSentEventSourceFromList []
-      let responseBodyValue = ResponseBody Http.status200 "text/plain" "ok" [] []
-          otherResponseBodyValue = ResponseBody Http.status500 "text/plain" "failed" [] []
+      let responseBodyValue = ResponseBody Http.status200 "text/plain" "ok" [] [] []
+          otherResponseBodyValue = ResponseBody Http.status500 "text/plain" "failed" [] [] []
           actionResponse = ClientActionResponse Http.status200 [] Nothing [] [] []
           otherActionResponse = ClientActionResponse Http.status422 [] (Just "email") [] [] []
           eventResponse = EventStreamResponse responseBodyValue eventSource :: Response TestRoute TestContext
@@ -2784,8 +2794,8 @@ spec = do
           otherEventResponse = EventStreamResponse otherResponseBodyValue otherEventSource
           actionBodyResponse = ClientActionBodyResponse actionResponse :: Response TestRoute TestContext
           otherActionBodyResponse = ClientActionBodyResponse otherActionResponse
-          protocolResponse = ProtocolResponseResult (ProtocolResponse Http.status200 [] (ProtocolResponseBytes "ok") [] []) :: Response TestRoute TestContext
-          otherProtocolResponse = ProtocolResponseResult (ProtocolResponse Http.status500 [] (ProtocolResponseBytes "failed") [] [])
+          protocolResponse = ProtocolResponseResult (ProtocolResponse Http.status200 [] (ProtocolResponseBytes "ok") [] [] []) :: Response TestRoute TestContext
+          otherProtocolResponse = ProtocolResponseResult (ProtocolResponse Http.status500 [] (ProtocolResponseBytes "failed") [] [] [])
       expectAll
         ( (actionBodyResponse /= otherActionBodyResponse `shouldBe` True)
             :| [ eventResponse == sameEventResponse `shouldBe` True,
@@ -2794,7 +2804,7 @@ spec = do
                  show [actionBodyResponse, eventResponse, protocolResponse] `shouldSatisfy` isInfixOf "EventStreamResponse",
                  show eventResponse `shouldSatisfy` isInfixOf "<event-source>",
                  show protocolResponse `shouldSatisfy` isInfixOf "ProtocolResponseResult",
-                 show (ProtocolResponse Http.status200 [(Http.hContentType, "application/example")] (ProtocolResponseBytes "ok") [] [])
+                 show (ProtocolResponse Http.status200 [(Http.hContentType, "application/example")] (ProtocolResponseBytes "ok") [] [] [])
                    `shouldBe` "ProtocolResponse (Status {statusCode = 200, statusMessage = \"OK\"}) [(\"Content-Type\",\"application/example\")] \"ProtocolResponseBytes \\\"ok\\\"\""
                ]
         )
@@ -2837,7 +2847,8 @@ spec = do
                 responseContentType = "text/html; charset=utf-8",
                 responseBody = "",
                 responseObservabilityAttributes = [],
-                responseLogEntries = []
+                responseLogEntries = [],
+                responseDatabaseOperations = []
               }
           metadataApplication =
             sampleApplication
@@ -3605,6 +3616,14 @@ spec = do
               { Observability.attributeName = "http.request.header.x_forwarded_prefix",
                 Observability.attributeValue = Observability.TextAttribute "/app"
               }
+          databaseOperation =
+            Database.DatabaseOperation
+              { Database.databaseOperationSystem = "postgresql",
+                Database.databaseOperationName = "load-data",
+                Database.databaseQueryTemplate = "SELECT payload FROM data WHERE id = ?;",
+                Database.databaseOperationStartedAtNanoseconds = Nothing,
+                Database.databaseOperationEndedAtNanoseconds = Nothing
+              }
           diagnosticApplication =
             trustedForwardedApplication
               { renderRequestResponse =
@@ -3616,7 +3635,8 @@ spec = do
                             responseContentType = "application/json",
                             responseBody = "{\"error\":\"data-unavailable\"}",
                             responseObservabilityAttributes = [failureAttribute],
-                            responseLogEntries = ["Sample failure log"]
+                            responseLogEntries = ["Sample failure log"],
+                            responseDatabaseOperations = [databaseOperation]
                           },
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
@@ -3627,21 +3647,22 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 503
       readResponseBody response `shouldReturn` "{\"error\":\"data-unavailable\"}"
       readIORef requestObservabilityReference
-        `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "https"
-                           "/data"
-                           "/app/data"
-                           503
-                           Observability.BodyResponseKind
-                           [ clientAddressAttribute,
-                             peerAddressAttribute,
-                             clientAddressSourceAttribute,
-                             forwardedForAttribute,
-                             forwardedProtoAttribute,
-                             forwardedPrefixAttribute,
-                             failureAttribute
-                           ]
+        `shouldReturn` [ Observability.withDatabaseOperations [databaseOperation] $
+                           Observability.buildRequestObservability
+                             "GET"
+                             "https"
+                             "/data"
+                             "/app/data"
+                             503
+                             Observability.BodyResponseKind
+                             [ clientAddressAttribute,
+                               peerAddressAttribute,
+                               clientAddressSourceAttribute,
+                               forwardedForAttribute,
+                               forwardedProtoAttribute,
+                               forwardedPrefixAttribute,
+                               failureAttribute
+                             ]
                        ]
       readIORef logEntriesReference
         `shouldReturn` [ "[client.address=\"203.0.113.10\" network.peer.address=\"127.0.0.1\" harch.client.address.source=\"x-forwarded-for\" http.request.header.x_forwarded_for=\"203.0.113.10, 10.0.0.1\" http.request.header.x_forwarded_proto=\"https\" http.request.header.x_forwarded_prefix=\"/app\" url.scheme=\"https\"] Sample failure log"
@@ -3712,7 +3733,8 @@ spec = do
                             responseContentType = "application/json",
                             responseBody = "{\"route\":\"data\"}",
                             responseObservabilityAttributes = [],
-                            responseLogEntries = ["Enriched source log"]
+                            responseLogEntries = ["Enriched source log"],
+                            responseDatabaseOperations = []
                           },
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
@@ -3919,7 +3941,8 @@ spec = do
                             responseContentType = "application/json",
                             responseBody = "{\"route\":\"data\"}",
                             responseObservabilityAttributes = [],
-                            responseLogEntries = ["Direct peer log"]
+                            responseLogEntries = ["Direct peer log"],
+                            responseDatabaseOperations = []
                           },
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [stripVolatileRequestTiming requestObservabilityValue]),
@@ -3974,7 +3997,8 @@ spec = do
                             responseContentType = "text/html; charset=utf-8",
                             responseBody = "",
                             responseObservabilityAttributes = [failureAttribute],
-                            responseLogEntries = ["Sample page failure log"]
+                            responseLogEntries = ["Sample page failure log"],
+                            responseDatabaseOperations = []
                           }
                       . samplePage,
                 reportRequestObservability = \requestObservabilityValue ->
@@ -4044,7 +4068,8 @@ spec = do
                                 responseContentType = "text/html; charset=utf-8",
                                 responseBody = "",
                                 responseObservabilityAttributes = [pageFailureAttribute],
-                                responseLogEntries = []
+                                responseLogEntries = [],
+                                responseDatabaseOperations = []
                               }
                             (samplePage request)
                         (KnownRoute, _, _) ->
@@ -4056,7 +4081,8 @@ spec = do
                                 responseContentType = "application/json",
                                 responseBody = "{\"error\":\"body-failure\"}",
                                 responseObservabilityAttributes = [bodyFailureAttribute],
-                                responseLogEntries = []
+                                responseLogEntries = [],
+                                responseDatabaseOperations = []
                               }
                         _ ->
                           renderSampleResponse request,
@@ -5223,102 +5249,108 @@ spec = do
             { otlpEndpoint = collectorUrl,
               otlpHeaders = [("authorization", "Bearer sample-token")]
             }
-          ( Observability.buildRequestObservability
-              "GET"
-              "https"
-              "/known"
-              "/known"
-              503
-              Observability.PageResponseKind
-              [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "exception.type",
-                    Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.system",
-                    Observability.attributeValue = Observability.TextAttribute "postgresql"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.name",
-                    Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.query.template",
-                    Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.start_monotonic_ns",
-                    Observability.attributeValue = Observability.IntAttribute 3000000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 1250000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.system",
-                    Observability.attributeValue = Observability.TextAttribute "postgresql"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.name",
-                    Observability.attributeValue = Observability.TextAttribute "load-home-page-summary"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.query.template",
-                    Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.start_monotonic_ns",
-                    Observability.attributeValue = Observability.IntAttribute (-1)
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute (-1)
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.system",
-                    Observability.attributeValue = Observability.TextAttribute "postgresql"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.name",
-                    Observability.attributeValue = Observability.TextAttribute "load-health-check"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.query.template",
-                    Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.request.start_monotonic_ns",
-                    Observability.attributeValue = Observability.IntAttribute 1000000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.request.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 5000000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.request-policy.start_offset_ns",
-                    Observability.attributeValue = Observability.IntAttribute 0
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.request-policy.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 250000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.route-match.start_offset_ns",
-                    Observability.attributeValue = Observability.IntAttribute 500000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.route-match.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 750000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.render-response.start_offset_ns",
-                    Observability.attributeValue = Observability.IntAttribute 1500000
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "harch.phase.render-response.duration_ns",
-                    Observability.attributeValue = Observability.IntAttribute 3000000
-                  }
+          ( Observability.withDatabaseOperations
+              [ Database.DatabaseOperation "postgresql" "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" (Just 3000000) (Just 4250000),
+                Database.DatabaseOperation "postgresql" "load-home-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;" Nothing Nothing,
+                Database.DatabaseOperation "postgresql" "load-health-check" "SELECT 1;" Nothing Nothing
               ]
+              ( Observability.buildRequestObservability
+                  "GET"
+                  "https"
+                  "/known"
+                  "/known"
+                  503
+                  Observability.PageResponseKind
+                  [ Observability.ObservabilityAttribute
+                      { Observability.attributeName = "exception.type",
+                        Observability.attributeValue = Observability.TextAttribute "ExampleFailure"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.system",
+                        Observability.attributeValue = Observability.TextAttribute "postgresql"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.name",
+                        Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.query.template",
+                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.start_monotonic_ns",
+                        Observability.attributeValue = Observability.IntAttribute 3000000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 1250000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.system",
+                        Observability.attributeValue = Observability.TextAttribute "postgresql"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.name",
+                        Observability.attributeValue = Observability.TextAttribute "load-home-page-summary"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.query.template",
+                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.start_monotonic_ns",
+                        Observability.attributeValue = Observability.IntAttribute (-1)
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute (-1)
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.system",
+                        Observability.attributeValue = Observability.TextAttribute "postgresql"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.operation.name",
+                        Observability.attributeValue = Observability.TextAttribute "load-health-check"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "db.query.template",
+                        Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.request.start_monotonic_ns",
+                        Observability.attributeValue = Observability.IntAttribute 1000000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.request.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 5000000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.request-policy.start_offset_ns",
+                        Observability.attributeValue = Observability.IntAttribute 0
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.request-policy.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 250000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.route-match.start_offset_ns",
+                        Observability.attributeValue = Observability.IntAttribute 500000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.route-match.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 750000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.render-response.start_offset_ns",
+                        Observability.attributeValue = Observability.IntAttribute 1500000
+                      },
+                    Observability.ObservabilityAttribute
+                      { Observability.attributeName = "harch.phase.render-response.duration_ns",
+                        Observability.attributeValue = Observability.IntAttribute 3000000
+                      }
+                  ]
+              )
           )
         CapturedCollectorRequest
           { capturedCollectorMethod = requestMethod,
@@ -5374,9 +5406,9 @@ spec = do
                    Text.count "\"name\":\"DB load-second-page-summary\"" requestBodyText `shouldBe` 1,
                    Text.count "\"name\":\"DB load-home-page-summary\"" requestBodyText `shouldBe` 1,
                    Text.count "\"name\":\"DB load-health-check\"" requestBodyText `shouldBe` 1,
-                   Text.count "\"key\":\"db.system\"" requestBodyText `shouldBe` 3,
-                   Text.count "\"key\":\"db.operation.name\"" requestBodyText `shouldBe` 3,
-                   Text.count "\"key\":\"db.query.template\"" requestBodyText `shouldBe` 3,
+                   Text.count "\"key\":\"db.system\"" requestBodyText `shouldBe` 6,
+                   Text.count "\"key\":\"db.operation.name\"" requestBodyText `shouldBe` 6,
+                   Text.count "\"key\":\"db.query.template\"" requestBodyText `shouldBe` 6,
                    Text.count "\"kind\":\"SPAN_KIND_SERVER\"" requestBodyText `shouldBe` 1,
                    Text.count "\"kind\":\"SPAN_KIND_INTERNAL\"" requestBodyText `shouldBe` 3,
                    Text.count "\"kind\":\"SPAN_KIND_CLIENT\"" requestBodyText `shouldBe` 3,
@@ -5534,26 +5566,17 @@ spec = do
             { otlpEndpoint = collectorUrl,
               otlpHeaders = []
             }
-          ( Observability.buildRequestObservability
-              "GET"
-              "http"
-              "/health"
-              "/health"
-              200
-              Observability.BodyResponseKind
-              [ Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.system",
-                    Observability.attributeValue = Observability.TextAttribute "postgresql"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.operation.name",
-                    Observability.attributeValue = Observability.TextAttribute "ping-database"
-                  },
-                Observability.ObservabilityAttribute
-                  { Observability.attributeName = "db.query.template",
-                    Observability.attributeValue = Observability.TextAttribute "SELECT 1;"
-                  }
-              ]
+          ( Observability.withDatabaseOperations
+              [Database.DatabaseOperation "postgresql" "ping-database" "SELECT 1;" Nothing Nothing]
+              ( Observability.buildRequestObservability
+                  "GET"
+                  "http"
+                  "/health"
+                  "/health"
+                  200
+                  Observability.BodyResponseKind
+                  []
+              )
           )
         CapturedCollectorRequest {capturedCollectorBody = requestBody} <-
           readMVar capturedRequestReference

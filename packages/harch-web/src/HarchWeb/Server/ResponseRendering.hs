@@ -57,13 +57,14 @@ redirectResponse status =
         responseContentType = "text/plain; charset=utf-8",
         responseBody = "",
         responseObservabilityAttributes = [],
-        responseLogEntries = []
+        responseLogEntries = [],
+        responseDatabaseOperations = []
       }
 
 responseDiagnostics :: Response route context -> ResponseDiagnostics
 responseDiagnostics response =
   case response of
-    PageResponse _ -> ResponseDiagnostics [] []
+    PageResponse _ -> ResponseDiagnostics [] [] []
     PageResponseWithMetadata responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     BodyResponse responseBodyValue -> responseBodyDiagnostics responseBodyValue
     RedirectResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
@@ -71,17 +72,20 @@ responseDiagnostics response =
       ResponseDiagnostics
         (clientActionObservabilityAttributes actionResponse)
         (clientActionLogEntries actionResponse)
+        []
     EventStreamResponse responseBodyValue _ -> responseBodyDiagnostics responseBodyValue
     ProtocolResponseResult protocolResponse ->
       ResponseDiagnostics
         (protocolResponseObservabilityAttributes protocolResponse)
         (protocolResponseLogEntries protocolResponse)
+        (protocolResponseDatabaseOperations protocolResponse)
 
 responseBodyDiagnostics :: ResponseBody -> ResponseDiagnostics
 responseBodyDiagnostics responseBodyValue =
   ResponseDiagnostics
     { diagnosticObservabilityAttributes = responseObservabilityAttributes responseBodyValue,
-      diagnosticLogEntries = responseLogEntries responseBodyValue
+      diagnosticLogEntries = responseLogEntries responseBodyValue,
+      diagnosticDatabaseOperations = responseDatabaseOperations responseBodyValue
     }
 
 responseStatusCode :: (Eq route) => Application route action context -> Response route context -> Int

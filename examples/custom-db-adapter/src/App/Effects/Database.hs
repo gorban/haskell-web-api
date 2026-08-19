@@ -41,4 +41,4 @@ buildMemoryDatabaseEffect (MemoryDatabase postsReference) = DatabaseEffect $ \ca
     pure (DatabaseResult saved [operation "memory-save-post" "memory://posts"])
 
 operation :: Text -> Text -> DatabaseOperation
-operation name template = DatabaseOperation name template Nothing Nothing
+operation name template = DatabaseOperation "memory" name template Nothing Nothing

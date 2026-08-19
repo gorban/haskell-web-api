@@ -19,10 +19,14 @@ newtype DatabaseEffect databaseError operation = DatabaseEffect
   { runDatabaseEffect :: forall result. operation result -> IO (DatabaseResult databaseError result)
   }
 
--- | Stable metadata for a database operation. Timings are deliberately
+-- | Stable metadata for a database operation. 'databaseOperationSystem' is
+-- deliberately plain 'Text': database implementations are application
+-- selectable, so a closed framework enumeration would reject valid adapters
+-- without preventing a meaningful invalid state. Timings are deliberately
 -- excluded from equality and display output so tests and logs stay stable.
 data DatabaseOperation = DatabaseOperation
-  { databaseOperationName :: Text,
+  { databaseOperationSystem :: Text,
+    databaseOperationName :: Text,
     databaseQueryTemplate :: Text,
     databaseOperationStartedAtNanoseconds :: Maybe Word64,
     databaseOperationEndedAtNanoseconds :: Maybe Word64
@@ -30,7 +34,8 @@ data DatabaseOperation = DatabaseOperation
 
 instance Eq DatabaseOperation where
   left == right =
-    databaseOperationName left == databaseOperationName right
+    databaseOperationSystem left == databaseOperationSystem right
+      && databaseOperationName left == databaseOperationName right
       && databaseQueryTemplate left == databaseQueryTemplate right
 
 instance Show DatabaseOperation where
@@ -38,6 +43,8 @@ instance Show DatabaseOperation where
     showParen (precedence > 10) $
       showString "DatabaseOperation {databaseOperationName = "
         . shows (databaseOperationName databaseOperation)
+        . showString ", databaseOperationSystem = "
+        . shows (databaseOperationSystem databaseOperation)
         . showString ", databaseQueryTemplate = "
         . shows (databaseQueryTemplate databaseOperation)
         . showString "}"

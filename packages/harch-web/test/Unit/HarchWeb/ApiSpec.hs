@@ -205,7 +205,9 @@ spec =
         postResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/status"})
         expectAll
           ( (apiRouteResponseBody getResponse `shouldBe` "ReadStatus")
-              :| [apiRouteResponseBody postResponse `shouldBe` "WriteStatus"]
+              :| [ apiRouteResponseBody postResponse `shouldBe` "WriteStatus",
+                   protocolResponseDatabaseOperations (apiRouteProtocolResponse getResponse) `shouldBe` []
+                 ]
           )
 
       it "runs a never-failing endpoint without inventing a domain-failure renderer" $ do
@@ -314,7 +316,8 @@ spec =
               protocolResponseHeaders = [("Content-Type", "text/plain; charset=utf-8"), ("X-Example", "present")],
               protocolResponseBody = ProtocolResponseBytes "hello",
               protocolResponseObservabilityAttributes = [],
-              protocolResponseLogEntries = []
+              protocolResponseLogEntries = [],
+              protocolResponseDatabaseOperations = []
             }
 
     it "renders every declared method to its RFC 9110 token" $
@@ -1090,7 +1093,8 @@ spec =
               protocolResponseHeaders = [("Content-Type", "application/example"), ("X-Example", "present")],
               protocolResponseBody = ProtocolResponseBytes "\NUL\SOH\STX",
               protocolResponseObservabilityAttributes = [],
-              protocolResponseLogEntries = []
+              protocolResponseLogEntries = [],
+              protocolResponseDatabaseOperations = []
             }
 
       it "uses an empty strict body for a protocol result without an API body" $

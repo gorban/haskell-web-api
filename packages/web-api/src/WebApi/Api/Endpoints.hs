@@ -63,13 +63,14 @@ import WebApi.Database
   )
 import WebApi.Response
   ( FailureSurface (ApiFailureSurface),
-    databaseOperationObservabilityAttributes,
+    diagnosticsDatabaseOperations,
     diagnosticsLogEntries,
     diagnosticsObservabilityAttributes,
     jsonErrorBody,
     pageFailureDiagnostics,
     secondRouteApiBody,
     statusApiBody,
+    toHarchDatabaseOperation,
   )
 import WebApi.Route (AppRequestContext, AppRoute, requestLocale)
 import WebApi.RouteData (SecondRouteData (..), StatusApiData (..))
@@ -111,7 +112,7 @@ secondApiRouteDefinition pageRepository =
           Right secondPageData ->
             Right
               ( (apiResponse (jsonBytes (secondRouteApiBody (toSecondRouteData secondPageData))))
-                  { apiEndpointResponseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations
+                  { apiEndpointResponseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
                   }
               )
           Left databaseError -> Left (SecondApiFailure databaseOperations databaseError)
@@ -128,7 +129,8 @@ secondApiFailureResponse (SecondApiFailure databaseOperations databaseError) =
   (apiResponse (jsonBytes (jsonErrorBody "second-page-unavailable")))
     { apiEndpointResponseStatus = HttpTypes.status503,
       apiEndpointResponseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      apiEndpointResponseLogEntries = diagnosticsLogEntries diagnostics
+      apiEndpointResponseLogEntries = diagnosticsLogEntries diagnostics,
+      apiEndpointResponseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
     }
   where
     diagnostics = pageFailureDiagnostics ApiFailureSurface "/second" "second-page" databaseOperations databaseError

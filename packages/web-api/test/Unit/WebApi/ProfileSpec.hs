@@ -84,6 +84,7 @@ spec =
                  responsePageBody unavailableResponse `shouldSatisfy` (not . Text.isInfixOf "AccountSessionStoreUnavailable"),
                  responseDiagnosticAttributes unavailableResponse `shouldBe` profileFailureAttributes "AccountSessionStoreError",
                  responseDiagnosticLogs unavailableResponse `shouldBe` ["Profile loading failed: AccountSessionStoreError"],
+                 HarchWeb.diagnosticDatabaseOperations (HarchWeb.responseDiagnostics unavailableResponse) `shouldBe` [],
                  responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
                  responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
                  responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""

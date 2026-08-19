@@ -3,6 +3,7 @@
 module Unit.HarchWeb.ObservabilitySpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
+import HarchWeb.Database qualified as Database
 import HarchWeb.Observability qualified as Observability
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
@@ -41,7 +42,8 @@ spec = do
             Observability.RequestObservability
               { Observability.observabilityRequestSpan = requestSpan,
                 Observability.observabilityHttpServerMetrics = httpServerMetrics,
-                Observability.observabilityTraceContext = Nothing
+                Observability.observabilityTraceContext = Nothing,
+                Observability.observabilityDatabaseOperations = []
               }
           connectionObservability =
             Observability.ConnectionObservability
@@ -53,6 +55,16 @@ spec = do
                 Observability.traceContextParentSpanId = "00f067aa0ba902b7",
                 Observability.traceContextState = Nothing
               }
+          databaseOperation =
+            Database.DatabaseOperation
+              { Database.databaseOperationSystem = "postgresql",
+                Database.databaseOperationName = "load-profile",
+                Database.databaseQueryTemplate = "SELECT profile FROM account WHERE id = ?;",
+                Database.databaseOperationStartedAtNanoseconds = Nothing,
+                Database.databaseOperationEndedAtNanoseconds = Nothing
+              }
+          observabilityWithDatabaseOperation =
+            Observability.withDatabaseOperations [databaseOperation] requestObservability
       expectAll
         ( (Observability.attributeName pageKindAttribute `shouldBe` "harch.response.kind")
             :| [ Observability.attributeValue pageKindAttribute `shouldBe` Observability.TextAttribute "page",
@@ -70,7 +82,9 @@ spec = do
                  Observability.traceContextTraceId traceContextWithoutState `shouldBe` "4bf92f3577b34da6a3ce929d0e0e4736",
                  Observability.traceContextParentSpanId traceContextWithoutState `shouldBe` "00f067aa0ba902b7",
                  Observability.traceContextState traceContextWithoutState `shouldBe` Nothing,
-                 Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan
+                 Observability.observabilityConnectionSpan connectionObservability `shouldBe` requestSpan,
+                 Observability.observabilityDatabaseOperations observabilityWithDatabaseOperation `shouldBe` [databaseOperation],
+                 Observability.forceRequestObservability observabilityWithDatabaseOperation `shouldBe` ()
                ]
         )
 
@@ -100,7 +114,8 @@ spec = do
             Observability.RequestObservability
               { Observability.observabilityRequestSpan = requestSpan,
                 Observability.observabilityHttpServerMetrics = httpServerMetrics,
-                Observability.observabilityTraceContext = Nothing
+                Observability.observabilityTraceContext = Nothing,
+                Observability.observabilityDatabaseOperations = []
               }
           traceContext =
             Observability.RequestTraceContext
@@ -146,8 +161,8 @@ spec = do
                  show [requestSpan] `shouldBe` "[RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}]",
                  show httpServerMetrics `shouldBe` "HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}",
                  show [httpServerMetrics] `shouldBe` "[HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}]",
-                 show requestObservability `shouldBe` "RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing}",
-                 show [requestObservability] `shouldBe` "[RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing}]",
+                 show requestObservability `shouldBe` "RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing, observabilityDatabaseOperations = []}",
+                 show [requestObservability] `shouldBe` "[RequestObservability {observabilityRequestSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}, observabilityHttpServerMetrics = HttpServerMetrics {requestDurationMetricName = \"http.server.request.duration\", activeRequestsMetricName = \"http.server.active_requests\", httpServerMetricAttributes = [ObservabilityAttribute {attributeName = \"http.response.status_code\", attributeValue = IntAttribute 200}]}, observabilityTraceContext = Nothing, observabilityDatabaseOperations = []}]",
                  show connectionObservability `shouldBe` "ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}",
                  show [connectionObservability] `shouldBe` "[ConnectionObservability {observabilityConnectionSpan = RequestSpan {requestSpanDisplayName = \"GET /\", requestSpanAttributes = [ObservabilityAttribute {attributeName = \"harch.response.kind\", attributeValue = TextAttribute \"page\"}]}}]"
                ]
@@ -313,7 +328,8 @@ spec = do
                         }
                     ]
                 },
-            Observability.observabilityTraceContext = Nothing
+            Observability.observabilityTraceContext = Nothing,
+            Observability.observabilityDatabaseOperations = []
           }
 
   describe "buildConnectionObservability" $
@@ -406,5 +422,6 @@ spec = do
                         }
                     ]
                 },
-            Observability.observabilityTraceContext = Nothing
+            Observability.observabilityTraceContext = Nothing,
+            Observability.observabilityDatabaseOperations = []
           }

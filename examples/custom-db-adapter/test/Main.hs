@@ -14,14 +14,14 @@ main = hspec $ describe "Unit.memory database adapter" $ do
     let effect = buildMemoryDatabaseEffect database
     initialPosts <- runDatabaseEffect effect ListPosts
     initialPosts
-      `shouldBe` DatabaseResult (Right [Post "First"]) [DatabaseOperation "memory-list-posts" "memory://posts" Nothing Nothing]
+      `shouldBe` DatabaseResult (Right [Post "First"]) [DatabaseOperation "memory" "memory-list-posts" "memory://posts" Nothing Nothing]
     case databaseResultOperations initialPosts of
       [initialOperation] -> do
         databaseOperationStartedAtNanoseconds initialOperation `shouldBe` Nothing
         databaseOperationEndedAtNanoseconds initialOperation `shouldBe` Nothing
       operations -> expectationFailure ("expected one database operation, got " <> show operations)
     runDatabaseEffect effect (SavePost (Post "Second"))
-      `shouldReturn` DatabaseResult (Right (Post "Second")) [DatabaseOperation "memory-save-post" "memory://posts" Nothing Nothing]
+      `shouldReturn` DatabaseResult (Right (Post "Second")) [DatabaseOperation "memory" "memory-save-post" "memory://posts" Nothing Nothing]
     fmap databaseResultValue (runDatabaseEffect effect ListPosts)
       `shouldReturn` Right [Post "First", Post "Second"]
 

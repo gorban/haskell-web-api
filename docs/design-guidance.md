@@ -824,6 +824,21 @@ newtype would duplicate it without improving composition or preventing an additi
 Observability remains explicitly numeric: `responseStatusCode` extracts `Http.statusCode` only when
 constructing the low-cardinality HTTP server attribute.
 
+### Follow-up decision — BW: typed database operations reach OTLP at the response boundary (2026-08-19)
+
+**Decision: extend the existing response and request-observability boundaries (option 1), rather
+than reconstructing a second database-operation protocol from generic attributes.** `ResponseBody`,
+`ProtocolResponse`, and `ApiResponse` now carry typed `HarchWeb.Database.DatabaseOperation` values;
+the request executor attaches them to `RequestObservability`, and the OTLP exporter alone projects
+them as client child spans. This is a small, general framework primitive: page and typed API
+responses already own request-scoped diagnostics, and all database adapters need identical parent/
+child semantics. Generic attributes stay generic—even attributes named `db.*`—so order, adjacency,
+or unrelated interleaved attributes cannot silently create or discard a span. The database-system
+identifier remains extensible `Text`, not a framework newtype or closed enumeration: application
+adapters are deliberately open, and wrapping or closing that identifier would not validate it or
+prevent a useful invalid state. Focused OTLP capture tests cover multiple operations, timing and
+untimed operations, and generic interleaved attributes; the full coverage gate is required proof.
+
 ### Follow-up decision — CJ: published dependency bounds (2026-08-17)
 
 **Decision: put PVP `^>=` bounds on every direct dependency in each project-owned package

@@ -28,6 +28,7 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Action qualified as Action
 import HarchWeb.Api (apiRequestDataFromWaiRequest, runRequestCodec)
+import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
@@ -360,7 +361,8 @@ expectedApiJsonProtocolResponse jsonBody =
       HarchWeb.protocolResponseHeaders = [(Http.hContentType, "application/json"), (Http.hVary, "Accept")],
       HarchWeb.protocolResponseBody = HarchWeb.ProtocolResponseBytes jsonBody,
       HarchWeb.protocolResponseObservabilityAttributes = [],
-      HarchWeb.protocolResponseLogEntries = []
+      HarchWeb.protocolResponseLogEntries = [],
+      HarchWeb.protocolResponseDatabaseOperations = []
     }
 
 pureRouteMatcher :: Text -> HarchWeb.RouteRequest AppRoute AppRequestContext
@@ -4561,8 +4563,9 @@ spec = do
                   | otherwise ->
                       failingPostgresResult "unexpected query"
           postgresEffect = buildPostgresPageRepositoryWithRunner runner postgresTestConfig
-      loadHomePageForRequest postgresEffect defaultRequestContext
-        `shouldReturn` DatabaseResult
+      timedHomeResult <- loadHomePageForRequest postgresEffect defaultRequestContext
+      timedHomeResult
+        `shouldBe` DatabaseResult
           { databaseResultValue =
               Right
                 HomePageData
@@ -4577,6 +4580,14 @@ spec = do
                   }
               ]
           }
+      case databaseResultOperations timedHomeResult of
+        [timedOperation] ->
+          case ( databaseOperationStartedAtNanoseconds timedOperation,
+                 databaseOperationEndedAtNanoseconds timedOperation
+               ) of
+            (Just startedAt, Just endedAt) -> endedAt `shouldSatisfy` (>= startedAt)
+            _ -> expectationFailure "expected completed PostgreSQL operation timestamps"
+        _ -> expectationFailure "expected one PostgreSQL home-page operation"
       loadHomePageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           HomePageData
@@ -5199,33 +5210,9 @@ spec = do
               { HarchWeb.responseStatus = Http.status200,
                 HarchWeb.responseContentType = "text/html; charset=utf-8",
                 HarchWeb.responseBody = "",
-                HarchWeb.responseObservabilityAttributes =
-                  [ Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.system",
-                        Observability.attributeValue = Observability.TextAttribute "postgresql"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.name",
-                        Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.query.template",
-                        Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.system",
-                        Observability.attributeValue = Observability.TextAttribute "postgresql"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.operation.name",
-                        Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
-                      },
-                    Observability.ObservabilityAttribute
-                      { Observability.attributeName = "db.query.template",
-                        Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
-                      }
-                  ],
-                HarchWeb.responseLogEntries = []
+                HarchWeb.responseObservabilityAttributes = [],
+                HarchWeb.responseLogEntries = [],
+                HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
               }
             ( HarchWeb.Page
                 { HarchWeb.pageTitle = "web-api: Second",
@@ -7939,7 +7926,8 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
       selectResponse defaultAppConfig apiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
@@ -7948,7 +7936,8 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
 
     it "keeps API payload rendering locale-aware without touching page routing" $ do
@@ -7959,7 +7948,8 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"es\"}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
       selectResponse defaultAppConfig spanishApiSecondRequest
         `shouldReturn` HarchWeb.BodyResponse
@@ -7968,10 +7958,11 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
 
-    it "attaches safe database operation observability to postgres-backed page and API responses" $ do
+    it "attaches typed database operations to postgres-backed page and API responses" $ do
       let postgresRunner command =
             pure $
               case commandSql command of
@@ -8003,33 +7994,9 @@ spec = do
             { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "text/html; charset=utf-8",
               HarchWeb.responseBody = "",
-              HarchWeb.responseObservabilityAttributes =
-                [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
-                    }
-                ],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
             }
           renderedSecondPage
       fmap stripVolatileDatabaseTimingResponse (selectResponseWithDatabase defaultAppConfig postgresEffect apiSecondRequest)
@@ -8038,33 +8005,9 @@ spec = do
             { HarchWeb.responseStatus = Http.status200,
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"summary\":\"Loaded second summary.\",\"highlights\":[\"Fast SSR\",\"Shared route data\"]}",
-              HarchWeb.responseObservabilityAttributes =
-                [ Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
-                    }
-                ],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseObservabilityAttributes = [],
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
             }
 
     it "keeps not-found handling consistent across page and non-page responses" $ do
@@ -8077,7 +8020,8 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"error\":\"not-found\"}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
 
     it "maps shared second-page load failures into explicit API error responses" $
@@ -8116,7 +8060,8 @@ spec = do
                     }
                 ],
               HarchWeb.responseLogEntries =
-                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
+                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""],
+              HarchWeb.responseDatabaseOperations = []
             }
 
     it "omits volatile database timing fields when a database effect reports untimed operations" $ do
@@ -8145,20 +8090,8 @@ spec = do
       response <- selectResponseWithDatabase defaultAppConfig untimedDatabaseEffect apiSecondRequest
       case response of
         HarchWeb.BodyResponse responseBody ->
-          HarchWeb.responseObservabilityAttributes responseBody
-            `shouldBe` [ Observability.ObservabilityAttribute
-                           { Observability.attributeName = "db.system",
-                             Observability.attributeValue = Observability.TextAttribute "postgresql"
-                           },
-                         Observability.ObservabilityAttribute
-                           { Observability.attributeName = "db.operation.name",
-                             Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                           },
-                         Observability.ObservabilityAttribute
-                           { Observability.attributeName = "db.query.template",
-                             Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                           }
-                       ]
+          HarchWeb.responseDatabaseOperations responseBody
+            `shouldBe` [expectedDatabaseOperation "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"]
         _ ->
           expectationFailure "expected API response body for untimed database operation"
 
@@ -8196,35 +8129,12 @@ spec = do
                   Observability.ObservabilityAttribute
                     { Observability.attributeName = "app.surface",
                       Observability.attributeValue = Observability.TextAttribute "api"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-summary"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.system",
-                      Observability.attributeValue = Observability.TextAttribute "postgresql"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.operation.name",
-                      Observability.attributeValue = Observability.TextAttribute "load-second-page-highlights"
-                    },
-                  Observability.ObservabilityAttribute
-                    { Observability.attributeName = "db.query.template",
-                      Observability.attributeValue = Observability.TextAttribute "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
                     }
                 ],
               HarchWeb.responseLogEntries =
                 [ "Database failure while rendering required second-page api response after database operations [load-second-page-summary (SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;), load-second-page-highlights (SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;)]: SecondPageDataError \"highlights unavailable\""
-                ]
+                ],
+              HarchWeb.responseDatabaseOperations = expectedSecondDatabaseOperations
             }
 
     it "preserves unexpected database error constructors in API diagnostics" $
@@ -8252,7 +8162,8 @@ spec = do
                   }
               ],
             HarchWeb.responseLogEntries =
-              ["Database failure while rendering required second-page api response: HomePageDataError \"wrong loader\""]
+              ["Database failure while rendering required second-page api response: HomePageDataError \"wrong loader\""],
+            HarchWeb.responseDatabaseOperations = []
           }
 
     it "maps required second-page failures into explicit HTML 500 responses" $ do
@@ -8294,7 +8205,8 @@ spec = do
                     }
                 ],
               HarchWeb.responseLogEntries =
-                ["Database failure while rendering required second-page page response: SecondPageDataError \"seed unavailable\""]
+                ["Database failure while rendering required second-page page response: SecondPageDataError \"seed unavailable\""],
+              HarchWeb.responseDatabaseOperations = []
             }
           renderedPage
 
@@ -8338,7 +8250,8 @@ spec = do
               HarchWeb.responseContentType = "application/json",
               HarchWeb.responseBody = "{\"status\":\"ok\",\"locale\":\"en\"}",
               HarchWeb.responseObservabilityAttributes = [],
-              HarchWeb.responseLogEntries = []
+              HarchWeb.responseLogEntries = [],
+              HarchWeb.responseDatabaseOperations = []
             }
 
     it "is deterministic for repeated requests" $ do
@@ -8472,7 +8385,8 @@ spec = do
             HarchWeb.responseContentType = "application/json",
             HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}",
             HarchWeb.responseObservabilityAttributes = [],
-            HarchWeb.responseLogEntries = []
+            HarchWeb.responseLogEntries = [],
+            HarchWeb.responseDatabaseOperations = []
           }
 
     it "escapes hostile database content in API JSON" $ do
@@ -8961,6 +8875,38 @@ spec = do
             :| [apiSecondResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}")]
         )
 
+    it "carries database operations through the typed API response boundary" $ do
+      let databaseOperation =
+            DatabaseOperation
+              { databaseOperationName = "load-second-page-summary",
+                databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+                databaseOperationStartedAtNanoseconds = Nothing,
+                databaseOperationEndedAtNanoseconds = Nothing
+              }
+          databaseApplication =
+            buildAppWithDatabase
+              defaultAppConfig
+              defaultPageRepository
+                { loadSecondPage =
+                    \_ ->
+                      pure
+                        DatabaseResult
+                          { databaseResultValue =
+                              Right
+                                SecondPageData
+                                  { secondPageDataSummary = "Typed operation summary.",
+                                    secondPageDataHighlights = []
+                                  },
+                            databaseResultOperations = [databaseOperation]
+                          }
+                }
+      renderedResponse <- HarchWeb.renderResponse databaseApplication apiSecondRequest
+      case renderedResponse of
+        HarchWeb.ProtocolResponseResult protocolResponse ->
+          HarchWeb.protocolResponseDatabaseOperations protocolResponse
+            `shouldBe` [expectedDatabaseOperation "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"]
+        _ -> expectationFailure "expected a typed API protocol response"
+
     it "maps a database failure at /api/second's typed endpoint boundary into the same explicit API error diagnostics the shared page/API selector reports" $ do
       let failingApplication =
             buildAppWithDatabase
@@ -8999,7 +8945,8 @@ spec = do
                     }
                 ],
               HarchWeb.protocolResponseLogEntries =
-                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""]
+                ["Database failure while rendering required second-page api response: SecondPageDataError \"seed unavailable\""],
+              HarchWeb.protocolResponseDatabaseOperations = []
             }
 
     it "declares no fields for /api/status and /api/second, decoding an empty request to ()" $
@@ -9582,18 +9529,36 @@ stripVolatileDatabaseTimingResponse response =
 stripVolatileDatabaseTimingResponseBody :: HarchWeb.ResponseBody -> HarchWeb.ResponseBody
 stripVolatileDatabaseTimingResponseBody responseBody =
   responseBody
-    { HarchWeb.responseObservabilityAttributes =
-        filter
-          (not . isVolatileDatabaseTimingAttribute)
-          (HarchWeb.responseObservabilityAttributes responseBody)
+    { HarchWeb.responseDatabaseOperations =
+        map stripVolatileDatabaseTiming (HarchWeb.responseDatabaseOperations responseBody)
     }
 
-isVolatileDatabaseTimingAttribute :: Observability.ObservabilityAttribute -> Bool
-isVolatileDatabaseTimingAttribute attribute =
-  Observability.attributeName attribute
-    `elem` [ "db.operation.start_monotonic_ns",
-             "db.operation.duration_ns"
-           ]
+stripVolatileDatabaseTiming :: HarchDatabase.DatabaseOperation -> HarchDatabase.DatabaseOperation
+stripVolatileDatabaseTiming databaseOperation =
+  databaseOperation
+    { HarchDatabase.databaseOperationStartedAtNanoseconds = Nothing,
+      HarchDatabase.databaseOperationEndedAtNanoseconds = Nothing
+    }
+
+expectedSecondDatabaseOperations :: [HarchDatabase.DatabaseOperation]
+expectedSecondDatabaseOperations =
+  [ expectedDatabaseOperation
+      "load-second-page-summary"
+      "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
+    expectedDatabaseOperation
+      "load-second-page-highlights"
+      "SELECT highlight FROM web_api.page_highlights WHERE route_slug = ? AND locale = ? ORDER BY position ASC;"
+  ]
+
+expectedDatabaseOperation :: Text -> Text -> HarchDatabase.DatabaseOperation
+expectedDatabaseOperation operationName queryTemplate =
+  HarchDatabase.DatabaseOperation
+    { HarchDatabase.databaseOperationSystem = "postgresql",
+      HarchDatabase.databaseOperationName = operationName,
+      HarchDatabase.databaseQueryTemplate = queryTemplate,
+      HarchDatabase.databaseOperationStartedAtNanoseconds = Nothing,
+      HarchDatabase.databaseOperationEndedAtNanoseconds = Nothing
+    }
 
 lookupTextObservabilityAttribute :: Text -> [Observability.ObservabilityAttribute] -> Maybe Text
 lookupTextObservabilityAttribute attributeName attributes =

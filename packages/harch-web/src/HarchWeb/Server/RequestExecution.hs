@@ -77,7 +77,8 @@ navigationRuntimeResponse runtime requestPath =
             responseContentType = "application/javascript; charset=utf-8",
             responseBody = Document.navigationRuntimeScript runtime,
             responseObservabilityAttributes = [],
-            responseLogEntries = []
+            responseLogEntries = [],
+            responseDatabaseOperations = []
           }
     else Nothing
 
@@ -385,7 +386,8 @@ renderRouteDispatch webApplication request routeDispatch =
                 protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
                 protocolResponseBody = ProtocolResponseBytes ByteString.empty,
                 protocolResponseObservabilityAttributes = [],
-                protocolResponseLogEntries = []
+                protocolResponseLogEntries = [],
+                protocolResponseDatabaseOperations = []
               }
         )
     RouteMatched routeRequest -> renderRequestResponse webApplication request routeRequest
@@ -398,7 +400,8 @@ renderRouteDispatch webApplication request routeDispatch =
                 protocolResponseHeaders = [(Http.hAllow, TextEncoding.encodeUtf8 (routeAllowHeaderValue declaredMethods))],
                 protocolResponseBody = ProtocolResponseBytes ByteString.empty,
                 protocolResponseObservabilityAttributes = [],
-                protocolResponseLogEntries = []
+                protocolResponseLogEntries = [],
+                protocolResponseDatabaseOperations = []
               }
         )
 
@@ -481,26 +484,27 @@ buildRoutedRequestObservability routedRequestExecution executionTimings routeReq
       request = routedRequestWaiRequest routedRequestExecution
       requestPolicyConfig = routedRequestPolicyConfig routedRequestExecution
       requestPath = routedRequestPath routedRequestExecution
-   in maybe id Observability.withRequestTraceContext (requestTraceContext request) $
-        Observability.buildRequestObservability
-          (requestMethodText request)
-          (requestScheme requestPolicyConfig request)
-          requestPath
-          (renderRoute (routeCodec webApplication) routeRequest)
-          (responseStatusCode webApplication response)
-          (responseKind response)
-          ( requestContextObservabilityAttributes requestPolicyConfig request
-              <> diagnosticObservabilityAttributes diagnosticValues
-              <> requestTimingObservabilityAttributes
-                (requestExecutionStartedAt executionTimings)
-                (requestResponseRenderedAt executionTimings)
-                ( [("request-policy", requestExecutionStartedAt executionTimings, requestPolicyEvaluatedAt executionTimings)]
-                    <> requestMiddlewareTimings executionTimings
-                    <> [ ("route-match", requestRouteMatchingStartedAt executionTimings, requestRouteMatchedAt executionTimings),
-                         ("render-response", requestRenderingStartedAt executionTimings, requestResponseRenderedAt executionTimings)
-                       ]
-                )
-          )
+   in Observability.withDatabaseOperations (diagnosticDatabaseOperations diagnosticValues) $
+        maybe id Observability.withRequestTraceContext (requestTraceContext request) $
+          Observability.buildRequestObservability
+            (requestMethodText request)
+            (requestScheme requestPolicyConfig request)
+            requestPath
+            (renderRoute (routeCodec webApplication) routeRequest)
+            (responseStatusCode webApplication response)
+            (responseKind response)
+            ( requestContextObservabilityAttributes requestPolicyConfig request
+                <> diagnosticObservabilityAttributes diagnosticValues
+                <> requestTimingObservabilityAttributes
+                  (requestExecutionStartedAt executionTimings)
+                  (requestResponseRenderedAt executionTimings)
+                  ( [("request-policy", requestExecutionStartedAt executionTimings, requestPolicyEvaluatedAt executionTimings)]
+                      <> requestMiddlewareTimings executionTimings
+                      <> [ ("route-match", requestRouteMatchingStartedAt executionTimings, requestRouteMatchedAt executionTimings),
+                           ("render-response", requestRenderingStartedAt executionTimings, requestResponseRenderedAt executionTimings)
+                         ]
+                  )
+            )
 
 requestTimingObservabilityAttributes :: Word64 -> Word64 -> [(Text, Word64, Word64)] -> [Observability.ObservabilityAttribute]
 requestTimingObservabilityAttributes requestStartedAt requestCompletedAt phaseTimings =

@@ -3,7 +3,6 @@
 module WebApi.Response
   ( FailureDiagnostics (..),
     FailureSurface (..),
-    databaseOperationObservabilityAttributes,
     jsonErrorBody,
     jsonText,
     pageFailureDiagnostics,
@@ -14,6 +13,7 @@ module WebApi.Response
     selectResponseWithDatabase,
     selectResponse,
     statusApiBody,
+    toHarchDatabaseOperation,
   )
 where
 
@@ -24,6 +24,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
+import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.Observability qualified as Observability
 import Network.HTTP.Types qualified as Http
 import WebApi.AppEffect (AccountWorkflow (..))
@@ -179,8 +180,9 @@ jsonResponseBodyWithOperations statusCode bodyValue databaseOperations =
     { HarchWeb.responseStatus = statusCode,
       HarchWeb.responseContentType = "application/json",
       HarchWeb.responseBody = jsonText bodyValue,
-      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
-      HarchWeb.responseLogEntries = []
+      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseLogEntries = [],
+      HarchWeb.responseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
 jsonErrorResponseBody :: Http.Status -> JsonEncoding.Encoding -> FailureDiagnostics -> HarchWeb.ResponseBody
@@ -190,7 +192,8 @@ jsonErrorResponseBody statusCode bodyValue diagnostics =
       HarchWeb.responseContentType = "application/json",
       HarchWeb.responseBody = jsonText bodyValue,
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics,
+      HarchWeb.responseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
     }
 
 jsonText :: JsonEncoding.Encoding -> Text
@@ -202,8 +205,9 @@ pageSuccessResponseMetadata databaseOperations =
     { HarchWeb.responseStatus = Http.status200,
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
-      HarchWeb.responseObservabilityAttributes = databaseOperationObservabilityAttributes databaseOperations,
-      HarchWeb.responseLogEntries = []
+      HarchWeb.responseObservabilityAttributes = [],
+      HarchWeb.responseLogEntries = [],
+      HarchWeb.responseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
 pageErrorResponseMetadata :: FailureDiagnostics -> HarchWeb.ResponseBody
@@ -213,12 +217,14 @@ pageErrorResponseMetadata diagnostics =
       HarchWeb.responseContentType = "text/html; charset=utf-8",
       HarchWeb.responseBody = "",
       HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics
+      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics,
+      HarchWeb.responseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
     }
 
 data FailureDiagnostics = FailureDiagnostics
   { diagnosticsObservabilityAttributes :: [Observability.ObservabilityAttribute],
-    diagnosticsLogEntries :: [Text]
+    diagnosticsLogEntries :: [Text],
+    diagnosticsDatabaseOperations :: [HarchDatabase.DatabaseOperation]
   }
 
 data FailureSurface
@@ -245,8 +251,7 @@ pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations da
             { Observability.attributeName = "app.surface",
               Observability.attributeValue = Observability.TextAttribute (renderFailureSurface failureSurface)
             }
-        ]
-          <> databaseOperationObservabilityAttributes databaseOperations,
+        ],
       diagnosticsLogEntries =
         [ Text.concat
             [ "Database failure while rendering required ",
@@ -258,7 +263,8 @@ pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations da
               ": ",
               Text.pack (show databaseError)
             ]
-        ]
+        ],
+      diagnosticsDatabaseOperations = map toHarchDatabaseOperation databaseOperations
     }
 
 profileFailureDiagnostics :: ProfileLoadError -> FailureDiagnostics
@@ -282,7 +288,8 @@ profileFailureDiagnostics profileLoadError =
               Observability.attributeValue = Observability.TextAttribute "page"
             }
         ],
-      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType profileLoadError]
+      diagnosticsLogEntries = ["Profile loading failed: " <> profileLoadErrorType profileLoadError],
+      diagnosticsDatabaseOperations = []
     }
 
 profileLoadErrorType :: ProfileLoadError -> Text
@@ -291,41 +298,15 @@ profileLoadErrorType profileLoadError =
     ProfileSessionStoreError _ -> "AccountSessionStoreError"
     ProfileAccountStoreError _ -> "AccountStoreError"
 
-databaseOperationObservabilityAttributes :: [DatabaseOperation] -> [Observability.ObservabilityAttribute]
-databaseOperationObservabilityAttributes =
-  concatMap databaseOperationObservabilityEntries
-
-databaseOperationObservabilityEntries :: DatabaseOperation -> [Observability.ObservabilityAttribute]
-databaseOperationObservabilityEntries databaseOperation =
-  [ Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.system",
-        Observability.attributeValue = Observability.TextAttribute "postgresql"
-      },
-    Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.operation.name",
-        Observability.attributeValue = Observability.TextAttribute (databaseOperationName databaseOperation)
-      },
-    Observability.ObservabilityAttribute
-      { Observability.attributeName = "db.query.template",
-        Observability.attributeValue = Observability.TextAttribute (databaseQueryTemplate databaseOperation)
-      }
-  ]
-    <> maybeDatabaseOperationTimingAttributes databaseOperation
-
-maybeDatabaseOperationTimingAttributes :: DatabaseOperation -> [Observability.ObservabilityAttribute]
-maybeDatabaseOperationTimingAttributes databaseOperation =
-  case (databaseOperationStartedAtNanoseconds databaseOperation, databaseOperationEndedAtNanoseconds databaseOperation) of
-    (Just startedAt, Just endedAt) ->
-      [ Observability.ObservabilityAttribute
-          { Observability.attributeName = "db.operation.start_monotonic_ns",
-            Observability.attributeValue = Observability.IntAttribute (fromIntegral startedAt)
-          },
-        Observability.ObservabilityAttribute
-          { Observability.attributeName = "db.operation.duration_ns",
-            Observability.attributeValue = Observability.IntAttribute (fromIntegral (endedAt - min startedAt endedAt))
-          }
-      ]
-    _ -> []
+toHarchDatabaseOperation :: DatabaseOperation -> HarchDatabase.DatabaseOperation
+toHarchDatabaseOperation databaseOperation =
+  HarchDatabase.DatabaseOperation
+    { HarchDatabase.databaseOperationSystem = "postgresql",
+      HarchDatabase.databaseOperationName = databaseOperationName databaseOperation,
+      HarchDatabase.databaseQueryTemplate = databaseQueryTemplate databaseOperation,
+      HarchDatabase.databaseOperationStartedAtNanoseconds = databaseOperationStartedAtNanoseconds databaseOperation,
+      HarchDatabase.databaseOperationEndedAtNanoseconds = databaseOperationEndedAtNanoseconds databaseOperation
+    }
 
 renderDatabaseOperationsSuffix :: [DatabaseOperation] -> Text
 renderDatabaseOperationsSuffix databaseOperations =
