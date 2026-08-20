@@ -154,11 +154,11 @@ applyTestPathPrefix pathPrefix path
   | path == "/" = pathPrefix
   | otherwise = pathPrefix <> path
 
-sampleRequestContextFromRequest :: Bool -> Wai.Request -> TestContext -> TestContext
-sampleRequestContextFromRequest trustProxyHeaders request requestContext =
+sampleRequestContextFromRequest :: ForwardedHeaderTrust -> Wai.Request -> TestContext -> TestContext
+sampleRequestContextFromRequest forwardedHeaderTrust request requestContext =
   requestContext
     { testContextPathPrefix =
-        if trustProxyHeaders
+        if isTrustedForwardingPeer forwardedHeaderTrust (Wai.remoteHost request)
           then
             maybe
               ""
@@ -258,13 +258,23 @@ defaultRequestPolicy =
       httpsRedirectPort = Nothing,
       httpsRedirectAuthority = Just "app.example.com",
       strictTransportSecurity = Nothing,
-      trustForwardedHeaders = False,
+      forwardedHeaderTrust = NeverTrustForwarded,
       requestHeadLimits = unboundedRequestHeadLimits,
       requestTransportLimits = warpDefaultRequestTransportLimits,
       requestConcurrencyLimit = Nothing,
       corsPolicy = defaultCorsPolicyConfig,
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
+
+-- | Covers both 'Wai.defaultRequest''s built-in peer (@0.0.0.0@) and the
+-- explicit loopback peer ('waiRequestWithRemoteHostAndHeaders') this file's
+-- fixtures use, so every existing "trust forwarded headers" test keeps its
+-- request unchanged.
+testTrustedForwardedProxy :: ForwardedHeaderTrust
+testTrustedForwardedProxy =
+  case parseCidrBlock "0.0.0.0/1" of
+    Just cidrBlock -> TrustForwardedFrom (cidrBlock :| [])
+    Nothing -> error "invalid test CIDR block"
 
 sampleApplicationWithStaticAssets :: StaticAssetsConfig -> Application TestRoute Text TestContext
 sampleApplicationWithStaticAssets staticAssetsConfig =
@@ -278,7 +288,7 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
   Application
     { appName = "sample",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest (trustForwardedHeaders requestPolicyConfig),
+      requestContextFromRequest = sampleRequestContextFromRequest (forwardedHeaderTrust requestPolicyConfig),
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = staticAssetsConfig,
       applicationRequestPolicy = requestPolicyConfig,
@@ -302,7 +312,7 @@ trustedForwardedApplication =
   sampleApplicationWithConfig
     emptyStaticAssets
     defaultRequestPolicy
-      { trustForwardedHeaders = True
+      { forwardedHeaderTrust = testTrustedForwardedProxy
       }
 
 sampleServerConfig :: ServerConfig
@@ -495,10 +505,10 @@ rootPathApplication =
   Application
     { appName = "root-path",
       defaultRequestContext = defaultContext,
-      requestContextFromRequest = sampleRequestContextFromRequest True,
+      requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
       applicationNavigationRuntime = Nothing,
       applicationStaticAssets = emptyStaticAssets,
-      applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
+      applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
       applicationRequestMiddleware = [],
       routeCodec = rootPathCodec,
       renderRequestResponse = \_ -> pure . PageResponse . samplePage,
@@ -1269,7 +1279,7 @@ spec = do
                 httpsRedirectPort = Just 5443,
                 httpsRedirectAuthority = Just "app.example.com",
                 strictTransportSecurity = Just strictTransportSecurityConfig,
-                trustForwardedHeaders = False,
+                forwardedHeaderTrust = NeverTrustForwarded,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
                 requestConcurrencyLimit = Nothing,
@@ -1388,7 +1398,7 @@ spec = do
                 httpsRedirectPort = Just 5443,
                 httpsRedirectAuthority = Just "app.example.com",
                 strictTransportSecurity = Just strictTransportSecurityConfig,
-                trustForwardedHeaders = False,
+                forwardedHeaderTrust = NeverTrustForwarded,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
                 requestConcurrencyLimit = Nothing,
@@ -1401,7 +1411,7 @@ spec = do
                 httpsRedirectPort = Nothing,
                 httpsRedirectAuthority = Just "other.example.com",
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig,
-                trustForwardedHeaders = False,
+                forwardedHeaderTrust = NeverTrustForwarded,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
                 requestConcurrencyLimit = Nothing,
@@ -1606,7 +1616,7 @@ spec = do
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
       show [responseSecurityHeadersConfig] `shouldContain` "[ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
-      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, httpsRedirectAuthority = Just \"app.example.com\", strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), trustForwardedHeaders = False"
+      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, httpsRedirectAuthority = Just \"app.example.com\", strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), forwardedHeaderTrust = NeverTrustForwarded"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
@@ -3075,7 +3085,7 @@ spec = do
                     ("X-Forwarded-Prefix", "/app")
                   ]
               }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))) redirectRequest
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))) redirectRequest
       Wai.responseStatus response `shouldBe` Http.status308
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
 
@@ -3088,7 +3098,7 @@ spec = do
                     ("X-Forwarded-Prefix", "app")
                   ]
               }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))) redirectRequest
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))) redirectRequest
       Wai.responseStatus response `shouldBe` Http.status308
       lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app"
 
@@ -3129,7 +3139,7 @@ spec = do
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = True
                       },
-                trustForwardedHeaders = True,
+                forwardedHeaderTrust = testTrustedForwardedProxy,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
                 requestConcurrencyLimit = Nothing,
@@ -3150,6 +3160,37 @@ spec = do
         `shouldBe` Just "max-age=31536000; includeSubDomains; preload"
       readResponseBody response `shouldReturn` "{\"route\":\"data\"}"
 
+    it "ignores forwarded HTTPS context from a peer outside every trusted CIDR block" $ do
+      let requestPolicyConfig =
+            RequestPolicyConfig
+              { redirectHttpToHttps = True,
+                httpsRedirectPort = Nothing,
+                httpsRedirectAuthority = Just "app.example.com",
+                strictTransportSecurity =
+                  Just
+                    StrictTransportSecurityConfig
+                      { strictTransportSecurityMaxAgeSeconds = 31536000,
+                        strictTransportSecurityIncludeSubDomains = True,
+                        strictTransportSecurityPreload = True
+                      },
+                forwardedHeaderTrust = testTrustedForwardedProxy,
+                requestHeadLimits = unboundedRequestHeadLimits,
+                requestTransportLimits = warpDefaultRequestTransportLimits,
+                requestConcurrencyLimit = Nothing,
+                corsPolicy = defaultCorsPolicyConfig,
+                responseSecurityHeaders = defaultResponseSecurityHeadersConfig
+              }
+          untrustedPeerRequest =
+            waiRequestWithRemoteHostAndHeaders
+              ["data"]
+              (Socket.SockAddrInet 4123 (Socket.tupleToHostAddress (203, 0, 113, 1)))
+              [ ("Host", "app.example.com"),
+                ("X-Forwarded-Proto", "https")
+              ]
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) untrustedPeerRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup "Strict-Transport-Security" (Wai.responseHeaders response) `shouldBe` Nothing
+
     it "does not emit HSTS headers for requests whose effective scheme stays HTTP" $ do
       let requestPolicyConfig =
             RequestPolicyConfig
@@ -3163,7 +3204,7 @@ spec = do
                         strictTransportSecurityIncludeSubDomains = True,
                         strictTransportSecurityPreload = False
                       },
-                trustForwardedHeaders = False,
+                forwardedHeaderTrust = NeverTrustForwarded,
                 requestHeadLimits = unboundedRequestHeadLimits,
                 requestTransportLimits = warpDefaultRequestTransportLimits,
                 requestConcurrencyLimit = Nothing,
@@ -3240,7 +3281,7 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "/app"
               }
           redirectingApplication =
-            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, trustForwardedHeaders = True}))
+            (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))
               { renderRequestResponse = \_ _ -> expectationFailure "expected HTTPS redirect before application rendering" >> pure (renderSampleResponse (RouteRequest {requestRoute = DataRoute, requestContext = defaultContext})),
                 reportRequestObservability = \requestObservabilityValue ->
                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
@@ -4112,8 +4153,8 @@ spec = do
               }
           diagnosticApplication =
             sampleApplication
-              { applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
-                requestContextFromRequest = sampleRequestContextFromRequest True,
+              { applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
+                requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
                 renderRequestResponse =
                   \_ request ->
                     pure $
@@ -4448,7 +4489,7 @@ spec = do
                 directRemoteHost
                 [("X-Forwarded-Prefix", "/app")]
             staticApplication =
-              (sampleApplicationWithConfig assetConfig (defaultRequestPolicy {trustForwardedHeaders = True}))
+              (sampleApplicationWithConfig assetConfig (defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy}))
                 { reportRequestObservability = \requestObservabilityValue ->
                     modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                 }
@@ -4512,7 +4553,7 @@ spec = do
                           strictTransportSecurityIncludeSubDomains = False,
                           strictTransportSecurityPreload = False
                         },
-                  trustForwardedHeaders = True,
+                  forwardedHeaderTrust = testTrustedForwardedProxy,
                   requestHeadLimits = unboundedRequestHeadLimits,
                   requestTransportLimits = warpDefaultRequestTransportLimits,
                   requestConcurrencyLimit = Nothing,
@@ -4551,7 +4592,7 @@ spec = do
               sampleApplicationWithConfig
                 assetConfig
                 defaultRequestPolicy
-                  { trustForwardedHeaders = True
+                  { forwardedHeaderTrust = testTrustedForwardedProxy
                   }
         createDirectoryIfMissing True assetDirectory
         writeFile (assetDirectory <> "/app.js") "console.log('asset');"
@@ -6906,8 +6947,8 @@ spec = do
                             outputHandle
                             acmeTlsConfig
                             sampleApplication
-                              { applicationRequestPolicy = defaultRequestPolicy {trustForwardedHeaders = True},
-                                requestContextFromRequest = sampleRequestContextFromRequest True,
+                              { applicationRequestPolicy = defaultRequestPolicy {forwardedHeaderTrust = testTrustedForwardedProxy},
+                                requestContextFromRequest = sampleRequestContextFromRequest testTrustedForwardedProxy,
                                 reportRequestObservability = \requestObservabilityValue ->
                                   modifyIORef' requestObservabilityReference (<> [requestObservabilityValue])
                               }

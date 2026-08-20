@@ -116,7 +116,7 @@ buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestO
             (buildAppRouteDefinition config pageRepository accountWorkflow)
         )
           { Site.siteRequestContextFromRequest =
-              requestContextFromWaiRequest (HarchWeb.trustForwardedHeaders (requestPolicy config)),
+              requestContextFromWaiRequest (HarchWeb.forwardedHeaderTrust (requestPolicy config)),
             Site.siteStaticAssets = staticAssets config,
             Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
             Site.siteRequestPolicy = requestPolicy config,

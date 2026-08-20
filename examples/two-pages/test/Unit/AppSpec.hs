@@ -23,6 +23,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
   ( ClientActionPayload (..),
     ClientActionRequest (..),
+    ForwardedHeaderTrust (..),
     ListenerConfig (..),
     RouteMethod (..),
     RouteRequest (..),
@@ -32,6 +33,7 @@ import HarchWeb
     defaultCorsPolicyConfig,
     defaultResponseSecurityHeadersConfig,
     defaultStaticAssetContentTypes,
+    forwardedHeaderTrust,
     httpsRedirectAuthority,
     httpsRedirectPort,
     listenerConfigs,
@@ -52,7 +54,6 @@ import HarchWeb
     strictTransportSecurity,
     toWaiApplication,
     tracingExporter,
-    trustForwardedHeaders,
     warpDefaultRequestTransportLimits,
   )
 import HarchWeb qualified
@@ -109,7 +110,7 @@ spec =
                    httpsRedirectPort (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    httpsRedirectAuthority (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    strictTransportSecurity (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
-                   trustForwardedHeaders (siteRequestPolicy twoPageSite) `shouldBe` False,
+                   forwardedHeaderTrust (siteRequestPolicy twoPageSite) `shouldBe` NeverTrustForwarded,
                    requestTransportLimits (siteRequestPolicy twoPageSite) `shouldBe` warpDefaultRequestTransportLimits,
                    requestConcurrencyLimit (siteRequestPolicy twoPageSite) `shouldBe` Nothing,
                    corsPolicy (siteRequestPolicy twoPageSite) `shouldBe` defaultCorsPolicyConfig,
@@ -137,7 +138,7 @@ spec =
                    httpsRedirectPort (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    httpsRedirectAuthority (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    strictTransportSecurity (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
-                   trustForwardedHeaders (requestPolicy twoPageServerConfig) `shouldBe` False,
+                   forwardedHeaderTrust (requestPolicy twoPageServerConfig) `shouldBe` NeverTrustForwarded,
                    requestTransportLimits (requestPolicy twoPageServerConfig) `shouldBe` warpDefaultRequestTransportLimits,
                    requestConcurrencyLimit (requestPolicy twoPageServerConfig) `shouldBe` Nothing,
                    corsPolicy (requestPolicy twoPageServerConfig) `shouldBe` defaultCorsPolicyConfig,

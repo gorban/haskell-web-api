@@ -11,6 +11,7 @@ module WebApi.Config.Types
     ConfigParseError (..),
     CorsPolicyConfig (..),
     DatabaseConfig (..),
+    ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),

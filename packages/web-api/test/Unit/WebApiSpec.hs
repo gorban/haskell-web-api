@@ -65,7 +65,7 @@ import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRunti
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.AppEffect qualified as AppEffect
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), LoginThrottleContext (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
@@ -228,13 +228,25 @@ loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Eith
 loadSecondPageValueForRequest pageRepository requestContext =
   databaseResultValue <$> loadSecondPageForRequest pageRepository requestContext
 
+-- | Covers both 'Wai.defaultRequest''s built-in peer (@0.0.0.0@) and the
+-- explicit loopback peer this file's fixtures use, so every existing
+-- "trust forwarded headers" test keeps its request unchanged.
+testTrustedForwardedProxy :: ForwardedHeaderTrust
+testTrustedForwardedProxy = TrustForwardedFrom (requiredTestCidrBlock "0.0.0.0/1" :| [])
+
+requiredTestCidrBlock :: Text.Text -> HarchWeb.CidrBlock
+requiredTestCidrBlock cidrText =
+  case HarchWeb.parseCidrBlock cidrText of
+    Just cidrBlock -> cidrBlock
+    Nothing -> error ("invalid test CIDR block: " <> Text.unpack cidrText)
+
 trustedForwardedApplication :: HarchWeb.Application AppRoute AccountAction AppRequestContext
 trustedForwardedApplication =
   buildApp
     defaultAppConfig
       { requestPolicy =
           (requestPolicy defaultAppConfig)
-            { trustForwardedHeaders = True
+            { forwardedHeaderTrust = testTrustedForwardedProxy
             }
       }
 
@@ -1142,7 +1154,7 @@ spec = do
                   httpsRedirectPort = Nothing,
                   httpsRedirectAuthority = Nothing,
                   strictTransportSecurity = Nothing,
-                  trustForwardedHeaders = False,
+                  forwardedHeaderTrust = NeverTrustForwarded,
                   requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                   requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                   requestConcurrencyLimit = Nothing,
@@ -1276,7 +1288,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -1623,7 +1635,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -1850,7 +1862,7 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = True,
                             strictTransportSecurityPreload = True
                           },
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -1882,7 +1894,7 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
                           },
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -1910,7 +1922,7 @@ spec = do
                             strictTransportSecurityIncludeSubDomains = False,
                             strictTransportSecurityPreload = False
                           },
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -1919,18 +1931,40 @@ spec = do
                   }
             }
 
-    it "parses trusted forwarded-header mode explicitly when enabled" $
+    it "parses a single trusted forwarded-proxy CIDR block" $
       parseRuntimeAppConfig
         committedRuntimeDefaults
         []
-        [("TRUST_FORWARDED_HEADERS", "true")]
+        [("TRUSTED_FORWARDED_PROXIES", "10.0.0.0/8")]
         `shouldBe` Right
           defaultAppConfig
             { requestPolicy =
                 (requestPolicy defaultAppConfig)
-                  { trustForwardedHeaders = True
+                  { forwardedHeaderTrust =
+                      TrustForwardedFrom (requiredTestCidrBlock "10.0.0.0/8" :| [])
                   }
             }
+
+    it "parses multiple comma-separated trusted forwarded-proxy CIDR blocks" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("TRUSTED_FORWARDED_PROXIES", "10.0.0.0/8, 172.16.0.0/12")]
+        `shouldBe` Right
+          defaultAppConfig
+            { requestPolicy =
+                (requestPolicy defaultAppConfig)
+                  { forwardedHeaderTrust =
+                      TrustForwardedFrom (requiredTestCidrBlock "10.0.0.0/8" :| [requiredTestCidrBlock "172.16.0.0/12"])
+                  }
+            }
+
+    it "rejects a malformed trusted forwarded-proxy CIDR block" $
+      parseRuntimeAppConfig
+        committedRuntimeDefaults
+        []
+        [("TRUSTED_FORWARDED_PROXIES", "10.0.0.0/8, not-a-cidr")]
+        `shouldBe` Left (InvalidConfigValue "TRUSTED_FORWARDED_PROXIES" "not-a-cidr")
 
     it "parses opt-in request-head resource limits without changing defaults" $
       fmap
@@ -2085,7 +2119,7 @@ spec = do
                     httpsRedirectPort = Just 5443,
                     httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -2163,7 +2197,7 @@ spec = do
                     httpsRedirectPort = Nothing,
                     httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
-                    trustForwardedHeaders = False,
+                    forwardedHeaderTrust = NeverTrustForwarded,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
                     requestTransportLimits = HarchWeb.warpDefaultRequestTransportLimits,
                     requestConcurrencyLimit = Nothing,
@@ -9139,7 +9173,7 @@ spec = do
               navigationAppConfig
                 { requestPolicy =
                     (requestPolicy navigationAppConfig)
-                      { trustForwardedHeaders = True
+                      { forwardedHeaderTrust = testTrustedForwardedProxy
                       }
                 }
       pageResponse <- performWaiRequest (HarchWeb.toWaiApplication prefixedApplication) prefixedPageRequest

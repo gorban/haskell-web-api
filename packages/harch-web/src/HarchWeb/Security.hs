@@ -14,7 +14,8 @@
 -- each other (see the AL decision record in @docs/design-guidance.md@) and
 -- were deliberately left unsplit rather than forced apart.
 module HarchWeb.Security
-  ( module HarchWeb.Security.RequestLimits,
+  ( module HarchWeb.Security.ForwardedTrust,
+    module HarchWeb.Security.RequestLimits,
     CorsPolicyConfig (..),
     PathPrefix.PathPrefix,
     PathPrefix.UrlPath,
@@ -65,6 +66,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Document (RuntimeNonce, runtimeNonceValue)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.PathPrefix qualified as PathPrefix
+import HarchWeb.Security.ForwardedTrust
 import HarchWeb.Security.RequestLimits
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
@@ -153,7 +155,14 @@ data RequestPolicyConfig = RequestPolicyConfig
     -- record in @docs/design-guidance.md@.
     httpsRedirectAuthority :: Maybe ByteString.ByteString,
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
-    trustForwardedHeaders :: Bool,
+    -- | Which peers this deployment trusts to supply proxy-forwarded
+    -- request context. Every @X-Forwarded-*@\/@Forwarded@ read below is
+    -- gated on the request's actual TCP peer ('Wai.remoteHost') matching
+    -- this, never on the header content alone — a bare on\/off flag let any
+    -- client spoof its own client address and downgrade its own connection
+    -- by simply sending the header. See the DE decision record in
+    -- @docs/design-guidance.md@.
+    forwardedHeaderTrust :: ForwardedHeaderTrust,
     requestHeadLimits :: RequestHeadLimits,
     requestTransportLimits :: RequestTransportLimits,
     requestConcurrencyLimit :: Maybe RequestConcurrencyLimit,
@@ -425,15 +434,21 @@ requestHeaderText headerName request =
 
 trustedRequestHeaderText :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
 trustedRequestHeaderText requestPolicyConfig headerName request =
-  if trustForwardedHeaders requestPolicyConfig then requestHeaderText headerName request else Nothing
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then requestHeaderText headerName request
+    else Nothing
 
 trustedRequestHeaderToken :: RequestPolicyConfig -> Http.HeaderName -> Wai.Request -> Maybe Text
 trustedRequestHeaderToken requestPolicyConfig headerName request =
-  if trustForwardedHeaders requestPolicyConfig then requestHeaderToken headerName request else Nothing
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then requestHeaderToken headerName request
+    else Nothing
 
 trustedForwardedHeaderToken :: RequestPolicyConfig -> Text -> Wai.Request -> Maybe Text
 trustedForwardedHeaderToken requestPolicyConfig parameterName request =
-  if trustForwardedHeaders requestPolicyConfig then forwardedHeaderToken parameterName request else Nothing
+  if isTrustedForwardingPeer (forwardedHeaderTrust requestPolicyConfig) (Wai.remoteHost request)
+    then forwardedHeaderToken parameterName request
+    else Nothing
 
 forwardedHeaderToken :: Text -> Wai.Request -> Maybe Text
 forwardedHeaderToken parameterName request = requestHeaderText "Forwarded" request >>= forwardedParameterValue parameterName

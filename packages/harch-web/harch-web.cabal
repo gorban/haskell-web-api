@@ -119,6 +119,7 @@ library
     HarchWeb.Observability.Types
     HarchWeb.PathPrefix
     HarchWeb.Security.ConstantTime
+    HarchWeb.Security.ForwardedTrust
     HarchWeb.Security.RequestLimits
     HarchWeb.Server.Application
     HarchWeb.Server.ClientAction

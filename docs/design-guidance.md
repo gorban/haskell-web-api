@@ -896,6 +896,41 @@ links) to also supply the redirect authority, overriding the listener-derived gu
 No new abstraction and no new required setting were added; both existing boundaries — the framework's
 request-policy record and web-api's own composition-root override point — were extended in place.
 
+### Follow-up decision — DE: forwarded-header trust becomes a property of the peer, not a global flag (2026-08-20)
+
+**Decision: add `HarchWeb.Security.ForwardedTrust` as a new sibling module (option 1, small and
+general, genuinely disjoint concern) implementing exactly the task's own sketched
+`ForwardedHeaderTrust`/`CidrBlock` shape; do not have the framework track hop counts or IPv6.**
+`trustForwardedHeaders :: Bool` let any client spoof `X-Forwarded-For`/`-Proto`/`-Prefix`/`Forwarded`
+regardless of who actually connected, poisoning `client.address` observability and letting a client
+downgrade its own connection's HSTS/redirect behavior by simply sending a header. The field is now
+`forwardedHeaderTrust :: ForwardedHeaderTrust`, and the framework's three header-trust gate functions
+in `Security.hs`, plus `WebApi.Route.requestContextFromWaiRequest` (a second, easy-to-miss choke
+point for `X-Forwarded-Prefix` that lived in web-api's own composition, not the framework), all check
+the request's actual TCP peer (`Wai.remoteHost`) against the configured CIDR list — never the
+client-claimed header alone. A Unix-domain-socket peer is always trusted once forwarding is enabled
+at all: unlike an IP, it cannot be spoofed by a remote client, since only a process with filesystem
+permission on that exact socket path can connect — a stronger guarantee than any CIDR check gives,
+confirmed against a pre-existing test proving that deployment shape must keep working. IPv6 peers are
+not matched by any CIDR block (the existing codebase's own `socketAddressText` is already IPv4-only);
+extending to IPv6 is a natural, separately-scoped follow-up if a deployment needs it, not silently
+assumed here.
+
+**Also recorded — a genuine GHC 9.14.1 `-O2` HPC instrumentation quirk, not a missing test.**
+`ForwardedHeaderTrust`/`CidrBlock` initially used `deriving (Eq, Show)`. Their derived instances'
+never-overridden `/=`, `show`, and `showList` default methods showed permanently unticked regardless
+of test coverage, and — unlike the project's established CSE-sharing artifact (see the coverage-gate
+memory) — adding more covering tests moved *which* sub-expression showed unticked rather than closing
+the gap, across several full rebuilds. The `.mix` file (not guesswork) showed why: GHC attributes each
+unoverridden class default method to its own coverage box at the bare `instance ... where` line, and
+the optimizer specializes/inlines a call to that method away before it registers as its own tick —
+while a real `/=` comparison, a bare `show`, and a `show` of a list (to reach `showList`) reliably
+fixed it once *every* default method had its own genuine call site. Both instances are now
+hand-written; ordinary user-defined functions do not have this problem and are covered normally. This
+is a third, distinct technique from the already-documented `$!`-forcing and extract-and-test ones —
+recorded in the `coverage_gate_haskell_web_api.md` memory so a future session facing an
+instance-method coverage gap does not misdiagnose it as a missing test either.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

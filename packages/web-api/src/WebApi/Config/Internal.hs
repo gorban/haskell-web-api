@@ -14,6 +14,7 @@ module WebApi.Config.Internal
     ConfigParseError (..),
     CorsPolicyConfig (..),
     DatabaseConfig (..),
+    ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
     ObservabilityConfig (..),
@@ -69,6 +70,7 @@ import Data.Bifunctor (bimap, first)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (traverse_)
 import Data.List (nub)
+import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -77,6 +79,7 @@ import HarchWeb
   ( AcmeConfig (..),
     CertbotConfig (..),
     CorsPolicyConfig (..),
+    ForwardedHeaderTrust (..),
     HasServerConfig (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -106,6 +109,7 @@ import HarchWeb
     firstCertbotDomain,
     mkRequestConcurrencyLimit,
     mkRequestHeaderCountLimit,
+    parseCidrBlock,
     requestByteLimit,
     requestItemCountLimit,
     requestTimeoutSeconds,
@@ -333,7 +337,7 @@ defaultAppConfig =
             httpsRedirectPort = Nothing,
             httpsRedirectAuthority = Nothing,
             strictTransportSecurity = Nothing,
-            trustForwardedHeaders = False,
+            forwardedHeaderTrust = NeverTrustForwarded,
             requestHeadLimits = unboundedRequestHeadLimits,
             requestTransportLimits = warpDefaultRequestTransportLimits,
             requestConcurrencyLimit = Nothing,
@@ -726,7 +730,7 @@ parseRequestPolicyConfigP parsedListeners =
     <*> pure (defaultHttpsRedirectPort parsedListeners)
     <*> pure (defaultHttpsRedirectAuthority parsedListeners)
     <*> parseOptionalStrictTransportSecurityP
-    <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
+    <*> parseForwardedHeaderTrustP
     <*> parseRequestHeadLimitsP
     <*> parseRequestTransportLimitsP
     <*> parseOptionalRequestConcurrencyLimitP "REQUEST_MAX_CONCURRENT"
@@ -817,6 +821,24 @@ defaultHttpsRedirectAuthority parsedListeners =
       [singleHttpsHost] -> Just (TextEncoding.encodeUtf8 singleHttpsHost)
       _ -> Nothing
     else Nothing
+
+-- | Trust is a property of the peer, not a global flag: a bare on\/off
+-- toggle let any client spoof its own @X-Forwarded-*@ headers regardless
+-- of who actually connected. @TRUSTED_FORWARDED_PROXIES@ names the CIDR
+-- blocks (comma-separated, e.g. @10.0.0.0\/8,172.16.0.0\/12@) whose peers
+-- this deployment's own reverse proxy connects from; absent or empty means
+-- 'NeverTrustForwarded'. See the DE decision record in
+-- @docs/design-guidance.md@.
+parseForwardedHeaderTrustP :: ConfigParser ForwardedHeaderTrust
+parseForwardedHeaderTrustP = do
+  cidrTexts <- parseOptionalDelimitedTextListP "TRUSTED_FORWARDED_PROXIES" []
+  case cidrTexts of
+    [] -> pure NeverTrustForwarded
+    firstCidrText : remainingCidrTexts ->
+      TrustForwardedFrom <$> liftEitherP (traverse parseCidrBlockConfigValue (firstCidrText :| remainingCidrTexts))
+  where
+    parseCidrBlockConfigValue cidrText =
+      maybe (Left (InvalidConfigValue "TRUSTED_FORWARDED_PROXIES" cidrText)) Right (parseCidrBlock cidrText)
 
 parseOptionalStrictTransportSecurityP :: ConfigParser (Maybe StrictTransportSecurityConfig)
 parseOptionalStrictTransportSecurityP = do

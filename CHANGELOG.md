@@ -55,6 +55,15 @@
     canonical `httpsRedirectAuthority`, derived from this app's own HTTPS listener when it has one and
     otherwise from the already-required `PUBLIC_BASE_URL`; the redirect simply does not fire when
     neither source resolves an authority.
+12. **Breaking:** trusting `X-Forwarded-For`/`-Proto`/`-Prefix`/`Forwarded` is now a property of the
+    connecting peer, not a global on/off flag: any client could previously spoof these headers to
+    poison `client.address` observability and downgrade its own connection's HSTS/redirect behavior
+    just by sending them. `RequestPolicyConfig`'s `trustForwardedHeaders :: Bool` is replaced by
+    `forwardedHeaderTrust :: ForwardedHeaderTrust`, checked against the request's actual TCP peer
+    address, not the header content; a Unix-domain-socket peer is always trusted once forwarding is
+    enabled at all, since it cannot be spoofed remotely. The `TRUST_FORWARDED_HEADERS` environment
+    variable is replaced by `TRUSTED_FORWARDED_PROXIES` (a comma-separated CIDR block list, e.g.
+    `10.0.0.0/8,172.16.0.0/12`), defaulting to this app's own unique HTTPS listener host when present.
 
 ## 0.1.1.0
 

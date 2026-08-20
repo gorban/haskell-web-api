@@ -289,11 +289,11 @@ mergeRequestContext requestContext maybeLocale =
           Nothing -> requestLocaleIsExplicit requestContext
     }
 
-requestContextFromWaiRequest :: Bool -> Wai.Request -> AppRequestContext -> AppRequestContext
-requestContextFromWaiRequest trustProxyHeaders request requestContext =
+requestContextFromWaiRequest :: HarchWeb.ForwardedHeaderTrust -> Wai.Request -> AppRequestContext -> AppRequestContext
+requestContextFromWaiRequest forwardedHeaderTrust request requestContext =
   requestContext
     { requestPathPrefix =
-        if trustProxyHeaders
+        if HarchWeb.isTrustedForwardingPeer forwardedHeaderTrust (Wai.remoteHost request)
           then
             maybe
               Text.empty
