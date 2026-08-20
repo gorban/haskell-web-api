@@ -1,53 +1,25 @@
 -- | Public ACME and certificate-automation API.
 --
 -- The implementation is deliberately split into private modules so callers can
--- depend on this stable boundary rather than ACME protocol, OpenSSL, certbot,
--- or challenge-store internals.  The lower-level helpers below remain exported
--- temporarily for compatibility with the umbrella 'HarchWeb' API; new
--- applications should generally start with 'AcmeConfig', 'AcmeChallengeStore',
--- and the workflow functions.
+-- depend on this stable boundary rather than certbot or challenge-store
+-- internals. Certificate acquisition is always certbot-backed
+-- ('AcmeConfig' requires a 'CertbotConfig'); see the DG decision record in
+-- @docs/design-guidance.md@ for why an in-process ACME protocol client is
+-- deliberately not part of this surface.
 module HarchWeb.Acme
-  ( AcmeAccountSession (..),
-    AcmeAuthorizationResponse (..),
-    AcmeCertificateRequestPaths (..),
-    AcmeChallengeResponse (..),
-    AcmeChallengeStore (..),
+  ( AcmeChallengeStore (..),
     AcmeConfig (..),
-    AcmeDirectoryContext (..),
-    AcmeDirectoryResponse (..),
-    AcmeJwk (..),
-    AcmeJwsRequestBody (..),
-    AcmeJwsResponseExpectation (..),
-    AcmeOrderIdentifier (..),
-    AcmeOrderResponse (..),
-    AcmeRequestAuth (..),
     ActiveAcmeChallenge (..),
     CertbotConfig (..),
     JsonValue (..),
-    PreparedAcmeChallenge (..),
     RuntimeAcmeBindPlan (..),
-    acmeCertificateRequestConfig,
     acmeChallengeResponseForRequest,
     acmeHttp01ChallengeToken,
-    acmeJwkThumbprintBytes,
-    base64urlText,
-    buildAcmeJwsBody,
-    buildAcmeKeyAuthorization,
     certbotCertificateName,
     certbotHasOption,
     certbotOptionValues,
-    createAcmeAccount,
-    createAcmeOrder,
-    decodeAcmeJsonResponse,
     escapeJsonCharacter,
-    fetchAcmeCertificate,
-    fetchAcmeDirectory,
-    fetchAcmeNonce,
-    finalizeAcmeOrder,
     firstCertbotDomain,
-    generateAcmeAccountKey,
-    generateAcmeCertificateRequest,
-    hexTextToByteString,
     jsonArrayBytes,
     jsonArrayItems,
     jsonBoolBytes,
@@ -62,31 +34,12 @@ module HarchWeb.Acme
     jsonStringBytes,
     jsonTextField,
     jsonValueParser,
-    loadAcmeJwk,
-    mailtoAcmeContact,
     matchesRuntimeAcmeChallenge,
-    openSslSha256,
-    parseAcmeAuthorizationResponse,
-    parseAcmeChallengeResponse,
-    parseAcmeDirectoryResponse,
-    parseAcmeOrderIdentifier,
-    parseAcmeOrderResponse,
     parseJsonValue,
-    performAcmeJwsRequest,
-    performAcmeRequest,
-    pollAcmeOrder,
-    pollAcmeOrderWithRetries,
-    prepareAcmeAuthorization,
     prepareCertbotManualTlsBindPlan,
     registerAcmeChallenges,
-    renderAcmeResponseBody,
-    responseHeaderText,
-    runOpenSslCommand,
-    runOpenSslTextCommand,
     runtimeCertbotArguments,
-    signOpenSslRs256,
     splitCertbotDomainValue,
-    triggerAcmeChallenge,
     unicodeJsonCharacterParser,
     unregisterAcmeChallenges,
     validAcmeHttp01ChallengeToken,
@@ -115,7 +68,6 @@ import HarchWeb.Acme.Challenge
     unregisterAcmeChallenges,
     validAcmeHttp01ChallengeToken,
   )
-import HarchWeb.Acme.Crypto (acmeJwkThumbprintBytes, base64urlText, hexTextToByteString)
 import HarchWeb.Acme.Json
   ( JsonValue (..),
     escapeJsonCharacter,
@@ -135,56 +87,5 @@ import HarchWeb.Acme.Json
     jsonValueParser,
     parseJsonValue,
     unicodeJsonCharacterParser,
-  )
-import HarchWeb.Acme.KeyMaterial
-  ( AcmeCertificateRequestPaths (..),
-    acmeCertificateRequestConfig,
-    generateAcmeAccountKey,
-    generateAcmeCertificateRequest,
-    loadAcmeJwk,
-  )
-import HarchWeb.Acme.OpenSsl (openSslSha256, runOpenSslCommand, runOpenSslTextCommand, signOpenSslRs256)
-import HarchWeb.Acme.Protocol.Client
-  ( buildAcmeJwsBody,
-    buildAcmeKeyAuthorization,
-    decodeAcmeJsonResponse,
-    fetchAcmeNonce,
-    performAcmeJwsRequest,
-    performAcmeRequest,
-    renderAcmeResponseBody,
-    responseHeaderText,
-  )
-import HarchWeb.Acme.Protocol.Decode
-  ( parseAcmeAuthorizationResponse,
-    parseAcmeChallengeResponse,
-    parseAcmeDirectoryResponse,
-    parseAcmeOrderIdentifier,
-    parseAcmeOrderResponse,
-  )
-import HarchWeb.Acme.Protocol.Types
-  ( AcmeAccountSession (..),
-    AcmeAuthorizationResponse (..),
-    AcmeChallengeResponse (..),
-    AcmeDirectoryContext (..),
-    AcmeDirectoryResponse (..),
-    AcmeJwk (..),
-    AcmeJwsRequestBody (..),
-    AcmeJwsResponseExpectation (..),
-    AcmeOrderIdentifier (..),
-    AcmeOrderResponse (..),
-    AcmeRequestAuth (..),
-    PreparedAcmeChallenge (..),
-  )
-import HarchWeb.Acme.Protocol.Workflow
-  ( createAcmeAccount,
-    createAcmeOrder,
-    fetchAcmeCertificate,
-    fetchAcmeDirectory,
-    finalizeAcmeOrder,
-    mailtoAcmeContact,
-    pollAcmeOrder,
-    pollAcmeOrderWithRetries,
-    prepareAcmeAuthorization,
-    triggerAcmeChallenge,
   )
 import HarchWeb.Server.Config (AcmeConfig (..), CertbotConfig (..))

@@ -85,14 +85,7 @@ library
     HarchWeb.Acme.Certbot.Options
     HarchWeb.Acme.Certbot.Runtime
     HarchWeb.Acme.Challenge
-    HarchWeb.Acme.Crypto
     HarchWeb.Acme.Json
-    HarchWeb.Acme.KeyMaterial
-    HarchWeb.Acme.OpenSsl
-    HarchWeb.Acme.Protocol.Client
-    HarchWeb.Acme.Protocol.Decode
-    HarchWeb.Acme.Protocol.Types
-    HarchWeb.Acme.Protocol.Workflow
     HarchWeb.Api.Endpoint
     HarchWeb.Api.Endpoint.Family
     HarchWeb.Api.Endpoint.Internal

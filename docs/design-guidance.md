@@ -931,6 +931,43 @@ is a third, distinct technique from the already-documented `$!`-forcing and extr
 recorded in the `coverage_gate_haskell_web_api.md` memory so a future session facing an
 instance-method coverage gap does not misdiagnose it as a missing test either.
 
+### Follow-up decision — DG: delete the never-wired native ACME protocol client rather than hardening it (2026-08-20)
+
+**Decision: delete `Acme/Protocol/{Client,Workflow,Types,Decode}.hs`, `Acme/KeyMaterial.hs`,
+`Acme/OpenSsl.hs`, and `Acme/Crypto.hs` outright, rather than replacing their `openssl`-subprocess
+calls with in-process crypto.** DG's finding — RSA-4096 keygen, RS256 signing, and SHA-256 hashing
+done by shelling out to `openssl` resolved through `$PATH`, with the raw command runner exported
+publicly — was accurate as a description of the code, but investigating where that code is actually
+used (prompted by a direct question: is any of this necessary, since ACME already works without it)
+found it has **zero production callers**. `AcmeConfig` (`Server/Config.hs`) requires a
+`CertbotConfig` with no alternative constructor; the only cert-acquisition path any running server
+takes is `Acme/Certbot/Runtime.hs`'s `certbot` subprocess, which owns its own crypto entirely outside
+this codebase. Commit history confirms this was never live: the squash-merge that created `HarchWeb`
+already lists "Remove in-process ACME backend" among its own history, and a later, unrelated
+pure-move refactor pass relocated the already-dead code into today's dedicated modules without ever
+wiring it up — making it look more current and load-bearing than it was.
+
+This is squarely the "add the primitive to the framework" vs. "flag and stop" fork the missing-
+capability protocol above describes, except for a fourth case the protocol doesn't name directly:
+the code already exists, so the real choice is finish-and-hardenit vs. delete-it. Finishing it means
+solving CSR generation — a PKCS#10 `CertificationRequest` as raw ASN.1 DER — which no Hackage package
+in this project's dependency closure builds from scratch (`x509`/`crypton-x509`, already available
+transitively via `tls`, only model and parse certificates); doing it correctly means hand-writing
+ASN.1 DER encoding, a genuinely error-prone, security-sensitive investment in a backend nothing
+calls. Deleting closes the actual attack surface ($PATH-resolved `openssl`, publicly exported) more
+completely and far more cheaply, and the task's two smaller findings (raw stdout/stderr spliced into
+a `userError`; unescaped domain interpolation into an openssl.cnf) disappear with the code they lived
+in rather than needing separate fixes. `HarchWeb.Acme`'s module doc now states plainly that ACME is
+always certbot-backed by design, closing the door on a reader assuming a native alternative is
+half-built and safe to extend. If a certbot-free ACME backend is ever wanted, it should be scoped and
+built fresh against current requirements — at which point the CSR-encoding question needs a real
+answer regardless, so nothing already written here would have been reusable as-is.
+
+`HarchWeb/Acme/Json.hs` was investigated and kept: although built for the now-deleted protocol
+client, it also backs `HarchWeb.Observability.Otlp.Wire`'s live OTLP JSON encoding. DH (a separate,
+still-open task) targets this exact file's hand-rolled `ReadP` parser; its own findings remain real
+and its task text was updated to stop pointing at the now-deleted ACME-response decoder types.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

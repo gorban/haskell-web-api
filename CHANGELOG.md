@@ -64,6 +64,13 @@
     enabled at all, since it cannot be spoofed remotely. The `TRUST_FORWARDED_HEADERS` environment
     variable is replaced by `TRUSTED_FORWARDED_PROXIES` (a comma-separated CIDR block list, e.g.
     `10.0.0.0/8,172.16.0.0/12`), defaulting to this app's own unique HTTPS listener host when present.
+13. **Breaking:** removed `HarchWeb.Acme`'s never-wired native ACME protocol client (account/order/
+    authorization/finalization requests, RSA-4096 key and CSR generation, RS256 JWS signing) and its
+    `openssl`-subprocess adapter, which resolved the `openssl` binary through `$PATH` and exported
+    that raw command runner publicly. This code had no production callers: ACME certificate
+    acquisition is, and has always been, exclusively certbot-backed (`AcmeConfig` requires a
+    `CertbotConfig`); nothing else changes for existing certbot-based deployments. `HarchWeb.Acme`'s
+    module documentation now states this plainly.
 
 ## 0.1.1.0
 
