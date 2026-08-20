@@ -42,7 +42,7 @@ spec = do
     it "directs verified accounts without a confirmed enrollment back to MFA setup" $ do
       beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing)))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing Nothing)))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
       beginPasswordLogin (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginEmailVerificationRequired accountId
@@ -56,7 +56,7 @@ spec = do
     it "accepts a validated TOTP only after validating the password" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 7))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
-          confirmedStore = mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100))))
+          confirmedStore = mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) Nothing)))
           validProof = TotpLoginProof (totpCode 123456 secret)
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore validProof) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
@@ -71,6 +71,44 @@ spec = do
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginRejected
 
+    it "rejects a replayed TOTP code without ever consulting the store again, and closes the race with an atomic mark" $ do
+      let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 7))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
+          validProof = TotpLoginProof (totpCode 123456 secret)
+          -- The counter 'totpCode 123456 secret' matches at nowSeconds=123456
+          -- (see 'secondFactorContextFor') is @123456 \`div\` 30@.
+          matchedCounter = 123456 `div` 30
+          storeWithLastUsed lastUsed =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) lastUsed))))
+              { markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update while already replayed"
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor (storeWithLastUsed (Just matchedCounter)) validProof) emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor (storeWithLastUsed (Just (matchedCounter + 1))) validProof) emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      markCallsReference <- newIORef []
+      let acceptingStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just (matchedCounter - 1))))))
+              { markTotpCodeUsed = \markedAccountId markedCounter -> do
+                  modifyIORef' markCallsReference ((markedAccountId, markedCounter) :)
+                  pure (Right True)
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor acceptingStore validProof) emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      readIORef markCallsReference `shouldReturn` [(accountId, matchedCounter)]
+      let racedStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just (matchedCounter - 1))))))
+              { markTotpCodeUsed = \_ _ -> pure (Right False)
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor racedStore validProof) emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      let unavailableMarkStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just (matchedCounter - 1))))))
+              { markTotpCodeUsed = \_ _ -> pure (Left (MfaStoreUnavailable "counter store down"))
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor unavailableMarkStore validProof) emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "counter store down")
+
     it "consumes a matched recovery-code hash atomically without exposing a reusable code" $ do
       consumedHashReference <- newIORef Nothing
       let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
@@ -78,7 +116,7 @@ spec = do
           confirmedStore =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
-                loadTotpEnrollment = \_ -> pure (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100)))),
+                loadTotpEnrollment = \_ -> pure (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100) Nothing))),
                 confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \receivedAccountId -> receivedAccountId `seq` pure (Right [recoveryCodeHashText recoveryCodeHash]),
                 consumeRecoveryCodeHash = \receivedAccountId receivedHash receivedNow -> do
@@ -87,7 +125,8 @@ spec = do
                         :| [receivedHash `shouldBe` recoveryCodeHashText recoveryCodeHash, receivedNow `shouldBe` 500]
                     )
                   writeIORef consumedHashReference (Just receivedHash)
-                  pure (Right True)
+                  pure (Right True),
+                markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
               }
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (RecoveryCodeLoginProof recoveryCode)) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
@@ -103,16 +142,17 @@ spec = do
                 loadTotpEnrollment = \_ -> pure enrollment,
                 confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
-                consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption"
+                consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+                markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
               }
       completeWith (enrollmentStore (Right Nothing)) validProof `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
-      completeWith (enrollmentStore (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100))))) validProof `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
+      completeWith (enrollmentStore (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100) Nothing)))) validProof `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
       completeWith (enrollmentStore (Left (MfaStoreUnavailable "database unavailable"))) validProof `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "database unavailable")
-      completeWith (enrollmentStore (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" Nothing)))) validProof `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
+      completeWith (enrollmentStore (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" Nothing Nothing)))) validProof `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
       let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
           recoveryCodeHash = required "recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
           racedStore =
-            (enrollmentStore (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100)))))
+            (enrollmentStore (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100) Nothing))))
               { loadUnusedRecoveryCodeHashes = \_ -> pure (Right [recoveryCodeHashText recoveryCodeHash]),
                 consumeRecoveryCodeHash = \_ _ _ -> pure (Right False)
               }
@@ -121,7 +161,7 @@ spec = do
     it "preserves every password and second-factor state without authenticating early" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 8))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
-          confirmedEnrollment = StoredTotpEnrollment encryptedSecret (Just 100)
+          confirmedEnrollment = StoredTotpEnrollment encryptedSecret (Just 100) Nothing
           validProof = TotpLoginProof (totpCode 123456 secret)
           completeWith credentialStoreValue mfaStoreValue = completePasswordLogin credentialStoreValue (secondFactorContextFor mfaStoreValue validProof) emailAddress (mkPassword "correct horse battery staple")
       completeWith (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore `shouldReturnEqual` PasswordMfaLoginEmailVerificationRequired accountId
@@ -131,14 +171,14 @@ spec = do
       completeWith (credentialStore (Right (Just verifiedCredential))) secondLookupStore `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreCorruptData "second lookup failed")
       noEnrollmentStore <- storeWithLookups [Right (Just confirmedEnrollment), Right Nothing]
       completeWith (credentialStore (Right (Just verifiedCredential))) noEnrollmentStore `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
-      pendingEnrollmentStore <- storeWithLookups [Right (Just confirmedEnrollment), Right (Just (StoredTotpEnrollment encryptedSecret Nothing))]
+      pendingEnrollmentStore <- storeWithLookups [Right (Just confirmedEnrollment), Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))]
       completeWith (credentialStore (Right (Just verifiedCredential))) pendingEnrollmentStore `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
       let invalidUtf8Envelope = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 9))) (mkSecretPlaintext (ByteString.pack [255])))
-      completeWith (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment invalidUtf8Envelope (Just 100))))) `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
+      completeWith (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment invalidUtf8Envelope (Just 100) Nothing)))) `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
 
     it "rejects malformed, missing, and unavailable recovery-code state" $ do
       let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
-          confirmedEnrollment = StoredTotpEnrollment "recovery-code-login" (Just 100)
+          confirmedEnrollment = StoredTotpEnrollment "recovery-code-login" (Just 100) Nothing
           completeWith store = completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) emailAddress (mkPassword "correct horse battery staple")
           storeFor recoveryResult consumptionResult =
             MfaStore
@@ -146,7 +186,8 @@ spec = do
                 loadTotpEnrollment = \_ -> pure (Right (Just confirmedEnrollment)),
                 confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
                 loadUnusedRecoveryCodeHashes = \_ -> pure recoveryResult,
-                consumeRecoveryCodeHash = \_ _ _ -> pure consumptionResult
+                consumeRecoveryCodeHash = \_ _ _ -> pure consumptionResult,
+                markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
               }
       completeWith (storeFor (Left (MfaStoreUnavailable "recovery lookup failed")) (Right True)) `shouldReturnEqual` PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "recovery lookup failed")
       completeWith (storeFor (Right ["not-a-password-hash"]) (Right True)) `shouldReturnEqual` PasswordMfaLoginCorruptEnrollment
@@ -427,7 +468,8 @@ mfaStore result =
       loadTotpEnrollment = \requestedAccountId -> requestedAccountId `seq` pure result,
       confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
       loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
-      consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption"
+      consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+      markTotpCodeUsed = \_ _ -> pure (Right True)
     }
 
 unexpectedMfaStore :: MfaStore
@@ -449,7 +491,7 @@ unverifiedCredential :: AccountCredential
 unverifiedCredential = AccountCredential accountId passwordHash False
 
 confirmedMfaStore :: MfaStore
-confirmedMfaStore = mfaStore (Right (Just (StoredTotpEnrollment "encrypted" (Just 100))))
+confirmedMfaStore = mfaStore (Right (Just (StoredTotpEnrollment "encrypted" (Just 100) Nothing)))
 
 storeWithLookups :: [Either MfaStoreError (Maybe StoredTotpEnrollment)] -> IO MfaStore
 storeWithLookups lookupResults = do
@@ -464,7 +506,8 @@ storeWithLookups lookupResults = do
             result : remainingResults -> modifyIORef' resultsReference (const remainingResults) >> pure result,
         confirmTotpEnrollment = \_ _ _ -> error "unexpected enrollment confirmation",
         loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
-        consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption"
+        consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+        markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
       }
 
 encryptionKey :: SecretEncryptionKey

@@ -3854,6 +3854,7 @@ spec = do
       assertMfaUnavailable (confirmTotpEnrollment unconfiguredMfaStore accountId ("hash" :| []) 0)
       assertMfaUnavailable (loadUnusedRecoveryCodeHashes unconfiguredMfaStore accountId)
       assertMfaUnavailable (consumeRecoveryCodeHash unconfiguredMfaStore accountId "hash" 0)
+      assertMfaUnavailable (markTotpCodeUsed unconfiguredMfaStore accountId 0)
       let unconfiguredCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow
       findAccountCredentialByEmail unconfiguredCredentialStore (requiredEmailAddress "person@example.test")
         >>= \case
@@ -4071,10 +4072,11 @@ spec = do
           mfaStore =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment save"),
-                loadTotpEnrollment = \account -> (account `shouldBe` accountId) >> pure (Right (Just (StoredTotpEnrollment encryptedTotpSecret (Just 1)))),
+                loadTotpEnrollment = \account -> (account `shouldBe` accountId) >> pure (Right (Just (StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing))),
                 confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (Right True)
               }
           sessionStore =
             AccountSessionStore
@@ -4142,7 +4144,7 @@ spec = do
           unverifiedCredential = AccountCredential accountId passwordHash False
           totpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret = requiredSecretEnvelope (Secret.encryptSecretWithNonce (totpEncryptionKey defaultAppEnvironmentConfig) (requiredSecretNonce (ByteString.replicate 12 8)) (Secret.mkSecretPlaintext (TextEncoding.encodeUtf8 (Totp.renderTotpSecret totpSecret))))
-          confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1)
+          confirmedEnrollment = StoredTotpEnrollment encryptedTotpSecret (Just 1) Nothing
           loginRequest requestContext fields = typedAccountActionRequest "POST" "/login" fields requestContext
           spanishLoginRequest fields = typedAccountActionRequest "POST" "/es/login" fields spanishRequestContext
           logoutRequest = typedAccountActionRequest "POST" "/logout" []
@@ -4155,7 +4157,8 @@ spec = do
                       loadTotpEnrollment = \_ -> pure enrollmentResult,
                       confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected enrollment confirmation"),
                       loadUnusedRecoveryCodeHashes = \_ -> pure (Right []),
-                      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                      markTotpCodeUsed = \_ _ -> pure (Right True)
                     },
                 accountWorkflowSessionStore =
                   AccountSessionStore
@@ -4263,7 +4266,7 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Left (MfaStoreUnavailable "down")) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
-      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1)))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
+      handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1) Nothing))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
       let failingLoginAttemptStore =
             LoginAttemptStore
@@ -4332,14 +4335,15 @@ spec = do
                   pure (Right True),
                 loadTotpEnrollment = \receivedAccountId -> do
                   receivedAccountId `shouldBe` accountId
-                  fmap (Right . fmap (`StoredTotpEnrollment` Nothing)) (readIORef encryptedSecretReference),
+                  fmap (Right . fmap (\secretValue -> StoredTotpEnrollment secretValue Nothing Nothing)) (readIORef encryptedSecretReference),
                 confirmTotpEnrollment = \receivedAccountId hashes receivedNow -> do
                   receivedAccountId `shouldBe` accountId
                   receivedNow `shouldBe` 500
                   writeIORef confirmationHashesReference (toList hashes)
                   pure (Right True),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
           workflow =
             unavailableAccountWorkflow
@@ -4417,7 +4421,8 @@ spec = do
                 loadTotpEnrollment = \_ -> pure loadResult,
                 confirmTotpEnrollment = \_ _ _ -> pure confirmationResult,
                 loadUnusedRecoveryCodeHashes = \_ -> error "unexpected recovery-code lookup",
-                consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption"
+                consumeRecoveryCodeHash = \_ _ _ -> error "unexpected recovery-code consumption",
+                markTotpCodeUsed = \_ _ -> error "unexpected TOTP counter update"
               }
           validTotpSecret = fromMaybe (error "expected TOTP secret") (Totp.mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           encryptedTotpSecret =
@@ -4434,19 +4439,19 @@ spec = do
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Enter a six-digit authenticator code"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Start a new authenticator enrollment"
       expect (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
-      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
-      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "That enrollment can no longer be confirmed"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "temporarily unavailable"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100) Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "That enrollment can no longer be confirmed"
       expect (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 Nothing "Choose an enrollment action"
       expectSpanish (mfaStoreFor (Right False) (Right Nothing) (Right False)) [("intent", "start")] 422 Nothing "Verifica tu direccion de correo"
       expectSpanish (mfaStoreFor (Left (MfaStoreUnavailable "down")) (Right Nothing) (Right False)) [("intent", "start")] 503 Nothing "no esta disponible temporalmente"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm")] 422 (Just "mfa-code") "Introduce un codigo de autenticador"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Inicia un nuevo registro"
       expectSpanish (mfaStoreFor (Right True) (Left (MfaStoreCorruptData "bad enrollment")) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
-      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
-      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100)))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Ese registro ya no se puede confirmar"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 503 (Just "mfa-code") "no esta disponible temporalmente"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment "not-an-envelope" (Just 100) Nothing))) (Right False)) [("intent", "confirm"), ("code", "123456")] 422 (Just "mfa-code") "Ese registro ya no se puede confirmar"
       expectSpanish (mfaStoreFor (Right True) (Right Nothing) (Right False)) [("intent", "other")] 422 Nothing "Elige una accion de registro"
-      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
-      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
+      expect (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "That authenticator code is invalid"
+      expectSpanish (mfaStoreFor (Right True) (Right (Just (StoredTotpEnrollment encryptedTotpSecret Nothing Nothing))) (Right False)) [("intent", "confirm"), ("code", "000000")] 422 (Just "mfa-code") "Ese codigo de autenticador no es valido"
       let unusedMfaStore = mfaStoreFor (Right True) (Right Nothing) (Right False)
           withSessionStore sessionStore = (workflowFor unusedMfaStore) {accountWorkflowMfaEnrollmentSessionStore = sessionStore}
           unavailableSessionStore =
@@ -5143,7 +5148,8 @@ spec = do
               "ALTER TABLE web_api.accounts ADD COLUMN IF NOT EXISTS display_name TEXT;",
               "CREATE UNIQUE INDEX IF NOT EXISTS accounts_username_lower_unique ON web_api.accounts (lower(username)) WHERE username IS NOT NULL;",
               "CREATE TABLE IF NOT EXISTS web_api.email_verifications (token_digest TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, email_normalized TEXT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL);",
-              "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL);",
+              "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL, last_used_totp_counter BIGINT);",
+              "ALTER TABLE web_api.account_totp ADD COLUMN IF NOT EXISTS last_used_totp_counter BIGINT;",
               "CREATE TABLE IF NOT EXISTS web_api.account_recovery_codes (account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
               "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
               "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.accounts TO \"" <> databaseUser postgresTestConfig <> "\";",

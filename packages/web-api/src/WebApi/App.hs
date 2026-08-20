@@ -473,7 +473,8 @@ unavailableMfaStore =
       loadTotpEnrollment = const (unavailableResult mfaPersistenceUnavailable),
       confirmTotpEnrollment = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
       loadUnusedRecoveryCodeHashes = const (unavailableResult mfaPersistenceUnavailable),
-      consumeRecoveryCodeHash = \_ _ _ -> unavailableResult mfaPersistenceUnavailable
+      consumeRecoveryCodeHash = \_ _ _ -> unavailableResult mfaPersistenceUnavailable,
+      markTotpCodeUsed = \_ _ -> unavailableResult mfaPersistenceUnavailable
     }
 
 unavailableAccountCredentialStore :: AccountCredentialStore

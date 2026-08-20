@@ -44,6 +44,11 @@
    declared response representation when its response type can carry the failure sentence, instead
    of always answering `text/plain`; an endpoint whose response type cannot carry it gets an empty
    body with no `Content-Type` claim rather than a mismatched one.
+10. TOTP login verification now compares codes with a constant-work comparison instead of derived
+    `Eq`, and rejects a code whose matched time-step counter is at or below the account's last
+    accepted counter (persisted in a new `account_totp.last_used_totp_counter` column, updated by an
+    atomic conditional store operation), closing the ~90-second window in which an observed code
+    could previously be replayed against the login endpoint.
 
 ## 0.1.1.0
 

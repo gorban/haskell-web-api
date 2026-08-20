@@ -84,6 +84,20 @@ spec = do
                ]
         )
 
+    it "reports the specific counter a code matched, for replay tracking" $ do
+      let nowSeconds = 60
+          previousPeriodCode = totpCode (nowSeconds - 30) rfcSecret
+          currentPeriodCode = totpCode nowSeconds rfcSecret
+          followingPeriodCode = totpCode (nowSeconds + 30) rfcSecret
+          outsideWindowCode = totpCode (nowSeconds + 60) rfcSecret
+      expectAll
+        ( (validateTotpCodeCounter nowSeconds 1 rfcSecret previousPeriodCode `shouldBe` Just 1)
+            :| [ validateTotpCodeCounter nowSeconds 1 rfcSecret currentPeriodCode `shouldBe` Just 2,
+                 validateTotpCodeCounter nowSeconds 1 rfcSecret followingPeriodCode `shouldBe` Just 3,
+                 validateTotpCodeCounter nowSeconds 1 rfcSecret outsideWindowCode `shouldBe` Nothing
+               ]
+        )
+
 rfcSecret :: TotpSecret
 rfcSecret = required (mkTotpSecret "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
 

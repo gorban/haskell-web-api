@@ -42,7 +42,7 @@ import HarchWeb.LoginProtection
 import HarchWeb.Password (Password, PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, verifyPassword)
 import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
-import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCode)
+import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCodeCounter)
 import HarchWeb.Username (Username, usernameText)
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
 
@@ -360,24 +360,40 @@ completeStoredEnrollment :: SecondFactorContext -> AccountId -> StoredTotpEnroll
 completeStoredEnrollment context accountId enrollment =
   case storedTotpConfirmedAtNanoseconds enrollment of
     Nothing -> pure (PasswordMfaLoginEnrollmentRequired accountId)
-    Just _ -> verifyProof context accountId (storedTotpEncryptedSecret enrollment)
+    Just _ -> verifyProof context accountId enrollment
 
-verifyProof :: SecondFactorContext -> AccountId -> Text -> IO PasswordMfaLoginResult
-verifyProof context accountId encryptedSecret =
+verifyProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> IO PasswordMfaLoginResult
+verifyProof context accountId enrollment =
   case secondFactorProof context of
     TotpLoginProof suppliedCode ->
-      pure (verifyTotpProof context accountId encryptedSecret suppliedCode)
+      verifyTotpProof context accountId enrollment suppliedCode
     RecoveryCodeLoginProof suppliedCode ->
       completeRecoveryCode context accountId suppliedCode
 
-verifyTotpProof :: SecondFactorContext -> AccountId -> Text -> TotpCode -> PasswordMfaLoginResult
-verifyTotpProof context accountId encryptedSecret suppliedCode =
-  case decodeTotpSecret (secondFactorEncryptionKey context) encryptedSecret of
-    Nothing -> PasswordMfaLoginCorruptEnrollment
+-- | Rejects a counter at or below 'storedTotpLastUsedCounter' before ever
+-- consulting the store again, closing the replay window a bare
+-- 'HarchWeb.Totp.validateTotpCode' boolean leaves open for the rest of its
+-- skew window. 'markTotpCodeUsed' is itself an atomic conditional update
+-- (mirroring 'consumeRecoveryCodeHash'), so a concurrent request racing to
+-- accept the same or an older counter for this account also loses.
+verifyTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO PasswordMfaLoginResult
+verifyTotpProof context accountId enrollment suppliedCode =
+  case decodeTotpSecret (secondFactorEncryptionKey context) (storedTotpEncryptedSecret enrollment) of
+    Nothing -> pure PasswordMfaLoginCorruptEnrollment
     Just secret ->
-      if validateTotpCode (secondFactorNowSeconds context) 1 secret suppliedCode
-        then PasswordMfaLoginAccepted accountId
-        else PasswordMfaLoginRejected
+      case validateTotpCodeCounter (secondFactorNowSeconds context) 1 secret suppliedCode of
+        Nothing -> pure PasswordMfaLoginRejected
+        Just matchedCounter
+          | maybe False (matchedCounter <=) (storedTotpLastUsedCounter enrollment) -> pure PasswordMfaLoginRejected
+          | otherwise ->
+              acceptOrReject
+                <$> markTotpCodeUsed (secondFactorMfaStore context) accountId matchedCounter
+  where
+    acceptOrReject markResult =
+      case markResult of
+        Left storeError -> PasswordMfaLoginMfaStoreError storeError
+        Right True -> PasswordMfaLoginAccepted accountId
+        Right False -> PasswordMfaLoginRejected
 
 -- | Throttled the same way as the password step, since a submitted code is
 -- checked against up to eight stored Argon2id hashes

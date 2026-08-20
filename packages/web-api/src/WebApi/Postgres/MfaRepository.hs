@@ -11,6 +11,7 @@ import Core.Control.Error (liftEitherWith)
 import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Word (Word64)
 import HarchWeb.Account (AccountId, accountIdText)
 import Text.Read (readMaybe)
 import WebApi.Config (DatabaseConfig)
@@ -35,7 +36,8 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
       loadTotpEnrollment = loadEnrollment,
       confirmTotpEnrollment = confirmEnrollment,
       loadUnusedRecoveryCodeHashes = loadRecoveryCodeHashes,
-      consumeRecoveryCodeHash = consumeRecoveryCode
+      consumeRecoveryCodeHash = consumeRecoveryCode,
+      markTotpCodeUsed = markCodeUsed
     }
   where
     saveEnrollment accountId encryptedSecret now =
@@ -63,6 +65,11 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
         (runQuery databaseConfig consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)])
         (decodeMatchingAccount "unexpected recovery-code consumption result: " accountId)
 
+    markCodeUsed accountId counter =
+      runMfaStoreQuery
+        (runQuery databaseConfig markTotpCodeUsedQuery [accountIdText accountId, Text.pack (show counter)])
+        (decodeMatchingAccount "unexpected TOTP counter update result: " accountId)
+
 runMfaStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either MfaStoreError value) -> IO (Either MfaStoreError value)
 runMfaStoreQuery query decodeRows =
   runExceptT $ do
@@ -77,17 +84,28 @@ decodeMatchingAccount errorPrefix accountId rows =
       | returnedAccountId == accountIdText accountId -> Right True
     _ -> Left (MfaStoreCorruptData (errorPrefix <> Text.pack (show rows)))
 
+-- The `$!` below (on an already-WHNF 'Text' literal) exists for the same HPC
+-- CSE-sharing reason documented on 'WebApi.Login.recordCredentialCheckOutcome'.
+{-# ANN decodeTotpEnrollment ("HLint: ignore Redundant $!" :: String) #-}
 decodeTotpEnrollment :: [[Text]] -> Either MfaStoreError (Maybe StoredTotpEnrollment)
 decodeTotpEnrollment rows =
   case rows of
     [] -> Right Nothing
-    [[encryptedSecret, ""]] -> Right (Just (StoredTotpEnrollment encryptedSecret Nothing))
-    [[encryptedSecret, confirmedAtValue]] ->
-      maybe
-        (Left (MfaStoreCorruptData "TOTP enrollment has an invalid confirmation timestamp"))
-        (Right . Just . StoredTotpEnrollment encryptedSecret . Just)
-        (readMaybe (Text.unpack confirmedAtValue))
+    [[encryptedSecret, confirmedAtValue, lastUsedCounterValue]] ->
+      Just
+        <$> ( StoredTotpEnrollment encryptedSecret
+                <$> decodeOptionalWord64 "confirmation timestamp" confirmedAtValue
+                <*> (decodeOptionalWord64 $! "last-used counter") lastUsedCounterValue
+            )
     _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
+
+decodeOptionalWord64 :: Text -> Text -> Either MfaStoreError (Maybe Word64)
+decodeOptionalWord64 _ "" = Right Nothing
+decodeOptionalWord64 label value =
+  maybe
+    (Left (MfaStoreCorruptData ("TOTP enrollment has an invalid " <> label)))
+    (Right . Just)
+    (readMaybe (Text.unpack value))
 
 decodeRecoveryCodeHashes :: [[Text]] -> Either MfaStoreError [Text]
 decodeRecoveryCodeHashes rows =
@@ -115,11 +133,12 @@ decodeSingleColumn row =
 -- "not eligible to start" — the same error a confirmed account should now
 -- also receive, reusing the existing interpretation rather than adding a new
 -- one.
-saveUnconfirmedTotpEnrollmentQuery, loadTotpEnrollmentQuery, loadUnusedRecoveryCodeHashesQuery, consumeRecoveryCodeHashQuery :: Text
-saveUnconfirmedTotpEnrollmentQuery = "INSERT INTO web_api.account_totp (account_id, encrypted_secret, created_at_nanoseconds) SELECT $1, convert_to($2, 'UTF8'), $3 WHERE EXISTS (SELECT 1 FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM web_api.account_totp WHERE account_id = $1 AND confirmed_at_nanoseconds IS NOT NULL) ON CONFLICT (account_id) DO UPDATE SET encrypted_secret = EXCLUDED.encrypted_secret, confirmed_at_nanoseconds = NULL, created_at_nanoseconds = EXCLUDED.created_at_nanoseconds RETURNING account_id;"
-loadTotpEnrollmentQuery = "SELECT convert_from(encrypted_secret, 'UTF8'), COALESCE(confirmed_at_nanoseconds::TEXT, '') FROM web_api.account_totp WHERE account_id = $1;"
+saveUnconfirmedTotpEnrollmentQuery, loadTotpEnrollmentQuery, loadUnusedRecoveryCodeHashesQuery, consumeRecoveryCodeHashQuery, markTotpCodeUsedQuery :: Text
+saveUnconfirmedTotpEnrollmentQuery = "INSERT INTO web_api.account_totp (account_id, encrypted_secret, created_at_nanoseconds) SELECT $1, convert_to($2, 'UTF8'), $3 WHERE EXISTS (SELECT 1 FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM web_api.account_totp WHERE account_id = $1 AND confirmed_at_nanoseconds IS NOT NULL) ON CONFLICT (account_id) DO UPDATE SET encrypted_secret = EXCLUDED.encrypted_secret, confirmed_at_nanoseconds = NULL, created_at_nanoseconds = EXCLUDED.created_at_nanoseconds, last_used_totp_counter = NULL RETURNING account_id;"
+loadTotpEnrollmentQuery = "SELECT convert_from(encrypted_secret, 'UTF8'), COALESCE(confirmed_at_nanoseconds::TEXT, ''), COALESCE(last_used_totp_counter::TEXT, '') FROM web_api.account_totp WHERE account_id = $1;"
 loadUnusedRecoveryCodeHashesQuery = "SELECT code_hash FROM web_api.account_recovery_codes WHERE account_id = $1 AND used_at_nanoseconds IS NULL ORDER BY code_hash ASC;"
 consumeRecoveryCodeHashQuery = "UPDATE web_api.account_recovery_codes SET used_at_nanoseconds = $3 WHERE account_id = $1 AND code_hash = $2 AND used_at_nanoseconds IS NULL RETURNING account_id;"
+markTotpCodeUsedQuery = "UPDATE web_api.account_totp SET last_used_totp_counter = $2 WHERE account_id = $1 AND (last_used_totp_counter IS NULL OR last_used_totp_counter < $2) RETURNING account_id;"
 
 confirmTotpEnrollmentQuery :: NonEmpty.NonEmpty Text -> Text
 confirmTotpEnrollmentQuery recoveryCodeHashes =

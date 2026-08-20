@@ -10,6 +10,7 @@ module HarchWeb.Totp
     totpCode,
     totpCodeText,
     validateTotpCode,
+    validateTotpCodeCounter,
   )
 where
 
@@ -20,9 +21,13 @@ import Data.Bits (shiftL, shiftR, (.&.), (.|.))
 import Data.ByteArray (convert)
 import Data.ByteString qualified as ByteString
 import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit, ord)
+import Data.List (find)
+import Data.Maybe (isJust)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word16, Word32, Word64, Word8)
+import HarchWeb.Security.ConstantTime (constantWorkEquals)
 
 newtype TotpSecret = TotpSecret ByteString.ByteString
   deriving (Eq)
@@ -57,13 +62,31 @@ totpCode nowSeconds (TotpSecret secret) = totpCodeForCounter secret (nowSeconds 
 
 -- | Accepts a code from the current TOTP period and up to the requested
 -- number of adjacent periods on either side. The caller chooses the bounded
--- skew window appropriate for its authentication policy.
+-- skew window appropriate for its authentication policy. This does not
+-- defend against replaying an observed code for the rest of its skew
+-- window; a caller authenticating a login should use
+-- 'validateTotpCodeCounter' instead and reject a counter it has already
+-- accepted.
 validateTotpCode :: Word64 -> Word8 -> TotpSecret -> TotpCode -> Bool
 validateTotpCode nowSeconds maxSkewPeriods secret suppliedCode =
-  any (matchesCounter secret suppliedCode) (windowCounters (nowSeconds `div` 30) maxSkewPeriods)
+  isJust (validateTotpCodeCounter nowSeconds maxSkewPeriods secret suppliedCode)
+
+-- | Like 'validateTotpCode', but returns the specific counter the supplied
+-- code matched instead of only whether one did. A caller that persists the
+-- highest counter it has already accepted (per account) and rejects any
+-- counter at or below that value closes the replay window a bare boolean
+-- result cannot: without it, an observed code stays valid for the rest of
+-- its skew window against every future request.
+validateTotpCodeCounter :: Word64 -> Word8 -> TotpSecret -> TotpCode -> Maybe Word64
+validateTotpCodeCounter nowSeconds maxSkewPeriods secret suppliedCode =
+  find (matchesCounter secret suppliedCode) (windowCounters (nowSeconds `div` 30) maxSkewPeriods)
 
 matchesCounter :: TotpSecret -> TotpCode -> Word64 -> Bool
-matchesCounter (TotpSecret secret) suppliedCode counter = totpCodeForCounter secret counter == suppliedCode
+matchesCounter (TotpSecret secret) suppliedCode counter =
+  constantWorkEquals (totpCodeBytes (totpCodeForCounter secret counter)) (totpCodeBytes suppliedCode)
+
+totpCodeBytes :: TotpCode -> ByteString.ByteString
+totpCodeBytes (TotpCode code) = TextEncoding.encodeUtf8 code
 
 totpCodeForCounter :: ByteString.ByteString -> Word64 -> TotpCode
 totpCodeForCounter secret counter =

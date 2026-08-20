@@ -42,11 +42,12 @@ spec = do
                   pure (Right True),
                 loadTotpEnrollment = \_ -> do
                   encryptedSecret <- readIORef encryptedSecretReference
-                  pure (Right (fmap (`StoredTotpEnrollment` Nothing) encryptedSecret)),
+                  pure (Right (fmap (\secretValue -> StoredTotpEnrollment secretValue Nothing Nothing) encryptedSecret)),
                 confirmTotpEnrollment = \receivedAccountId hashes _ ->
                   pure (Right (receivedAccountId == accountId && length hashes == 8 && not (any Text.null hashes))),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
       started <- startMfaEnrollment store encryptionKey accountId 100
       case started of
@@ -72,7 +73,8 @@ spec = do
                 loadTotpEnrollment = \_ -> pure (error "unexpected load"),
                 confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
       startMfaEnrollmentWith (pure secret) (\_ plaintext -> if plaintext == "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP" then pure (Just "encrypted-secret") else pure Nothing) store encryptionKey accountId 100
         `shouldReturnEqual` Right (MfaEnrollmentStart secret)
@@ -97,13 +99,14 @@ spec = do
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> pure (error "unexpected save"),
                 loadTotpEnrollment = \receivedAccountId ->
                   if receivedAccountId == accountId
-                    then pure (Right (Just (StoredTotpEnrollment encryptedSecret Nothing)))
+                    then pure (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing)))
                     else pure (error "unexpected account"),
                 confirmTotpEnrollment = \receivedAccountId hashes now -> do
                   modifyIORef' confirmationCallsReference ((receivedAccountId, hashes, now) :)
                   pure (Right True),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
           hashCode recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
       confirmation <- confirmMfaEnrollmentWith (confirmationEnvironment (nextFrom recoveryCodes) hashCode store) accountId (totpCode 123456 secret)
@@ -130,7 +133,8 @@ spec = do
                 loadTotpEnrollment = \_ -> pure enrollment,
                 confirmTotpEnrollment = \_ _ _ -> pure confirmation,
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+                consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+                markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
               }
           oneCode = requiredRecoveryCode "0123456789ABCDEF0123"
           successfulHash recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
@@ -140,22 +144,22 @@ spec = do
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreUnavailable "unavailable"))
       confirmWith (validStore (Right Nothing) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentNotFound
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing))) (Right True)) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment "not-an-envelope" Nothing Nothing))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentCorruptSecret
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment (requiredEncryptedPlaintext (ByteString.pack [255])) Nothing))) (Right True)) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment (requiredEncryptedPlaintext (ByteString.pack [255])) Nothing Nothing))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentCorruptSecret
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment (requiredEncryptedPlaintext "not-a-valid-totp-secret") Nothing))) (Right True)) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment (requiredEncryptedPlaintext "not-a-valid-totp-secret") Nothing Nothing))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentCorruptSecret
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 1)))) (Right True)) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 1) Nothing))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentConfirmationRejected
-      confirmMfaEnrollmentWith (confirmationEnvironment (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True))) accountId (requiredTotpCode "000000")
+      confirmMfaEnrollmentWith (confirmationEnvironment (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right True))) accountId (requiredTotpCode "000000")
         `shouldReturnEqual` Left MfaEnrollmentInvalidCode
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) (pure oneCode) failingHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right True)) (pure oneCode) failingHash
         `shouldReturnEqual` Left MfaEnrollmentRecoveryCodeHashingFailed
       readIORef hashCallsReference `shouldReturn` 1
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Left (MfaStoreCorruptData "bad confirmation"))) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Left (MfaStoreCorruptData "bad confirmation"))) (pure oneCode) successfulHash
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreCorruptData "bad confirmation"))
-      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right False)) (pure oneCode) successfulHash
+      confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing Nothing))) (Right False)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentConfirmationRejected
 
     it "keeps enrollment results comparable without rendering their secrets" $ do
@@ -184,7 +188,8 @@ storeWithSave result =
       loadTotpEnrollment = \_ -> pure (error "unexpected load"),
       confirmTotpEnrollment = \_ _ _ -> pure (error "unexpected confirmation"),
       loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
-      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
+      consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption"),
+      markTotpCodeUsed = \_ _ -> pure (error "unexpected TOTP counter update")
     }
 
 nextFrom :: NonEmpty RecoveryCode -> IO RecoveryCode
