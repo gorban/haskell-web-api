@@ -2625,7 +2625,7 @@ spec = do
           productionRuntimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
           >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
-        let sampleRequestObservability = Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind []
+        let sampleRequestObservability = Observability.buildRequestObservability Observability.RequestIdentity {Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET", Observability.requestIdentityScheme = "http", Observability.requestIdentityPath = "/api/status", Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"} 200 Observability.BodyResponseKind []
         runtimeRequestObservabilityReporter Production defaultAppConfig sampleRequestObservability
         runtimeRequestObservabilityReporter Development defaultAppConfig sampleRequestObservability
         HarchWeb.reportConnectionObservability
@@ -8846,10 +8846,12 @@ spec = do
       HarchWeb.reportRequestObservability
         pureApplication
         ( Observability.buildRequestObservability
-            "GET"
-            "http"
-            "/"
-            "/"
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                Observability.requestIdentityScheme = "http",
+                Observability.requestIdentityPath = "/",
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/"
+              }
             200
             Observability.PageResponseKind
             []
@@ -9167,10 +9169,12 @@ spec = do
       HarchWeb.reportRequestObservability
         runtimeApplication
         ( Observability.buildRequestObservability
-            "GET"
-            "http"
-            "/second"
-            "/second"
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                Observability.requestIdentityScheme = "http",
+                Observability.requestIdentityPath = "/second",
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/second"
+              }
             500
             Observability.BodyResponseKind
             [ Observability.ObservabilityAttribute
@@ -9212,7 +9216,7 @@ spec = do
                 defaultAppEnvironmentConfig
         HarchWeb.reportRequestObservability
           runtimeApplication
-          (Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind [])
+          (Observability.buildRequestObservability Observability.RequestIdentity {Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET", Observability.requestIdentityScheme = "http", Observability.requestIdentityPath = "/api/status", Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"} 200 Observability.BodyResponseKind [])
         CapturedOtlpRequest
           { capturedOtlpMethod = requestMethod,
             capturedOtlpPath = requestPath,
@@ -9251,7 +9255,7 @@ spec = do
                 defaultAppEnvironmentConfig
         HarchWeb.reportRequestObservability
           runtimeApplication
-          (Observability.buildRequestObservability "GET" "http" "/api/second" "/api/second" 500 Observability.BodyResponseKind [])
+          (Observability.buildRequestObservability Observability.RequestIdentity {Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET", Observability.requestIdentityScheme = "http", Observability.requestIdentityPath = "/api/second", Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/second"} 500 Observability.BodyResponseKind [])
         CapturedOtlpRequest
           { capturedOtlpMethod = requestMethod,
             capturedOtlpPath = requestPath
@@ -9280,7 +9284,7 @@ spec = do
                 (const defaultPageRepository)
                 defaultAppEnvironmentConfig
             floodObservability =
-              Observability.buildRequestObservability "GET" "http" "/api/status" "/api/status" 200 Observability.BodyResponseKind []
+              Observability.buildRequestObservability Observability.RequestIdentity {Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET", Observability.requestIdentityScheme = "http", Observability.requestIdentityPath = "/api/status", Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"} 200 Observability.BodyResponseKind []
         floodStartedAt <- getMonotonicTimeNSec
         -- One export occupies the worker for the full 3s collector delay, so
         -- the other 279 calls must pile into the 256-item bounded queue —

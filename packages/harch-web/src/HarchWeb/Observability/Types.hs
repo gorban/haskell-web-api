@@ -11,6 +11,7 @@ module HarchWeb.Observability.Types
     ObservabilityStartupPlan (..),
     OtlpExporter (..),
     OtlpExporterStartup (..),
+    RequestIdentity (..),
     RequestTraceContext (..),
     RequestObservability (..),
     RequestSpan (..),
@@ -154,18 +155,31 @@ requestSpanName :: SpanMethodLabel -> SpanRoutePath -> Text
 requestSpanName (SpanMethodLabel method) (SpanRoutePath routePath) =
   Text.concat [method, " ", requestSpanOperationName routePath]
 
+-- | The four values identifying one HTTP request for observability: its
+-- method and matched route path reuse this module's existing
+-- 'SpanMethodLabel'/'SpanRoutePath' newtypes so a caller cannot transpose
+-- them with the request's own scheme or raw path, which have no comparable
+-- adjacent-newtype risk with each other.
+data RequestIdentity = RequestIdentity
+  { requestIdentityMethod :: SpanMethodLabel,
+    requestIdentityScheme :: Text,
+    requestIdentityPath :: Text,
+    requestIdentityRoutePath :: SpanRoutePath
+  }
+
 requestObservabilityAttributes ::
-  Text ->
-  Text ->
-  Text ->
-  Text ->
+  RequestIdentity ->
   Int ->
   ResponseKind ->
   [ObservabilityAttribute] ->
   [ObservabilityAttribute]
-requestObservabilityAttributes method scheme requestPath routePath statusCode responseKind extraAttributes =
+requestObservabilityAttributes identity statusCode responseKind extraAttributes =
   commonAttributes ++ extraAttributes
   where
+    SpanMethodLabel method = requestIdentityMethod identity
+    SpanRoutePath routePath = requestIdentityRoutePath identity
+    scheme = requestIdentityScheme identity
+    requestPath = requestIdentityPath identity
     commonAttributes =
       [ ObservabilityAttribute
           { attributeName = "http.request.method",
@@ -194,20 +208,17 @@ requestObservabilityAttributes method scheme requestPath routePath statusCode re
       ]
 
 buildRequestObservability ::
-  Text ->
-  Text ->
-  Text ->
-  Text ->
+  RequestIdentity ->
   Int ->
   ResponseKind ->
   [ObservabilityAttribute] ->
   RequestObservability
-buildRequestObservability method scheme requestPath routePath statusCode responseKind extraAttributes =
-  let attributes = requestObservabilityAttributes method scheme requestPath routePath statusCode responseKind extraAttributes
+buildRequestObservability identity statusCode responseKind extraAttributes =
+  let attributes = requestObservabilityAttributes identity statusCode responseKind extraAttributes
    in RequestObservability
         { observabilityRequestSpan =
             RequestSpan
-              { requestSpanDisplayName = requestSpanName (mkSpanMethodLabel method) (mkSpanRoutePath routePath),
+              { requestSpanDisplayName = requestSpanName (requestIdentityMethod identity) (requestIdentityRoutePath identity),
                 requestSpanAttributes = attributes
               },
           observabilityHttpServerMetrics =

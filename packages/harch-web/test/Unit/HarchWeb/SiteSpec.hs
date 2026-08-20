@@ -60,10 +60,12 @@ spec = do
       let siteApplication = buildSiteApplication sampleSite
           requestObservability =
             Observability.buildRequestObservability
-              "GET"
-              "http"
-              "/"
-              "/"
+              Observability.RequestIdentity
+                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                  Observability.requestIdentityScheme = "http",
+                  Observability.requestIdentityPath = "/",
+                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/"
+                }
               200
               Observability.PageResponseKind
               []

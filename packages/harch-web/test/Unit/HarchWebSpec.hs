@@ -1993,10 +1993,12 @@ spec = do
       reportRequestObservability
         sampleApplication
         ( Observability.buildRequestObservability
-            "GET"
-            "http"
-            "/known"
-            "/known"
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                Observability.requestIdentityScheme = "http",
+                Observability.requestIdentityPath = "/known",
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
+              }
             200
             Observability.PageResponseKind
             []
@@ -3226,10 +3228,12 @@ spec = do
       capturedRequestObservability <- readIORef requestObservabilityReference
       map stripVolatileRequestTiming capturedRequestObservability
         `shouldBe` [ Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/second"
-                       "/app/second"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/second",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/app/second"
+                         }
                        308
                        Observability.BodyResponseKind
                        [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
@@ -3276,10 +3280,12 @@ spec = do
         `shouldReturn` [ Observability.withRequestTraceContext
                            traceContext
                            ( Observability.buildRequestObservability
-                               "GET"
-                               "http"
-                               "/second"
-                               "/second"
+                               Observability.RequestIdentity
+                                 { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                                   Observability.requestIdentityScheme = "http",
+                                   Observability.requestIdentityPath = "/second",
+                                   Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/second"
+                                 }
                                308
                                Observability.BodyResponseKind
                                [clientAddressAttribute, peerAddressAttribute]
@@ -3429,10 +3435,12 @@ spec = do
       capturedRequestObservability <- readIORef requestObservabilityReference
       map stripVolatileRequestTiming capturedRequestObservability
         `shouldBe` [ Observability.buildRequestObservability
-                       "OPTIONS"
-                       "http"
-                       "/data"
-                       "/data"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "OPTIONS",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/data",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                         }
                        204
                        Observability.BodyResponseKind
                        [clientAddressAttribute, peerAddressAttribute]
@@ -3478,10 +3486,12 @@ spec = do
         `shouldBe` [ Observability.withRequestTraceContext
                        traceContext
                        ( Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [clientAddressAttribute, peerAddressAttribute]
@@ -3518,10 +3528,12 @@ spec = do
       capturedRequestObservability <- readIORef requestObservabilityReference
       map stripVolatileRequestTiming capturedRequestObservability
         `shouldBe` [ Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/data"
-                       "/data"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/data",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                         }
                        202
                        Observability.BodyResponseKind
                        [clientAddressAttribute, peerAddressAttribute]
@@ -3559,10 +3571,12 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [clientAddressAttribute, peerAddressAttribute]
@@ -3649,10 +3663,12 @@ spec = do
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.withDatabaseOperations [databaseOperation] $
                            Observability.buildRequestObservability
-                             "GET"
-                             "https"
-                             "/data"
-                             "/app/data"
+                             Observability.RequestIdentity
+                               { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                                 Observability.requestIdentityScheme = "https",
+                                 Observability.requestIdentityPath = "/data",
+                                 Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/app/data"
+                               }
                              503
                              Observability.BodyResponseKind
                              [ clientAddressAttribute,
@@ -3745,10 +3761,12 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "https"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "https",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [ clientAddressAttribute,
@@ -3835,10 +3853,12 @@ spec = do
         `shouldReturn` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [ emptyForwardedClientAddressAttribute,
@@ -3846,10 +3866,12 @@ spec = do
                              emptyForwardedAttribute
                            ],
                          Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [ emptyForwardedClientAddressAttribute,
@@ -3857,10 +3879,12 @@ spec = do
                              emptyForwardedForAttribute
                            ],
                          Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [ unquotedForwardedClientAddressAttribute,
@@ -3953,10 +3977,12 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "https"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "https",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [clientAddressAttribute, peerAddressAttribute]
@@ -4013,10 +4039,12 @@ spec = do
       readResponseBody response `shouldReturn` renderDocument (pageShell diagnosticApplication (samplePage (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})))
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/known"
-                           "/known"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/known",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
+                             }
                            500
                            Observability.PageResponseKind
                            [clientAddressAttribute, peerAddressAttribute, failureAttribute]
@@ -4124,34 +4152,42 @@ spec = do
       capturedRequestObservability <- readIORef requestObservabilityReference
       map stripVolatileRequestTiming capturedRequestObservability
         `shouldBe` [ Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/known"
-                       "/known"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/known",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
+                         }
                        200
                        Observability.PageResponseKind
                        [clientAddressAttribute, peerAddressAttribute],
                      Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/es/known"
-                       "/es/known"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/es/known",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/es/known"
+                         }
                        500
                        Observability.PageResponseKind
                        [clientAddressAttribute, peerAddressAttribute, pageFailureAttribute],
                      Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/data"
-                       "/data"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/data",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                         }
                        202
                        Observability.BodyResponseKind
                        [clientAddressAttribute, peerAddressAttribute],
                      Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/data"
-                       "/app/data"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/data",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/app/data"
+                         }
                        503
                        Observability.BodyResponseKind
                        [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute, bodyFailureAttribute]
@@ -4201,10 +4237,12 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [ clientAddressAttribute,
@@ -4250,10 +4288,12 @@ spec = do
       Http.statusCode (Wai.responseStatus response) `shouldBe` 202
       readIORef requestObservabilityReference
         `shouldReturn` [ Observability.buildRequestObservability
-                           "GET"
-                           "http"
-                           "/data"
-                           "/data"
+                           Observability.RequestIdentity
+                             { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                               Observability.requestIdentityScheme = "http",
+                               Observability.requestIdentityPath = "/data",
+                               Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/data"
+                             }
                            202
                            Observability.BodyResponseKind
                            [clientAddressAttribute, peerAddressAttribute, clientAddressSourceAttribute, forwardedForAttribute]
@@ -4288,10 +4328,12 @@ spec = do
       capturedRequestObservability <- readIORef requestObservabilityReference
       map stripVolatileRequestTiming capturedRequestObservability
         `shouldBe` [ Observability.buildRequestObservability
-                       "GET"
-                       "http"
-                       "/favicon.ico"
-                       "/404"
+                       Observability.RequestIdentity
+                         { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                           Observability.requestIdentityScheme = "http",
+                           Observability.requestIdentityPath = "/favicon.ico",
+                           Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/404"
+                         }
                        404
                        Observability.PageResponseKind
                        [clientAddressAttribute, peerAddressAttribute]
@@ -4332,10 +4374,12 @@ spec = do
         capturedRequestObservability <- readIORef requestObservabilityReference
         map stripVolatileRequestTiming capturedRequestObservability
           `shouldBe` [ Observability.buildRequestObservability
-                         "GET"
-                         "http"
-                         "/styles.css"
-                         "/*"
+                         Observability.RequestIdentity
+                           { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                             Observability.requestIdentityScheme = "http",
+                             Observability.requestIdentityPath = "/styles.css",
+                             Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/*"
+                           }
                          200
                          Observability.BodyResponseKind
                          [clientAddressAttribute, peerAddressAttribute]
@@ -4385,10 +4429,12 @@ spec = do
         capturedRequestObservability <- readIORef requestObservabilityReference
         map stripVolatileRequestTiming capturedRequestObservability
           `shouldBe` [ Observability.buildRequestObservability
-                         "GET"
-                         "http"
-                         "/assets/missing.js"
-                         "/app/assets/*"
+                         Observability.RequestIdentity
+                           { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                             Observability.requestIdentityScheme = "http",
+                             Observability.requestIdentityPath = "/assets/missing.js",
+                             Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/app/assets/*"
+                           }
                          404
                          Observability.BodyResponseKind
                          [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]
@@ -5255,10 +5301,12 @@ spec = do
                 Database.DatabaseOperation "postgresql" "load-health-check" "SELECT 1;" Nothing Nothing
               ]
               ( Observability.buildRequestObservability
-                  "GET"
-                  "https"
-                  "/known"
-                  "/known"
+                  Observability.RequestIdentity
+                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                      Observability.requestIdentityScheme = "https",
+                      Observability.requestIdentityPath = "/known",
+                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
+                    }
                   503
                   Observability.PageResponseKind
                   [ Observability.ObservabilityAttribute
@@ -5489,10 +5537,12 @@ spec = do
               otlpHeaders = []
             }
           ( Observability.buildRequestObservability
-              "GET"
-              "http"
-              "/assets/app.js"
-              "/assets/*"
+              Observability.RequestIdentity
+                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                  Observability.requestIdentityScheme = "http",
+                  Observability.requestIdentityPath = "/assets/app.js",
+                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/assets/*"
+                }
               200
               Observability.BodyResponseKind
               [ Observability.ObservabilityAttribute
@@ -5532,10 +5582,12 @@ spec = do
                   Observability.traceContextState = Just "vendor=value"
                 }
               ( Observability.buildRequestObservability
-                  "GET"
-                  "http"
-                  "/known"
-                  "/known"
+                  Observability.RequestIdentity
+                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                      Observability.requestIdentityScheme = "http",
+                      Observability.requestIdentityPath = "/known",
+                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/known"
+                    }
                   200
                   Observability.BodyResponseKind
                   [ Observability.ObservabilityAttribute
@@ -5569,10 +5621,12 @@ spec = do
           ( Observability.withDatabaseOperations
               [Database.DatabaseOperation "postgresql" "ping-database" "SELECT 1;" Nothing Nothing]
               ( Observability.buildRequestObservability
-                  "GET"
-                  "http"
-                  "/health"
-                  "/health"
+                  Observability.RequestIdentity
+                    { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                      Observability.requestIdentityScheme = "http",
+                      Observability.requestIdentityPath = "/health",
+                      Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/health"
+                    }
                   200
                   Observability.BodyResponseKind
                   []
@@ -5609,10 +5663,12 @@ spec = do
                     otlpHeaders = []
                   }
                 ( Observability.buildRequestObservability
-                    "GET"
-                    "http"
-                    "/"
-                    "/"
+                    Observability.RequestIdentity
+                      { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                        Observability.requestIdentityScheme = "http",
+                        Observability.requestIdentityPath = "/",
+                        Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/"
+                      }
                     200
                     Observability.BodyResponseKind
                     [ Observability.ObservabilityAttribute
@@ -6834,19 +6890,23 @@ spec = do
                   prefixedChallengeResponseBytes `shouldSatisfy` ByteString.isInfixOf "loopback-token-response"
                   let expectedChallengeRequestObservability =
                         Observability.buildRequestObservability
-                          "GET"
-                          "http"
-                          "/.well-known/acme-challenge/loopback-token"
-                          "/.well-known/acme-challenge/*"
+                          Observability.RequestIdentity
+                            { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                              Observability.requestIdentityScheme = "http",
+                              Observability.requestIdentityPath = "/.well-known/acme-challenge/loopback-token",
+                              Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/.well-known/acme-challenge/*"
+                            }
                           200
                           Observability.BodyResponseKind
                           [clientAddressAttribute, peerAddressAttribute]
                       expectedPrefixedChallengeRequestObservability =
                         Observability.buildRequestObservability
-                          "GET"
-                          "http"
-                          "/.well-known/acme-challenge/loopback-token"
-                          "/app/.well-known/acme-challenge/*"
+                          Observability.RequestIdentity
+                            { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                              Observability.requestIdentityScheme = "http",
+                              Observability.requestIdentityPath = "/.well-known/acme-challenge/loopback-token",
+                              Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/app/.well-known/acme-challenge/*"
+                            }
                           200
                           Observability.BodyResponseKind
                           [clientAddressAttribute, peerAddressAttribute, forwardedPrefixAttribute]

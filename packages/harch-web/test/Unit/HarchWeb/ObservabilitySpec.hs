@@ -171,10 +171,12 @@ spec = do
     it "forces optional trace context state when present or absent" $ do
       let requestObservability =
             Observability.buildRequestObservability
-              "GET"
-              "http"
-              "/health"
-              "/health"
+              Observability.RequestIdentity
+                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                  Observability.requestIdentityScheme = "http",
+                  Observability.requestIdentityPath = "/health",
+                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/health"
+                }
               200
               Observability.BodyResponseKind
               []
@@ -218,10 +220,12 @@ spec = do
                 Observability.attributeValue = Observability.TextAttribute "fr"
               }
        in Observability.requestObservabilityAttributes
-            "GET"
-            "http"
-            "/fr/missing"
-            "/fr/404"
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                Observability.requestIdentityScheme = "http",
+                Observability.requestIdentityPath = "/fr/missing",
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/fr/404"
+              }
             404
             Observability.PageResponseKind
             [extraAttribute]
@@ -255,10 +259,12 @@ spec = do
   describe "buildRequestObservability" $
     it "uses stable span and HTTP metric names for body responses" $
       Observability.buildRequestObservability
-        "POST"
-        "https"
-        "/api/status"
-        "/api/status"
+        Observability.RequestIdentity
+          { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "POST",
+            Observability.requestIdentityScheme = "https",
+            Observability.requestIdentityPath = "/api/status",
+            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/api/status"
+          }
         200
         Observability.BodyResponseKind
         [ Observability.ObservabilityAttribute
@@ -357,10 +363,12 @@ spec = do
   describe "buildRequestObservability" $
     it "groups unmatched request spans under a stable not-found operation name while retaining the concrete URL path attribute" $
       Observability.buildRequestObservability
-        "GET"
-        "http"
-        "/favicon.ico"
-        "/404"
+        Observability.RequestIdentity
+          { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+            Observability.requestIdentityScheme = "http",
+            Observability.requestIdentityPath = "/favicon.ico",
+            Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/404"
+          }
         404
         Observability.PageResponseKind
         []

@@ -426,10 +426,12 @@ buildRoutedRequestObservability routedRequestExecution executionTimings routeReq
    in Observability.withDatabaseOperations (diagnosticDatabaseOperations diagnosticValues) $
         maybe id Observability.withRequestTraceContext (requestTraceContext request) $
           Observability.buildRequestObservability
-            (requestMethodText request)
-            (requestScheme requestPolicyConfig request)
-            requestPath
-            (renderRoute (routeCodec webApplication) routeRequest)
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel (requestMethodText request),
+                Observability.requestIdentityScheme = requestScheme requestPolicyConfig request,
+                Observability.requestIdentityPath = requestPath,
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath (renderRoute (routeCodec webApplication) routeRequest)
+              }
             (responseStatusCode webApplication response)
             (responseKind response)
             ( requestContextObservabilityAttributes requestPolicyConfig request
@@ -483,10 +485,12 @@ reportEarlyRequestObservability webApplication request requestStartedAt requestC
       requestObservability =
         maybe id Observability.withRequestTraceContext (requestTraceContext request) $
           Observability.buildRequestObservability
-            (requestMethodText request)
-            (requestScheme requestPolicyConfig request)
-            (waiRequestPath requestPolicyConfig request)
-            routePath
+            Observability.RequestIdentity
+              { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel (requestMethodText request),
+                Observability.requestIdentityScheme = requestScheme requestPolicyConfig request,
+                Observability.requestIdentityPath = waiRequestPath requestPolicyConfig request,
+                Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath routePath
+              }
             (Http.statusCode (Wai.responseStatus response))
             Observability.BodyResponseKind
             (requestContextObservabilityAttributes requestPolicyConfig request <> requestTimingObservabilityAttributes requestStartedAt requestCompletedAt [])
