@@ -22,6 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
+import Data.Typeable (Typeable)
 import HarchWeb qualified
 import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.Endpoint.Runtime
@@ -47,6 +48,7 @@ apiRouteDefinition endpoint =
 -- calls the same runtime decoder directly rather than constructing unused
 -- synthetic endpoint path and method fields.
 apiRouteDefinitionWithContext ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -73,6 +75,7 @@ apiRouteDefinitionWithContext method fields body encoders contextAwareHandler fa
 -- | Context-aware variant that gives the declaration its accumulated typed
 -- request-field failures. The runtime fixes this response's status at 400.
 apiRouteDefinitionWithContextWithFieldFailure ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -100,6 +103,7 @@ apiRouteDefinitionWithContextWithFieldFailure method fields body encoders fieldF
 -- | The total-handler variant has no fabricated failure renderer or
 -- unreachable error branch.
 apiRouteDefinitionWithContextNeverFailing ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -124,6 +128,7 @@ apiRouteDefinitionWithContextNeverFailing method fields body encoders contextAwa
 -- | Total-handler context-aware variant that renders accumulated request-field
 -- failures at the declaration boundary while retaining HTTP 400.
 apiRouteDefinitionWithContextNeverFailingWithFieldFailure ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->

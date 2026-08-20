@@ -698,7 +698,11 @@ spec =
                    apiRouteResponseBody jsonResponse `shouldBe` "\"hello\"",
                    lookup "Content-Type" (apiRouteResponseHeaders jsonResponse) `shouldBe` Just "application/json; charset=utf-8",
                    apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
-                   apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                   apiRouteResponseBody unacceptableResponse `shouldBe` "\"API response has no acceptable representation.\"",
+                   lookup "Content-Type" (apiRouteResponseHeaders unacceptableResponse) `shouldBe` Just "application/json; charset=utf-8",
+                   protocolResponseObservabilityAttributes (apiRouteProtocolResponse unacceptableResponse) `shouldBe` [],
+                   protocolResponseLogEntries (apiRouteProtocolResponse unacceptableResponse) `shouldBe` [],
+                   protocolResponseDatabaseOperations (apiRouteProtocolResponse unacceptableResponse) `shouldBe` []
                  ]
           )
 
@@ -783,7 +787,11 @@ spec =
         expectAll
           ( (lookup "Content-Type" (apiRouteResponseHeaders utf8Response) `shouldBe` Just "text/plain; charset=utf-8")
               :| [ apiRouteResponseStatus unacceptableResponse `shouldBe` HttpTypes.status406,
-                   apiRouteResponseBody unacceptableResponse `shouldBe` "API response has no acceptable representation."
+                   apiRouteResponseBody unacceptableResponse `shouldBe` "",
+                   lookup "Content-Type" (apiRouteResponseHeaders unacceptableResponse) `shouldBe` Nothing,
+                   protocolResponseObservabilityAttributes (apiRouteProtocolResponse unacceptableResponse) `shouldBe` [],
+                   protocolResponseLogEntries (apiRouteProtocolResponse unacceptableResponse) `shouldBe` [],
+                   protocolResponseDatabaseOperations (apiRouteProtocolResponse unacceptableResponse) `shouldBe` []
                  ]
           )
 

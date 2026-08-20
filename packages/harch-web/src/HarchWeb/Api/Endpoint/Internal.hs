@@ -33,6 +33,7 @@ where
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
+import Data.Typeable (Typeable)
 import HarchWeb.Api.Multipart
   ( MultipartConsumeError,
     MultipartLimits,
@@ -75,6 +76,7 @@ at = ApiPath
 -- consumer, domain-failure interpretation, and response representations.
 data ApiRouteEndpoint fields body domainFailure response where
   ApiRouteEndpoint ::
+    (Typeable response) =>
     ApiPath ->
     ApiMethod ->
     RequestCodec fields ->
@@ -85,6 +87,7 @@ data ApiRouteEndpoint fields body domainFailure response where
     (domainFailure -> ApiResponse response) ->
     ApiRouteEndpoint fields body domainFailure response
   ApiRouteEndpointNeverFailing ::
+    (Typeable response) =>
     ApiPath ->
     ApiMethod ->
     RequestCodec fields ->
@@ -168,6 +171,7 @@ data ApiRequestBody body where
     ApiRequestBody (ApiMultipartRequest stored)
 
 apiRouteEndpoint ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -184,6 +188,7 @@ apiRouteEndpoint method = apiRouteEndpointAt method (at "")
 -- The runtime fixes this response's status at 400, since field decoding is a
 -- client request failure rather than an application outcome.
 apiRouteEndpointWithFieldFailure ::
+  (Typeable response) =>
   ApiMethod ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -198,6 +203,7 @@ apiRouteEndpointWithFieldFailure method = apiRouteEndpointAtWithFieldFailure met
 -- adapter can use 'apiRouteEndpoint' while the application route codec
 -- remains the authoritative path owner.
 apiRouteEndpointAt ::
+  (Typeable response) =>
   ApiMethod ->
   ApiPath ->
   RequestCodec fields ->
@@ -211,6 +217,7 @@ apiRouteEndpointAt method path fields body encoders =
 
 -- | Path-owning variant of 'apiRouteEndpointWithFieldFailure'.
 apiRouteEndpointAtWithFieldFailure ::
+  (Typeable response) =>
   ApiMethod ->
   ApiPath ->
   RequestCodec fields ->
@@ -227,6 +234,7 @@ apiRouteEndpointAtWithFieldFailure method path fields body encoders fieldFailure
 -- this over inventing an unreachable error value and failure renderer: it
 -- makes total behavior explicit and leaves no impossible branch.
 apiRouteEndpointAtNeverFailing ::
+  (Typeable response) =>
   ApiMethod ->
   ApiPath ->
   RequestCodec fields ->
@@ -239,6 +247,7 @@ apiRouteEndpointAtNeverFailing method path fields body encoders =
 
 -- | Total-handler variant of 'apiRouteEndpointAtWithFieldFailure'.
 apiRouteEndpointAtNeverFailingWithFieldFailure ::
+  (Typeable response) =>
   ApiMethod ->
   ApiPath ->
   RequestCodec fields ->

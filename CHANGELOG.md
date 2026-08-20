@@ -40,6 +40,10 @@
    `HarchWeb.LoginProtection`'s existing policy, an unknown-identifier login now runs a dummy Argon2id
    verification so its timing matches a known identifier's wrong-password rejection, and a recovery-code
    attempt is throttled the same way before its up-to-eight-hash KDF comparison runs.
+9. Typed API endpoint transport failures (400/406/413/415) now render through the endpoint's own
+   declared response representation when its response type can carry the failure sentence, instead
+   of always answering `text/plain`; an endpoint whose response type cannot carry it gets an empty
+   body with no `Content-Type` claim rather than a mismatched one.
 
 ## 0.1.1.0
 

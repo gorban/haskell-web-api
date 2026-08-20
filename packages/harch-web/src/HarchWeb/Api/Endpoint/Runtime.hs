@@ -1,5 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TypeApplications #-}
 
 -- | Private request decoding and response interpretation for typed API
 -- endpoints.  This module owns the effectful request-body boundary; route
@@ -23,6 +25,8 @@ import Data.List.NonEmpty qualified as NonEmpty
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Type.Equality ((:~:) (Refl))
+import Data.Typeable (Typeable, eqT)
 import HarchWeb.Api.Endpoint.Internal
 import HarchWeb.Api.MediaType (ApiContentType, apiContentTypeText)
 import HarchWeb.Api.Multipart (MultipartLimits, MultipartStorage, withMultipartRequestBodyWithStorage)
@@ -49,6 +53,7 @@ runApiRouteEndpoint endpoint =
 -- response continuation. Protocol parse failures are interpreted exactly at
 -- this transport boundary rather than forwarded through endpoint handlers.
 runDecodedApiRequest ::
+  (Typeable response) =>
   ApiRequestData ->
   RequestCodec fields ->
   ApiRequestBody body ->
@@ -89,7 +94,7 @@ runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded req
         Nothing ->
           case runRequestCodec fields fieldsData of
             ([], Just decodedFields) -> onDecodedFields decodedFields
-            _ -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request fields were rejected.")
+            _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
         Just responseFor ->
           case runRequestCodec fields fieldsData of
             ([], Just decodedFields) -> onDecodedFields decodedFields
@@ -98,11 +103,11 @@ runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded req
     decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
       bodyResult <- readRequestBodyUpTo maximumBytes request
       case bodyResult of
-        Left RequestBodyLimitExceeded -> pure (apiFailureProtocolResponse HttpTypes.status413 "API request body exceeds its declared limit.")
+        Left RequestBodyLimitExceeded -> pure (apiFailureProtocolResponse encoders HttpTypes.status413 "API request body exceeds its declared limit.")
         Right lazyBody ->
           case selectApiBodyDecoder missingContentTypePolicy decoders (contentType requestData) (LazyByteString.toStrict lazyBody) of
-            ApiUnsupportedMediaType _ -> pure (apiFailureProtocolResponse HttpTypes.status415 "API request body has an unsupported media type.")
-            ApiMalformedBody -> pure (apiFailureProtocolResponse HttpTypes.status400 "API request body is malformed.")
+            ApiUnsupportedMediaType _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status415 "API request body has an unsupported media type.")
+            ApiMalformedBody -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request body is malformed.")
             ApiDecodedBody decodedBody -> onDecodedBody decodedBody
 
     fieldFailureResponse responseFor parseErrors =
@@ -115,6 +120,7 @@ runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded req
 -- 'ApiRouteEndpoint', so a context-aware route definition has no unused
 -- path or method to construct.
 runApiRouteEndpointHandler ::
+  (Typeable response) =>
   RequestCodec fields ->
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
@@ -135,6 +141,7 @@ runApiRouteEndpointHandler fields body encoders fieldFailure handler failureResp
 -- | The total-handler variant has no domain-failure interpreter and therefore
 -- no impossible error branch for callers to construct.
 runApiRouteEndpointHandlerNeverFailing ::
+  (Typeable response) =>
   RequestCodec fields ->
   ApiRequestBody body ->
   NonEmpty (ApiResponseEncoder response) ->
@@ -186,10 +193,10 @@ singleHeaderValue wanted requestData =
     [] -> Nothing
     values -> Just (Text.intercalate ", " values)
 
-renderEndpointResult :: NonEmpty (ApiResponseEncoder response) -> ApiRequestData -> ApiResponse response -> ProtocolResponse
+renderEndpointResult :: (Typeable response) => NonEmpty (ApiResponseEncoder response) -> ApiRequestData -> ApiResponse response -> ProtocolResponse
 renderEndpointResult encoders requestData responseValue =
   case selectContentTypeRepresentation declaredContentTypes (acceptHeader requestData) of
-    NoAcceptableContentTypeRepresentation -> apiFailureProtocolResponse HttpTypes.status406 "API response has no acceptable representation."
+    NoAcceptableContentTypeRepresentation -> apiFailureProtocolResponse encoders HttpTypes.status406 "API response has no acceptable representation."
     SelectedContentTypeRepresentation selectedContentType ->
       ProtocolResponse
         { protocolResponseStatus = apiEndpointResponseStatus responseValue,
@@ -241,9 +248,41 @@ varyValueWithAccept headerValue
   where
     value = apiHeaderValueText headerValue
 
-apiFailureProtocolResponse :: HttpTypes.Status -> Text -> ProtocolResponse
-apiFailureProtocolResponse status bodyText =
-  apiResponseBodyToProtocolResponse ((apiTextResponse bodyText) {apiResponseStatus = status})
+-- | Renders a transport-boundary failure sentence through the endpoint's own
+-- first declared representation when its response type can carry one
+-- (checked with 'eqT', since 'apiResponseEncoderEncode' only accepts a
+-- 'Text' value when @response@ genuinely is 'Text'), so a JSON-only endpoint
+-- never answers 400/413/415/406 with an un-negotiated @text/plain@ body.
+-- When @response@ is not 'Text', there is no representation this sentence
+-- can honestly be rendered as, so the response carries no body and no
+-- 'Content-Type' claim rather than a mismatched one.
+apiFailureProtocolResponse :: forall response. (Typeable response) => NonEmpty (ApiResponseEncoder response) -> HttpTypes.Status -> Text -> ProtocolResponse
+apiFailureProtocolResponse encoders status bodyText =
+  case eqT @response @Text of
+    Just Refl -> textFailureProtocolResponse (NonEmpty.head encoders) status bodyText
+    Nothing -> emptyFailureProtocolResponse status
+
+textFailureProtocolResponse :: ApiResponseEncoder Text -> HttpTypes.Status -> Text -> ProtocolResponse
+textFailureProtocolResponse encoder status bodyText =
+  ProtocolResponse
+    { protocolResponseStatus = status,
+      protocolResponseHeaders = [("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))],
+      protocolResponseBody = protocolResponseBodyFor (apiResponseEncoderEncode encoder bodyText),
+      protocolResponseObservabilityAttributes = [],
+      protocolResponseLogEntries = [],
+      protocolResponseDatabaseOperations = []
+    }
+
+emptyFailureProtocolResponse :: HttpTypes.Status -> ProtocolResponse
+emptyFailureProtocolResponse status =
+  ProtocolResponse
+    { protocolResponseStatus = status,
+      protocolResponseHeaders = [],
+      protocolResponseBody = ProtocolResponseBytes ByteString.empty,
+      protocolResponseObservabilityAttributes = [],
+      protocolResponseLogEntries = [],
+      protocolResponseDatabaseOperations = []
+    }
 
 data ApiHttpResponse = ApiHttpResponse
   { apiHttpResponseStatus :: HttpTypes.Status,
