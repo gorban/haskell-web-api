@@ -3,6 +3,7 @@
 
 module Unit.WebApi.LoginSpec (spec) where
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Control.Monad (unless)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
@@ -11,8 +12,9 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb.Account (AccountId, mkAccountId)
+import HarchWeb.Account (AccountId, accountIdText, mkAccountId)
 import HarchWeb.Email (EmailAddress, mkEmailAddress)
+import HarchWeb.LoginProtection (LoginAttempt (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
 import HarchWeb.Password (PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, passwordHashText)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
@@ -30,25 +32,25 @@ spec :: Spec
 spec = do
   describe "password-first MFA login" $ do
     it "requires a confirmed authenticator only after a correct verified password" $ do
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore emailAddress (mkPassword "incorrect password")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "incorrect password")
         `shouldReturnEqual` PasswordLoginRejected
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginRejected
 
     it "directs verified accounts without a confirmed enrollment back to MFA setup" $ do
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing)))) emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing)))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginEmailVerificationRequired accountId
 
     it "preserves credential and MFA persistence failures" $ do
-      beginPasswordLogin (credentialStore (Left (AccountCredentialStoreUnavailable "database unavailable"))) unexpectedMfaStore emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Left (AccountCredentialStoreUnavailable "database unavailable"))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "database unavailable")
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Left (MfaStoreCorruptData "bad enrollment"))) emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Left (MfaStoreCorruptData "bad enrollment"))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaStoreError (MfaStoreCorruptData "bad enrollment")
 
     it "accepts a validated TOTP only after validating the password" $ do
@@ -167,9 +169,189 @@ spec = do
                  PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True,
                  PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True,
                  PasswordMfaLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordMfaLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
-                 PasswordMfaLoginCorruptEnrollment /= PasswordMfaLoginRejected `shouldBe` True
+                 PasswordMfaLoginCorruptEnrollment /= PasswordMfaLoginRejected `shouldBe` True,
+                 PasswordLoginThrottled 100 /= PasswordLoginThrottled 200 `shouldBe` True,
+                 PasswordLoginThrottled 100 /= PasswordLoginRejected `shouldBe` True,
+                 PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "x") /= PasswordLoginAttemptStoreError (LoginAttemptStoreCorruptData "x") `shouldBe` True,
+                 PasswordMfaLoginThrottled 100 /= PasswordMfaLoginThrottled 200 `shouldBe` True,
+                 PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "x") /= PasswordMfaLoginAttemptStoreError (LoginAttemptStoreCorruptData "x") `shouldBe` True
                ]
         )
+
+  describe "login throttling" $ do
+    it "raises the existence-oracle dummy-hash construction error for an invalid input" $ do
+      evaluate (requiredPasswordHashOrDie "test failure" Nothing `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "test failure" `Text.isInfixOf` Text.pack message
+
+    it "throttles a password step and an already-verified recovery-code step alike, without touching the credential, MFA, or attempt-recording stores" $ do
+      let recentFailures = [LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
+          expectedLockoutEnd = 450 + loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy
+          throttledStoreFor matchingKey =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt ->
+                        if key == matchingKey
+                          then error "unexpected throttle record for an already-throttled key"
+                          else key `seq` attempt `seq` pure (Right ()),
+                      loadRecentLoginAttempts = \requestedKey _ ->
+                        pure (if requestedKey == matchingKey then Right recentFailures else Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup while throttled") (\_ -> error "unexpected credential lookup while throttled")
+      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore (throttledStoreFor "email:person@example.test") emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
+      completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor "email:person@example.test"}) emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
+      let recoveryContext =
+            -- 'confirmedMfaStore' lets the password step's and the second-factor
+            -- step's own 'loadTotpEnrollment' lookups succeed (both are required
+            -- before 'completeRecoveryCode' can even run), while its recovery-code
+            -- methods still error out — proving the throttle short-circuits before
+            -- the KDF-heavy recovery-code hash comparison this test is guarding.
+            (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
+              { secondFactorThrottle = throttledStoreFor ("recovery:" <> accountIdText accountId)
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
+
+    it "records an identical failed attempt for an unknown identifier and for a known identifier with a wrong password, so both count the same toward the throttle" $ do
+      let recordingThrottle recordedReference =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedReference ((key, attempt) :) >> pure (Right ()),
+                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+      unknownReference <- newIORef []
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (recordingThrottle unknownReference) emailAddress (mkPassword "whatever")
+        `shouldReturnEqual` PasswordLoginRejected
+      unknownRecorded <- readIORef unknownReference
+      knownReference <- newIORef []
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownReference) emailAddress (mkPassword "incorrect password")
+        `shouldReturnEqual` PasswordLoginRejected
+      knownRecorded <- readIORef knownReference
+      expectAll
+        ( (unknownRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 False)])
+            :| [knownRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 False)]]
+        )
+
+    it "records a successful attempt whenever the password check itself succeeds, even though a further step is still required" $ do
+      let recordFor mfaStoreValue credential = do
+            recordedReference <- newIORef []
+            let throttle =
+                  LoginThrottleContext
+                    { loginThrottleStore =
+                        LoginAttemptStore
+                          { recordLoginAttempt = \key attempt -> modifyIORef' recordedReference ((key, attempt) :) >> pure (Right ()),
+                            loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                          },
+                      loginThrottlePolicy = defaultLoginProtectionPolicy,
+                      loginThrottleNow = 500
+                    }
+            result <- beginPasswordLogin (credentialStore (Right (Just credential))) mfaStoreValue throttle emailAddress (mkPassword "correct horse battery staple")
+            recorded <- readIORef recordedReference
+            pure (result, recorded)
+      -- 'verifiedCredential' reaches 'loadTotpEnrollment' (needs 'confirmedMfaStore'
+      -- to answer it); 'unverifiedCredential' is rejected on its unverified email
+      -- before any MFA lookup, so 'unexpectedMfaStore' proves that lookup never runs.
+      (mfaRequiredResult, mfaRequiredRecorded) <- recordFor confirmedMfaStore verifiedCredential
+      (unverifiedResult, unverifiedRecorded) <- recordFor unexpectedMfaStore unverifiedCredential
+      expectAll
+        ( (mfaRequiredResult == PasswordLoginMfaRequired accountId `shouldBe` True)
+            :| [ mfaRequiredRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 True)],
+                 unverifiedResult == PasswordLoginEmailVerificationRequired accountId `shouldBe` True,
+                 unverifiedRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 True)]
+               ]
+        )
+
+    it "propagates login-attempt store failures from the throttle check without querying the credential store" $ do
+      let failingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \_ _ -> error "unexpected throttle record after a failed throttle check",
+                      loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "database unavailable"))
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup") (\_ -> error "unexpected credential lookup")
+      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore failingThrottle emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
+      completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
+
+    it "keys the throttle by \"username:\" for a username identifier, distinct from the \"email:\" key an email identifier uses" $ do
+      keyReference <- newIORef []
+      let capturingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key _ -> modifyIORef' keyReference (key :) >> pure (Right ()),
+                      loadRecentLoginAttempts = \key _ -> modifyIORef' keyReference (key :) >> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          username = required "username" (mkUsername "person_01")
+      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername username) (mkPassword "whatever")
+        `shouldReturnEqual` PasswordLoginRejected
+      capturedKeys <- readIORef keyReference
+      capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
+
+    it "clamps the throttle window's lower bound to zero instead of underflowing when the current time is earlier than the policy window" $ do
+      sinceReference <- newIORef Nothing
+      let capturingThrottleAt now =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \_ _ -> pure (Right ()),
+                      loadRecentLoginAttempts = \_ since -> writeIORef sinceReference (Just since) >> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = now
+              }
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) emailAddress (mkPassword "whatever")
+        `shouldReturnEqual` PasswordLoginRejected
+      readIORef sinceReference `shouldReturn` Just 0
+      let largeNow = loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt largeNow) emailAddress (mkPassword "whatever")
+        `shouldReturnEqual` PasswordLoginRejected
+      readIORef sinceReference `shouldReturn` Just 500
+
+    it "propagates a login-attempt store failure from the recovery-code step's own throttle check, distinct from an already-throttled recovery attempt" $ do
+      let recoveryKey = "recovery:" <> accountIdText accountId
+          recoveryFailingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt ->
+                        if key == recoveryKey
+                          then error "unexpected throttle record after a failed recovery throttle check"
+                          else key `seq` attempt `seq` pure (Right ()),
+                      loadRecentLoginAttempts = \requestedKey _ ->
+                        pure (if requestedKey == recoveryKey then Left (LoginAttemptStoreUnavailable "recovery throttle store down") else Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          -- 'confirmedMfaStore' lets both 'loadTotpEnrollment' lookups succeed
+          -- (password step, then second-factor step) while its recovery-code
+          -- methods still error out, proving the throttle store's own failure
+          -- is what stops 'completeRecoveryCode' before any hash comparison.
+          recoveryContext =
+            (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
+              { secondFactorThrottle = recoveryFailingThrottle
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "recovery throttle store down")
 
   describe "runtime PostgreSQL credential lookup" $ do
     it "uses an email parameter and decodes verified credentials" $ do
@@ -295,7 +477,23 @@ secondFactorContextFor mfaStoreValue proof =
       secondFactorEncryptionKey = encryptionKey,
       secondFactorNowNanoseconds = 500,
       secondFactorNowSeconds = 123456,
-      secondFactorProof = proof
+      secondFactorProof = proof,
+      secondFactorThrottle = permissiveThrottle
+    }
+
+-- | Never denies an attempt: records nothing, always reports no prior
+-- attempts, so 'evaluateLoginAttempt' always returns 'LoginPermitted'. Used
+-- by every test in this module that is not itself about throttling.
+permissiveThrottle :: LoginThrottleContext
+permissiveThrottle =
+  LoginThrottleContext
+    { loginThrottleStore =
+        LoginAttemptStore
+          { recordLoginAttempt = \_ _ -> pure (Right ()),
+            loadRecentLoginAttempts = \_ _ -> pure (Right [])
+          },
+      loginThrottlePolicy = defaultLoginProtectionPolicy,
+      loginThrottleNow = 500
     }
 
 required :: String -> Maybe value -> value

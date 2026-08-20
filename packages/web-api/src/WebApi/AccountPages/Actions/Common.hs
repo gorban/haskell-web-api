@@ -15,6 +15,7 @@ module WebApi.AccountPages.Actions.Common
     credentialStoreErrorMessage,
     accountStoreErrorDetail,
     mfaStoreErrorMessage,
+    loginAttemptStoreErrorMessage,
     sessionStoreErrorMessage,
     mfaEnrollmentSessionStoreErrorMessage,
     registrationResponse,
@@ -53,7 +54,7 @@ import WebApi.AppEffect
     renderFailureCode,
     throwAppFailure,
   )
-import WebApi.Login (AccountCredentialStoreError (..))
+import WebApi.Login (AccountCredentialStoreError (..), LoginAttemptStoreError (..))
 import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Profile (ProfileLoadError (..))
@@ -153,6 +154,12 @@ mfaStoreErrorMessage storeError =
   case storeError of
     MfaStoreUnavailable detail -> detail
     MfaStoreCorruptData detail -> detail
+
+loginAttemptStoreErrorMessage :: LoginAttemptStoreError -> Text
+loginAttemptStoreErrorMessage storeError =
+  case storeError of
+    LoginAttemptStoreUnavailable detail -> detail
+    LoginAttemptStoreCorruptData detail -> detail
 
 sessionStoreErrorMessage :: AccountSessionStoreError -> Text
 sessionStoreErrorMessage storeError =

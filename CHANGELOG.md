@@ -35,6 +35,11 @@
    single-use scoped multipart consumer backed by an explicitly selected storage adapter and
    `MultipartLimits`; duplicate consumption and parser failures remain typed outcomes, and uploads retain
    their existing promote-or-discard lifecycle.
+8. `web-api` now throttles login attempts: a new `LoginAttemptStore` capability (with a PostgreSQL
+   adapter and `login_attempts` migration) backs a per-identifier and per-account lockout using
+   `HarchWeb.LoginProtection`'s existing policy, an unknown-identifier login now runs a dummy Argon2id
+   verification so its timing matches a known identifier's wrong-password rejection, and a recovery-code
+   attempt is throttled the same way before its up-to-eight-hash KDF comparison runs.
 
 ## 0.1.1.0
 

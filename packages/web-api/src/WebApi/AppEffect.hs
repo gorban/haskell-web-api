@@ -23,7 +23,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret (SecretEncryptionKey)
 import WebApi.Account (AccountProfileStore, AccountStore)
-import WebApi.Login (AccountCredentialStore)
+import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
 import WebApi.Session (AccountSessionStore, MfaEnrollmentSessionStore)
@@ -35,6 +35,7 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowClock :: IO Word64,
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
+    accountWorkflowLoginAttemptStore :: LoginAttemptStore,
     accountWorkflowSessionStore :: AccountSessionStore,
     accountWorkflowMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore,
     accountWorkflowProfileStore :: AccountProfileStore,
@@ -59,6 +60,7 @@ data FailureCode
   | MfaEnrollmentConfirmFailure
   | LoginCredentialStoreFailure
   | LoginMfaStoreFailure
+  | LoginAttemptStoreFailure
   | LoginCorruptEnrollmentFailure
   | LoginSessionFailure
   | LogoutSessionFailure
@@ -81,6 +83,7 @@ renderFailureCode failureCodeValue =
     MfaEnrollmentConfirmFailure -> "account.mfa.confirm"
     LoginCredentialStoreFailure -> "account.login.credential-store"
     LoginMfaStoreFailure -> "account.login.mfa-store"
+    LoginAttemptStoreFailure -> "account.login.attempt-store"
     LoginCorruptEnrollmentFailure -> "account.login.corrupt-enrollment"
     LoginSessionFailure -> "account.login.session"
     LogoutSessionFailure -> "account.logout.session"

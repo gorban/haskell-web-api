@@ -67,6 +67,12 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_recovery_codes" <> " (account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "account_sessions" <> " (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "mfa_enrollment_sessions" <> " (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES " <> qualifiedTableName "accounts" <> " (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
+        -- Not a foreign key to accounts: an attempt key can name an unknown
+        -- identifier (the existence-oracle and brute-force surface this
+        -- table exists to throttle), so it must be recordable whether or
+        -- not any matching account exists.
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "login_attempts" <> " (attempt_key TEXT NOT NULL, attempted_at_nanoseconds BIGINT NOT NULL, succeeded TEXT NOT NULL);",
+        "CREATE INDEX IF NOT EXISTS login_attempts_key_time ON " <> qualifiedTableName "login_attempts" <> " (attempt_key, attempted_at_nanoseconds);",
         "ALTER TABLE " <> qualifiedTableName "page_content" <> " OWNER TO " <> migrationOwner <> ";",
         "ALTER TABLE " <> qualifiedTableName "page_highlights" <> " OWNER TO " <> migrationOwner <> ";",
         "ALTER TABLE " <> qualifiedTableName "accounts" <> " OWNER TO " <> migrationOwner <> ";",
@@ -74,7 +80,8 @@ migrationStatementsFor migrationDatabaseConfig runtimeDatabaseConfig =
         "ALTER TABLE " <> qualifiedTableName "account_totp" <> " OWNER TO " <> migrationOwner <> ";",
         "ALTER TABLE " <> qualifiedTableName "account_recovery_codes" <> " OWNER TO " <> migrationOwner <> ";",
         "ALTER TABLE " <> qualifiedTableName "account_sessions" <> " OWNER TO " <> migrationOwner <> ";",
-        "ALTER TABLE " <> qualifiedTableName "mfa_enrollment_sessions" <> " OWNER TO " <> migrationOwner <> ";"
+        "ALTER TABLE " <> qualifiedTableName "mfa_enrollment_sessions" <> " OWNER TO " <> migrationOwner <> ";",
+        "ALTER TABLE " <> qualifiedTableName "login_attempts" <> " OWNER TO " <> migrationOwner <> ";"
       ]
     privilegeStatements
       | databaseUser migrationDatabaseConfig == databaseUser runtimeDatabaseConfig = []
@@ -95,7 +102,7 @@ tablePrivileges runtimeOwner =
   let revoke tableName = "REVOKE ALL ON TABLE " <> qualifiedTableName tableName <> " FROM PUBLIC;"
       readOnly tableName = "GRANT SELECT ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
       readWrite tableName = "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
-   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions"]
+   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts"]
 
 seedStatements :: [Text]
 seedStatements =

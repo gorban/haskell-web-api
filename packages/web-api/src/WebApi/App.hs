@@ -55,13 +55,14 @@ import WebApi.Config
     loadAppStartupConfig,
   )
 import WebApi.Database (PageRepository, defaultPageRepository)
-import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..))
+import WebApi.Login (AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..))
 import WebApi.Postgres.AccountRepository
   ( buildRuntimePostgresAccountCredentialStore,
     buildRuntimePostgresAccountProfileStore,
     buildRuntimePostgresAccountStore,
   )
+import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
@@ -207,6 +208,7 @@ buildRuntimeAccountWorkflow !environmentConfig =
             accountWorkflowClock = getMonotonicTimeNSec,
             accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
             accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
+            accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore databaseConfiguration,
             accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
             accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore databaseConfiguration,
             accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
@@ -446,6 +448,7 @@ unavailableAccountWorkflow =
       accountWorkflowClock = pure 0,
       accountWorkflowMfaStore = unavailableMfaStore,
       accountWorkflowCredentialStore = unavailableAccountCredentialStore,
+      accountWorkflowLoginAttemptStore = unavailableLoginAttemptStore,
       accountWorkflowSessionStore = unavailableAccountSessionStore,
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
@@ -478,6 +481,13 @@ unavailableAccountCredentialStore =
   AccountCredentialStore
     { findAccountCredentialByEmail = const (unavailableResult accountCredentialsUnavailable),
       findAccountCredentialByUsername = const (unavailableResult accountCredentialsUnavailable)
+    }
+
+unavailableLoginAttemptStore :: LoginAttemptStore
+unavailableLoginAttemptStore =
+  LoginAttemptStore
+    { recordLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
+      loadRecentLoginAttempts = \_ _ -> unavailableResult loginAttemptsUnavailable
     }
 
 unavailableAccountSessionStore :: AccountSessionStore
@@ -513,6 +523,10 @@ mfaPersistenceUnavailable =
 accountCredentialsUnavailable :: AccountCredentialStoreError
 accountCredentialsUnavailable =
   AccountCredentialStoreUnavailable "account credentials are not configured"
+
+loginAttemptsUnavailable :: LoginAttemptStoreError
+loginAttemptsUnavailable =
+  LoginAttemptStoreUnavailable "login-attempt persistence is not configured"
 
 accountProfilesUnavailable :: AccountStoreError
 accountProfilesUnavailable =

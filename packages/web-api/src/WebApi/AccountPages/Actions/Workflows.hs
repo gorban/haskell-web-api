@@ -21,6 +21,7 @@ import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
+import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Session
@@ -59,6 +60,7 @@ import WebApi.AppEffect
   )
 import WebApi.Login
   ( LoginIdentifier (..),
+    LoginThrottleContext (..),
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
     SecondFactorContext (..),
@@ -348,7 +350,13 @@ completePasswordLoginNow identifier passwordValue proof = do
             secondFactorEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
             secondFactorNowNanoseconds = nowNanoseconds,
             secondFactorNowSeconds = nowSeconds,
-            secondFactorProof = proof
+            secondFactorProof = proof,
+            secondFactorThrottle =
+              LoginThrottleContext
+                { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
+                  loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
+                  loginThrottleNow = nowNanoseconds
+                }
           }
         identifier
         (Password.mkPassword passwordValue)
@@ -390,8 +398,10 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
         PasswordMfaLoginEmailVerificationRequired _ -> pure (response Http.status403 (localized actionRequest "Verify your email address before signing in." "Verifica tu direccion de correo antes de iniciar sesion.") True Nothing [])
         PasswordMfaLoginEnrollmentRequired accountId -> issueLoginEnrollmentSession actionRequest emailValue nowNanoseconds accountId
         PasswordMfaLoginRejected -> pure (response Http.status422 (localized actionRequest "Sign-in was rejected." "El inicio de sesion fue rechazado.") True (Just "login-code") [])
+        PasswordMfaLoginThrottled _retryAfterNanoseconds -> pure (response Http.status429 (localized actionRequest "Too many sign-in attempts. Try again later." "Demasiados intentos de inicio de sesion. Intentalo de nuevo mas tarde.") True (Just "login-email") [])
         PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
         PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
+        PasswordMfaLoginAttemptStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginAttemptStoreFailure "LoginAttemptStoreError" (loginAttemptStoreErrorMessage storeError)
         PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
 
 issueLoginSession :: AccountActionRequest -> Text -> Word64 -> Account.AccountId -> AccountActionWorkflow

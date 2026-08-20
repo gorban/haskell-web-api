@@ -31,6 +31,7 @@ import HarchWeb.Api (apiRequestDataFromWaiRequest, runRequestCodec)
 import HarchWeb.Database qualified as HarchDatabase
 import HarchWeb.DevSmtp qualified as DevSmtp
 import HarchWeb.Email qualified as Email
+import HarchWeb.LoginProtection qualified as LoginProtection
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
@@ -67,7 +68,7 @@ import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
-import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), LoginThrottleContext (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
@@ -464,6 +465,25 @@ testPasswordHashingPolicy =
   fromMaybe
     (error "Expected valid test password hashing policy")
     (Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1))
+
+-- | A 'LoginAttemptStore' that never denies a login attempt: it records
+-- nothing and always reports no prior attempts, so 'evaluateLoginAttempt'
+-- always returns 'LoginPermitted'. For tests exercising login/logout
+-- behavior unrelated to throttling itself.
+permissiveLoginAttemptStore :: LoginAttemptStore
+permissiveLoginAttemptStore =
+  LoginAttemptStore
+    { recordLoginAttempt = \_ _ -> pure (Right ()),
+      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+    }
+
+permissiveLoginThrottleContext :: Word64 -> LoginThrottleContext
+permissiveLoginThrottleContext now =
+  LoginThrottleContext
+    { loginThrottleStore = permissiveLoginAttemptStore,
+      loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
+      loginThrottleNow = now
+    }
 
 registrationEnvironmentAt ::
   (Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash)) ->
@@ -2599,6 +2619,7 @@ spec = do
         accountWorkflowPasswordHasher workflow `seq` pure ()
         accountWorkflowMfaStore workflow `seq` pure ()
         accountWorkflowCredentialStore workflow `seq` pure ()
+        accountWorkflowLoginAttemptStore workflow `seq` pure ()
         accountWorkflowSessionStore workflow `seq` pure ()
         accountWorkflowMfaEnrollmentSessionStore workflow `seq` pure ()
         accountWorkflowProfileStore workflow `seq` pure ()
@@ -3696,6 +3717,7 @@ spec = do
                 accountWorkflowClock = pure 100,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
+                accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
@@ -3841,6 +3863,14 @@ spec = do
         >>= \case
           Left (AccountCredentialStoreUnavailable "account credentials are not configured") -> pure ()
           _ -> expectationFailure "expected unavailable account credentials"
+      let unconfiguredLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow
+          assertLoginAttemptsUnavailable :: IO (Either LoginAttemptStoreError value) -> Expectation
+          assertLoginAttemptsUnavailable action =
+            action >>= \case
+              Left (LoginAttemptStoreUnavailable "login-attempt persistence is not configured") -> pure ()
+              _ -> expectationFailure "expected unavailable login-attempt persistence"
+      assertLoginAttemptsUnavailable (recordLoginAttempt unconfiguredLoginAttemptStore "key" (LoginProtection.LoginAttempt 0 True))
+      assertLoginAttemptsUnavailable (loadRecentLoginAttempts unconfiguredLoginAttemptStore "key" 0)
       let unconfiguredSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow
           assertSessionUnavailable :: IO (Either AccountSessionStoreError value) -> Expectation
           assertSessionUnavailable action =
@@ -3911,6 +3941,7 @@ spec = do
                 accountWorkflowClock = pure now,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
+                accountWorkflowLoginAttemptStore = accountWorkflowLoginAttemptStore unavailableAccountWorkflow,
                 accountWorkflowSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow,
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
@@ -4056,6 +4087,7 @@ spec = do
               { accountWorkflowCredentialStore = credentialStore,
                 accountWorkflowMfaStore = mfaStore,
                 accountWorkflowSessionStore = sessionStore,
+                accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
                 accountWorkflowTotpClock = pure 123456
@@ -4131,6 +4163,7 @@ spec = do
                       loadAccountSession = \_ -> pure (Right Nothing),
                       invalidateAccountSession = \_ _ -> pure invalidationResult
                     },
+                accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
                 accountWorkflowTotpClock = pure 123456
@@ -4216,6 +4249,7 @@ spec = do
         beginPasswordLoginWithIdentifier
           (accountWorkflowCredentialStore validWorkflow)
           (accountWorkflowMfaStore validWorkflow)
+          (permissiveLoginThrottleContext 500)
           (LoginUsername (fromMaybe (error "expected valid username") (Username.mkUsername "person_01")))
           password
       case usernameLoginResult of
@@ -4231,6 +4265,29 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just (StoredTotpEnrollment "not-encrypted" (Just 1)))) (Right True) (Right True)) (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
+      let failingLoginAttemptStore =
+            LoginAttemptStore
+              { recordLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
+                loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down"))
+              }
+          corruptLoginAttemptStore =
+            LoginAttemptStore
+              { recordLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
+                loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt"))
+              }
+          throttledLoginAttemptStore =
+            LoginAttemptStore
+              { recordLoginAttempt = \_ _ -> error "unexpected throttle record while already throttled",
+                loadRecentLoginAttempts = \_ _ -> pure (Right [LoginProtection.LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]])
+              }
+      handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = failingLoginAttemptStore} (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = corruptLoginAttemptStore} (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = throttledLoginAttemptStore} (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Too many sign-in attempts")
+      handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = throttledLoginAttemptStore} (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Demasiados intentos")
       handleAccountAction unavailableSession (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
       handleAccountAction (workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreCorruptData) (Right True)) (loginRequest defaultRequestContext validFields)
