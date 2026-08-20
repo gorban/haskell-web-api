@@ -6,6 +6,7 @@ module WebApi.Login
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
     PasswordLoginResult (..),
+    SecondFactorContext (..),
     beginPasswordLogin,
     beginPasswordLoginWithIdentifier,
     completePasswordLogin,
@@ -76,6 +77,14 @@ data LoginInfrastructureError
   = LoginMfaStoreError MfaStoreError
   | LoginCorruptEnrollment
 
+-- | Decision (CF, 2026-08-19): extend this existing second-factor context to
+-- the entry points ('completePasswordLogin', 'completePasswordLoginWithIdentifier')
+-- rather than leaving them threading its five fields positionally alongside
+-- the credential store, identifier, and password. 'secondFactorMfaStore'
+-- already carries the one dependency 'beginPasswordLoginWithIdentifier' needs,
+-- so the entry points read it from the context instead of taking a separate,
+-- easily-transposed 'MfaStore' argument. This took both entry points from 8
+-- positional parameters to 4.
 data SecondFactorContext = SecondFactorContext
   { secondFactorMfaStore :: MfaStore,
     secondFactorEncryptionKey :: SecretEncryptionKey,
@@ -126,40 +135,14 @@ classifyMfaEnrollment accountId enrollmentResult =
 -- | Performs password validation before examining the supplied second factor.
 -- A recovery code is marked used by its stored hash only after its Argon2id
 -- verification succeeds, so its cleartext representation never reaches storage.
-completePasswordLogin ::
-  AccountCredentialStore ->
-  MfaStore ->
-  SecretEncryptionKey ->
-  Word64 ->
-  Word64 ->
-  EmailAddress ->
-  Password ->
-  MfaLoginProof ->
-  IO PasswordMfaLoginResult
-completePasswordLogin credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds emailAddress password proof = do
-  completePasswordLoginWithIdentifier credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds (LoginEmailAddress emailAddress) password proof
+completePasswordLogin :: AccountCredentialStore -> SecondFactorContext -> EmailAddress -> Password -> IO PasswordMfaLoginResult
+completePasswordLogin credentialStore context emailAddress =
+  completePasswordLoginWithIdentifier credentialStore context (LoginEmailAddress emailAddress)
 
-completePasswordLoginWithIdentifier ::
-  AccountCredentialStore ->
-  MfaStore ->
-  SecretEncryptionKey ->
-  Word64 ->
-  Word64 ->
-  LoginIdentifier ->
-  Password ->
-  MfaLoginProof ->
-  IO PasswordMfaLoginResult
-completePasswordLoginWithIdentifier credentialStore mfaStore encryptionKey nowNanoseconds nowSeconds identifier password proof = do
-  passwordResult <- beginPasswordLoginWithIdentifier credentialStore mfaStore identifier password
-  continuePasswordLogin
-    SecondFactorContext
-      { secondFactorMfaStore = mfaStore,
-        secondFactorEncryptionKey = encryptionKey,
-        secondFactorNowNanoseconds = nowNanoseconds,
-        secondFactorNowSeconds = nowSeconds,
-        secondFactorProof = proof
-      }
-    passwordResult
+completePasswordLoginWithIdentifier :: AccountCredentialStore -> SecondFactorContext -> LoginIdentifier -> Password -> IO PasswordMfaLoginResult
+completePasswordLoginWithIdentifier credentialStore context identifier password = do
+  passwordResult <- beginPasswordLoginWithIdentifier credentialStore (secondFactorMfaStore context) identifier password
+  continuePasswordLogin context passwordResult
 
 continuePasswordLogin :: SecondFactorContext -> PasswordLoginResult -> IO PasswordMfaLoginResult
 continuePasswordLogin context passwordResult =

@@ -1,5 +1,6 @@
 module WebApi.MfaEnrollment
-  ( MfaEnrollmentConfirmation (..),
+  ( MfaConfirmationEnvironment (..),
+    MfaEnrollmentConfirmation (..),
     MfaEnrollmentError (..),
     MfaEnrollmentStart (..),
     confirmMfaEnrollment,
@@ -99,29 +100,46 @@ generateEncryptedSecret generateSecret encrypt encryptionKey = do
 pairTotpSecret :: TotpSecret -> Text -> (TotpSecret, Text)
 pairTotpSecret = (,)
 
+-- | The dependencies one enrollment confirmation runs against: how to
+-- generate and hash recovery codes, where enrollments live, the TOTP
+-- decryption key, and the clock. Grouping these leaves only the two inputs
+-- that vary per confirmation attempt, the account and the supplied code, as
+-- positional arguments.
+data MfaConfirmationEnvironment = MfaConfirmationEnvironment
+  { mfaConfirmationGenerateCode :: IO RecoveryCode,
+    mfaConfirmationHashCode :: RecoveryCode -> IO (Maybe RecoveryCodeHash),
+    mfaConfirmationStore :: MfaStore,
+    mfaConfirmationEncryptionKey :: SecretEncryptionKey,
+    mfaConfirmationNowNanoseconds :: Word64,
+    mfaConfirmationNowSeconds :: Word64
+  }
+
 confirmMfaEnrollment ::
   PasswordHashingPolicy ->
   MfaStore ->
   SecretEncryptionKey ->
+  Word64 ->
+  Word64 ->
   AccountId ->
-  Word64 ->
-  Word64 ->
   TotpCode ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollment passwordHashingPolicy =
-  confirmMfaEnrollmentWith generateRecoveryCode (hashRecoveryCode passwordHashingPolicy)
+confirmMfaEnrollment passwordHashingPolicy mfaStore encryptionKey nowNanoseconds nowSeconds =
+  confirmMfaEnrollmentWith
+    MfaConfirmationEnvironment
+      { mfaConfirmationGenerateCode = generateRecoveryCode,
+        mfaConfirmationHashCode = hashRecoveryCode passwordHashingPolicy,
+        mfaConfirmationStore = mfaStore,
+        mfaConfirmationEncryptionKey = encryptionKey,
+        mfaConfirmationNowNanoseconds = nowNanoseconds,
+        mfaConfirmationNowSeconds = nowSeconds
+      }
 
 confirmMfaEnrollmentWith ::
-  IO RecoveryCode ->
-  (RecoveryCode -> IO (Maybe RecoveryCodeHash)) ->
-  MfaStore ->
-  SecretEncryptionKey ->
+  MfaConfirmationEnvironment ->
   AccountId ->
-  Word64 ->
-  Word64 ->
   TotpCode ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)
-confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId nowNanoseconds nowSeconds suppliedCode =
+confirmMfaEnrollmentWith environment accountId suppliedCode =
   runExceptT $ do
     enrollment <-
       liftMfaStore (loadTotpEnrollment mfaStore accountId)
@@ -135,6 +153,12 @@ confirmMfaEnrollmentWith generateCode hashCode mfaStore encryptionKey accountId 
     guardError MfaEnrollmentConfirmationRejected confirmed
     pure (MfaEnrollmentConfirmation recoveryCodes)
   where
+    generateCode = mfaConfirmationGenerateCode environment
+    hashCode = mfaConfirmationHashCode environment
+    mfaStore = mfaConfirmationStore environment
+    encryptionKey = mfaConfirmationEncryptionKey environment
+    nowNanoseconds = mfaConfirmationNowNanoseconds environment
+    nowSeconds = mfaConfirmationNowSeconds environment
     hashGeneratedRecoveryCode recoveryCode =
       recoveryCodeHashText
         <$> liftMaybeWith MfaEnrollmentRecoveryCodeHashingFailed (hashCode recoveryCode)

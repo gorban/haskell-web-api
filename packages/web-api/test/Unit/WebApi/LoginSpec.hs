@@ -56,17 +56,17 @@ spec = do
           encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 7))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
           confirmedStore = mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100))))
           validProof = TotpLoginProof (totpCode 123456 secret)
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") validProof
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore validProof) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 - 30) secret))
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (totpCode (123456 - 30) secret))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 + 30) secret))
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (totpCode (123456 + 30) secret))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (totpCode (123456 + 60) secret))
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (totpCode (123456 + 60) secret))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginRejected
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "incorrect password") validProof
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore validProof) emailAddress (mkPassword "incorrect password")
         `shouldReturnEqual` PasswordMfaLoginRejected
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginRejected
 
     it "consumes a matched recovery-code hash atomically without exposing a reusable code" $ do
@@ -87,14 +87,14 @@ spec = do
                   writeIORef consumedHashReference (Just receivedHash)
                   pure (Right True)
               }
-      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedStore encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (RecoveryCodeLoginProof recoveryCode)
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (RecoveryCodeLoginProof recoveryCode)) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
       readIORef consumedHashReference `shouldReturn` Just (recoveryCodeHashText recoveryCodeHash)
 
     it "rejects unavailable, raced, and corrupt second-factor records" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
           validProof = TotpLoginProof (totpCode 123456 secret)
-          completeWith store = completePasswordLogin (credentialStore (Right (Just verifiedCredential))) store encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple")
+          completeWith store proof = completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor store proof) emailAddress (mkPassword "correct horse battery staple")
           enrollmentStore enrollment =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
@@ -121,7 +121,7 @@ spec = do
           encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 8))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
           confirmedEnrollment = StoredTotpEnrollment encryptedSecret (Just 100)
           validProof = TotpLoginProof (totpCode 123456 secret)
-          completeWith credentialStoreValue mfaStoreValue = completePasswordLogin credentialStoreValue mfaStoreValue encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") validProof
+          completeWith credentialStoreValue mfaStoreValue = completePasswordLogin credentialStoreValue (secondFactorContextFor mfaStoreValue validProof) emailAddress (mkPassword "correct horse battery staple")
       completeWith (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore `shouldReturnEqual` PasswordMfaLoginEmailVerificationRequired accountId
       completeWith (credentialStore (Left (AccountCredentialStoreCorruptData "bad credential"))) unexpectedMfaStore `shouldReturnEqual` PasswordMfaLoginCredentialStoreError (AccountCredentialStoreCorruptData "bad credential")
       completeWith (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) `shouldReturnEqual` PasswordMfaLoginEnrollmentRequired accountId
@@ -137,7 +137,7 @@ spec = do
     it "rejects malformed, missing, and unavailable recovery-code state" $ do
       let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
           confirmedEnrollment = StoredTotpEnrollment "recovery-code-login" (Just 100)
-          completeWith store = completePasswordLogin (credentialStore (Right (Just verifiedCredential))) store encryptionKey 500 123456 emailAddress (mkPassword "correct horse battery staple") (RecoveryCodeLoginProof recoveryCode)
+          completeWith store = completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) emailAddress (mkPassword "correct horse battery staple")
           storeFor recoveryResult consumptionResult =
             MfaStore
               { saveUnconfirmedTotpEnrollment = \_ _ _ -> error "unexpected enrollment save",
@@ -287,6 +287,16 @@ storeWithLookups lookupResults = do
 
 encryptionKey :: SecretEncryptionKey
 encryptionKey = required "encryption key" (mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+
+secondFactorContextFor :: MfaStore -> MfaLoginProof -> SecondFactorContext
+secondFactorContextFor mfaStoreValue proof =
+  SecondFactorContext
+    { secondFactorMfaStore = mfaStoreValue,
+      secondFactorEncryptionKey = encryptionKey,
+      secondFactorNowNanoseconds = 500,
+      secondFactorNowSeconds = 123456,
+      secondFactorProof = proof
+    }
 
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))

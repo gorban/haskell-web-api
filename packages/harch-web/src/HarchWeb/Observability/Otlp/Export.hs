@@ -52,16 +52,10 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
       rootSpan = Observability.observabilityRequestSpan requestObservability
   let requestBody =
         OtlpWire.otlpTraceBodyFromSpan
-          serviceName
-          traceId
-          spanId
-          parentSpanId
-          traceState
-          startTimeUnixNano
-          endTimeUnixNano
-          rootSpan
-          OtlpWire.OtlpServerSpan
-          (otlpRequestSpanStatusFields requestObservability)
+          OtlpWire.OtlpTraceIdentity {OtlpWire.otlpTraceServiceName = serviceName, OtlpWire.otlpTraceId = traceId, OtlpWire.otlpTraceState = traceState}
+          OtlpWire.OtlpSpanIdentity {OtlpWire.otlpSpanId = spanId, OtlpWire.otlpSpanParentId = parentSpanId, OtlpWire.otlpSpanKindValue = OtlpWire.OtlpServerSpan}
+          OtlpWire.OtlpSpanTiming {OtlpWire.otlpSpanStartTimeUnixNano = startTimeUnixNano, OtlpWire.otlpSpanEndTimeUnixNano = endTimeUnixNano}
+          OtlpWire.OtlpRootSpanContent {OtlpWire.otlpRootRequestSpan = rootSpan, OtlpWire.otlpRootStatusFields = otlpRequestSpanStatusFields requestObservability}
           timedChildSpans
   Otlp.sendOtlpTraceRequest exporter requestBody
 
@@ -76,16 +70,13 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
   let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano connectionFallbackDurationNanoseconds
   let requestBody =
         OtlpWire.otlpTraceBodyFromSpan
-          serviceName
-          traceId
-          spanId
-          Nothing
-          Nothing
-          startTimeUnixNano
-          endTimeUnixNano
-          (Observability.observabilityConnectionSpan connectionObservability)
-          OtlpWire.OtlpInternalSpan
-          OtlpWire.otlpErrorStatusFields
+          OtlpWire.OtlpTraceIdentity {OtlpWire.otlpTraceServiceName = serviceName, OtlpWire.otlpTraceId = traceId, OtlpWire.otlpTraceState = Nothing}
+          OtlpWire.OtlpSpanIdentity {OtlpWire.otlpSpanId = spanId, OtlpWire.otlpSpanParentId = Nothing, OtlpWire.otlpSpanKindValue = OtlpWire.OtlpInternalSpan}
+          OtlpWire.OtlpSpanTiming {OtlpWire.otlpSpanStartTimeUnixNano = startTimeUnixNano, OtlpWire.otlpSpanEndTimeUnixNano = endTimeUnixNano}
+          OtlpWire.OtlpRootSpanContent
+            { OtlpWire.otlpRootRequestSpan = Observability.observabilityConnectionSpan connectionObservability,
+              OtlpWire.otlpRootStatusFields = OtlpWire.otlpErrorStatusFields
+            }
           []
   Otlp.sendOtlpTraceRequest exporter requestBody
 
@@ -103,14 +94,18 @@ nonNegativeStartTime :: Word64 -> Word64 -> Word64
 nonNegativeStartTime endTimeUnixNano durationNanos =
   endTimeUnixNano - min endTimeUnixNano durationNanos
 
-timedOtlpChildSpan :: Word64 -> Word64 -> Text -> (OtlpWire.OtlpSpanKind, Observability.RequestSpan) -> (Text, OtlpWire.OtlpSpanKind, Word64, Word64, Observability.RequestSpan)
+timedOtlpChildSpan :: Word64 -> Word64 -> Text -> (OtlpWire.OtlpSpanKind, Observability.RequestSpan) -> OtlpWire.OtlpChildSpan
 timedOtlpChildSpan rootStartTimeUnixNano rootDurationNanoseconds childSpanId (childSpanKind, childSpan) =
-  ( childSpanId,
-    childSpanKind,
-    childStartTimeUnixNano,
-    childStartTimeUnixNano + childDurationNanoseconds,
-    childSpan
-  )
+  OtlpWire.OtlpChildSpan
+    { OtlpWire.otlpChildSpanId = childSpanId,
+      OtlpWire.otlpChildSpanKind = childSpanKind,
+      OtlpWire.otlpChildTiming =
+        OtlpWire.OtlpSpanTiming
+          { OtlpWire.otlpSpanStartTimeUnixNano = childStartTimeUnixNano,
+            OtlpWire.otlpSpanEndTimeUnixNano = childStartTimeUnixNano + childDurationNanoseconds
+          },
+      OtlpWire.otlpChildRequestSpan = childSpan
+    }
   where
     childStartOffsetNanoseconds =
       fromMaybe 0 (requestSpanIntAttribute "harch.span.start_offset_ns" childSpan)

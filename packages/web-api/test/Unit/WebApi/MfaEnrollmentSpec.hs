@@ -13,14 +13,15 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Password (defaultPasswordHashingPolicy)
-import HarchWeb.RecoveryCode (RecoveryCode, hashRecoveryCodeWithSalt, mkRecoveryCode)
+import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, hashRecoveryCodeWithSalt, mkRecoveryCode)
 import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment
-  ( MfaEnrollmentConfirmation (..),
+  ( MfaConfirmationEnvironment (..),
+    MfaEnrollmentConfirmation (..),
     MfaEnrollmentError (..),
     MfaEnrollmentStart (..),
     confirmMfaEnrollment,
@@ -52,7 +53,7 @@ spec = do
         Left _ -> expectationFailure "expected production enrollment start to succeed"
         Right (MfaEnrollmentStart secret) -> do
           (MfaEnrollmentStart secret == MfaEnrollmentStart secret) `shouldBe` True
-          confirmation <- confirmMfaEnrollment defaultPasswordHashingPolicy store encryptionKey accountId 500 123456 (totpCode 123456 secret)
+          confirmation <- confirmMfaEnrollment defaultPasswordHashingPolicy store encryptionKey 500 123456 accountId (totpCode 123456 secret)
           case confirmation of
             Left _ -> expectationFailure "expected production enrollment confirmation to succeed"
             Right confirmed -> do
@@ -105,7 +106,7 @@ spec = do
                 consumeRecoveryCodeHash = \_ _ _ -> pure (error "unexpected recovery-code consumption")
               }
           hashCode recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
-      confirmation <- confirmMfaEnrollmentWith (nextFrom recoveryCodes) hashCode store encryptionKey accountId 500 123456 (totpCode 123456 secret)
+      confirmation <- confirmMfaEnrollmentWith (confirmationEnvironment (nextFrom recoveryCodes) hashCode store) accountId (totpCode 123456 secret)
       if confirmation == Right (MfaEnrollmentConfirmation recoveryCodes)
         then pure ()
         else expectationFailure "expected the encrypted enrollment to be confirmed"
@@ -134,7 +135,7 @@ spec = do
           oneCode = requiredRecoveryCode "0123456789ABCDEF0123"
           successfulHash recoveryCode = pure (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
           failingHash _ = modifyIORef' hashCallsReference (+ 1) >> pure Nothing
-          confirmWith store generatedCode hashing = confirmMfaEnrollmentWith generatedCode hashing store encryptionKey accountId 500 123456 suppliedCode
+          confirmWith store generatedCode hashing = confirmMfaEnrollmentWith (confirmationEnvironment generatedCode hashing store) accountId suppliedCode
       confirmWith (validStore (Left (MfaStoreUnavailable "unavailable")) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left (MfaEnrollmentStoreError (MfaStoreUnavailable "unavailable"))
       confirmWith (validStore (Right Nothing) (Right True)) (pure oneCode) successfulHash
@@ -147,7 +148,7 @@ spec = do
         `shouldReturnEqual` Left MfaEnrollmentCorruptSecret
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 1)))) (Right True)) (pure oneCode) successfulHash
         `shouldReturnEqual` Left MfaEnrollmentConfirmationRejected
-      confirmMfaEnrollmentWith (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) encryptionKey accountId 500 123456 (requiredTotpCode "000000")
+      confirmMfaEnrollmentWith (confirmationEnvironment (pure oneCode) successfulHash (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True))) accountId (requiredTotpCode "000000")
         `shouldReturnEqual` Left MfaEnrollmentInvalidCode
       confirmWith (validStore (Right (Just (StoredTotpEnrollment encryptedSecret Nothing))) (Right True)) (pure oneCode) failingHash
         `shouldReturnEqual` Left MfaEnrollmentRecoveryCodeHashingFailed
@@ -241,6 +242,17 @@ encryptionKey =
   case mkSecretEncryptionKey "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" of
     Just key -> key
     Nothing -> error "expected a valid secret encryption key"
+
+confirmationEnvironment :: IO RecoveryCode -> (RecoveryCode -> IO (Maybe RecoveryCodeHash)) -> MfaStore -> MfaConfirmationEnvironment
+confirmationEnvironment generateCode hashCode store =
+  MfaConfirmationEnvironment
+    { mfaConfirmationGenerateCode = generateCode,
+      mfaConfirmationHashCode = hashCode,
+      mfaConfirmationStore = store,
+      mfaConfirmationEncryptionKey = encryptionKey,
+      mfaConfirmationNowNanoseconds = 500,
+      mfaConfirmationNowSeconds = 123456
+    }
 
 accountId :: AccountId
 accountId =

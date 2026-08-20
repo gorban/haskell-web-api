@@ -61,6 +61,7 @@ import WebApi.Login
   ( LoginIdentifier (..),
     MfaLoginProof (..),
     PasswordMfaLoginResult (..),
+    SecondFactorContext (..),
     completePasswordLoginWithIdentifier,
   )
 import WebApi.MfaEnrollment
@@ -299,7 +300,7 @@ confirmMfaEnrollmentNow accountId code = do
   liftIO $ do
     nowNanoseconds <- accountWorkflowClock workflow
     nowSeconds <- accountWorkflowTotpClock workflow
-    confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) accountId nowNanoseconds nowSeconds code
+    confirmMfaEnrollment Password.defaultPasswordHashingPolicy (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds accountId code
 
 interpretMfaFailure ::
   AccountActionRequest ->
@@ -339,7 +340,18 @@ completePasswordLoginNow identifier passwordValue proof = do
   liftIO $ do
     nowNanoseconds <- accountWorkflowClock workflow
     nowSeconds <- accountWorkflowTotpClock workflow
-    loginResult <- completePasswordLoginWithIdentifier (accountWorkflowCredentialStore workflow) (accountWorkflowMfaStore workflow) (accountWorkflowTotpEncryptionKey workflow) nowNanoseconds nowSeconds identifier (Password.mkPassword passwordValue) proof
+    loginResult <-
+      completePasswordLoginWithIdentifier
+        (accountWorkflowCredentialStore workflow)
+        SecondFactorContext
+          { secondFactorMfaStore = accountWorkflowMfaStore workflow,
+            secondFactorEncryptionKey = accountWorkflowTotpEncryptionKey workflow,
+            secondFactorNowNanoseconds = nowNanoseconds,
+            secondFactorNowSeconds = nowSeconds,
+            secondFactorProof = proof
+          }
+        identifier
+        (Password.mkPassword passwordValue)
     pure (nowNanoseconds, loginResult)
 
 parseLoginForm ::

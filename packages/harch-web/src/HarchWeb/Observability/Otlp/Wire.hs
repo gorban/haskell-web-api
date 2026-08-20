@@ -1,8 +1,27 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Private OTLP JSON wire representation.
+--
+-- Decision (CF, 2026-08-19): group this module's OTLP-specific recurring
+-- argument clusters into named records rather than threading them
+-- positionally, matching the same pattern applied to ACME's protocol
+-- context in @HarchWeb.Acme.Protocol.Types@. 'OtlpTraceIdentity' is the
+-- @(service name, trace id, trace state)@ that every span in one trace
+-- shares. 'OtlpSpanIdentity' and 'OtlpSpanTiming' are each individual
+-- span's identity within the trace tree and its time range, used for both
+-- the root span and every child. 'OtlpRootSpanContent' and 'OtlpChildSpan'
+-- separate what only the root carries (arbitrary status fields) from what
+-- only a child carries (its own identity and timing, since children always
+-- inherit the root's parent linkage and never carry status fields). This
+-- took 'otlpTraceBodyFromSpan' from 11 positional parameters to 5, and the
+-- private 'otlpSpanObject' helper from 9 to 5.
 module HarchWeb.Observability.Otlp.Wire
-  ( OtlpSpanKind (..),
+  ( OtlpChildSpan (..),
+    OtlpRootSpanContent (..),
+    OtlpSpanIdentity (..),
+    OtlpSpanKind (..),
+    OtlpSpanTiming (..),
+    OtlpTraceIdentity (..),
     otlpErrorStatusFields,
     otlpTraceBodyFromSpan,
   )
@@ -29,25 +48,61 @@ otlpSpanKindText spanKind =
     OtlpInternalSpan -> "SPAN_KIND_INTERNAL"
     OtlpClientSpan -> "SPAN_KIND_CLIENT"
 
+-- | What every span in one trace shares: which service produced it, which
+-- trace it belongs to, and the (optional) upstream trace state to
+-- propagate.
+data OtlpTraceIdentity = OtlpTraceIdentity
+  { otlpTraceServiceName :: Text,
+    otlpTraceId :: Text,
+    otlpTraceState :: Maybe Text
+  }
+
+-- | One span's identity within its trace's span tree: its own id, its
+-- parent's id (absent only for a trace's root span with no upstream
+-- parent), and its OTLP kind.
+data OtlpSpanIdentity = OtlpSpanIdentity
+  { otlpSpanId :: Text,
+    otlpSpanParentId :: Maybe Text,
+    otlpSpanKindValue :: OtlpSpanKind
+  }
+
+-- | One span's time range.
+data OtlpSpanTiming = OtlpSpanTiming
+  { otlpSpanStartTimeUnixNano :: Word64,
+    otlpSpanEndTimeUnixNano :: Word64
+  }
+
+-- | What only a trace's root span carries beyond identity and timing: the
+-- application span it was projected from, and any OTLP status fields (for
+-- example an error status). Children never carry status fields of their
+-- own.
+data OtlpRootSpanContent = OtlpRootSpanContent
+  { otlpRootRequestSpan :: Observability.RequestSpan,
+    otlpRootStatusFields :: [(Text, LazyByteString.ByteString)]
+  }
+
+-- | One child span. Its parent linkage is always the trace's root span, so
+-- only what varies per child is exposed here.
+data OtlpChildSpan = OtlpChildSpan
+  { otlpChildSpanId :: Text,
+    otlpChildSpanKind :: OtlpSpanKind,
+    otlpChildTiming :: OtlpSpanTiming,
+    otlpChildRequestSpan :: Observability.RequestSpan
+  }
+
 otlpTraceBodyFromSpan ::
-  Text ->
-  Text ->
-  Text ->
-  Maybe Text ->
-  Maybe Text ->
-  Word64 ->
-  Word64 ->
-  Observability.RequestSpan ->
-  OtlpSpanKind ->
-  [(Text, LazyByteString.ByteString)] ->
-  [(Text, OtlpSpanKind, Word64, Word64, Observability.RequestSpan)] ->
+  OtlpTraceIdentity ->
+  OtlpSpanIdentity ->
+  OtlpSpanTiming ->
+  OtlpRootSpanContent ->
+  [OtlpChildSpan] ->
   LazyByteString.ByteString
-otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceState startTimeUnixNano endTimeUnixNano requestSpan rootSpanKind statusFields childSpans =
+otlpTraceBodyFromSpan traceIdentity rootIdentity rootTiming rootContent childSpans =
   jsonObjectBytes
     [ ( "resourceSpans",
         jsonArrayBytes
           [ jsonObjectBytes
-              [ ("resource", otlpResourceObject serviceName),
+              [ ("resource", otlpResourceObject (otlpTraceServiceName traceIdentity)),
                 ( "scopeSpans",
                   jsonArrayBytes
                     [ jsonObjectBytes
@@ -57,27 +112,18 @@ otlpTraceBodyFromSpan serviceName traceId spanId maybeParentSpanId maybeTraceSta
                           ),
                           ( "spans",
                             jsonArrayBytes
-                              ( otlpSpanObject
-                                  traceId
-                                  spanId
-                                  maybeParentSpanId
-                                  maybeTraceState
-                                  rootSpanKind
-                                  startTimeUnixNano
-                                  endTimeUnixNano
-                                  requestSpan
-                                  statusFields
+                              ( otlpSpanObject traceIdentity rootIdentity rootTiming (otlpRootRequestSpan rootContent) (otlpRootStatusFields rootContent)
                                   : [ otlpSpanObject
-                                        traceId
-                                        childSpanId
-                                        (Just spanId)
-                                        maybeTraceState
-                                        childSpanKind
-                                        childStartTimeUnixNano
-                                        childEndTimeUnixNano
-                                        childSpan
+                                        traceIdentity
+                                        OtlpSpanIdentity
+                                          { otlpSpanId = otlpChildSpanId childSpan,
+                                            otlpSpanParentId = Just (otlpSpanId rootIdentity),
+                                            otlpSpanKindValue = otlpChildSpanKind childSpan
+                                          }
+                                        (otlpChildTiming childSpan)
+                                        (otlpChildRequestSpan childSpan)
                                         []
-                                    | (childSpanId, childSpanKind, childStartTimeUnixNano, childEndTimeUnixNano, childSpan) <- childSpans
+                                    | childSpan <- childSpans
                                     ]
                               )
                           )
@@ -114,24 +160,20 @@ otlpResourceObject serviceName =
     ]
 
 otlpSpanObject ::
-  Text ->
-  Text ->
-  Maybe Text ->
-  Maybe Text ->
-  OtlpSpanKind ->
-  Word64 ->
-  Word64 ->
+  OtlpTraceIdentity ->
+  OtlpSpanIdentity ->
+  OtlpSpanTiming ->
   Observability.RequestSpan ->
   [(Text, LazyByteString.ByteString)] ->
   LazyByteString.ByteString
-otlpSpanObject traceId spanId maybeParentSpanId maybeTraceState spanKind startTimeUnixNano endTimeUnixNano requestSpan statusFields =
+otlpSpanObject traceIdentity spanIdentity timing requestSpan statusFields =
   jsonObjectBytes
-    ( [ ("traceId", jsonStringBytes traceId),
-        ("spanId", jsonStringBytes spanId),
+    ( [ ("traceId", jsonStringBytes (otlpTraceId traceIdentity)),
+        ("spanId", jsonStringBytes (otlpSpanId spanIdentity)),
         ("name", jsonStringBytes (Observability.requestSpanDisplayName requestSpan)),
-        ("kind", jsonStringBytes (otlpSpanKindText spanKind)),
-        ("startTimeUnixNano", jsonStringBytes (Text.pack (show startTimeUnixNano))),
-        ("endTimeUnixNano", jsonStringBytes (Text.pack (show endTimeUnixNano))),
+        ("kind", jsonStringBytes (otlpSpanKindText (otlpSpanKindValue spanIdentity))),
+        ("startTimeUnixNano", jsonStringBytes (Text.pack (show (otlpSpanStartTimeUnixNano timing)))),
+        ("endTimeUnixNano", jsonStringBytes (Text.pack (show (otlpSpanEndTimeUnixNano timing)))),
         ( "attributes",
           jsonArrayBytes
             ( map otlpAttribute $
@@ -139,8 +181,8 @@ otlpSpanObject traceId spanId maybeParentSpanId maybeTraceState spanKind startTi
             )
         )
       ]
-        ++ maybe [] (\parentSpanId -> [("parentSpanId", jsonStringBytes parentSpanId)]) maybeParentSpanId
-        ++ maybe [] (\traceState -> [("traceState", jsonStringBytes traceState)]) maybeTraceState
+        ++ maybe [] (\parentSpanId -> [("parentSpanId", jsonStringBytes parentSpanId)]) (otlpSpanParentId spanIdentity)
+        ++ maybe [] (\traceState -> [("traceState", jsonStringBytes traceState)]) (otlpTraceState traceIdentity)
         ++ statusFields
     )
 
