@@ -143,6 +143,15 @@ defaultResponseSecurityHeadersConfig =
 data RequestPolicyConfig = RequestPolicyConfig
   { redirectHttpToHttps :: Bool,
     httpsRedirectPort :: Maybe Int,
+    -- | The bare host (no scheme, no port) the HTTPS upgrade redirects to.
+    -- 'requestRedirectLocation' never echoes the request's own @Host@ header
+    -- into the redirect target: an untrusted client (or an intermediary
+    -- cache) could set that header to anything, turning the redirect into
+    -- an open-redirect primitive. When this is 'Nothing' — no canonical
+    -- authority is configured — the upgrade simply does not redirect,
+    -- rather than falling back to the untrusted header. See the DF decision
+    -- record in @docs/design-guidance.md@.
+    httpsRedirectAuthority :: Maybe ByteString.ByteString,
     strictTransportSecurity :: Maybe StrictTransportSecurityConfig,
     trustForwardedHeaders :: Bool,
     requestHeadLimits :: RequestHeadLimits,
@@ -177,31 +186,23 @@ requestRedirectLocation requestPolicyConfig request =
     && not (isAcmeHttp01ChallengeRequest requestPolicyConfig request)
     then
       fmap
-        ( \redirectAuthority ->
+        ( \canonicalAuthority ->
             "https://"
-              <> redirectAuthority
+              <> applyHttpsRedirectPort (httpsRedirectPort requestPolicyConfig) canonicalAuthority
               <> requestRedirectPathAndQuery requestPolicyConfig request
         )
-        (requestRedirectAuthority requestPolicyConfig request)
+        (httpsRedirectAuthority requestPolicyConfig)
     else Nothing
-
-requestRedirectAuthority :: RequestPolicyConfig -> Wai.Request -> Maybe ByteString.ByteString
-requestRedirectAuthority requestPolicyConfig request =
-  fmap
-    (applyHttpsRedirectPort (httpsRedirectPort requestPolicyConfig))
-    (lookup "Host" (Wai.requestHeaders request))
 
 requestRedirectPathAndQuery :: RequestPolicyConfig -> Wai.Request -> ByteString.ByteString
 requestRedirectPathAndQuery requestPolicyConfig request =
   TextEncoding.encodeUtf8 (externalRequestPath requestPolicyConfig request) <> Wai.rawQueryString request
 
 applyHttpsRedirectPort :: Maybe Int -> ByteString.ByteString -> ByteString.ByteString
-applyHttpsRedirectPort maybeRedirectPort hostHeader =
-  let normalizedDefaultHostHeader =
-        fromMaybe hostHeader (ByteStringChar8.stripSuffix ":80" hostHeader)
-      hostOnly = ByteStringChar8.takeWhile (/= ':') normalizedDefaultHostHeader
+applyHttpsRedirectPort maybeRedirectPort canonicalAuthority =
+  let hostOnly = ByteStringChar8.takeWhile (/= ':') canonicalAuthority
    in case maybeRedirectPort of
-        Nothing -> normalizedDefaultHostHeader
+        Nothing -> canonicalAuthority
         Just 443 -> hostOnly
         Just redirectPort ->
           hostOnly <> ":" <> ByteStringChar8.pack (show redirectPort)

@@ -49,6 +49,12 @@
     accepted counter (persisted in a new `account_totp.last_used_totp_counter` column, updated by an
     atomic conditional store operation), closing the ~90-second window in which an observed code
     could previously be replayed against the login endpoint.
+11. The HTTP-to-HTTPS upgrade redirect no longer echoes the request's own `Host` header into its
+    `Location`, closing an open redirect a client (or an intermediary cache) could previously trigger
+    by setting that header on a plaintext request. `RequestPolicyConfig` now carries an explicit
+    canonical `httpsRedirectAuthority`, derived from this app's own HTTPS listener when it has one and
+    otherwise from the already-required `PUBLIC_BASE_URL`; the redirect simply does not fire when
+    neither source resolves an authority.
 
 ## 0.1.1.0
 

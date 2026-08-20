@@ -66,11 +66,13 @@ import Core.Config
     parsePositiveInt,
   )
 import Data.Bifunctor (bimap, first)
+import Data.ByteString qualified as ByteString
 import Data.Foldable (traverse_)
 import Data.List (nub)
 import Data.Maybe (fromJust, fromMaybe, isJust, listToMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
   ( AcmeConfig (..),
     CertbotConfig (..),
@@ -329,6 +331,7 @@ defaultAppConfig =
         RequestPolicyConfig
           { redirectHttpToHttps = False,
             httpsRedirectPort = Nothing,
+            httpsRedirectAuthority = Nothing,
             strictTransportSecurity = Nothing,
             trustForwardedHeaders = False,
             requestHeadLimits = unboundedRequestHeadLimits,
@@ -721,6 +724,7 @@ parseRequestPolicyConfigP parsedListeners =
   RequestPolicyConfig
     <$> parseRedirectHttpToHttpsP parsedListeners
     <*> pure (defaultHttpsRedirectPort parsedListeners)
+    <*> pure (defaultHttpsRedirectAuthority parsedListeners)
     <*> parseOptionalStrictTransportSecurityP
     <*> parseOptionalBoolWithDefaultP "TRUST_FORWARDED_HEADERS" False
     <*> parseRequestHeadLimitsP
@@ -797,6 +801,20 @@ defaultHttpsRedirectPort parsedListeners =
   if any ((== Http) . listenerScheme) parsedListeners
     then case nub [listenerPort listener | listener <- parsedListeners, listenerScheme listener == Https] of
       [redirectPort] -> Just redirectPort
+      _ -> Nothing
+    else Nothing
+
+-- | A configuration-time best-effort default for 'HarchWeb.httpsRedirectAuthority':
+-- the host of this app's own HTTPS listener, when exactly one distinct host
+-- is declared. This only covers a deployment that terminates TLS itself; a
+-- deployment behind a TLS-offloading proxy declares no HTTPS listener at
+-- all, so 'WebApi.App.buildRuntimeApp' overrides this with the host parsed
+-- from @PUBLIC_BASE_URL@, which is required in every deployment shape.
+defaultHttpsRedirectAuthority :: [ListenerConfig] -> Maybe ByteString.ByteString
+defaultHttpsRedirectAuthority parsedListeners =
+  if any ((== Http) . listenerScheme) parsedListeners
+    then case nub [listenerHost listener | listener <- parsedListeners, listenerScheme listener == Https] of
+      [singleHttpsHost] -> Just (TextEncoding.encodeUtf8 singleHttpsHost)
       _ -> Nothing
     else Nothing
 

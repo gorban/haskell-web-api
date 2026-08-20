@@ -15,13 +15,16 @@ module WebApi.App
   )
 where
 
+import Control.Applicative ((<|>))
 import Control.Concurrent (forkIO)
 import Control.Concurrent.STM (atomically)
 import Control.Concurrent.STM.TBQueue (TBQueue, isFullTBQueue, newTBQueueIO, readTBQueue, writeTBQueue)
 import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (forM_, forever, unless)
+import Data.ByteString qualified as ByteString
 import Data.IORef (IORef, atomicModifyIORef', newIORef)
 import Data.Text qualified as Text
+import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.IO qualified as TextIO
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -174,7 +177,7 @@ buildRuntimeApp config environmentConfig =
    in pageRepository `seq`
         accountWorkflow `seq`
           buildAppWithDatabaseAndReporters
-            config
+            (withPublicBaseUrlRedirectAuthority environmentConfig config)
             pageRepository
             accountWorkflow
             (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
@@ -190,7 +193,7 @@ buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig 
   let pageRepository = buildPageRepository (databaseConfig environmentConfig)
    in pageRepository `seq`
         buildAppWithDatabaseAndReporters
-          config
+          (withPublicBaseUrlRedirectAuthority environmentConfig config)
           pageRepository
           unavailableAccountWorkflow
           (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
@@ -252,6 +255,34 @@ trimTrailingSlash value =
   case Text.unsnoc value of
     Just (prefix, '/') -> prefix
     _ -> value
+
+-- | The HTTPS-upgrade redirect must never echo a client-supplied @Host@
+-- header into its target (see 'HarchWeb.httpsRedirectAuthority'). Every
+-- web-api deployment already declares a canonical @PUBLIC_BASE_URL@ (used
+-- for email links), including a TLS-offloading deployment whose own
+-- listeners are HTTP-only and so cannot supply
+-- 'WebApi.Config.defaultHttpsRedirectAuthority''s listener-derived guess.
+-- Prefer the host parsed from that required setting, falling back to the
+-- config-derived guess only if @PUBLIC_BASE_URL@ is malformed.
+withPublicBaseUrlRedirectAuthority :: AppEnvironmentConfig -> AppConfig -> AppConfig
+withPublicBaseUrlRedirectAuthority !environmentConfig config =
+  config
+    { requestPolicy =
+        (requestPolicy config)
+          { HarchWeb.httpsRedirectAuthority =
+              authorityFromPublicBaseUrl (publicBaseUrl environmentConfig)
+                <|> HarchWeb.httpsRedirectAuthority (requestPolicy config)
+          }
+    }
+
+authorityFromPublicBaseUrl :: Text.Text -> Maybe ByteString.ByteString
+authorityFromPublicBaseUrl baseUrl =
+  case Text.stripPrefix "https://" baseUrl <|> Text.stripPrefix "http://" baseUrl of
+    Nothing -> Nothing
+    Just afterScheme ->
+      let authority = Text.takeWhile (\character -> character /= '/' && character /= '?' && character /= '#') afterScheme
+          host = Text.takeWhile (/= ':') authority
+       in if Text.null host then Nothing else Just (TextEncoding.encodeUtf8 host)
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig !environmentConfig = do

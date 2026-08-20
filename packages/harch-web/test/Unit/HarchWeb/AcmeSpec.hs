@@ -45,6 +45,7 @@ defaultRequestPolicy =
   RequestPolicyConfig
     { redirectHttpToHttps = False,
       httpsRedirectPort = Nothing,
+      httpsRedirectAuthority = Nothing,
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,

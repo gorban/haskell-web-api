@@ -256,6 +256,7 @@ defaultRequestPolicy =
   RequestPolicyConfig
     { redirectHttpToHttps = False,
       httpsRedirectPort = Nothing,
+      httpsRedirectAuthority = Just "app.example.com",
       strictTransportSecurity = Nothing,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,
@@ -1266,6 +1267,7 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
+                httpsRedirectAuthority = Just "app.example.com",
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
@@ -1322,6 +1324,7 @@ spec = do
       staticCacheControlSeconds (staticAssets serverConfig) `shouldBe` Just 3600
       redirectHttpToHttps requestPolicyConfig `shouldBe` True
       httpsRedirectPort requestPolicyConfig `shouldBe` Just 5443
+      httpsRedirectAuthority requestPolicyConfig `shouldBe` Just "app.example.com"
       strictTransportSecurity requestPolicyConfig `shouldBe` Just strictTransportSecurityConfig
       corsPolicy requestPolicyConfig `shouldBe` defaultCorsPolicyConfig
       responseSecurityHeaders requestPolicyConfig `shouldBe` defaultResponseSecurityHeadersConfig
@@ -1383,6 +1386,7 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Just 5443,
+                httpsRedirectAuthority = Just "app.example.com",
                 strictTransportSecurity = Just strictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
@@ -1395,6 +1399,7 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = False,
                 httpsRedirectPort = Nothing,
+                httpsRedirectAuthority = Just "other.example.com",
                 strictTransportSecurity = Just otherStrictTransportSecurityConfig,
                 trustForwardedHeaders = False,
                 requestHeadLimits = unboundedRequestHeadLimits,
@@ -1601,7 +1606,7 @@ spec = do
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
       show [responseSecurityHeadersConfig] `shouldContain` "[ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
-      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), trustForwardedHeaders = False"
+      show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, httpsRedirectAuthority = Just \"app.example.com\", strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), trustForwardedHeaders = False"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
@@ -3009,6 +3014,28 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
       readResponseBody response `shouldReturn` "Redirecting to HTTPS"
 
+    it "redirects to the configured canonical authority instead of an untrusted Host header" $ do
+      let redirectRequest =
+            (waiRequest ["data"])
+              { Wai.rawQueryString = "?from=plain-http",
+                Wai.requestHeaders = [("Host", "evil.example")]
+              }
+      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data?from=plain-http"
+
+    it "does not redirect at all when no canonical authority is configured" $ do
+      let redirectRequest =
+            (waiRequest ["data"])
+              { Wai.requestHeaders = [("Host", "evil.example")]
+              }
+      response <-
+        performWaiRequest
+          (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectAuthority = Nothing})))
+          redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status202
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Nothing
+
     it "rewrites redirects to the configured HTTPS listener port" $ do
       let redirectRequest =
             (waiRequest ["data"])
@@ -3094,6 +3121,7 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = True,
                 httpsRedirectPort = Nothing,
+                httpsRedirectAuthority = Just "app.example.com",
                 strictTransportSecurity =
                   Just
                     StrictTransportSecurityConfig
@@ -3127,6 +3155,7 @@ spec = do
             RequestPolicyConfig
               { redirectHttpToHttps = False,
                 httpsRedirectPort = Nothing,
+                httpsRedirectAuthority = Nothing,
                 strictTransportSecurity =
                   Just
                     StrictTransportSecurityConfig
@@ -4475,6 +4504,7 @@ spec = do
               RequestPolicyConfig
                 { redirectHttpToHttps = False,
                   httpsRedirectPort = Nothing,
+                  httpsRedirectAuthority = Nothing,
                   strictTransportSecurity =
                     Just
                       StrictTransportSecurityConfig

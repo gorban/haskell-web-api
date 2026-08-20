@@ -82,6 +82,7 @@ spec = do
                  fmap HarchWeb.navigationRuntimePath (siteNavigationRuntime sampleSite) `shouldBe` Just "/assets/navigation.js",
                  siteNavigationRuntimePathPrefix sampleSite (SampleContext "/app") `shouldBe` "",
                  HarchWeb.httpsRedirectPort (siteRequestPolicy sampleSite) `shouldBe` Nothing,
+                 HarchWeb.httpsRedirectAuthority (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.requestTransportLimits (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.warpDefaultRequestTransportLimits,
                  HarchWeb.requestConcurrencyLimit (siteRequestPolicy sampleSite) `shouldBe` Nothing,
                  HarchWeb.corsPolicy (siteRequestPolicy sampleSite) `shouldBe` HarchWeb.defaultCorsPolicyConfig,

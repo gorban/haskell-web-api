@@ -872,6 +872,30 @@ second build order. The manifest gate asserts the three Simple packages and the 
 implementation, while the complete test/coverage gate proves Cabal resolves and runs every declared
 test tool.
 
+### Follow-up decision — DF: HTTPS-redirect authority stops trusting the request's own Host header (2026-08-20)
+
+**Decision: extend `RequestPolicyConfig` with a canonical `httpsRedirectAuthority` field (option 1,
+small and general); do not have the framework introspect `AcmeConfig`/TLS bind-plan config to guess
+a domain.** `requestRedirectAuthority` echoed the request's own `Host` header into the 308 upgrade's
+`Location`, an open redirect an attacker (or a caching intermediary) fully controls by setting that
+header on a plaintext request. The task's own text suggested the framework already had a usable
+domain list on `AcmeConfig`/`ManualTlsBindPlan`; checking found `ManualTlsBindPlan` carries no domain
+field at all, so that path does not generalize. `HarchWeb.Security.requestRedirectLocation` now never
+reads the request's `Host` header — it renders `httpsRedirectAuthority` (with the existing
+`httpsRedirectPort` rewrite) or does not redirect at all when unset, rather than falling back to the
+untrusted header.
+
+The framework-level default (`WebApi.Config.Internal.defaultHttpsRedirectAuthority`) derives the
+authority from this app's own unique HTTPS listener host, mirroring `defaultHttpsRedirectPort`'s
+existing gate (an HTTP listener must also be present). That default is `Nothing` for a deployment
+behind a TLS-offloading reverse proxy, which declares no local HTTPS listener at all — exactly the
+shape `REDIRECT_HTTP_TO_HTTPS` most needs, per the existing "TLS-offload deployments" test. Rather
+than add a second, redundant config key for that case, `WebApi.App.buildRuntimeApp` extends the
+already-required `PUBLIC_BASE_URL` setting (already the canonical external URL used for email
+links) to also supply the redirect authority, overriding the listener-derived guess when it parses.
+No new abstraction and no new required setting were added; both existing boundaries — the framework's
+request-policy record and web-api's own composition-root override point — were extended in place.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

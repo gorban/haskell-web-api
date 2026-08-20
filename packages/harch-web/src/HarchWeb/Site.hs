@@ -276,6 +276,7 @@ defaultSiteRequestPolicy =
   RequestPolicyConfig
     { redirectHttpToHttps = False,
       httpsRedirectPort = Nothing,
+      httpsRedirectAuthority = Nothing,
       strictTransportSecurity = Nothing :: Maybe StrictTransportSecurityConfig,
       trustForwardedHeaders = False,
       requestHeadLimits = unboundedRequestHeadLimits,

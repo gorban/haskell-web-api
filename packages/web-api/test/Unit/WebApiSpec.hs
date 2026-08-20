@@ -1140,6 +1140,7 @@ spec = do
               RequestPolicyConfig
                 { redirectHttpToHttps = False,
                   httpsRedirectPort = Nothing,
+                  httpsRedirectAuthority = Nothing,
                   strictTransportSecurity = Nothing,
                   trustForwardedHeaders = False,
                   requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
@@ -1273,6 +1274,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
+                    httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
@@ -1619,6 +1621,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Just 5443,
+                    httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
@@ -1839,6 +1842,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Nothing,
+                    httpsRedirectAuthority = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -1870,6 +1874,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
                     httpsRedirectPort = Nothing,
+                    httpsRedirectAuthority = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -1897,6 +1902,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
                     httpsRedirectPort = Nothing,
+                    httpsRedirectAuthority = Nothing,
                     strictTransportSecurity =
                       Just
                         StrictTransportSecurityConfig
@@ -2077,6 +2083,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = False,
                     httpsRedirectPort = Just 5443,
+                    httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
@@ -2154,6 +2161,7 @@ spec = do
                 RequestPolicyConfig
                   { redirectHttpToHttps = True,
                     httpsRedirectPort = Nothing,
+                    httpsRedirectAuthority = Just "127.0.0.1",
                     strictTransportSecurity = Nothing,
                     trustForwardedHeaders = False,
                     requestHeadLimits = HarchWeb.unboundedRequestHeadLimits,
@@ -9257,6 +9265,47 @@ spec = do
             ]
         )
       HarchWeb.reportApplicationLog runtimeApplication "runtime failure detail"
+
+    it "redirects to the canonical authority parsed from PUBLIC_BASE_URL, ignoring a forged Host header" $ do
+      let runtimeAppConfig = defaultAppConfig {requestPolicy = (requestPolicy defaultAppConfig) {redirectHttpToHttps = True}}
+          runtimeEnvironmentConfig = defaultAppEnvironmentConfig {publicBaseUrl = "https://accounts.example.test:8443/"}
+          runtimeApplication = buildRuntimeAppWithDatabaseBuilder runtimeAppConfig (const defaultPageRepository) runtimeEnvironmentConfig
+          redirectRequest = (waiRequest ["second"]) {Wai.requestHeaders = [("Host", "evil.example")]}
+      response <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://accounts.example.test/second"
+
+    it "falls back to the listener-derived authority when PUBLIC_BASE_URL has no recognizable authority" $ do
+      let runtimeAppConfig =
+            defaultAppConfig
+              { requestPolicy =
+                  (requestPolicy defaultAppConfig)
+                    { redirectHttpToHttps = True,
+                      httpsRedirectAuthority = Just "127.0.0.1"
+                    }
+              }
+          runtimeEnvironmentConfig = defaultAppEnvironmentConfig {publicBaseUrl = "not-a-url"}
+          runtimeApplication = buildRuntimeAppWithDatabaseBuilder runtimeAppConfig (const defaultPageRepository) runtimeEnvironmentConfig
+          redirectRequest = (waiRequest ["second"]) {Wai.requestHeaders = [("Host", "evil.example")]}
+      response <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://127.0.0.1/second"
+
+    it "falls back to the listener-derived authority when PUBLIC_BASE_URL has no host after its scheme" $ do
+      let runtimeAppConfig =
+            defaultAppConfig
+              { requestPolicy =
+                  (requestPolicy defaultAppConfig)
+                    { redirectHttpToHttps = True,
+                      httpsRedirectAuthority = Just "127.0.0.1"
+                    }
+              }
+          runtimeEnvironmentConfig = defaultAppEnvironmentConfig {publicBaseUrl = "https://"}
+          runtimeApplication = buildRuntimeAppWithDatabaseBuilder runtimeAppConfig (const defaultPageRepository) runtimeEnvironmentConfig
+          redirectRequest = (waiRequest ["second"]) {Wai.requestHeaders = [("Host", "evil.example")]}
+      response <- performWaiRequest (HarchWeb.toWaiApplication runtimeApplication) redirectRequest
+      Wai.responseStatus response `shouldBe` Http.status308
+      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://127.0.0.1/second"
 
     it "exports runtime request observability to the configured OTLP tracing endpoint" $
       withOtlpCaptureServer Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
