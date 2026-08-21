@@ -10,6 +10,7 @@ module WebApi.Page.Model
 where
 
 import Data.Text (Text)
+import HarchWeb (SafeUrl)
 import WebApi.AccountPages.Actions.Contract (AccountActionTarget)
 import WebApi.AccountPages.Forms
   ( LoginForm (..),
@@ -22,7 +23,7 @@ import WebApi.Route (AppRoute)
 data CallToAction = CallToAction
   { callToActionLabel :: Text,
     callToActionRoute :: AppRoute,
-    callToActionHref :: Text
+    callToActionHref :: SafeUrl
   }
   deriving (Eq, Show)
 

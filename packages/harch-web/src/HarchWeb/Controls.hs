@@ -127,7 +127,7 @@ defaultActionFormAttributes =
       actionFormRecoveryCopy = defaultActionRecoveryCopy
     }
 
-pageLink :: (route -> Text) -> route -> [Html] -> Html
+pageLink :: (route -> SafeUrl) -> route -> [Html] -> Html
 pageLink renderPageTarget target =
   element
     anchorTag

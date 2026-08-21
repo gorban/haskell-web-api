@@ -1199,6 +1199,75 @@ session's *other* documented coverage-gate pattern — a CSE-shared bare atom lo
 literal, in the new upfront-check code path; `$!`-forcing it at the same argument position the
 technique already covers closed it immediately, confirmed by a genuine coverage re-run.
 
+### Follow-up decision — BR: validated newtypes plus `IsString`, not a blocklist or a bare `Text` parameter (2026-08-21)
+
+**Decision: introduce `DataAttributeSuffix` and `SafeUrl` as validated newtypes with `IsString`
+instances, rather than either a runtime blocklist check inside `dataAttribute`/`href` or leaving
+their parameters as bare `Text`.** This is the extend-vs-new-abstraction call from the "Design
+decisions before you build" framework: `HarchWeb.Markup.Internal`'s existing `AttributeName`
+newtype already had the right shape for this (a validated wrapper around `Text`) but no validation
+at all, so the fix extends that existing boundary — giving the two *public* construction paths
+(`dataAttribute`/`dataFlag`'s suffix, `href`'s URL) their own validated types — rather than adding
+a second, parallel checking mechanism next to it. A runtime blocklist (reject `javascript:`,
+`data:`, `vbscript:`, …) was rejected for `SafeUrl` specifically: a blocklist can miss an obscure
+dangerous scheme a browser will still execute, while an allowlist (relative reference, or
+`http`/`https`) cannot silently regress the same way — BR's own task text already named this
+tradeoff correctly.
+
+The `IsString` instance is the piece that made this tractable at the ~30-call-site scale this
+change touches: every existing call site already writes `dataAttribute "harch-action" ...` or
+`href "/second"` as an `OverloadedStrings` literal, so giving each newtype `fromString = fromMaybe
+(error ...) . mkX . Text.pack` lets every such literal keep compiling completely unchanged, with
+the validation still running (`OverloadedStrings` resolves through this instance at compile-adjacent
+time, against text the application author wrote themselves) and a malformed literal caught the
+first time that page renders — the same failure mode any other `OverloadedStrings`-literal type
+already accepts. A caller building either value from genuine runtime `Text` (a redirect target, a
+user-supplied link) must go through the explicit `Maybe`-returning `mkDataAttributeSuffix`/
+`mkSafeUrl` and handle rejection — the untrusted-input resource-ownership principle applied to
+"which text is allowed to bypass validation": never runtime/caller-supplied text, always exactly
+the literal the application author wrote at the call site.
+
+This surfaced a genuine framework-capability gap mid-task, handled per the protocol's "add the
+primitive" fork: `HarchWeb.Markup.Quasi.Lowering`'s `[harch| ... |]` EDSL lowers markup-source
+string literals through its own `textLiteral` helper (`AppE (VarE 'Text.pack) ...`), which
+bypasses `OverloadedStrings`/`IsString` entirely — it is TH-generated code building `Text` directly,
+not going through GHC's literal-defaulting mechanism. Left unfixed, every `data-*`/`href` literal
+written inside quasiquoted markup (the majority of real call sites in this codebase) would have
+failed to compile despite the `IsString` design being otherwise correct. Fixed with a parallel
+`fromStringLiteral` helper (`AppE (VarE 'fromString) ...`) routed through the `data-*`-suffix and
+literal-`href` lowering paths specifically, rather than changing `textLiteral`'s behavior for every
+other attribute (which still wants plain `Text`, not a validated type).
+
+`HarchWeb.Controls.pageLink`'s route-render parameter changed from `route -> Text` to
+`route -> SafeUrl`, pushing the safety proof to the type that actually renders a route into an
+`href`. Both real call sites that build one (`App.Routes.twoPageNavigationPath`,
+`WebApi.Page.Building.buildCallToAction`) render exclusively from a closed, always-safe typed route
+table and can show by construction that `mkSafeUrl` never actually rejects their output — a rejection
+there could only mean a route itself was defined to render an unsafe URL, a programming mistake in
+that renderer, not a runtime condition either function's own callers need to handle. Rather than
+duplicate a `fromMaybe (error ...) . mkSafeUrl` inline in both places, this need (now shared by two
+call sites with identical shape) was itself the extend-vs-new-abstraction question one level down:
+a new framework-level `HarchWeb.requiredSafeUrlOrDie :: Text -> Maybe SafeUrl -> SafeUrl` was added
+once, matching the exact shape and naming convention `WebApi.Login`'s existing
+`requiredPasswordHashOrDie` already established this session for "assert a value that's provably
+always present, or crash with a named diagnostic" — and both call sites use it instead of hand-
+rolling their own.
+
+Two rounds of genuine coverage gaps surfaced closing this out, both already-documented patterns
+applied to new shapes rather than new problems. First: `requiredSafeUrlOrDie`'s `context` argument
+is only demanded on its (never-taken, by construction) `error` path, so the `Text.concat`-shaped
+diagnostic-message expression at each call site stayed a permanently-unticked, unforced thunk under
+HPC in every real run — closed with the established `$!`-forcing technique at each call site
+(`(requiredSafeUrlOrDie $! contextExpr) (mkSafeUrl renderedPath)`), not by trying to make the
+`error` branch reachable. Second: `DataAttributeSuffix`/`SafeUrl`'s `deriving (Eq, Show)` showed
+"top-level declarations" gaps despite exhaustive `==`/`/=`/`show`/`show [x]` exercises covering most
+of it — the residue needed an explicit *equal-value* `==` exercise (`x == x`) alongside the
+already-present *unequal-value* `/=` exercise, confirmed by reading the per-line HPC HTML markup
+rather than assumed. Both `fromString`'s own `error` fallback (the invalid-literal path) needed its
+own direct test forcing it via a deliberately malformed `OverloadedStrings` literal at the type,
+matching the `requiredXOrDie` extract-and-directly-test pattern rather than trying to make production
+code take that branch.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

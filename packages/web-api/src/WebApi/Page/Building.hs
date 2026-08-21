@@ -179,18 +179,33 @@ buildSecondPageModel routeRequest secondRouteDataResult =
                 secondPrimaryAction = returnHome
               }
 
+{-# ANN buildCallToAction ("HLint: ignore Redundant $!" :: String) #-}
 buildCallToAction :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppRoute -> Text -> CallToAction
 buildCallToAction routeRequest route label =
   CallToAction
     { callToActionLabel = label,
       callToActionRoute = route,
+      -- Always a relative path built from this application's own typed
+      -- route table, never from unvalidated caller text — a rejection here
+      -- would mean a route itself renders an unsafe URL, a programming
+      -- mistake in the route table, not a runtime condition this
+      -- function's own callers need to handle. See
+      -- 'HarchWeb.requiredSafeUrlOrDie' for why the failure path is
+      -- extracted rather than inlined; the @$!@ forces the diagnostic
+      -- message eagerly since it is otherwise only demanded on the
+      -- (never-taken, by construction) failure path, leaving it a
+      -- permanently-unticked thunk under HPC.
       callToActionHref =
-        renderRoutePath
-          HarchWeb.RouteRequest
-            { HarchWeb.requestRoute = route,
-              HarchWeb.requestContext = HarchWeb.requestContext routeRequest
-            }
+        (HarchWeb.requiredSafeUrlOrDie $! ("buildCallToAction: rendered an unsafe URL: " <> renderedPath))
+          (HarchWeb.mkSafeUrl renderedPath)
     }
+  where
+    renderedPath =
+      renderRoutePath
+        HarchWeb.RouteRequest
+          { HarchWeb.requestRoute = route,
+            HarchWeb.requestContext = HarchWeb.requestContext routeRequest
+          }
 
 localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text -> Text -> Text
 localizedText routeRequest englishText spanishText =

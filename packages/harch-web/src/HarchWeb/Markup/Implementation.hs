@@ -3,6 +3,7 @@
 
 module HarchWeb.Markup.Implementation
   ( Attribute,
+    DataAttributeSuffix,
     ElementId,
     Html,
     MarkupContent (toHtml),
@@ -10,6 +11,7 @@ module HarchWeb.Markup.Implementation
     RegionId,
     RegionPatch,
     NormalTag,
+    SafeUrl,
     TrustedHtml,
     VoidTag,
     anchorTag,
@@ -21,6 +23,7 @@ module HarchWeb.Markup.Implementation
     className,
     codeTag,
     dataAttribute,
+    dataAttributeSuffixText,
     dataFlag,
     divTag,
     element,
@@ -48,8 +51,10 @@ module HarchWeb.Markup.Implementation
     maxLength,
     method,
     minLength,
+    mkDataAttributeSuffix,
     mkElementId,
     mkRegionId,
+    mkSafeUrl,
     name,
     paragraphTag,
     optionTag,
@@ -59,7 +64,9 @@ module HarchWeb.Markup.Implementation
     regionPatchId,
     replaceRegion,
     required,
+    requiredSafeUrlOrDie,
     role,
+    safeUrlText,
     sectionTag,
     selectTag,
     text,
@@ -70,7 +77,11 @@ module HarchWeb.Markup.Implementation
   )
 where
 
+import Data.Char qualified as Char
+import Data.Maybe (fromMaybe)
+import Data.String (IsString (fromString))
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb.Markup.Internal
   ( Attribute,
     AttributeName (..),
@@ -111,11 +122,55 @@ instance MarkupContent [Html] where
 className :: CssClass -> Attribute
 className = attribute (AttributeName "class") . cssClassText
 
-dataAttribute :: Text -> Text -> Attribute
-dataAttribute attributeSuffix = attribute (AttributeName ("data-" <> attributeSuffix))
+-- | The suffix half of a @data-*@ attribute name (the part after
+-- @data-@). Attribute values are HTML-escaped before rendering, but an
+-- attribute *name* is written directly into markup with no escaping at
+-- all — an unvalidated suffix could close the attribute early and inject
+-- an event-handler attribute (e.g. @dataAttribute "x\" onmouseover=\"evil()"
+-- "v"@). Restricted to the same character set HTML custom-data-attribute
+-- names actually need: lowercase ASCII letters, digits, and hyphens.
+--
+-- Decision (BR, 2026-08-21, per @docs/design-guidance.md@'s
+-- extend-vs-new-abstraction rule): this and 'SafeUrl' extend
+-- 'HarchWeb.Markup.Internal.AttributeName''s existing (but previously
+-- unvalidated) newtype boundary rather than adding a parallel checking
+-- mechanism, and each carries an 'IsString' instance so every existing
+-- @OverloadedStrings@ call site keeps compiling unchanged while a runtime
+-- @Text@ value must go through the explicit smart constructor. See
+-- @docs/design-guidance.md@'s \"Follow-up decision — BR\" for the full
+-- record, including the allowlist-vs-blocklist call for 'SafeUrl' and the
+-- quasiquoter capability gap this design surfaced.
+newtype DataAttributeSuffix = DataAttributeSuffix Text
+  deriving (Eq, Show)
 
-dataFlag :: Text -> Attribute
-dataFlag attributeSuffix = booleanAttribute (AttributeName ("data-" <> attributeSuffix))
+dataAttributeSuffixText :: DataAttributeSuffix -> Text
+dataAttributeSuffixText (DataAttributeSuffix suffix) = suffix
+
+mkDataAttributeSuffix :: Text -> Maybe DataAttributeSuffix
+mkDataAttributeSuffix suffix =
+  if not (Text.null suffix) && Text.all isDataAttributeSuffixCharacter suffix
+    then Just (DataAttributeSuffix suffix)
+    else Nothing
+  where
+    isDataAttributeSuffixCharacter character = Char.isAsciiLower character || Char.isDigit character || character == '-'
+
+-- | Lets an application author write @dataAttribute "harch-action" ...@ as
+-- a plain string literal (every call site in this codebase already does):
+-- 'OverloadedStrings' resolves the literal through this instance at
+-- compile time against a value the author wrote themselves, not against
+-- caller-supplied or untrusted text — 'mkDataAttributeSuffix' remains the
+-- only way to validate a suffix built from a runtime 'Text' value. A
+-- malformed literal is a programming mistake caught the first time the
+-- page it appears on is rendered, the same failure mode 'OverloadedStrings'
+-- literals of other validated types already accept throughout Haskell.
+instance IsString DataAttributeSuffix where
+  fromString suffix = fromMaybe (error ("invalid data-attribute suffix literal: " <> show suffix)) (mkDataAttributeSuffix (Text.pack suffix))
+
+dataAttribute :: DataAttributeSuffix -> Text -> Attribute
+dataAttribute attributeSuffix = attribute (AttributeName ("data-" <> dataAttributeSuffixText attributeSuffix))
+
+dataFlag :: DataAttributeSuffix -> Attribute
+dataFlag attributeSuffix = booleanAttribute (AttributeName ("data-" <> dataAttributeSuffixText attributeSuffix))
 
 formAction :: Text -> Attribute
 formAction = attribute (AttributeName "action")
@@ -132,8 +187,66 @@ autocomplete = attribute (AttributeName "autocomplete")
 role :: Text -> Attribute
 role = attribute (AttributeName "role")
 
-href :: Text -> Attribute
-href = attribute (AttributeName "href")
+-- | A URL that cannot execute script when a browser navigates to it.
+-- 'escapeHtmlAttribute' already protects the surrounding markup, but no
+-- amount of HTML escaping stops a browser from running @javascript:@ (or
+-- @data:text/html,…@, @vbscript:@, …) the moment a link is followed —
+-- that requires validating the URL's own scheme, not just quoting it
+-- safely into an attribute. Allowlisted, not blocklisted: only a relative
+-- reference (no scheme at all) or an explicit @http@\/@https@ URL is
+-- accepted, rather than naming every dangerous scheme and hoping the list
+-- is complete.
+newtype SafeUrl = SafeUrl Text
+  deriving (Eq, Show)
+
+safeUrlText :: SafeUrl -> Text
+safeUrlText (SafeUrl url) = url
+
+mkSafeUrl :: Text -> Maybe SafeUrl
+mkSafeUrl url =
+  if isSafeUrlScheme url then Just (SafeUrl url) else Nothing
+
+-- | Browsers strip embedded tabs\/newlines\/carriage returns and leading
+-- whitespace before determining a URL's effective scheme, so
+-- @"java\\tscript:alert(1)"@ and @" javascript:alert(1)"@ both still run
+-- as script despite not literally starting with @"javascript:"@. Stripping
+-- the same characters here before reading the scheme closes that gap
+-- rather than only catching the literal, unobfuscated case.
+isSafeUrlScheme :: Text -> Bool
+isSafeUrlScheme url =
+  case Text.uncons remainderAfterScheme of
+    Just (':', _) -> Text.toLower candidateScheme `elem` ["http", "https"]
+    _ -> True
+  where
+    strippedUrl = Text.filter (`notElem` (" \t\n\r" :: String)) url
+    candidateScheme = Text.takeWhile isSchemeCharacter strippedUrl
+    remainderAfterScheme = Text.drop (Text.length candidateScheme) strippedUrl
+    isSchemeCharacter character = Char.isAsciiUpper character || Char.isAsciiLower character || Char.isDigit character || character == '+' || character == '-' || character == '.'
+
+-- | Mirrors 'DataAttributeSuffix'\'s 'IsString' instance: a plain string
+-- literal is the application author's own text, validated once at compile
+-- time against a value they wrote themselves. A caller building a URL from
+-- a runtime 'Text' value (a redirect target, a user-supplied link, …) must
+-- go through 'mkSafeUrl' and handle a rejected scheme explicitly.
+instance IsString SafeUrl where
+  fromString url = fromMaybe (error ("invalid or unsafe URL literal: " <> show url)) (mkSafeUrl (Text.pack url))
+
+-- | For code that renders a URL from a fixed, typed route table rather than
+-- from a string literal (so 'IsString' does not apply) and can show, by
+-- construction, that the rendered text will always satisfy 'mkSafeUrl' — a
+-- typed route renderer covering a closed set of constructors, for example.
+-- A rejection here means the route table itself was defined to render an
+-- unsafe URL, a programming mistake in that renderer, not a runtime
+-- condition its callers need to handle. Follows the same shape as
+-- @WebApi.Login@'s @requiredPasswordHashOrDie@: extracted into its own
+-- named, exported helper so a dedicated test can force the failure path
+-- directly with a deliberately unsafe 'Maybe' value, leaving every real
+-- call site's own coverage untouched by the branch it can never take.
+requiredSafeUrlOrDie :: Text -> Maybe SafeUrl -> SafeUrl
+requiredSafeUrlOrDie context = fromMaybe (error ("HarchWeb.Markup: " <> Text.unpack context))
+
+href :: SafeUrl -> Attribute
+href = attribute (AttributeName "href") . safeUrlText
 
 hidden :: Attribute
 hidden = booleanAttribute (AttributeName "hidden")

@@ -7,6 +7,7 @@ where
 
 import Data.Functor ((<&>))
 import Data.List (find, intercalate)
+import Data.String (fromString)
 import Data.Text qualified as Text
 import HarchWeb.Markup.Quasi.Parser
   ( MarkupAttribute (..),
@@ -294,6 +295,12 @@ lowerLiteralAttribute position attributeName literal =
     "id" -> applyNamed "elementId" [applyNamedPure "literalElementId" [textLiteral literal]]
     "for" -> applyNamed "labelFor" [applyNamedPure "literalElementId" [textLiteral literal]]
     "class" -> failAt position "class requires an interpolated CssClass expression"
+    -- 'href' takes a 'SafeUrl', not 'Text': a quoted literal in markup
+    -- source is the template author's own text, validated once at compile
+    -- time through 'SafeUrl'\'s 'IsString' instance (the same trust level
+    -- 'fromStringLiteral' already gives a literal Haskell string), not
+    -- through the plain-'Text' 'textLiteral' every other text attribute uses.
+    "href" -> lowerTextAttribute position attributeName (fromStringLiteral literal)
     _ -> lowerTextAttribute position attributeName (textLiteral literal)
 
 lowerExpressionAttribute :: Position -> String -> String -> Q Exp
@@ -310,7 +317,7 @@ lowerFlagAttribute position attributeName =
   case attributeName of
     "required" -> namedValue position "required"
     _
-      | Just suffix <- dataAttributeSuffix attributeName -> applyNamed "dataFlag" [textLiteral suffix]
+      | Just suffix <- dataAttributeSuffix attributeName -> applyNamed "dataFlag" [fromStringLiteral suffix]
       | otherwise -> failAt position ("unsupported boolean attribute " <> attributeName)
 
 lowerTextAttribute :: Position -> String -> Exp -> Q Exp
@@ -319,7 +326,12 @@ lowerTextAttribute position attributeName valueExpression =
     Just constructorName -> applyNamed constructorName [valueExpression]
     Nothing
       | Just suffix <- dataAttributeSuffix attributeName ->
-          applyNamed "dataAttribute" [textLiteral suffix, valueExpression]
+          -- The suffix always comes from the static attribute name parsed
+          -- from markup source (never from an interpolated expression), so
+          -- it goes through 'DataAttributeSuffix'\'s 'IsString' instance
+          -- via 'fromStringLiteral' regardless of whether the *value* half
+          -- was a literal or an interpolated expression.
+          applyNamed "dataAttribute" [fromStringLiteral suffix, valueExpression]
       | otherwise -> failAt position ("unsupported attribute " <> attributeName)
 
 textAttributeConstructors :: [(String, String)]
@@ -365,6 +377,13 @@ parseExpression position expressionSource =
 
 textLiteral :: String -> Exp
 textLiteral literal = AppE (VarE 'Text.pack) (LitE (StringL literal))
+
+-- | Like 'textLiteral', but for a validated newtype ('DataAttributeSuffix',
+-- 'SafeUrl') reached through its 'IsString' instance instead of building a
+-- plain 'Text' value: the generated code reads the same as a template
+-- author writing the string literal directly with 'OverloadedStrings'.
+fromStringLiteral :: String -> Exp
+fromStringLiteral literal = AppE (VarE 'fromString) (LitE (StringL literal))
 
 failAt :: Position -> String -> Q a
 failAt (Position line column) message =

@@ -31,6 +31,9 @@ import HarchWeb
   ( RouteCodec (..),
     RouteMethod (..),
     RouteRequest (..),
+    SafeUrl,
+    mkSafeUrl,
+    requiredSafeUrlOrDie,
     routeMethodPolicy,
   )
 import HarchWeb.Action
@@ -134,11 +137,26 @@ twoPageActions =
     (post "/actions/subscribe")
     (SubscribeAction <$> singleOrDefault "" (formField "email" textValue))
 
-twoPageNavigationPath :: TwoPageNavigationTarget -> Text
+-- | Every branch renders a relative path built from this application's own
+-- fixed route structure, never from unvalidated caller text, so
+-- 'mkSafeUrl' rejecting it here would only ever mean a route itself was
+-- defined to render an unsafe URL — a programming mistake in this
+-- function, not a runtime condition 'pageLink' callers need to handle.
+-- See 'requiredSafeUrlOrDie' for why the failure path is extracted rather
+-- than inlined. The @$!@ below forces the diagnostic message eagerly for
+-- the same HPC CSE-sharing reason documented on other forced call sites
+-- in this codebase: 'requiredSafeUrlOrDie' only demands this argument on
+-- the (never-taken, by construction) failure path, so it would otherwise
+-- stay an unevaluated, permanently-unticked thunk in every real run.
+{-# ANN twoPageNavigationPath ("HLint: ignore Redundant $!" :: String) #-}
+twoPageNavigationPath :: TwoPageNavigationTarget -> SafeUrl
 twoPageNavigationPath navigationTarget =
-  case navigationTarget of
-    NavigationPage page -> pageRoutePath page
-    NavigationPreview previewSlug -> "/preview/" <> previewSlugText previewSlug
+  (requiredSafeUrlOrDie $! ("twoPageNavigationPath: rendered an unsafe URL: " <> renderedPath))
+    (mkSafeUrl renderedPath)
+  where
+    renderedPath = case navigationTarget of
+      NavigationPage page -> pageRoutePath page
+      NavigationPreview previewSlug -> "/preview/" <> previewSlugText previewSlug
 
 mkPreviewSlug :: Text -> Maybe PreviewSlug
 mkPreviewSlug value =

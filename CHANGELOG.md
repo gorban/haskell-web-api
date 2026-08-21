@@ -105,6 +105,19 @@
     anti-enumeration protection for email addresses specifically. The pending-account insert now
     targets `ON CONFLICT (email_normalized) DO NOTHING` (was untargeted), paired with an upfront
     username-availability check run only when a username was supplied.
+18. **Breaking:** `dataAttribute`/`dataFlag` now take a validated `DataAttributeSuffix` instead of
+    raw `Text` (`mkDataAttributeSuffix` restricts it to non-empty `[a-z0-9-]+`), and `href`/
+    `pageLink` now take a validated `SafeUrl` instead of raw `Text` (`mkSafeUrl` allowlists relative
+    references and `http`/`https` schemes, rejecting `javascript:`/`data:`/`vbscript:`/etc., and
+    strips embedded whitespace/control characters before reading the scheme so an obfuscated
+    literal cannot bypass it). Attribute values are HTML-escaped before rendering, but an attribute
+    *name* is written into markup with no escaping at all, so an unvalidated `data-*` suffix could
+    previously inject an arbitrary event-handler attribute; `href` previously accepted any scheme,
+    including ones a browser will execute as script when a link is followed. Both new types carry
+    an `IsString` instance, so every existing `OverloadedStrings` literal call site (including
+    inside `[harch| ... |]` quasiquoted markup) keeps compiling unchanged; a caller building either
+    value from a runtime `Text` value must go through the explicit `mkDataAttributeSuffix`/
+    `mkSafeUrl` smart constructor and handle rejection.
 
 ## 0.1.1.0
 
