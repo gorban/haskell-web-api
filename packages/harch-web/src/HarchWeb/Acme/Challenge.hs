@@ -8,10 +8,12 @@
 module HarchWeb.Acme.Challenge
   ( AcmeChallengeStore (..),
     ActiveAcmeChallenge (..),
+    CertbotWebrootStore (..),
     acmeChallengeResponseForRequest,
     acmeChallengeRoutePath,
     acmeHttp01ChallengeToken,
     matchesRuntimeAcmeChallenge,
+    newCertbotWebrootStore,
     registerAcmeChallenges,
     registerCertbotAcmeChallengeWebroot,
     unregisterAcmeChallenges,
@@ -40,7 +42,6 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.Directory (doesFileExist)
 import System.FilePath ((</>))
-import System.IO.Unsafe (unsafePerformIO)
 
 data ActiveAcmeChallenge = ActiveAcmeChallenge
   { activeAcmeChallengeDomain :: Text,
@@ -50,8 +51,8 @@ data ActiveAcmeChallenge = ActiveAcmeChallenge
 
 newtype AcmeChallengeStore = AcmeChallengeStore (MVar [ActiveAcmeChallenge])
 
-acmeChallengeResponseForRequest :: RequestPolicyConfig -> AcmeChallengeStore -> Wai.Request -> IO (Maybe Wai.Response)
-acmeChallengeResponseForRequest requestPolicyConfig (AcmeChallengeStore challengeStore) request = do
+acmeChallengeResponseForRequest :: RequestPolicyConfig -> AcmeChallengeStore -> CertbotWebrootStore -> Wai.Request -> IO (Maybe Wai.Response)
+acmeChallengeResponseForRequest requestPolicyConfig (AcmeChallengeStore challengeStore) webrootStore request = do
   challenges <- readMVar challengeStore
   case fmap
     ( Wai.responseLBS
@@ -65,7 +66,7 @@ acmeChallengeResponseForRequest requestPolicyConfig (AcmeChallengeStore challeng
     Just challengeResponse ->
       pure (Just challengeResponse)
     Nothing ->
-      certbotAcmeChallengeResponseForRequest requestPolicyConfig request
+      certbotAcmeChallengeResponseForRequest webrootStore requestPolicyConfig request
 
 matchesRuntimeAcmeChallenge :: RequestPolicyConfig -> Wai.Request -> ActiveAcmeChallenge -> Bool
 matchesRuntimeAcmeChallenge requestPolicyConfig request challenge =
@@ -95,26 +96,33 @@ unregisterAcmeChallenges :: AcmeChallengeStore -> [ActiveAcmeChallenge] -> IO ()
 unregisterAcmeChallenges (AcmeChallengeStore challengeStore) completedChallenges =
   modifyMVar_ challengeStore (pure . filter (not . (`sameActiveAcmeChallengeAny` completedChallenges)))
 
-{-# NOINLINE certbotAcmeChallengeWebrootDirectories #-}
-certbotAcmeChallengeWebrootDirectories :: MVar [FilePath]
-certbotAcmeChallengeWebrootDirectories =
-  unsafePerformIO (newMVar [])
+-- | Decision (BZ, 2026-08-21, per @docs/design-guidance.md@'s
+-- explicit-props rule): an explicitly-owned prop, not a process-global CAF
+-- — matching 'AcmeChallengeStore' immediately above, which already gets
+-- this right. Two server instances (or two parallel test suites) in one
+-- process previously shared one global webroot list with no way to
+-- substitute their own. See @docs/design-guidance.md@'s
+-- \"Follow-up decision — BZ\" for the full record.
+newtype CertbotWebrootStore = CertbotWebrootStore (MVar [FilePath])
 
-registerCertbotAcmeChallengeWebroot :: FilePath -> IO ()
-registerCertbotAcmeChallengeWebroot webrootDirectory =
-  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . (webrootDirectory :))
+newCertbotWebrootStore :: IO CertbotWebrootStore
+newCertbotWebrootStore = CertbotWebrootStore <$> newMVar []
 
-unregisterCertbotAcmeChallengeWebroot :: FilePath -> IO ()
-unregisterCertbotAcmeChallengeWebroot webrootDirectory =
-  modifyMVar_ certbotAcmeChallengeWebrootDirectories (pure . filter (/= webrootDirectory))
+registerCertbotAcmeChallengeWebroot :: CertbotWebrootStore -> FilePath -> IO ()
+registerCertbotAcmeChallengeWebroot (CertbotWebrootStore webrootStore) webrootDirectory =
+  modifyMVar_ webrootStore (pure . (webrootDirectory :))
 
-certbotAcmeChallengeResponseForRequest :: RequestPolicyConfig -> Wai.Request -> IO (Maybe Wai.Response)
-certbotAcmeChallengeResponseForRequest requestPolicyConfig request =
+unregisterCertbotAcmeChallengeWebroot :: CertbotWebrootStore -> FilePath -> IO ()
+unregisterCertbotAcmeChallengeWebroot (CertbotWebrootStore webrootStore) webrootDirectory =
+  modifyMVar_ webrootStore (pure . filter (/= webrootDirectory))
+
+certbotAcmeChallengeResponseForRequest :: CertbotWebrootStore -> RequestPolicyConfig -> Wai.Request -> IO (Maybe Wai.Response)
+certbotAcmeChallengeResponseForRequest (CertbotWebrootStore webrootStore) requestPolicyConfig request =
   case acmeHttp01ChallengeToken requestPolicyConfig request >>= validAcmeHttp01ChallengeToken of
     Nothing ->
       pure Nothing
     Just challengeToken -> do
-      webrootDirectories <- readMVar certbotAcmeChallengeWebrootDirectories
+      webrootDirectories <- readMVar webrootStore
       maybeChallengeFile <-
         firstExistingFile
           [ webrootDirectory </> ".well-known" </> "acme-challenge" </> Text.unpack challengeToken

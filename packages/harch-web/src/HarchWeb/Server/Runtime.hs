@@ -77,9 +77,10 @@ runServerWithStartupPlan ::
 runServerWithStartupPlan waiMiddleware outputHandle config webApplication startupPlan = do
   let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
   challengeStore <- AcmeChallengeStore <$> newMVar []
+  webrootStore <- newCertbotWebrootStore
   let runtimeRequestPolicy = requestPolicy (toServerConfig config)
   gatedWaiApplication <- toWaiApplication webApplication
-  let runtimeApplication = toRuntimeWaiApplication (waiMiddleware gatedWaiApplication) challengeStore webApplication
+  let runtimeApplication = toRuntimeWaiApplication (waiMiddleware gatedWaiApplication) challengeStore webrootStore webApplication
       connectionReporter = reportConnectionObservability webApplication
       runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
       runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
@@ -90,7 +91,7 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
         stopRuntimeServers
         ( \httpServers ->
             bracket
-              (startAcmeRuntimeServersWithRequestTransportLimits runtimeRequestHeadLimits runtimeRequestTransportLimits (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
+              (startAcmeRuntimeServersWithRequestTransportLimits webrootStore runtimeRequestHeadLimits runtimeRequestTransportLimits (runtimeAcmeBindPlans startupPlan) runtimeApplication connectionReporter (reportApplicationLog webApplication))
               stopAcmeRuntimeServers
               ( \acmeServers ->
                   bracket
@@ -110,12 +111,13 @@ toRuntimeWaiApplication ::
   (Eq route) =>
   Wai.Application ->
   AcmeChallengeStore ->
+  CertbotWebrootStore ->
   Application route action context ->
   Wai.Application
-toRuntimeWaiApplication renderedWaiApplication challengeStore webApplication request respond = do
+toRuntimeWaiApplication renderedWaiApplication challengeStore webrootStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
-  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore request
+  maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore webrootStore request
   maybe
     (renderedWaiApplication request respond)
     (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)

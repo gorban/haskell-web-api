@@ -203,6 +203,15 @@ spec = do
                ]
         )
 
+  describe "newOtlpHttpManager" $
+    it "constructs a usable HTTP manager, as an explicit prop rather than a global" $ do
+      -- 'HttpClient.Manager' has no 'Eq'/'Show' to compare against, so the
+      -- meaningful assertion available here is that construction succeeds;
+      -- see the BZ decision record for why this is a caller-owned prop now,
+      -- not a process-global CAF.
+      manager <- Observability.newOtlpHttpManager
+      manager `seq` pure ()
+
   describe "requestSpanName" $ do
     it "uses the request method with the canonical route path" $
       Observability.requestSpanName (Observability.mkSpanMethodLabel "GET") (Observability.mkSpanRoutePath "/fr/second")

@@ -35,6 +35,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
+import Network.HTTP.Client qualified as HttpClient
 import Numeric.Natural (Natural)
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush, stderr)
@@ -349,7 +350,7 @@ runtimeRequestObservabilityReporter mode config =
     mode
     config
     "request observability"
-    (HarchWeb.exportRequestObservabilityToOtlp "web-api")
+    (HarchWeb.exportRequestObservabilityToOtlp otlpHttpManager "web-api")
 
 runtimeConnectionObservabilityReporter :: AppMode -> AppConfig -> Observability.ConnectionObservability -> IO ()
 runtimeConnectionObservabilityReporter mode config =
@@ -357,7 +358,7 @@ runtimeConnectionObservabilityReporter mode config =
     mode
     config
     "connection observability"
-    (HarchWeb.exportConnectionObservabilityToOtlp "web-api")
+    (HarchWeb.exportConnectionObservabilityToOtlp otlpHttpManager "web-api")
 
 -- | The unstructured "TRACE " stderr dump is a local-debugging convenience,
 -- not a private structured log: it carries client.address, user_agent, and
@@ -385,22 +386,29 @@ runtimeObservabilityReporter mode config observabilityKind exportObservability o
   forM_ (maybe [] pure (HarchWeb.tracingExporter (observability config))) $ \exporter ->
     enqueueOtlpExport observabilityKind (exportObservability exporter observabilityValue)
 
--- | Decision record (AU): the request-handling thread must never block on
--- network I/O to the OTLP collector, so 'runtimeObservabilityReporter'
--- hands each export off to this bounded queue instead of awaiting
--- 'exportObservability' itself. A background worker — started once,
--- lazily, via the same 'unsafePerformIO' \/ 'NOINLINE' idiom
--- @HarchWeb.Observability.Otlp@ already uses for its shared HTTP manager —
--- drains the queue and performs the actual blocking POST off the request
--- path. A full queue drops the export and counts it rather than blocking
--- the caller: a slow or hung collector degrades trace completeness, never
--- response latency. This is deliberately an application-layer fix rather
--- than a framework one (per the framework-capability-gap protocol in
+-- | Decision record (AU, updated BZ 2026-08-21): the request-handling thread
+-- must never block on network I/O to the OTLP collector, so
+-- 'runtimeObservabilityReporter' hands each export off to this bounded queue
+-- instead of awaiting 'exportObservability' itself. A background worker —
+-- started once, lazily, via 'unsafePerformIO' \/ 'NOINLINE' — drains the
+-- queue and performs the actual blocking POST off the request path. A full
+-- queue drops the export and counts it rather than blocking the caller: a
+-- slow or hung collector degrades trace completeness, never response
+-- latency. This is deliberately an application-layer fix rather than a
+-- framework one (per the framework-capability-gap protocol in
 -- @docs/design-guidance.md@): 'web-api' is this tree's only caller of
 -- @HarchWeb.exportRequestObservabilityToOtlp@\/@exportConnectionObservabilityToOtlp@
 -- today, so there is no shared boundary yet to extend. If a second
 -- application adopts OTLP export, promote this queue into
--- @HarchWeb.Observability@ instead of duplicating it there.
+-- @HarchWeb.Observability@ instead of duplicating it there. As of BZ,
+-- 'otlpHttpManager' below follows this exact same reasoning: it used to be
+-- @HarchWeb.Observability.Otlp@'s own global, but a framework module owning
+-- ambient mutable state means two applications (or two parallel test
+-- suites) in one process unavoidably share it with no way to substitute
+-- their own — so ownership moved here, the one real caller, the same place
+-- this queue already lives, rather than becoming a second framework-owned
+-- global. See @docs/design-guidance.md@'s \"Follow-up decision — BZ\" for
+-- the full record.
 enqueueOtlpExport :: Text.Text -> IO () -> IO ()
 enqueueOtlpExport observabilityKind exportAction = do
   enqueued <- atomically $ do
@@ -426,6 +434,11 @@ otlpExportDroppedCount :: IORef Int
 {-# NOINLINE otlpExportDroppedCount #-}
 otlpExportDroppedCount =
   unsafePerformIO (newIORef 0)
+
+otlpHttpManager :: HttpClient.Manager
+{-# NOINLINE otlpHttpManager #-}
+otlpHttpManager =
+  unsafePerformIO HarchWeb.newOtlpHttpManager
 
 otlpExportWorker :: TBQueue (Text.Text, IO ()) -> IO ()
 otlpExportWorker queue = forever $ do

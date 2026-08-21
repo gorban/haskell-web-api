@@ -6,6 +6,7 @@
 -- these implementation details deliberately remain behind that boundary.
 module HarchWeb.Observability.Otlp
   ( currentUnixTimeNSec,
+    newOtlpHttpManager,
     nextOtlpSpanIdentifiers,
     nextOtlpSpanId,
     sendOtlpTraceRequest,
@@ -27,10 +28,20 @@ import HarchWeb.Observability.Types (OtlpExporter (..))
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as Http
-import System.IO.Unsafe (unsafePerformIO)
 
-sendOtlpTraceRequest :: OtlpExporter -> LazyByteString.ByteString -> IO ()
-sendOtlpTraceRequest exporter requestBody = do
+-- | Decision (BZ, 2026-08-21, per @docs/design-guidance.md@'s explicit-props
+-- rule): the connection-reusing HTTP manager is a caller-owned prop, not a
+-- process-global CAF — two applications (or two parallel test suites) in
+-- one process would otherwise unavoidably share one manager with no way to
+-- substitute their own. See @docs/design-guidance.md@'s
+-- \"Follow-up decision — BZ\" for the full record. A caller constructs one
+-- via 'newOtlpHttpManager' once and passes it to every 'sendOtlpTraceRequest'
+-- call, the same shape 'HarchWeb.Gmail.runGmailHttpRequest' already uses.
+newOtlpHttpManager :: IO HttpClient.Manager
+newOtlpHttpManager = HttpClient.newManager HttpClientTls.tlsManagerSettings
+
+sendOtlpTraceRequest :: HttpClient.Manager -> OtlpExporter -> LazyByteString.ByteString -> IO ()
+sendOtlpTraceRequest manager exporter requestBody = do
   baseRequest <- HttpClient.parseRequest (Text.unpack (otlpEndpoint exporter))
   response <-
     HttpClient.httpLbs
@@ -41,7 +52,7 @@ sendOtlpTraceRequest exporter requestBody = do
               : map otlpHeader (otlpHeaders exporter),
           HttpClient.requestBody = HttpClient.RequestBodyLBS requestBody
         }
-      otlpHttpManager
+      manager
   let statusCode = Http.statusCode (HttpClient.responseStatus response)
   unless (statusCode >= 200 && statusCode < 300) $
     ioError . userError $
@@ -82,8 +93,3 @@ otlpHeader (headerName, headerValue) =
 otlpIdHexText :: ByteString.ByteString -> Text
 otlpIdHexText =
   TextEncoding.decodeLatin1 . Base16.encode
-
-otlpHttpManager :: HttpClient.Manager
-{-# NOINLINE otlpHttpManager #-}
-otlpHttpManager =
-  unsafePerformIO (HttpClient.newManager HttpClientTls.tlsManagerSettings)

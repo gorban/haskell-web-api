@@ -221,8 +221,9 @@ spec = do
                       { acmeCertificateDirectory = Just sharedDirectory,
                         acmeCertbotConfig = certbotConfig
                       }
+            webrootStore <- newCertbotWebrootStore
             (certbotManualPlan, certbotCleanupDirectory) <-
-              prepareCertbotManualTlsBindPlan certbotPlan certbotConfig
+              prepareCertbotManualTlsBindPlan webrootStore certbotPlan certbotConfig
             ( do
                 certbotManualPlan `shouldSatisfy` (/= Nothing)
                 case certbotManualPlan of
@@ -240,6 +241,7 @@ spec = do
               `finally` removePathForcibly certbotCleanupDirectory
     it "covers challenge matching and store update helpers" $ do
       challengeStore <- AcmeChallengeStore <$> newMVar []
+      webrootStore <- newCertbotWebrootStore
       let challenge =
             ActiveAcmeChallenge
               { activeAcmeChallengeDomain = "example.com",
@@ -275,7 +277,7 @@ spec = do
       registerAcmeChallenges challengeStore [challenge]
       registeredChallenges <- unwrapChallengeStore challengeStore
       registeredChallenges `shouldBe` [challenge]
-      challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStore matchingRequest
+      challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStore webrootStore matchingRequest
       case challengeResponse of
         Just response -> do
           Wai.responseStatus response `shouldBe` Http.ok200
@@ -284,6 +286,11 @@ spec = do
         Nothing -> expectationFailure "expected a registered ACME challenge response"
       unregisterAcmeChallenges challengeStore [challenge]
       unwrapChallengeStore challengeStore `shouldReturn` []
+      registerCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-a"
+      registerCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-b"
+      unwrapWebrootStore webrootStore `shouldReturn` ["/tmp/webroot-b", "/tmp/webroot-a"]
+      unregisterCertbotAcmeChallengeWebroot webrootStore "/tmp/webroot-a"
+      unwrapWebrootStore webrootStore `shouldReturn` ["/tmp/webroot-b"]
 
   describe "ACME JSON encoding helpers" $ do
     it "encodes strings, arrays, and objects as JSON bytes" $ do
@@ -334,6 +341,10 @@ isLeftWith expectedMessage result =
 unwrapChallengeStore :: AcmeChallengeStore -> IO [ActiveAcmeChallenge]
 unwrapChallengeStore (AcmeChallengeStore challengeStore) =
   readMVar challengeStore
+
+unwrapWebrootStore :: CertbotWebrootStore -> IO [FilePath]
+unwrapWebrootStore (CertbotWebrootStore webrootStore) =
+  readMVar webrootStore
 
 withFakeCertbotScript :: [String] -> (FilePath -> IO a) -> IO a
 withFakeCertbotScript scriptLines action =

@@ -11,6 +11,7 @@ module HarchWeb.Acme
     AcmeConfig (..),
     ActiveAcmeChallenge (..),
     CertbotConfig (..),
+    CertbotWebrootStore (..),
     RuntimeAcmeBindPlan (..),
     acmeChallengeResponseForRequest,
     acmeHttp01ChallengeToken,
@@ -19,11 +20,14 @@ module HarchWeb.Acme
     certbotOptionValues,
     firstCertbotDomain,
     matchesRuntimeAcmeChallenge,
+    newCertbotWebrootStore,
     prepareCertbotManualTlsBindPlan,
     registerAcmeChallenges,
+    registerCertbotAcmeChallengeWebroot,
     runtimeCertbotArguments,
     splitCertbotDomainValue,
     unregisterAcmeChallenges,
+    unregisterCertbotAcmeChallengeWebroot,
     validAcmeHttp01ChallengeToken,
   )
 where
@@ -43,11 +47,15 @@ import HarchWeb.Acme.Certbot.Runtime
 import HarchWeb.Acme.Challenge
   ( AcmeChallengeStore (..),
     ActiveAcmeChallenge (..),
+    CertbotWebrootStore (..),
     acmeChallengeResponseForRequest,
     acmeHttp01ChallengeToken,
     matchesRuntimeAcmeChallenge,
+    newCertbotWebrootStore,
     registerAcmeChallenges,
+    registerCertbotAcmeChallengeWebroot,
     unregisterAcmeChallenges,
+    unregisterCertbotAcmeChallengeWebroot,
     validAcmeHttp01ChallengeToken,
   )
 import HarchWeb.Server.Config (AcmeConfig (..), CertbotConfig (..))

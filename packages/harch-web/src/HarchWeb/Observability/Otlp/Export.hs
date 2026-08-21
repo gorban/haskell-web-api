@@ -15,13 +15,15 @@ import HarchWeb.Database qualified as Database
 import HarchWeb.Observability.Otlp qualified as Otlp
 import HarchWeb.Observability.Otlp.Wire qualified as OtlpWire
 import HarchWeb.Observability.Types qualified as Observability
+import Network.HTTP.Client qualified as HttpClient
 
 exportRequestObservabilityToOtlp ::
+  HttpClient.Manager ->
   Text ->
   Observability.OtlpExporter ->
   Observability.RequestObservability ->
   IO ()
-exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
+exportRequestObservabilityToOtlp manager serviceName exporter requestObservability = do
   (generatedTraceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
   let childSpans =
         requestRuntimePhaseChildSpans requestObservability
@@ -57,14 +59,15 @@ exportRequestObservabilityToOtlp serviceName exporter requestObservability = do
           OtlpWire.OtlpSpanTiming {OtlpWire.otlpSpanStartTimeUnixNano = startTimeUnixNano, OtlpWire.otlpSpanEndTimeUnixNano = endTimeUnixNano}
           OtlpWire.OtlpRootSpanContent {OtlpWire.otlpRootRequestSpan = rootSpan, OtlpWire.otlpRootStatusFields = otlpRequestSpanStatusFields requestObservability}
           timedChildSpans
-  Otlp.sendOtlpTraceRequest exporter requestBody
+  Otlp.sendOtlpTraceRequest manager exporter requestBody
 
 exportConnectionObservabilityToOtlp ::
+  HttpClient.Manager ->
   Text ->
   Observability.OtlpExporter ->
   Observability.ConnectionObservability ->
   IO ()
-exportConnectionObservabilityToOtlp serviceName exporter connectionObservability = do
+exportConnectionObservabilityToOtlp manager serviceName exporter connectionObservability = do
   (traceId, spanId) <- Otlp.nextOtlpSpanIdentifiers
   endTimeUnixNano <- Otlp.currentUnixTimeNSec
   let startTimeUnixNano = nonNegativeStartTime endTimeUnixNano connectionFallbackDurationNanoseconds
@@ -78,7 +81,7 @@ exportConnectionObservabilityToOtlp serviceName exporter connectionObservability
               OtlpWire.otlpRootStatusFields = OtlpWire.otlpErrorStatusFields
             }
           []
-  Otlp.sendOtlpTraceRequest exporter requestBody
+  Otlp.sendOtlpTraceRequest manager exporter requestBody
 
 minimumOtlpSpanDurationNanoseconds :: Word64
 minimumOtlpSpanDurationNanoseconds = 1000

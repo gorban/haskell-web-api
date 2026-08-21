@@ -144,6 +144,16 @@
     length reinterpreting as negative, and unsigned (rather than two's-complement) integer decoding.
     A malformed key that crashes the underlying ASN.1 decoder now fails with a clean error instead
     of an uncaught exception.
+23. **Breaking:** the certbot ACME challenge webroot list is no longer a process-global mutable
+    variable. `HarchWeb.Acme` gained `CertbotWebrootStore`/`newCertbotWebrootStore`; every function
+    that reads or writes the webroot list (`registerCertbotAcmeChallengeWebroot`,
+    `unregisterCertbotAcmeChallengeWebroot`, `prepareCertbotManualTlsBindPlan`,
+    `startAcmeRuntimeServersWithRequestTransportLimits`, `acmeChallengeResponseForRequest`) now
+    takes one explicitly instead of sharing one global list across every server instance and test
+    suite in a process. `HarchWeb.Observability.Otlp.sendOtlpTraceRequest` and
+    `HarchWeb.Observability.export{Request,Connection}ObservabilityToOtlp` likewise now take an
+    explicit `HttpClient.Manager` (constructed via the new `HarchWeb.newOtlpHttpManager`) instead of
+    reaching for a framework-owned global one.
 
 ## 0.1.1.0
 

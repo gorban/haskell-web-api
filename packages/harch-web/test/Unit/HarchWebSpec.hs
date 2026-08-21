@@ -25,6 +25,7 @@ import HarchWeb.Database qualified as Database
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Security qualified as Security
+import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
@@ -5366,8 +5367,9 @@ spec = do
 
   describe "exportRequestObservabilityToOtlp" $ do
     it "posts OTLP trace payloads with request attributes, resource attributes, and custom headers" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportRequestObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -5607,8 +5609,9 @@ spec = do
             expectationFailure "expected rooted OTLP timing data for one request span, three phase spans, and three DB spans"
 
     it "omits runtime phase child spans when request timing has only a measured root duration" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportRequestObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -5646,8 +5649,9 @@ spec = do
         Text.count "\"name\":\"GET /assets/*\"" requestBodyText `shouldBe` 1
 
     it "reuses incoming W3C trace context for OTLP request exports" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportRequestObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -5689,8 +5693,9 @@ spec = do
         Text.count "\"parentSpanId\":\"00f067aa0ba902b7\"" requestBodyText `shouldBe` 1
 
     it "uses an intentional fallback duration when direct request exports lack runtime timing metadata" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportRequestObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -5731,10 +5736,11 @@ spec = do
           _ -> expectationFailure "expected root and child OTLP spans"
 
     it "fails explicitly when the collector rejects the export request" $
-      withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.serviceUnavailable503 "{\"error\":\"collector unavailable\"}" $ \manager collectorUrl capturedRequestReference -> do
         exportResult <-
           try
             ( exportRequestObservabilityToOtlp
+                manager
                 "sample-app"
                 OtlpExporter
                   { otlpEndpoint = collectorUrl,
@@ -5767,8 +5773,9 @@ spec = do
 
   describe "exportConnectionObservabilityToOtlp" $ do
     it "posts OTLP trace payloads for connection-level observability" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportConnectionObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -5815,8 +5822,9 @@ spec = do
           )
 
     it "posts OTLP trace payloads for prematurely closed connection observability" $
-      withOtlpCollector Http.ok200 "{}" $ \collectorUrl capturedRequestReference -> do
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportConnectionObservabilityToOtlp
+          manager
           "sample-app"
           OtlpExporter
             { otlpEndpoint = collectorUrl,
@@ -6551,8 +6559,10 @@ spec = do
           ]
           $ \certbotExecutable -> do
             let certbotConfig = CertbotConfig {certbotExecutable = certbotExecutable, certbotArguments = []}
+            webrootStore <- newCertbotWebrootStore
             (manualTlsBindPlan, stateDirectory) <-
               prepareCertbotManualTlsBindPlan
+                webrootStore
                 (runtimeAcmePlanWithCertbotConfig certbotConfig)
                 certbotConfig
             removePathForcibly stateDirectory
@@ -6628,8 +6638,10 @@ spec = do
                           "configured.example"
                         ]
                     }
+            webrootStore <- newCertbotWebrootStore
             (manualTlsBindPlan, stateDirectory) <-
               prepareCertbotManualTlsBindPlan
+                webrootStore
                 (runtimeAcmePlanWithCertbotConfig certbotConfig)
                 certbotConfig
             removePathForcibly stateDirectory
@@ -6678,8 +6690,10 @@ spec = do
                             "configured-webroot-cert"
                           ]
                       }
+              webrootStore <- newCertbotWebrootStore
               (_, stateDirectory) <-
                 prepareCertbotManualTlsBindPlan
+                  webrootStore
                   (runtimeAcmePlanWithCertbotConfig certbotConfig)
                   certbotConfig
               removePathForcibly stateDirectory
@@ -6736,13 +6750,16 @@ spec = do
                           "dns-cert"
                         ]
                     }
+            webrootStore <- newCertbotWebrootStore
             (_, standaloneStateDirectory) <-
               prepareCertbotManualTlsBindPlan
+                webrootStore
                 (runtimeAcmePlanWithCertbotConfig standaloneConfig)
                 standaloneConfig
             removePathForcibly standaloneStateDirectory
             (_, dnsStateDirectory) <-
               prepareCertbotManualTlsBindPlan
+                webrootStore
                 (runtimeAcmePlanWithCertbotConfig dnsConfig)
                 dnsConfig
             removePathForcibly dnsStateDirectory
@@ -6784,6 +6801,7 @@ spec = do
             ]
             $ \certbotExecutable -> do
               prepareResultReference <- newEmptyMVar
+              webrootStore <- newCertbotWebrootStore
               let certbotConfig = CertbotConfig {certbotExecutable = certbotExecutable, certbotArguments = []}
                   markerPath = markerDirectory </> "started"
                   challengeStore = AcmeChallengeStore <$> newMVar []
@@ -6804,6 +6822,7 @@ spec = do
                 result <-
                   try
                     ( prepareCertbotManualTlsBindPlan
+                        webrootStore
                         (runtimeAcmePlanWithCertbotConfig certbotConfig)
                         certbotConfig
                     ) ::
@@ -6811,7 +6830,7 @@ spec = do
                 putMVar prepareResultReference result
               waitForMarker (500 :: Int)
               challengeStoreValue <- challengeStore
-              challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStoreValue challengeRequest
+              challengeResponse <- acmeChallengeResponseForRequest defaultRequestPolicy challengeStoreValue webrootStore challengeRequest
               isNothing challengeResponse `shouldBe` True
               prepareResult <- readMVar prepareResultReference
               case prepareResult of
@@ -7990,10 +8009,11 @@ isVolatileRequestTimingAttribute attribute =
 withOtlpCollector ::
   Http.Status ->
   LazyByteString.ByteString ->
-  (Text -> MVar CapturedCollectorRequest -> IO a) ->
+  (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
   IO a
 withOtlpCollector responseStatus responseBody action =
   withUnusedLoopbackPort $ \collectorPort -> do
+    manager <- HttpClient.newManager HttpClient.defaultManagerSettings
     capturedRequestReference <- newEmptyMVar
     let collectorUrl = Text.pack ("http://127.0.0.1:" <> show collectorPort <> "/v1/traces")
         collectorApplication request respond = do
@@ -8009,7 +8029,7 @@ withOtlpCollector responseStatus responseBody action =
           respond (Wai.responseLBS responseStatus [("Content-Type", "application/json")] responseBody)
     serverThreadId <- forkIO (Warp.run collectorPort collectorApplication)
     threadDelay 50000
-    action collectorUrl capturedRequestReference `finally` killThread serverThreadId
+    action manager collectorUrl capturedRequestReference `finally` killThread serverThreadId
 
 extractQuotedJsonField :: Text -> Text -> Maybe Text
 extractQuotedJsonField fieldName bodyText =
