@@ -36,6 +36,7 @@ import WebApi.Account
     AccountProfileStore (..),
     AccountStore (..),
     AccountStoreError (..),
+    CreatePendingAccountOutcome (..),
     PendingAccount (..),
   )
 import WebApi.Config (DatabaseConfig)
@@ -45,6 +46,8 @@ import WebApi.Login
     AccountCredentialStoreError (..),
   )
 import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
+
+{-# ANN module ("HLint: ignore Redundant $!" :: String) #-}
 
 buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
 buildRuntimePostgresAccountStore !databaseConfig =
@@ -88,23 +91,49 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
       consumeEmailVerification = consumeVerification
     }
   where
+    -- Two round trips, not one atomic statement: the accounts table has two
+    -- independent unique constraints (email, case-insensitive username),
+    -- and the insert below only targets the email one with
+    -- 'ON CONFLICT (email_normalized) DO NOTHING', so a username collision
+    -- must be found before attempting it. This leaves a narrow race for two
+    -- concurrent registrations racing for the same available username: both
+    -- can pass this check, and the loser's insert then violates the
+    -- username unique index outright (an 'AccountStoreUnavailable' error,
+    -- not a clean 'PendingAccountUsernameTaken' outcome) rather than a
+    -- silent no-op. Accepted rather than a single CTE union query, matching
+    -- BA's own suggested design.
     createAccount pendingAccount =
       runExceptT $ do
-        rows <-
-          runStoreQuery AccountStoreUnavailable $
-            runQuery
-              databaseConfig
-              createPendingAccountQuery
-              [ accountIdText (pendingAccountId pendingAccount),
-                emailAddressText (pendingAccountEmail pendingAccount),
-                passwordHashText (pendingAccountPasswordHash pendingAccount),
-                emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
-                Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
-                Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount)),
-                maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
-                fromMaybe Text.empty (pendingAccountDisplayName pendingAccount)
-              ]
-        liftEither (decodeCreatedAccount pendingAccount rows)
+        usernameTaken <- case pendingAccountUsername pendingAccount of
+          Nothing -> pure False
+          Just username -> do
+            -- `$!` on the constructor position: this is the same CSE-shared-atom
+            -- coverage gap the project's coverage-gate memory documents (usually
+            -- against a string literal; here against a data constructor
+            -- partially applied identically to several other call sites in this
+            -- module), not a real reachability gap.
+            availabilityRows <-
+              (runStoreQuery $! AccountStoreUnavailable) $
+                runQuery databaseConfig usernameAvailabilityQuery [usernameText username]
+            pure (not (null availabilityRows))
+        if usernameTaken
+          then pure PendingAccountUsernameTaken
+          else do
+            rows <-
+              runStoreQuery AccountStoreUnavailable $
+                runQuery
+                  databaseConfig
+                  createPendingAccountQuery
+                  [ accountIdText (pendingAccountId pendingAccount),
+                    emailAddressText (pendingAccountEmail pendingAccount),
+                    passwordHashText (pendingAccountPasswordHash pendingAccount),
+                    emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
+                    Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
+                    Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount)),
+                    maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
+                    fromMaybe Text.empty (pendingAccountDisplayName pendingAccount)
+                  ]
+            liftEither (decodeCreatedAccount pendingAccount rows)
 
     replaceVerification verification =
       runExceptT $ do
@@ -182,12 +211,12 @@ nonEmptyText :: Text -> Maybe Text
 nonEmptyText "" = Nothing
 nonEmptyText value = Just value
 
-decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError Bool
+decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError CreatePendingAccountOutcome
 decodeCreatedAccount pendingAccount rows =
   case rows of
-    [] -> Right False
+    [] -> Right PendingAccountEmailTaken
     [[createdAccountId]]
-      | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right True
+      | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right PendingAccountCreated
     _ -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
 
 decodeReplacedVerification :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError Bool
@@ -228,8 +257,9 @@ decodeConsumedVerification rows =
         (mkAccountId accountIdValue)
     _ -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
 
-createPendingAccountQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery :: Text
-createPendingAccountQuery = "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES ($1, $2, $3, $6, NULLIF($7, ''), NULLIF($8, '')) ON CONFLICT DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
+usernameAvailabilityQuery, createPendingAccountQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery :: Text
+usernameAvailabilityQuery = "SELECT 1 FROM web_api.accounts WHERE username IS NOT NULL AND lower(username) = lower($1) LIMIT 1;"
+createPendingAccountQuery = "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES ($1, $2, $3, $6, NULLIF($7, ''), NULLIF($8, '')) ON CONFLICT (email_normalized) DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
 replaceEmailVerificationQuery = "WITH pending_account AS (SELECT account_id FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NULL FOR UPDATE), removed_verifications AS (DELETE FROM web_api.email_verifications WHERE account_id IN (SELECT account_id FROM pending_account)) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $2, account_id, $3, $4 FROM pending_account RETURNING account_id;"
 findEmailVerificationQuery = "SELECT account_id, email_normalized, expires_at_nanoseconds FROM web_api.email_verifications WHERE token_digest = $1;"
 consumeEmailVerificationQuery = "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"

@@ -164,11 +164,18 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
   let path = HarchWeb.clientActionContext actionRequest
       response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
    in case registrationResult of
-        -- Both outcomes share this exact branch (not merely the same wording)
-        -- so a registered-address probe cannot be distinguished from a
-        -- genuine registration by response bytes: the hedged "if that
-        -- address can register" phrasing is meaningless if the other
-        -- outcome answers differently.
+        -- A taken username is a recoverable, user-correctable input (the
+        -- applicant can simply pick another one), unlike a taken email
+        -- address — reporting it plainly restores the recovery path BA's
+        -- own note found missing, and does not reopen the address-enumeration
+        -- concern the branch below exists to close: usernames, unlike email
+        -- addresses, are not privacy-sensitive to confirm as taken.
+        Right RegistrationUsernameTaken -> pure (response Http.status422 (localized actionRequest "That username is already taken. Please choose another." "Ese nombre de usuario ya esta en uso. Elige otro.") True (Just "registration-username"))
+        -- Both remaining outcomes share this exact branch (not merely the
+        -- same wording) so a registered-address probe cannot be
+        -- distinguished from a genuine registration by response bytes: the
+        -- hedged "if that address can register" phrasing is meaningless if
+        -- the other outcome answers differently.
         Right _ -> pure (response Http.status202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
         Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) RegistrationDeliveryFailure "EmailDeliveryError" detail
         Left (RegistrationStoreError storeError) -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)

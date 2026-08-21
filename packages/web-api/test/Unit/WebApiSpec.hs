@@ -57,7 +57,7 @@ import System.Process (callProcess)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), PendingAccount (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccount, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccount, resendEmailVerificationAt)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.Api.Endpoints (noApiRequestFields)
@@ -3160,7 +3160,7 @@ spec = do
             AccountStore
               { createPendingAccount = \pendingAccount -> do
                   modifyIORef' pendingAccountsReference (<> [pendingAccount])
-                  pure (Right True),
+                  pure (Right PendingAccountCreated),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -3210,7 +3210,7 @@ spec = do
       pendingAccountsReference <- newIORef []
       let accountStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -3261,7 +3261,7 @@ spec = do
       pendingAccountsReference <- newIORef []
       let successfulStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -3298,21 +3298,25 @@ spec = do
                ]
         )
 
-    it "does not send an email when registration is already present or persistence fails" $ do
+    it "does not send an email when registration is already present, the username is taken, or persistence fails" $ do
       deliveredMessagesReference <- newIORef []
       let emailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
           emailAddress = requiredEmailAddress "person@example.test"
           existingStore =
             AccountStore
-              { createPendingAccount = \_ -> pure (Right False),
+              { createPendingAccount = \_ -> pure (Right PendingAccountEmailTaken),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
+          takenUsernameStore = existingStore {createPendingAccount = \_ -> pure (Right PendingAccountUsernameTaken)}
           unavailableStore = existingStore {createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
       assertRegistrationResult
         (registerAccount (registrationEnvironmentAt Password.hashPassword existingStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Right RegistrationAlreadyRegistered -> True; _ -> False)
+      assertRegistrationResult
+        (registerAccount (registrationEnvironmentAt Password.hashPassword takenUsernameStore emailDelivery 100 200) (registrationRequestOf emailAddress))
+        (\case Right RegistrationUsernameTaken -> True; _ -> False)
       assertRegistrationResult
         (registerAccount (registrationEnvironmentAt Password.hashPassword unavailableStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Left (RegistrationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
@@ -3360,7 +3364,7 @@ spec = do
       pendingAccountsReference <- newIORef []
       let accountStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right True),
+              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -3752,7 +3756,7 @@ spec = do
                     pendingAccountUsername pendingAccount `shouldBe` Just (fromMaybe (error "expected username") (Username.mkUsername "person_01"))
                     pendingAccountDisplayName pendingAccount `shouldSatisfy` (`elem` [Nothing, Just "Person Example"])
                     pendingAccountEmail pendingAccount `shouldBe` emailAddress
-                    pure (Right True),
+                    pure (Right PendingAccountCreated),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure (Right (Just storedVerification)),
                 consumeEmailVerification = \_ _ -> pure (Right (Just accountId))
@@ -4009,16 +4013,20 @@ spec = do
           validToken = [("token", Account.emailVerificationTokenText token)]
           delivery = Email.EmailDelivery (\message -> Email.emailMessageSubject message `shouldBe` "Verify your email address")
           spanishAction path fields = typedAccountActionRequest "POST" ("/es" <> path) fields (defaultRequestContext {requestLocale = Spanish})
-      alreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      alreadyRegistered <- handleAccountAction (workflowFor (store (Right PendingAccountEmailTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       alreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
-      spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right False) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
+      spanishAlreadyRegistered <- handleAccountAction (workflowFor (store (Right PendingAccountEmailTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
       spanishAlreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion"
-      createdEnglish <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      createdEnglish <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
       -- Byte-identical responses for the already-registered and newly-created
       -- outcomes: the hedged "if that address can register" wording only
       -- protects against enumeration if both branches answer identically.
       alreadyRegistered `shouldBe` createdEnglish
+      usernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      usernameTaken `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "That username is already taken"
+      spanishUsernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
+      spanishUsernameTaken `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "Ese nombre de usuario ya esta en uso"
       unavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       unavailableRegistration `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       spanishUnavailableRegistration <- handleAccountAction (workflowFor (store (Left (AccountStoreUnavailable "down")) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
@@ -4033,13 +4041,13 @@ spec = do
                 && any (Text.isInfixOf "bad") (HarchWeb.clientActionLogEntries response)
                 && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.store") (HarchWeb.clientActionObservabilityAttributes response)
           )
-      deliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
+      deliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (request "/register" validRegistration)
       deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
-      spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
+      spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
       spanishDeliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "No pudimos enviar"
       passwordHashingFailure <-
         handleAccountAction
-          ( (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery)
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
               { accountWorkflowPasswordHasher = \_ _ -> pure Nothing
               }
           )
@@ -4047,23 +4055,23 @@ spec = do
       passwordHashingFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       spanishPasswordHashingFailure <-
         handleAccountAction
-          ( (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery)
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
               { accountWorkflowPasswordHasher = \_ _ -> pure Nothing
               }
           )
           (spanishAction "/register" validRegistration)
       spanishPasswordHashingFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
-      clockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (request "/register" validRegistration)
+      clockOverflow <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) maxBound delivery) (request "/register" validRegistration)
       clockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
-      spanishClockOverflow <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) maxBound delivery) (spanishAction "/register" validRegistration)
+      spanishClockOverflow <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) maxBound delivery) (spanishAction "/register" validRegistration)
       spanishClockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
-      invalidVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [("token", "invalid")])
+      invalidVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [("token", "invalid")])
       invalidVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "link is invalid"
-      spanishInvalidVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/verify" [("token", "invalid")])
+      spanishInvalidVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/verify" [("token", "invalid")])
       spanishInvalidVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "enlace de verificacion no es valido"
-      missingVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [])
+      missingVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (request "/verify" [])
       missingVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "link is invalid"
-      acceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (request "/verify" validToken)
+      acceptedVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (request "/verify" validToken)
       acceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "email address is verified"
       acceptedVerificationSessionReference <- newIORef Nothing
       let workingEnrollmentSessionStore =
@@ -4074,7 +4082,7 @@ spec = do
               }
       acceptedVerificationWithSession <-
         handleAccountAction
-          (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery)
+          (workflowFor (store (Right PendingAccountCreated) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery)
             { accountWorkflowMfaEnrollmentSessionStore = workingEnrollmentSessionStore
             }
           (request "/verify" validToken)
@@ -4088,19 +4096,19 @@ spec = do
       case savedEnrollmentSession of
         Just session -> Session.sessionPrincipal session `shouldBe` accountId
         Nothing -> expectationFailure "expected an MFA-enrollment session to be saved after verification"
-      spanishAcceptedVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (spanishAction "/verify" validToken)
+      spanishAcceptedVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right (Just storedVerification)) (Right (Just accountId))) 499 delivery) (spanishAction "/verify" validToken)
       spanishAcceptedVerification `shouldSatisfy` actionHasStatusAndFocus 200 Nothing "direccion de correo esta verificada"
-      expiredVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (request "/verify" validToken)
+      expiredVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (request "/verify" validToken)
       expiredVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "has expired"
-      spanishExpiredVerification <- handleAccountAction (workflowFor (store (Right True) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (spanishAction "/verify" validToken)
+      spanishExpiredVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right (Just storedVerification)) (Right Nothing)) 500 delivery) (spanishAction "/verify" validToken)
       spanishExpiredVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "ha caducado"
-      rejectedVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 499 delivery) (request "/verify" validToken)
+      rejectedVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 499 delivery) (request "/verify" validToken)
       rejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "invalid or has already been used"
-      spanishRejectedVerification <- handleAccountAction (workflowFor (store (Right True) (Right Nothing) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
+      spanishRejectedVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
       spanishRejectedVerification `shouldSatisfy` actionHasStatusAndFocus 422 (Just "verification-token") "no es valido o ya se ha utilizado"
-      unavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
+      unavailableVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (request "/verify" validToken)
       unavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "temporarily unavailable"
-      spanishUnavailableVerification <- handleAccountAction (workflowFor (store (Right True) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
+      spanishUnavailableVerification <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Left (AccountStoreUnavailable "down")) (Right Nothing)) 499 delivery) (spanishAction "/verify" validToken)
       spanishUnavailableVerification `shouldSatisfy` actionHasStatusAndFocus 503 (Just "verification-token") "no esta disponible"
 
     it "issues a cookie only after password and TOTP verification, and revokes it on logout" $ do
@@ -4580,17 +4588,20 @@ spec = do
             config `seq` do
               modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
               pure $
-                if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
-                  then Right [["account_01"]]
+                if "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql
+                  then Right []
                   else
-                    if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
-                      then Right [["account_01", "person@example.test", "500"]]
+                    if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
+                      then Right [["account_01"]]
                       else
-                        if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
-                          then Right [["account_01"]]
-                          else Left "unexpected query"
+                        if "SELECT account_id, email_normalized" `Text.isInfixOf` sql
+                          then Right [["account_01", "person@example.test", "500"]]
+                          else
+                            if "DELETE FROM web_api.email_verifications" `Text.isInfixOf` sql
+                              then Right [["account_01"]]
+                              else Left "unexpected query"
           accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
-      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) id
+      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) (\case PendingAccountCreated -> True; _ -> False)
       assertAccountStoreSuccess
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
         (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
@@ -4610,6 +4621,48 @@ spec = do
       Text.isInfixOf (Username.usernameText username) parameterText `shouldBe` True
       Text.isInfixOf "Person Example" parameterText `shouldBe` True
 
+    it "checks username availability before inserting, and skips the check entirely when no username is given" $ do
+      recordedQueriesReference <- newIORef []
+      let accountId = requiredAccountId "account_01"
+          emailAddress = requiredEmailAddress "person@example.test"
+          username = fromMaybe (error "Expected username") (Username.mkUsername "person_01")
+          token = requiredVerificationToken (Text.replicate 43 "a")
+          passwordHash = fromMaybe (error "Expected password hash") (Password.hashPasswordWithSalt testPasswordHashingPolicy "0123456789abcdef" (Password.mkPassword "correct horse battery staple"))
+          pendingAccountWith maybeUsername =
+            PendingAccount
+              { pendingAccountId = accountId,
+                pendingAccountEmail = emailAddress,
+                pendingAccountUsername = maybeUsername,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
+                pendingAccountCreatedAtNanoseconds = 100
+              }
+          takenUsernameRunner _config sql parameters = do
+            modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
+            pure $
+              if "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql
+                then Right [["1"]]
+                else Left "unexpected query: insert should not run after a taken username"
+          takenUsernameStore = buildRuntimePostgresAccountStoreWithRunner takenUsernameRunner postgresTestConfig
+      assertAccountStoreSuccess
+        (createPendingAccount takenUsernameStore (pendingAccountWith (Just username)))
+        (\case PendingAccountUsernameTaken -> True; _ -> False)
+      takenUsernameQueries <- readIORef recordedQueriesReference
+      length takenUsernameQueries `shouldBe` 1
+
+      noUsernameQueriesReference <- newIORef []
+      let noUsernameRunner _config sql parameters = do
+            modifyIORef' noUsernameQueriesReference (<> [(sql, parameters)])
+            pure (Right [["account_01"]])
+          noUsernameStore = buildRuntimePostgresAccountStoreWithRunner noUsernameRunner postgresTestConfig
+      assertAccountStoreSuccess
+        (createPendingAccount noUsernameStore (pendingAccountWith Nothing))
+        (\case PendingAccountCreated -> True; _ -> False)
+      noUsernameQueries <- readIORef noUsernameQueriesReference
+      length noUsernameQueries `shouldBe` 1
+      any (\(sql, _) -> "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql) noUsernameQueries `shouldBe` False
+
     it "maps malformed account-store query results to application-owned errors" $ do
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
@@ -4627,7 +4680,7 @@ spec = do
               }
           storeFor result = buildRuntimePostgresAccountStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
       assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) pendingAccount) (isUnavailable "connection failed")
-      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [])) pendingAccount) not
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [])) pendingAccount) (\case PendingAccountEmailTaken -> True; _ -> False)
       assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) pendingAccount) (isCorrupt "unexpected pending-account result: [[\"other_account\"]]")
       assertAccountStoreError (replaceEmailVerification (storeFor (Left "connection failed")) (pendingAccountVerification pendingAccount)) (isUnavailable "connection failed")
       assertAccountStoreSuccess (replaceEmailVerification (storeFor (Right [])) (pendingAccountVerification pendingAccount)) not
@@ -5113,7 +5166,7 @@ spec = do
                 pendingAccountCreatedAtNanoseconds = 100
               }
           accountStore = buildRuntimePostgresAccountStore defaultRealPostgresConfig
-      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) id
+      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) (\case PendingAccountCreated -> True; _ -> False)
       assertAccountStoreSuccess
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
         (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)

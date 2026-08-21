@@ -5,6 +5,7 @@ module WebApi.Account
     AccountStoreError (..),
     AccountProfile (..),
     AccountProfileStore (..),
+    CreatePendingAccountOutcome (..),
     PendingAccount (..),
     RegistrationEnvironment (..),
     RegistrationRequest (..),
@@ -79,11 +80,21 @@ data PendingAccount = PendingAccount
   }
 
 data AccountStore = AccountStore
-  { createPendingAccount :: PendingAccount -> IO (Either AccountStoreError Bool),
+  { createPendingAccount :: PendingAccount -> IO (Either AccountStoreError CreatePendingAccountOutcome),
     replaceEmailVerification :: StoredEmailVerification -> IO (Either AccountStoreError Bool),
     findEmailVerification :: EmailVerificationTokenDigest -> IO (Either AccountStoreError (Maybe StoredEmailVerification)),
     consumeEmailVerification :: EmailVerificationTokenDigest -> Word64 -> IO (Either AccountStoreError (Maybe AccountId))
   }
+
+-- | Which of the two independent unique constraints a pending-account
+-- insert can collide with. Kept distinct from a plain 'Bool' so a taken
+-- username (a recoverable, user-correctable input) is never conflated
+-- with a taken email address (deliberately reported identically to a
+-- successful registration — see BA's decision record).
+data CreatePendingAccountOutcome
+  = PendingAccountCreated
+  | PendingAccountEmailTaken
+  | PendingAccountUsernameTaken
 
 data RegistrationError
   = RegistrationStoreError AccountStoreError
@@ -94,6 +105,7 @@ data RegistrationError
 data RegistrationResult
   = RegistrationCreated AccountId
   | RegistrationAlreadyRegistered
+  | RegistrationUsernameTaken
 
 data ResendVerificationError
   = ResendVerificationStoreError AccountStoreError
@@ -146,12 +158,13 @@ registerAccount environment request =
               pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
               pendingAccountCreatedAtNanoseconds = now
             }
-    created <- liftAccountStore RegistrationStoreError (createPendingAccount accountStore pendingAccount)
-    if created
-      then do
+    outcome <- liftAccountStore RegistrationStoreError (createPendingAccount accountStore pendingAccount)
+    case outcome of
+      PendingAccountCreated -> do
         deliverVerificationEmail RegistrationDeliveryFailed emailDelivery locale emailAddress renderVerificationUrl token
         pure (RegistrationCreated accountId)
-      else pure RegistrationAlreadyRegistered
+      PendingAccountEmailTaken -> pure RegistrationAlreadyRegistered
+      PendingAccountUsernameTaken -> pure RegistrationUsernameTaken
   where
     passwordHasher = registrationPasswordHasher environment
     passwordHashingPolicy = registrationHashingPolicy environment

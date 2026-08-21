@@ -1161,7 +1161,43 @@ actually provisions TLS on the Postgres server(s) this project deploys against �
 defaulting it on would be optimizing for a security property this project cannot yet exercise in
 its own test suite.
 
-## Current capability and remaining design direction
+### Follow-up decision — BA: give a taken username its own outcome, and target the conflict the insert is actually protecting (2026-08-21)
+
+**Decision: replace `AccountStore.createPendingAccount`'s `Bool` result with a three-way
+`CreatePendingAccountOutcome`, target the insert's `ON CONFLICT` at the email constraint
+specifically, and check username availability up front with a second query rather than one atomic
+statement.** BA's own 2026-08-15 note already scoped this precisely and correctly, including
+naming the exact three-way type, the targeted conflict clause, and the ~20 test call sites it would
+touch; this follow-up implemented that scope as written rather than re-deriving it. The one design
+choice BA's note left open — one atomic CTE-union query vs. two round trips with a documented race
+— was resolved in favor of two round trips, matching the note's own "upfront username-availability
+check" phrasing: a single query returning a distinguishable outcome for three cases (created /
+email taken / username taken) is expressible in Postgres, but only via a more complex CTE-and-UNION
+shape whose correctness would have been materially harder to verify by reading, for a security
+task where getting the query subtly wrong is worse than a documented, narrow race between two
+concurrent registrations for the same available username.
+
+The response-layer half of this decision is the more interesting one: a taken username gets its
+own distinguishable 422 response, while a taken email address keeps the existing byte-identical
+`Right _` branch shared with a genuine registration. These look like the same category of "does
+this outcome leak information" question that the 2026-08-15 fix answered by hiding the email case,
+but they are not — a username is what a user picks and is commonly checked for availability
+directly during signup on far more security-conscious services than this one; an email address is
+what identifies a specific person's account, and confirming one is registered is a privacy/
+enumeration concern in a way confirming a *username* string is taken is not. Treating them the same
+(hiding both) would have left BA's own stated goal — restoring a legitimate user's ability to
+recover from a taken-username collision — permanently unmet for no security benefit; treating them
+differently, as implemented, closes both findings correctly rather than trading one for the other.
+
+`CreatePendingAccountOutcome` deliberately has no `deriving` clause, matching `RegistrationResult`'s
+own existing style in the same module: tests use pattern-match predicates
+(`\case PendingAccountCreated -> True; _ -> False`) instead of `==`, sidestepping the derived-
+`Eq`/`Show`-under-HPC coverage gap this session already root-caused and documented twice (DE, and
+the memory it lives in) rather than needing a third encounter with it. A smaller instance of this
+session's *other* documented coverage-gate pattern — a CSE-shared bare atom losing its own HPC tick
+— surfaced anyway, this time on a data constructor (`AccountStoreUnavailable`) rather than a string
+literal, in the new upfront-check code path; `$!`-forcing it at the same argument position the
+technique already covers closed it immediately, confirmed by a genuine coverage re-run.
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.

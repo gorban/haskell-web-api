@@ -96,6 +96,15 @@
     requiring TLS unconditionally would refuse every connection to a Postgres server that doesn't
     have it configured, including this project's own default local/CI setup — see the AY note in
     `docs/design-guidance.md` for why that half of the finding is deferred rather than defaulted on.
+17. **Breaking:** a taken username during registration now gets its own response (422, naming the
+    `registration-username` field) instead of silently reporting the same "check your inbox"
+    outcome a genuine registration or a taken *email address* gets. `AccountStore.createPendingAccount`
+    returns a new `CreatePendingAccountOutcome` (created / email taken / username taken) instead of
+    `Bool`, and `RegistrationResult` gained `RegistrationUsernameTaken`; the taken-email and
+    newly-created outcomes remain byte-identical to each other, preserving the existing
+    anti-enumeration protection for email addresses specifically. The pending-account insert now
+    targets `ON CONFLICT (email_normalized) DO NOTHING` (was untargeted), paired with an upfront
+    username-availability check run only when a username was supplied.
 
 ## 0.1.1.0
 

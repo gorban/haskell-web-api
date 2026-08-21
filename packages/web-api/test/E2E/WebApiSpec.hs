@@ -11,7 +11,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Session qualified as Session
 import System.IO.Temp (withSystemTempDirectory)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..))
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..))
 import WebApi.App (buildApp, buildAppWithDatabaseAndAccountWorkflow, unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (AppConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
@@ -250,7 +250,7 @@ localizedRegistrationWorkflow =
   unavailableAccountWorkflow
     { accountWorkflowStore =
         (accountWorkflowStore unavailableAccountWorkflow)
-          { createPendingAccount = \_ -> pure (Right False)
+          { createPendingAccount = \_ -> pure (Right PendingAccountEmailTaken)
           },
       accountWorkflowPasswordHasher = \_ _ -> pure (Just (Password.PasswordHash "test-password-hash"))
     }
