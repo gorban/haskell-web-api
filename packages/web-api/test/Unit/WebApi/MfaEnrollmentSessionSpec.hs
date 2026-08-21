@@ -23,7 +23,7 @@ import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Testing (buildRuntimePostgresMfaEnrollmentSessionStore, buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.Testing (buildRuntimePostgresMfaEnrollmentSessionStore, buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 import WebApi.Session
   ( MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError (..),
@@ -107,7 +107,8 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
       unknownSessionId <- generateSessionId
-      loadMfaEnrollmentSession (buildRuntimePostgresMfaEnrollmentSessionStore defaultRealPostgresConfig) unknownSessionId `shouldReturnEqual` Right Nothing
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      loadMfaEnrollmentSession (buildRuntimePostgresMfaEnrollmentSessionStore pool) unknownSessionId `shouldReturnEqual` Right Nothing
 
     it "keeps the MFA-enrollment-session errors comparable without exposing persistence details" $ do
       MfaEnrollmentSessionStoreUnavailable /= MfaEnrollmentSessionStoreCorruptData `shouldBe` True
@@ -161,7 +162,8 @@ databaseConfig =
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
       databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 accountId :: AccountId

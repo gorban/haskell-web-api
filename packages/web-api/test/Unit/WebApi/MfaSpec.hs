@@ -17,7 +17,7 @@ import WebApi.Mfa
     MfaStoreError (..),
     StoredTotpEnrollment (..),
   )
-import WebApi.Postgres.Testing (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.Testing (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
 spec :: Spec
 spec = do
@@ -122,7 +122,8 @@ spec = do
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
         `shouldReturn` Right ()
       unknownAccountId <- generateAccountId
-      let store = buildRuntimePostgresMfaStore defaultRealPostgresConfig
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresMfaStore pool
       saveUnconfirmedTotpEnrollment store unknownAccountId "encrypted-envelope" 100 `shouldReturnEqual` Right False
       loadTotpEnrollment store unknownAccountId `shouldReturnEqual` Right Nothing
       confirmTotpEnrollment store unknownAccountId ("hash" :| []) 500 `shouldReturnEqual` Right False
@@ -143,7 +144,8 @@ databaseConfig =
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
       databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 accountId :: AccountId

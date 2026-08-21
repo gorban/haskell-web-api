@@ -55,6 +55,7 @@ import WebApi.Config
     ListenerConfig (..),
     ListenerScheme (..),
     SmtpDeliveryConfig (..),
+    databasePoolCapacity,
     defaultAppEnvironmentConfig,
     loadAppStartupConfig,
   )
@@ -69,6 +70,7 @@ import WebApi.Postgres.AccountRepository
 import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
+import WebApi.Postgres.Pool (PostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
@@ -166,14 +168,22 @@ routeNavigationLabel route = lookup route navigationLabels
         (ProfileRoute, "Profile")
       ]
 
+-- | 'pool' is a bound variable referenced twice in this @let@ (once for
+-- 'pageRepository', once below for 'accountWorkflow'); GHC's HPC
+-- instrumentation credits only the first reference, the same "repeated
+-- bound-variable arguments passed directly to a function call" pattern
+-- documented against AW's coverage investigation. The @$!@ below forces the
+-- second, uncredited reference directly rather than restructuring around it;
+-- no ignore pragma is needed since 'pool' is an opaque function parameter,
+-- not a value HLint could ever consider already in WHNF.
 buildRuntimeApp ::
+  PostgresPool ->
   AppConfig ->
   AppEnvironmentConfig ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
-buildRuntimeApp config environmentConfig =
-  let databaseConfiguration = databaseConfig environmentConfig
-      pageRepository = buildRuntimePostgresPageRepository databaseConfiguration
-      accountWorkflow = buildRuntimeAccountWorkflow environmentConfig
+buildRuntimeApp pool config environmentConfig =
+  let pageRepository = buildRuntimePostgresPageRepository pool
+      accountWorkflow = (buildRuntimeAccountWorkflow $! pool) environmentConfig
    in buildAppWithDatabaseAndReporters
         (withPublicBaseUrlRedirectAuthority environmentConfig config)
         pageRepository
@@ -197,24 +207,23 @@ buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig 
         (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
         runtimeApplicationLogReporter
 
-buildRuntimeAccountWorkflow :: AppEnvironmentConfig -> AccountWorkflow
-buildRuntimeAccountWorkflow !environmentConfig =
-  let databaseConfiguration = databaseConfig environmentConfig
-   in AccountWorkflow
-        { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
-          accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
-          accountWorkflowPasswordHasher = Password.hashPassword,
-          accountWorkflowClock = getMonotonicTimeNSec,
-          accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
-          accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
-          accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore databaseConfiguration,
-          accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
-          accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore databaseConfiguration,
-          accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
-          accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
-          accountWorkflowTotpClock = floor <$> getPOSIXTime,
-          accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
-        }
+buildRuntimeAccountWorkflow :: PostgresPool -> AppEnvironmentConfig -> AccountWorkflow
+buildRuntimeAccountWorkflow pool !environmentConfig =
+  AccountWorkflow
+    { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
+      accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
+      accountWorkflowPasswordHasher = Password.hashPassword,
+      accountWorkflowClock = getMonotonicTimeNSec,
+      accountWorkflowMfaStore = buildRuntimePostgresMfaStore pool,
+      accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore pool,
+      accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore pool,
+      accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore pool,
+      accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
+      accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
+      accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
+      accountWorkflowTotpClock = floor <$> getPOSIXTime,
+      accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
+    }
 
 runtimeEmailDelivery :: SmtpDeliveryConfig -> Email.EmailDelivery
 runtimeEmailDelivery smtpConfig =
@@ -282,8 +291,10 @@ authorityFromPublicBaseUrl baseUrl =
 
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig !environmentConfig = do
+  let runtimeDatabaseConfig = databaseConfig environmentConfig
+  pool <- newPostgresPool (databasePoolCapacity runtimeDatabaseConfig) runtimeDatabaseConfig
   announceParsedListenerConfigs outputHandle appConfig
-  HarchWeb.runServer outputHandle appConfig (buildRuntimeApp appConfig environmentConfig)
+  HarchWeb.runServer outputHandle appConfig (buildRuntimeApp pool appConfig environmentConfig)
 
 run :: Handle -> IO ()
 run outputHandle = do

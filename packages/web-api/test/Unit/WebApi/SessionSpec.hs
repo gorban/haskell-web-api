@@ -21,7 +21,7 @@ import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Postgres.Testing (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.Testing (buildRuntimePostgresAccountSessionStore, buildRuntimePostgresAccountSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 import WebApi.Session
   ( AccountSessionStore (..),
     AccountSessionStoreError (..),
@@ -104,7 +104,8 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
       unknownSessionId <- generateSessionId
-      loadAccountSession (buildRuntimePostgresAccountSessionStore defaultRealPostgresConfig) unknownSessionId `shouldReturnEqual` Right Nothing
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      loadAccountSession (buildRuntimePostgresAccountSessionStore pool) unknownSessionId `shouldReturnEqual` Right Nothing
 
     it "keeps the account-session errors comparable without exposing persistence details" $ do
       AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True
@@ -155,7 +156,8 @@ databaseConfig =
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
       databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 accountId :: AccountId

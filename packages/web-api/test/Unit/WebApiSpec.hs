@@ -74,7 +74,7 @@ import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Response (renderApiResponseFromRouteData, selectResponse, selectResponseWithDatabase)
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), PageRoute, RouteMetadata (..), RouteSelectionError (..), defaultRequestContext, parseRoute, renderRoutePath, routeMetadata, selectRoute)
 import WebApi.Route qualified
@@ -448,7 +448,8 @@ postgresTestConfig =
       databaseName = "web_api_prod",
       databaseUser = "web_api_app",
       databasePassword = "super-secret",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 -- | An independently written decoder for libpq's single-quoted conninfo
@@ -666,7 +667,8 @@ setupMigrationPostgresTestConfig =
       databaseName = "web_api_dev",
       databaseUser = "web_api_owner",
       databasePassword = "owner-secret",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 runtimeSetupPostgresTestConfig :: DatabaseConfig
@@ -677,7 +679,8 @@ runtimeSetupPostgresTestConfig =
       databaseName = "web_api_dev",
       databaseUser = "web_api_runtime",
       databasePassword = "runtime-secret",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult
@@ -2608,6 +2611,7 @@ spec = do
                      ("DATABASE_USER", "web_api_runtime"),
                      ("DATABASE_PASSWORD", "web_api"),
                      ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
+                     ("DATABASE_POOL_CAPACITY", "10"),
                      ("SMTP_HOST", "127.0.0.1"),
                      ("SMTP_PORT", "5025"),
                      ("SMTP_HELO_NAME", "localhost"),
@@ -2633,7 +2637,7 @@ spec = do
               }
           dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
       show dynamicEnvironmentConfig
-        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
+        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
                        <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
                    )
@@ -2650,11 +2654,12 @@ spec = do
                       { smtpDeliveryPort = fromIntegral (DevSmtp.devSmtpPort server)
                       }
                 }
-            workflow = buildRuntimeAccountWorkflow environmentConfig
             baseUrlWithoutTrailingSlash = "https://accounts.example.test:" <> Text.pack (show (DevSmtp.devSmtpPort server))
-            untrimmedWorkflow = buildRuntimeAccountWorkflow (environmentConfig {publicBaseUrl = baseUrlWithoutTrailingSlash})
             token = requiredVerificationToken (Text.replicate 43 "a")
             recipient = requiredEmailAddress "person@example.test"
+        pool <- newPostgresPool (databasePoolCapacity (databaseConfig environmentConfig)) (databaseConfig environmentConfig)
+        let workflow = buildRuntimeAccountWorkflow pool environmentConfig
+            untrimmedWorkflow = buildRuntimeAccountWorkflow pool (environmentConfig {publicBaseUrl = baseUrlWithoutTrailingSlash})
         accountWorkflowVerificationUrl workflow (defaultRequestContext {requestLocale = Spanish}) token
           `shouldBe` "https://accounts.example.test/es/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         Text.unpack (accountWorkflowVerificationUrl workflow defaultRequestContext token)
@@ -2683,12 +2688,12 @@ spec = do
                 `ByteString.isInfixOf` DevSmtp.devSmtpRawMessage received
                 `shouldBe` True
             Nothing -> expectationFailure "expected the loopback SMTP server to receive the message"
-        let runtimeApplication = buildRuntimeApp defaultAppConfig environmentConfig
+        let runtimeApplication = buildRuntimeApp pool defaultAppConfig environmentConfig
         HarchWeb.renderResponse
           runtimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
           >>= (`shouldSatisfy` \case HarchWeb.ProtocolResponseResult _ -> True; _ -> False)
-        let productionRuntimeApplication = buildRuntimeApp defaultAppConfig (environmentConfig {appMode = Production})
+        let productionRuntimeApplication = buildRuntimeApp pool defaultAppConfig (environmentConfig {appMode = Production})
         HarchWeb.renderResponse
           productionRuntimeApplication
           (HarchWeb.RouteRequest StatusApiRoute defaultRequestContext)
@@ -2701,14 +2706,17 @@ spec = do
           (Observability.buildConnectionObservability "CONNECTION runtime-account-workflow-test" [])
 
     it "rejects invalid SMTP runtime delivery configurations" $ do
+      pool <- newPostgresPool (databasePoolCapacity (databaseConfig defaultAppEnvironmentConfig)) (databaseConfig defaultAppEnvironmentConfig)
       let recipient = requiredEmailAddress "person@example.test"
           invalidSenderWorkflow =
             buildRuntimeAccountWorkflow
+              pool
               defaultAppEnvironmentConfig
                 { smtpDeliveryConfig = (smtpDeliveryConfig defaultAppEnvironmentConfig) {smtpDeliverySender = "not-an-email"}
                 }
           invalidHeloWorkflow =
             buildRuntimeAccountWorkflow
+              pool
               defaultAppEnvironmentConfig
                 { smtpDeliveryConfig = (smtpDeliveryConfig defaultAppEnvironmentConfig) {smtpDeliveryHeloName = "bad\nhelo"}
                 }
@@ -2729,7 +2737,8 @@ spec = do
                 databaseName = "web_api_prod",
                 databaseUser = "web_api_app",
                 databasePassword = "super-secret",
-                databaseConnectTimeoutSeconds = 10
+                databaseConnectTimeoutSeconds = 10,
+                databasePoolCapacity = 10
               }
           productionEnvironmentConfig =
             defaultAppEnvironmentConfig
@@ -2762,9 +2771,9 @@ spec = do
       show Production `shouldBe` "Production"
       show [Development, Test, Production] `shouldBe` "[Development,Test,Production]"
       show productionDatabaseConfig
-        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}"
+        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}"
       show [productionDatabaseConfig]
-        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}]"
+        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10, databasePoolCapacity = 10}]"
       show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
         `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
@@ -4729,14 +4738,16 @@ spec = do
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01", "person@example.test", "invalid username", "", ""]])) accountId) (isCorrupt "account profile lookup has an invalid username")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_02", "person@example.test", "", "", ""]])) accountId) (isCorrupt "account profile lookup returned a different account id")
       assertAccountStoreError (findAccountProfile (profileStoreFor (Right [["account_01"]])) accountId) (isCorrupt "unexpected account profile lookup result: [[\"account_01\"]]")
-      buildRuntimePostgresAccountProfileStore postgresTestConfig `seq` pure ()
+      testPool <- newPostgresPool (databasePoolCapacity postgresTestConfig) postgresTestConfig
+      buildRuntimePostgresAccountProfileStore testPool `seq` pure ()
 
     it "executes the native account-profile adapter against a migrated PostgreSQL database" $ do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
+      realPool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
       assertAccountStoreSuccess
         ( findAccountProfile
-            (buildRuntimePostgresAccountProfileStore defaultRealPostgresConfig)
+            (buildRuntimePostgresAccountProfileStore realPool)
             (requiredAccountId "profile_lookup_missing_01")
         )
         (\case Nothing -> True; Just _ -> False)
@@ -5165,7 +5176,8 @@ spec = do
                 pendingAccountVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token,
                 pendingAccountCreatedAtNanoseconds = 100
               }
-          accountStore = buildRuntimePostgresAccountStore defaultRealPostgresConfig
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let accountStore = buildRuntimePostgresAccountStore pool
       assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) (\case PendingAccountCreated -> True; _ -> False)
       assertAccountStoreSuccess
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
@@ -5174,7 +5186,7 @@ spec = do
         (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
         (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
 
-      let mfaStoreForAccount = buildRuntimePostgresMfaStore defaultRealPostgresConfig
+      let mfaStoreForAccount = buildRuntimePostgresMfaStore pool
           assertMfaBoolResult label action expected = do
             result <- action
             case result of
@@ -5539,7 +5551,8 @@ spec = do
                     databaseName = "web_api_local",
                     databaseUser = "local_user",
                     databasePassword = "local_password",
-                    databaseConnectTimeoutSeconds = 10
+                    databaseConnectTimeoutSeconds = 10,
+                    databasePoolCapacity = 10
                   }
             }
 
@@ -5568,7 +5581,8 @@ spec = do
                     databaseName = "web_api_local",
                     databaseUser = "local_user",
                     databasePassword = "runtime_password",
-                    databaseConnectTimeoutSeconds = 10
+                    databaseConnectTimeoutSeconds = 10,
+                    databasePoolCapacity = 10
                   }
             }
 
@@ -5624,7 +5638,8 @@ spec = do
                         databaseName = "shared_db",
                         databaseUser = "shared_user",
                         databasePassword = "local_password",
-                        databaseConnectTimeoutSeconds = 10
+                        databaseConnectTimeoutSeconds = 10,
+                        databasePoolCapacity = 10
                       }
                 }
 
@@ -5650,7 +5665,8 @@ spec = do
                               databaseName = "shared_db",
                               databaseUser = "shared_user",
                               databasePassword = "runtime_password",
-                              databaseConnectTimeoutSeconds = 10
+                              databaseConnectTimeoutSeconds = 10,
+                              databasePoolCapacity = 10
                             }
                       }
 
@@ -5707,7 +5723,8 @@ spec = do
                           databaseName = "shared_db",
                           databaseUser = "shared_user",
                           databasePassword = "local_password",
-                          databaseConnectTimeoutSeconds = 10
+                          databaseConnectTimeoutSeconds = 10,
+                          databasePoolCapacity = 10
                         }
                   }
 
@@ -5757,7 +5774,8 @@ spec = do
                                 databaseName = "web_api_dev",
                                 databaseUser = "web_api_runtime",
                                 databasePassword = "local_password",
-                                databaseConnectTimeoutSeconds = 10
+                                databaseConnectTimeoutSeconds = 10,
+                                databasePoolCapacity = 10
                               }
                         },
                     startupAppConfig =
@@ -5800,7 +5818,8 @@ spec = do
                                       databaseName = "web_api_dev",
                                       databaseUser = "web_api_runtime",
                                       databasePassword = "local_password",
-                                      databaseConnectTimeoutSeconds = 10
+                                      databaseConnectTimeoutSeconds = 10,
+                                      databasePoolCapacity = 10
                                     }
                               },
                           startupAppConfig =
@@ -6004,7 +6023,8 @@ spec = do
                           databaseName = "web_api_dev",
                           databaseUser = "web_api_runtime",
                           databasePassword = "web_api",
-                          databaseConnectTimeoutSeconds = 10
+                          databaseConnectTimeoutSeconds = 10,
+                          databasePoolCapacity = 10
                         }
                   },
               setupAppConfig = defaultAppConfig,
@@ -6016,7 +6036,8 @@ spec = do
                       databaseName = "web_api_dev",
                       databaseUser = "web_api_owner",
                       databasePassword = "owner-secret",
-                      databaseConnectTimeoutSeconds = 10
+                      databaseConnectTimeoutSeconds = 10,
+                      databasePoolCapacity = 1
                     },
               setupAutostartConfig = defaultSetupAutostartConfig
             }
@@ -6132,7 +6153,8 @@ spec = do
                                   databaseName = "web_api_dev",
                                   databaseUser = "web_api_runtime",
                                   databasePassword = "web_api",
-                                  databaseConnectTimeoutSeconds = 10
+                                  databaseConnectTimeoutSeconds = 10,
+                                  databasePoolCapacity = 10
                                 }
                           },
                       setupAppConfig = defaultAppConfig,
@@ -6144,7 +6166,8 @@ spec = do
                               databaseName = "web_api_dev",
                               databaseUser = "web_api_owner",
                               databasePassword = "owner-secret",
-                              databaseConnectTimeoutSeconds = 10
+                              databaseConnectTimeoutSeconds = 10,
+                              databasePoolCapacity = 1
                             },
                       setupAutostartConfig = defaultSetupAutostartConfig
                     }
@@ -6222,7 +6245,8 @@ spec = do
                         databaseName = "web_api_dev",
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
-                        databaseConnectTimeoutSeconds = 10
+                        databaseConnectTimeoutSeconds = 10,
+                        databasePoolCapacity = 10
                       },
                 setupAutostartConfig =
                   SetupAutostartConfig
@@ -6242,7 +6266,8 @@ spec = do
               databaseName = "web_api_dev",
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
-              databaseConnectTimeoutSeconds = 10
+              databaseConnectTimeoutSeconds = 10,
+              databasePoolCapacity = 10
             }
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig
@@ -6300,7 +6325,8 @@ spec = do
                             databaseName = "web_api_build",
                             databaseUser = "web_api_runtime",
                             databasePassword = "secret",
-                            databaseConnectTimeoutSeconds = 10
+                            databaseConnectTimeoutSeconds = 10,
+                            databasePoolCapacity = 10
                           }
                     }
               }
@@ -6326,7 +6352,8 @@ spec = do
                             databaseName = "web_api_build",
                             databaseUser = "web_api_runtime",
                             databasePassword = "secret",
-                            databaseConnectTimeoutSeconds = 10
+                            databaseConnectTimeoutSeconds = 10,
+                            databasePoolCapacity = 10
                           }
                     },
                 setupAutostartConfig =
@@ -6707,7 +6734,8 @@ spec = do
               databaseName = "web_api_dev",
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
-              databaseConnectTimeoutSeconds = 10
+              databaseConnectTimeoutSeconds = 10,
+              databasePoolCapacity = 1
             }
 
     it "fails missing or invalid migration environment values explicitly" $ do
@@ -6742,7 +6770,8 @@ spec = do
                         databaseName = "web_api_dev",
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
-                        databaseConnectTimeoutSeconds = 10
+                        databaseConnectTimeoutSeconds = 10,
+                        databasePoolCapacity = 1
                       }
 
   describe "runDatabaseSetupCommand"

@@ -26,7 +26,7 @@ import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPost
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
-import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
 spec :: Spec
 spec = do
@@ -450,7 +450,8 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
         `shouldReturn` Right ()
-      let store = buildRuntimePostgresAccountCredentialStore defaultRealPostgresConfig
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresAccountCredentialStore pool
       findAccountCredentialByEmail store (required "unknown email address" (mkEmailAddress "missing-login-credential@example.test"))
         `shouldSatisfyEqual` \case
           Right Nothing -> True
@@ -554,7 +555,8 @@ databaseConfig =
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
       databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }
 
 shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation

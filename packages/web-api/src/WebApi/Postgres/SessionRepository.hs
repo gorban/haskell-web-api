@@ -19,22 +19,22 @@ import HarchWeb.Session
     sessionIdText,
   )
 import Text.Read (readMaybe)
-import WebApi.Config (DatabaseConfig)
-import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
+import WebApi.Postgres.Pool (PostgresPool)
+import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
 import WebApi.Session
   ( AccountSessionStore (..),
     AccountSessionStoreError (..),
   )
 
-buildRuntimePostgresAccountSessionStore :: DatabaseConfig -> AccountSessionStore
-buildRuntimePostgresAccountSessionStore !databaseConfig =
-  buildRuntimePostgresAccountSessionStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresAccountSessionStore :: PostgresPool -> AccountSessionStore
+buildRuntimePostgresAccountSessionStore !pool =
+  buildRuntimePostgresAccountSessionStoreWithRunner runPooledParameterizedRowsQuery pool
 
 buildRuntimePostgresAccountSessionStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   AccountSessionStore
-buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresAccountSessionStoreWithRunner runQuery source =
   AccountSessionStore
     { saveAccountSession = saveSession,
       loadAccountSession = loadSession,
@@ -44,7 +44,7 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
     saveSession session =
       runSessionStoreQuery
         ( runQuery
-            databaseConfig
+            source
             saveAccountSessionQuery
             [ sessionIdText (sessionId session),
               accountIdText (sessionPrincipal session),
@@ -57,12 +57,12 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery databaseConfig =
 
     loadSession sessionToken =
       runSessionStoreQuery
-        (runQuery databaseConfig loadAccountSessionQuery [sessionIdText sessionToken])
+        (runQuery source loadAccountSessionQuery [sessionIdText sessionToken])
         (decodeStoredSession sessionToken)
 
     invalidateSession sessionToken invalidatedAtNanoseconds =
       runSessionStoreQuery
-        (runQuery databaseConfig invalidateAccountSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
+        (runQuery source invalidateAccountSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
         (decodeMatchingSessionId (sessionIdText sessionToken))
 
 runSessionStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either AccountSessionStoreError value) -> IO (Either AccountSessionStoreError value)

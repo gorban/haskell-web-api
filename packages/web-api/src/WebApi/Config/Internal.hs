@@ -132,7 +132,8 @@ data DatabaseConfig = DatabaseConfig
     databaseName :: Text,
     databaseUser :: Text,
     databasePassword :: Text,
-    databaseConnectTimeoutSeconds :: Int
+    databaseConnectTimeoutSeconds :: Int,
+    databasePoolCapacity :: Int
   }
   deriving (Eq)
 
@@ -151,6 +152,8 @@ instance Show DatabaseConfig where
       <> show (databaseUser config)
       <> ", databasePassword = <redacted>, databaseConnectTimeoutSeconds = "
       <> show (databaseConnectTimeoutSeconds config)
+      <> ", databasePoolCapacity = "
+      <> show (databasePoolCapacity config)
       <> "}"
 
 data AppEnvironmentConfig = AppEnvironmentConfig
@@ -261,6 +264,7 @@ committedEnvDefaults =
     ("DATABASE_USER", "web_api_runtime"),
     ("DATABASE_PASSWORD", "web_api"),
     ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
+    ("DATABASE_POOL_CAPACITY", "10"),
     ("SMTP_HOST", "127.0.0.1"),
     ("SMTP_PORT", "5025"),
     ("SMTP_HELO_NAME", "localhost"),
@@ -299,6 +303,13 @@ defaultCertificateDirectoryRoot = ".tls"
 defaultDatabaseConnectTimeoutSeconds :: Int
 defaultDatabaseConnectTimeoutSeconds = 10
 
+-- | Bounds how many live libpq connections 'WebApi.Postgres.Pool' opens
+-- against this database at once. Ten matches Warp's own comfortable
+-- concurrency range for a single small deployment; a busier deployment
+-- raises this via 'databasePoolCapacityKey' rather than by editing code.
+defaultDatabasePoolCapacity :: Int
+defaultDatabasePoolCapacity = 10
+
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
   AppEnvironmentConfig
@@ -310,7 +321,8 @@ defaultAppEnvironmentConfig =
             databaseName = "web_api_dev",
             databaseUser = "web_api_runtime",
             databasePassword = "web_api",
-            databaseConnectTimeoutSeconds = defaultDatabaseConnectTimeoutSeconds
+            databaseConnectTimeoutSeconds = defaultDatabaseConnectTimeoutSeconds,
+            databasePoolCapacity = defaultDatabasePoolCapacity
           },
       smtpDeliveryConfig =
         SmtpDeliveryConfig
@@ -426,6 +438,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
   parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
   parsedDatabaseConnectTimeoutSeconds <- parseConnectTimeout =<< requiredConfigValue databaseConnectTimeoutSecondsKey
+  parsedDatabasePoolCapacity <- parsePoolCapacity =<< requiredConfigValue databasePoolCapacityKey
   parsedSmtpHost <- requiredConfigValue "SMTP_HOST"
   parsedSmtpPort <- parseSmtpPort =<< requiredConfigValue "SMTP_PORT"
   parsedSmtpHeloName <- requiredConfigValue "SMTP_HELO_NAME"
@@ -445,7 +458,8 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
               databaseName = parsedDatabaseName,
               databaseUser = parsedDatabaseUser,
               databasePassword = parsedDatabasePassword,
-              databaseConnectTimeoutSeconds = parsedDatabaseConnectTimeoutSeconds
+              databaseConnectTimeoutSeconds = parsedDatabaseConnectTimeoutSeconds,
+              databasePoolCapacity = parsedDatabasePoolCapacity
             },
         smtpDeliveryConfig =
           SmtpDeliveryConfig
@@ -508,6 +522,26 @@ databaseConnectTimeoutSecondsKey = "DATABASE_CONNECT_TIMEOUT_SECONDS"
 {-# ANN parseConnectTimeout ("HLint: ignore Redundant $!" :: String) #-}
 parseConnectTimeout :: Text -> Either ConfigParseError Int
 parseConnectTimeout = parseNonNegativeInt $! databaseConnectTimeoutSecondsKey
+
+-- | The @DATABASE_POOL_CAPACITY@ env var name, mirroring
+-- 'databaseConnectTimeoutSecondsKey' above.
+databasePoolCapacityKey :: Text
+databasePoolCapacityKey = "DATABASE_POOL_CAPACITY"
+
+-- | Positive, not non-negative: a zero-capacity pool can never hand out a
+-- connection, so every database-backed request would block forever.
+--
+-- Naming 'databasePoolCapacityKey' once instead of writing the env var name
+-- at both this module's uses does not fully close the coverage gap by
+-- itself, confirmed directly rather than assumed: it is a trivial 'Text'
+-- literal CAF, and GHC's @-O2@ optimizer inlines it back to a bare literal
+-- at this reference, reproducing the same CSE-sharing gap the naming was
+-- meant to remove. The @$!@ below forces that one remaining reference.
+-- Confirmed directly (not assumed by analogy to this module's other
+-- @$!@-forced key lookups) that HLint's @--language=ImportQualifiedPost@
+-- invocation does not flag this line, so no ignore pragma is added.
+parsePoolCapacity :: Text -> Either ConfigParseError Int
+parsePoolCapacity = parsePositiveInt $! databasePoolCapacityKey
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do

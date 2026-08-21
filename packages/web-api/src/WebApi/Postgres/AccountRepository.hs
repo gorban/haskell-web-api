@@ -39,31 +39,31 @@ import WebApi.Account
     CreatePendingAccountOutcome (..),
     PendingAccount (..),
   )
-import WebApi.Config (DatabaseConfig)
 import WebApi.Login
   ( AccountCredential (..),
     AccountCredentialStore (..),
     AccountCredentialStoreError (..),
   )
-import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
+import WebApi.Postgres.Pool (PostgresPool)
+import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
 
-buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
-buildRuntimePostgresAccountStore !databaseConfig =
-  buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresAccountStore :: PostgresPool -> AccountStore
+buildRuntimePostgresAccountStore !pool =
+  buildRuntimePostgresAccountStoreWithRunner runPooledParameterizedRowsQuery pool
 
-buildRuntimePostgresAccountProfileStore :: DatabaseConfig -> AccountProfileStore
-buildRuntimePostgresAccountProfileStore !databaseConfig =
-  buildRuntimePostgresAccountProfileStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresAccountProfileStore :: PostgresPool -> AccountProfileStore
+buildRuntimePostgresAccountProfileStore !pool =
+  buildRuntimePostgresAccountProfileStoreWithRunner runPooledParameterizedRowsQuery pool
 
-buildRuntimePostgresAccountCredentialStore :: DatabaseConfig -> AccountCredentialStore
-buildRuntimePostgresAccountCredentialStore !databaseConfig =
-  buildRuntimePostgresAccountCredentialStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresAccountCredentialStore :: PostgresPool -> AccountCredentialStore
+buildRuntimePostgresAccountCredentialStore !pool =
+  buildRuntimePostgresAccountCredentialStoreWithRunner runPooledParameterizedRowsQuery pool
 
 buildRuntimePostgresAccountCredentialStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   AccountCredentialStore
-buildRuntimePostgresAccountCredentialStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresAccountCredentialStoreWithRunner runQuery source =
   AccountCredentialStore findCredentialByEmail findCredentialByUsername
   where
     findCredentialByEmail emailAddress =
@@ -74,14 +74,14 @@ buildRuntimePostgresAccountCredentialStoreWithRunner runQuery databaseConfig =
       runExceptT $ do
         rows <-
           runStoreQuery AccountCredentialStoreUnavailable $
-            runQuery databaseConfig query parameters
+            runQuery source query parameters
         liftEither (decodeAccountCredentialRows rows)
 
 buildRuntimePostgresAccountStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   AccountStore
-buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresAccountStoreWithRunner runQuery source =
   AccountStore
     { createPendingAccount = createAccount,
       replaceEmailVerification = replaceVerification,
@@ -107,7 +107,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
           Just username -> do
             availabilityRows <-
               unavailableAccountStoreQuery $
-                runQuery databaseConfig usernameAvailabilityQuery [usernameText username]
+                runQuery source usernameAvailabilityQuery [usernameText username]
             pure (not (null availabilityRows))
         if usernameTaken
           then pure PendingAccountUsernameTaken
@@ -115,7 +115,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
             rows <-
               unavailableAccountStoreQuery $
                 runQuery
-                  databaseConfig
+                  source
                   createPendingAccountQuery
                   [ accountIdText (pendingAccountId pendingAccount),
                     emailAddressText (pendingAccountEmail pendingAccount),
@@ -133,7 +133,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
         rows <-
           unavailableAccountStoreQuery $
             runQuery
-              databaseConfig
+              source
               replaceEmailVerificationQuery
               [ accountIdText (storedVerificationAccountId verification),
                 emailVerificationTokenDigestText (storedVerificationTokenDigest verification),
@@ -146,7 +146,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
       runExceptT $ do
         rows <-
           unavailableAccountStoreQuery $
-            runQuery databaseConfig findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
+            runQuery source findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
         liftEither (decodeStoredVerification tokenDigest rows)
 
     consumeVerification tokenDigest now =
@@ -154,21 +154,21 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
         rows <-
           unavailableAccountStoreQuery $
             runQuery
-              databaseConfig
+              source
               consumeEmailVerificationQuery
               [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
         liftEither (decodeConsumedVerification rows)
 
 buildRuntimePostgresAccountProfileStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   AccountProfileStore
-buildRuntimePostgresAccountProfileStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresAccountProfileStoreWithRunner runQuery source =
   AccountProfileStore $ \accountId ->
     runExceptT $ do
       rows <-
         unavailableAccountStoreQuery $
-          runQuery databaseConfig findAccountProfileQuery [accountIdText accountId]
+          runQuery source findAccountProfileQuery [accountIdText accountId]
       liftEither (decodeAccountProfileRows accountId rows)
 
 runStoreQuery :: (Text -> storeError) -> IO (Either Text value) -> ExceptT storeError IO value

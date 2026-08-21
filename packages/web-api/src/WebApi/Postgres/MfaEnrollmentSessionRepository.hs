@@ -19,22 +19,22 @@ import HarchWeb.Session
     sessionIdText,
   )
 import Text.Read (readMaybe)
-import WebApi.Config (DatabaseConfig)
-import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
+import WebApi.Postgres.Pool (PostgresPool)
+import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
 import WebApi.Session
   ( MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError (..),
   )
 
-buildRuntimePostgresMfaEnrollmentSessionStore :: DatabaseConfig -> MfaEnrollmentSessionStore
-buildRuntimePostgresMfaEnrollmentSessionStore !databaseConfig =
-  buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresMfaEnrollmentSessionStore :: PostgresPool -> MfaEnrollmentSessionStore
+buildRuntimePostgresMfaEnrollmentSessionStore !pool =
+  buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runPooledParameterizedRowsQuery pool
 
 buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   MfaEnrollmentSessionStore
-buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runQuery source =
   MfaEnrollmentSessionStore
     { saveMfaEnrollmentSession = saveSession,
       loadMfaEnrollmentSession = loadSession,
@@ -44,7 +44,7 @@ buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runQuery databaseConfig 
     saveSession session =
       runSessionStoreQuery
         ( runQuery
-            databaseConfig
+            source
             saveMfaEnrollmentSessionQuery
             [ sessionIdText (sessionId session),
               accountIdText (sessionPrincipal session),
@@ -57,12 +57,12 @@ buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner runQuery databaseConfig 
 
     loadSession sessionToken =
       runSessionStoreQuery
-        (runQuery databaseConfig loadMfaEnrollmentSessionQuery [sessionIdText sessionToken])
+        (runQuery source loadMfaEnrollmentSessionQuery [sessionIdText sessionToken])
         (decodeStoredSession sessionToken)
 
     invalidateSession sessionToken invalidatedAtNanoseconds =
       runSessionStoreQuery
-        (runQuery databaseConfig invalidateMfaEnrollmentSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
+        (runQuery source invalidateMfaEnrollmentSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
         (decodeMatchingSessionId (sessionIdText sessionToken))
 
 runSessionStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either MfaEnrollmentSessionStoreError value) -> IO (Either MfaEnrollmentSessionStoreError value)

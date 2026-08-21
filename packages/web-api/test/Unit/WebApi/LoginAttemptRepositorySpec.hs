@@ -12,7 +12,7 @@ import Test.Hspec
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login (LoginAttemptStore (..), LoginAttemptStoreError (..))
-import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, runPostgresMigrationsForRuntime)
+import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
 spec :: Spec
 spec = do
@@ -65,7 +65,8 @@ spec = do
       runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
         `shouldReturn` Right ()
       attemptKey <- accountIdText <$> generateAccountId
-      let store = buildRuntimePostgresLoginAttemptStore defaultRealPostgresConfig
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresLoginAttemptStore pool
       loadRecentLoginAttempts store attemptKey 0 `shouldReturnEqual` Right []
       recordLoginAttempt store attemptKey (LoginAttempt 500 False) `shouldReturnEqual` Right ()
       recordLoginAttempt store attemptKey (LoginAttempt 600 True) `shouldReturnEqual` Right ()
@@ -86,5 +87,6 @@ databaseConfig =
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
       databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10
+      databaseConnectTimeoutSeconds = 10,
+      databasePoolCapacity = 10
     }

@@ -13,6 +13,9 @@ module WebApi.Postgres.Runtime
     renderRunnerError,
     renderRuntimeConnectionErrorMessage,
     renderRuntimeResultErrorMessage,
+    runPooledRowsQuery,
+    runPooledParameterizedRowsQuery,
+    runPooledScalarQuery,
     runRequiredScalarCommand,
     runRowsCommand,
     runRuntimeRowsQuery,
@@ -20,6 +23,7 @@ module WebApi.Postgres.Runtime
     runRuntimeScalarQuery,
     runPostgresCommand,
     runStatements,
+    runtimeConnectionString,
   )
 where
 
@@ -39,6 +43,7 @@ import WebApi.Database
   ( PageRepository,
   )
 import WebApi.Postgres.PageRepository qualified as PageRepository
+import WebApi.Postgres.Pool (PostgresPool, libpqConnectionValue, runtimeConnectionString, withPooledConnection)
 import WebApi.Postgres.QueryRunner (PageQueryRunner (..))
 
 data PostgresCommand = PostgresCommand
@@ -91,20 +96,20 @@ buildPostgresPageRepositoryWithRunner runCommand databaseConfig =
             . runRowsCommand runCommand databaseConfig
       }
 
-buildRuntimePostgresPageRepository :: DatabaseConfig -> PageRepository
+buildRuntimePostgresPageRepository :: PostgresPool -> PageRepository
 buildRuntimePostgresPageRepository =
-  buildRuntimePostgresPageRepositoryWithRunner runRuntimeScalarQuery runRuntimeRowsQuery
+  buildRuntimePostgresPageRepositoryWithRunner runPooledScalarQuery runPooledRowsQuery
 
 buildRuntimePostgresPageRepositoryWithRunner ::
-  (DatabaseConfig -> Text -> IO (Either Text Text)) ->
-  (DatabaseConfig -> Text -> IO (Either Text [Text])) ->
-  DatabaseConfig ->
+  (source -> Text -> IO (Either Text Text)) ->
+  (source -> Text -> IO (Either Text [Text])) ->
+  source ->
   PageRepository
-buildRuntimePostgresPageRepositoryWithRunner runScalarQuery runRowsQuery databaseConfig =
+buildRuntimePostgresPageRepositoryWithRunner runScalarQuery runRowsQuery source =
   PageRepository.pageRepository
     PageQueryRunner
-      { runRequiredTextQuery = runScalarQuery databaseConfig,
-        runTextRowsQuery = runRowsQuery databaseConfig
+      { runRequiredTextQuery = runScalarQuery source,
+        runTextRowsQuery = runRowsQuery source
       }
 
 runRequiredScalarCommand :: (PostgresCommand -> IO PostgresCommandResult) -> DatabaseConfig -> Text -> IO (Either PostgresRunnerError Text)
@@ -182,6 +187,23 @@ runRuntimeParameterizedRowsQuery databaseConfig sql parameters =
     LibPQ.finish
     (runRuntimeParameterizedQueryRows sql parameters)
 
+-- | The pooled counterparts of 'runRuntimeScalarQuery' / 'runRuntimeRowsQuery'
+-- / 'runRuntimeParameterizedRowsQuery': same query execution and row
+-- decoding, sourcing their connection from a shared 'PostgresPool' via
+-- 'withPooledConnection' instead of opening and closing a fresh connection
+-- per call.
+runPooledScalarQuery :: PostgresPool -> Text -> IO (Either Text Text)
+runPooledScalarQuery pool sql =
+  fmap runtimeScalarRowsResult (runPooledRowsQuery pool sql)
+
+runPooledRowsQuery :: PostgresPool -> Text -> IO (Either Text [Text])
+runPooledRowsQuery pool sql =
+  withPooledConnection pool (runRuntimeQueryRows sql)
+
+runPooledParameterizedRowsQuery :: PostgresPool -> Text -> [Text] -> IO (Either Text [[Text]])
+runPooledParameterizedRowsQuery pool sql parameters =
+  withPooledConnection pool (runRuntimeParameterizedQueryRows sql parameters)
+
 runRuntimeQueryRows :: Text -> LibPQ.Connection -> IO (Either Text [Text])
 runRuntimeQueryRows sql =
   runRuntimeQuery
@@ -251,27 +273,6 @@ decodeRuntimeQueryValue maybeValue =
   case maybeValue of
     Nothing -> Left "unexpected NULL column value"
     Just value -> Right (TextEncoding.decodeUtf8With lenientDecode value)
-
-runtimeConnectionString :: DatabaseConfig -> ByteString.ByteString
-runtimeConnectionString databaseConfig =
-  TextEncoding.encodeUtf8 $
-    Text.unwords
-      [ "host=" <> libpqConnectionValue (databaseHost databaseConfig),
-        "port=" <> Text.pack (show (databasePort databaseConfig)),
-        "dbname=" <> libpqConnectionValue (databaseName databaseConfig),
-        "user=" <> libpqConnectionValue (databaseUser databaseConfig),
-        "password=" <> libpqConnectionValue (databasePassword databaseConfig),
-        "connect_timeout=" <> Text.pack (show (databaseConnectTimeoutSeconds databaseConfig))
-      ]
-
--- | Quote a value for libpq's connection-string syntax. Backslashes must be
--- escaped before quotes: escaping in the other order turns each escaped
--- quote's backslash into two backslashes, leaving the quote unescaped and
--- terminating the value early, so the remainder of a password or database
--- name containing a quote would be parsed as further conninfo keywords.
-libpqConnectionValue :: Text -> Text
-libpqConnectionValue value =
-  "'" <> Text.replace "'" "\\'" (Text.replace "\\" "\\\\" value) <> "'"
 
 renderRuntimeConnectionError :: LibPQ.Connection -> IO Text
 renderRuntimeConnectionError connection = do

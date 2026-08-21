@@ -116,6 +116,7 @@ library
     WebApi.Postgres.MfaRepository
     WebApi.Postgres.Migration
     WebApi.Postgres.PageRepository
+    WebApi.Postgres.Pool
     WebApi.Postgres.QueryRunner
     WebApi.Postgres.Runtime
     WebApi.Postgres.SessionRepository
@@ -221,6 +222,7 @@ test-suite haskell-web-api-tests
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
     network ^>=3.2.8.0,
+    postgresql-libpq ^>=0.11.0.0,
     process ^>=1.6.26.1,
     temporary ^>=1.3,
     test-core ^>=0.1.2.0,

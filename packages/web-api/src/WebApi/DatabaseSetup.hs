@@ -78,6 +78,10 @@ parseDatabaseSetupConfig environmentEntries =
     -- of scope). It exists here only because 'DatabaseConfig' is a single
     -- shared record; the value is otherwise inert on this path.
     <*> pure migrationDatabaseConnectTimeoutSeconds
+    -- Same reasoning as the timeout above: migrations run their statements
+    -- one psql subprocess at a time (see AX), so there is no pool to size on
+    -- this path either. The value is otherwise inert here.
+    <*> pure migrationDatabasePoolCapacity
   where
     requiredConfigValue key =
       case lookup key environmentEntries of
@@ -86,6 +90,9 @@ parseDatabaseSetupConfig environmentEntries =
 
 migrationDatabaseConnectTimeoutSeconds :: Int
 migrationDatabaseConnectTimeoutSeconds = 10
+
+migrationDatabasePoolCapacity :: Int
+migrationDatabasePoolCapacity = 1
 
 parseDatabaseSetupCommand :: [String] -> Either DatabaseSetupError DatabaseSetupCommand
 parseDatabaseSetupCommand arguments =

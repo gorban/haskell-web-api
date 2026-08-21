@@ -14,23 +14,23 @@ import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId, accountIdText)
 import Text.Read (readMaybe)
-import WebApi.Config (DatabaseConfig)
 import WebApi.Mfa
   ( MfaStore (..),
     MfaStoreError (..),
     StoredTotpEnrollment (..),
   )
-import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
+import WebApi.Postgres.Pool (PostgresPool)
+import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
 
-buildRuntimePostgresMfaStore :: DatabaseConfig -> MfaStore
-buildRuntimePostgresMfaStore !databaseConfig =
-  buildRuntimePostgresMfaStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
+buildRuntimePostgresMfaStore :: PostgresPool -> MfaStore
+buildRuntimePostgresMfaStore !pool =
+  buildRuntimePostgresMfaStoreWithRunner runPooledParameterizedRowsQuery pool
 
 buildRuntimePostgresMfaStoreWithRunner ::
-  (DatabaseConfig -> Text -> [Text] -> IO (Either Text [[Text]])) ->
-  DatabaseConfig ->
+  (source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+  source ->
   MfaStore
-buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
+buildRuntimePostgresMfaStoreWithRunner runQuery source =
   MfaStore
     { saveUnconfirmedTotpEnrollment = saveEnrollment,
       loadTotpEnrollment = loadEnrollment,
@@ -42,32 +42,32 @@ buildRuntimePostgresMfaStoreWithRunner runQuery databaseConfig =
   where
     saveEnrollment accountId encryptedSecret now =
       runMfaStoreQuery
-        (runQuery databaseConfig saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)])
+        (runQuery source saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)])
         (decodeMatchingAccount "unexpected TOTP enrollment result: " accountId)
 
     loadEnrollment accountId =
       runMfaStoreQuery
-        (runQuery databaseConfig loadTotpEnrollmentQuery [accountIdText accountId])
+        (runQuery source loadTotpEnrollmentQuery [accountIdText accountId])
         decodeTotpEnrollment
 
     confirmEnrollment accountId recoveryCodeHashes now =
       runMfaStoreQuery
-        (runQuery databaseConfig (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes))
+        (runQuery source (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes))
         (decodeMatchingAccount "unexpected TOTP confirmation result: " accountId)
 
     loadRecoveryCodeHashes accountId =
       runMfaStoreQuery
-        (runQuery databaseConfig loadUnusedRecoveryCodeHashesQuery [accountIdText accountId])
+        (runQuery source loadUnusedRecoveryCodeHashesQuery [accountIdText accountId])
         decodeRecoveryCodeHashes
 
     consumeRecoveryCode accountId recoveryCodeHash now =
       runMfaStoreQuery
-        (runQuery databaseConfig consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)])
+        (runQuery source consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)])
         (decodeMatchingAccount "unexpected recovery-code consumption result: " accountId)
 
     markCodeUsed accountId counter =
       runMfaStoreQuery
-        (runQuery databaseConfig markTotpCodeUsedQuery [accountIdText accountId, Text.pack (show counter)])
+        (runQuery source markTotpCodeUsedQuery [accountIdText accountId, Text.pack (show counter)])
         (decodeMatchingAccount "unexpected TOTP counter update result: " accountId)
 
 runMfaStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either MfaStoreError value) -> IO (Either MfaStoreError value)

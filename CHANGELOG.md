@@ -160,6 +160,16 @@
     incompatible copies of the same cryptographic primitives that back every password hash, session
     token, TOTP secret, and JWT signature in the framework. No behavior change; `crypton` is a
     module-for-module drop-in replacement.
+25. `web-api` now pools its PostgreSQL connections instead of opening and closing a fresh libpq
+    connection for every runtime query (a login previously made four such round trips, a profile page
+    two). A new `WebApi.Postgres.Pool` gives the composition root one shared, bounded
+    `PostgresPool`, sized by a new `DATABASE_POOL_CAPACITY` environment variable (default `10`,
+    following the same committed-default pattern as `DATABASE_CONNECT_TIMEOUT_SECONDS`); connections
+    are opened lazily on first use, reused across requests, and a connection that fails is discarded
+    rather than pooled. Every runtime repository builder (`buildRuntimePostgresAccountStore` and its
+    siblings) now takes the pool instead of a bare `DatabaseConfig`. Database migrations are
+    unaffected: they still run each statement through its own `psql` subprocess, a separate concern
+    tracked by its own task.
 
 ## 0.1.1.0
 

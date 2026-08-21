@@ -24,7 +24,7 @@ import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd,
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), HomePageData (..), PageRepository (..), SecondPageData (..))
-import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository)
+import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository, newPostgresPool)
 import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
 
 loadHomePageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError HomePageData)
@@ -247,7 +247,8 @@ spec = do
                 }
 
           withTemporaryEnvironment "PATH" (Just "") $ do
-            let runtimePostgresEffect = buildRuntimePostgresPageRepository defaultRealPostgresConfig
+            runtimePool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+            let runtimePostgresEffect = buildRuntimePostgresPageRepository runtimePool
             loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
               `shouldReturn` Right
                 HomePageData
@@ -303,11 +304,9 @@ spec = do
     it "maps runtime PostgreSQL connection failures into database errors without shelling out to psql" $
       withUnusedLoopbackPort $ \unusedPort ->
         withTemporaryEnvironment "PATH" (Just "") $ do
-          let runtimePostgresEffect =
-                buildRuntimePostgresPageRepository
-                  defaultRealPostgresConfig
-                    { databasePort = unusedPort
-                    }
+          let unreachableDatabaseConfig = defaultRealPostgresConfig {databasePort = unusedPort}
+          unreachablePool <- newPostgresPool (databasePoolCapacity unreachableDatabaseConfig) unreachableDatabaseConfig
+          let runtimePostgresEffect = buildRuntimePostgresPageRepository unreachablePool
           loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
               Left (HomePageDataError errorMessage) -> do

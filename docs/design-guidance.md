@@ -1204,6 +1204,64 @@ actually provisions TLS on the Postgres server(s) this project deploys against �
 defaulting it on would be optimizing for a security property this project cannot yet exercise in
 its own test suite.
 
+### Follow-up decision — AY: the connection pool, kept separate from AX's migration runtime (2026-08-21)
+
+**Decision: ship the runtime-query connection pool now, as its own change, rather than waiting to
+design it together with AX's migration runtime as the note above suggested.** Revisiting that note
+before building: the two are not actually coupled at the implementation level. AX's blocker is that
+migrations run through one `psql` subprocess per statement, so there is no single persistent
+connection to hold a transaction or an advisory lock across statements — fixing that means replacing
+the subprocess model outright, independent of anything the runtime query path does. The runtime
+query path already used `Database.PostgreSQL.LibPQ` directly (`runRuntimeParameterizedRowsQuery`
+and siblings), just via `bracket (LibPQ.connectdb …) LibPQ.finish` per call; pooling that is a
+refinement of an existing boundary (`WebApi.Postgres.Runtime`), not a new one, and needed no
+decision that also constrains AX's separate psql-to-libpq migration. Waiting would have blocked a
+real, closeable half of AY on an unrelated, larger, still-unscoped task.
+
+**Shape: a new `WebApi.Postgres.Pool` (bounded, lazy, explicit-prop) alongside the existing
+`WebApi.Postgres.Runtime`, not folded into it.** `PostgresPool` holds live libpq connections in an
+`idle :: TVar [Connection]` plus a `live :: TVar Int` count bounded by capacity; `acquirePooledConnection`
+reuses an idle connection or, under capacity, reserves a slot and opens a fresh one, blocking via STM
+`retry` at capacity; `releasePooledConnection` checks `LibPQ.status` and either returns a healthy
+connection to idle or discards a broken one and frees its slot, so a connection that dies gets
+replaced by the next acquirer rather than poisoning the pool. Connections are opened **lazily** —
+`newPostgresPool` only allocates two `TVar`s, never connects — so building a pool against an
+unreachable database still succeeds, and only the first query against it fails; this preserves the
+exact behavior `Integration.WebApiSpec`'s "maps runtime PostgreSQL connection failures... without
+shelling out to psql" test already asserted; making pool construction eager and fail-fast at startup
+would have been a legitimate but different design with its own tradeoffs, changing today's "database
+down at startup still serves non-DB routes" behavior — not made unilaterally here. The pool is
+threaded as an explicit prop from `WebApi.App`'s `runWithConfig` through `buildRuntimeApp` and
+`buildRuntimeAccountWorkflow`, one pool shared by every repository builder, per BX's precedent above
+(explicit-prop caching over a second `unsafePerformIO`/`NOINLINE` global) rather than joining
+`otlpExportQueue`/`otlpHttpManager`'s existing shape. Every `buildRuntimePostgresX`/
+`buildRuntimePostgresXWithRunner` pair's `WithRunner` half was generalized from a `DatabaseConfig`-
+typed runner to a type-variable-typed one (`(source -> Text -> [Text] -> IO (Either Text [[Text]])) ->
+source -> X`) so the plain builder could switch to `PostgresPool` while every existing fake-runner
+test (`buildRuntimePostgresXWithRunner (\_ _ _ -> pure result) postgresTestConfig`) kept compiling
+unchanged, `source` simply inferring back to `DatabaseConfig` there. `DatabaseConfig` itself gained
+`databasePoolCapacity :: Int` (`DATABASE_POOL_CAPACITY`, default `10`), following
+`databaseConnectTimeoutSeconds`'s exact pattern including its migration-path precedent: the
+`psql`-subprocess migration runner has no pool to size, so `WebApi.DatabaseSetup.parseDatabaseSetupConfig`
+supplies a hardcoded `migrationDatabasePoolCapacity = 1` rather than a second unused required env var.
+
+**Three genuine coverage gaps surfaced, all the documented "bare variable as a direct call argument"
+HPC artifact, none needing an ignore pragma — confirmed by actually running HLint, not assumed by
+analogy.** `writeTVar (poolIdleConnections pool) remainingIdleConnections` (a pattern-bound list
+tail), `buildRuntimeAccountWorkflow pool environmentConfig` (`pool` referenced twice in one `let`,
+crediting only the first use), and `parsePositiveInt databasePoolCapacityKey` (the same
+named-CSE-literal gap `databaseConnectTimeoutSecondsKey` hit) all needed `$!` at the uncredited
+reference. The refinement to this document's own worked-example precedent: forcing a *bare
+identifier* (a pattern-bound variable, a function parameter, or a same-module named literal) is not
+automatically an HLint "Redundant $!" case the way forcing a literal or a fully-applied constructor
+is — running `hlint --language=ImportQualifiedPost` against all three sites, and against the existing
+`parseConnectTimeout = parseNonNegativeInt $! databaseConnectTimeoutSecondsKey` with its own ignore
+pragma stripped, returned "No hints" in every case. HLint cannot prove a bare identifier resolves to
+a value already in WHNF without cross-declaration analysis it does not perform, so it does not flag
+forcing one — meaning an ignore pragma here would itself be an unverified, unnecessary suppression,
+exactly what the never-mask-a-gate-finding rule warns against. All three `$!` additions ship with a
+plain comment explaining the HPC gap; none carries `{-# ANN ... "HLint: ignore Redundant $!" #-}`.
+
 ### Follow-up decision — BA: give a taken username its own outcome, and target the conflict the insert is actually protecting (2026-08-21)
 
 **Decision: replace `AccountStore.createPendingAccount`'s `Bool` result with a three-way
@@ -1504,7 +1562,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Scoped CSS names | Implemented | Use `cssScope`; typed CSS authoring remains future work. |
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
-| PostgreSQL and custom adapters | Implemented | Keep operations typed and interpreters app-selectable. |
+| PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
 | `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. The now-unused compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` (and the legacy `ApiEndpoint` table) were deleted 2026-08-13 (see the AK decision record), which closed AK's module-health signal too (`HarchWeb.Api.Endpoint` is 499 lines). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). On 2026-08-18, `UntrustedFilename` made the filename metadata boundary explicit and non-negative byte/item limit types made malformed negative configuration unrepresentable. Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
