@@ -5,6 +5,7 @@ module HarchWeb.Markup.Quasi.Lowering
   )
 where
 
+import Control.Exception (ErrorCall (..), evaluate, try)
 import Data.Functor ((<&>))
 import Data.List (find, intercalate)
 import Data.String (fromString)
@@ -29,6 +30,7 @@ import Language.Haskell.TH
     mkName,
     nameBase,
     reify,
+    runIO,
   )
 
 lowerNodes :: [MarkupNode] -> Q Exp
@@ -417,11 +419,36 @@ applyNamed name arguments = pure (applyNamedPure name arguments)
 applyNamedPure :: Name -> [Exp] -> Exp
 applyNamedPure name = foldl AppE (VarE name)
 
+-- | Decision (BV, 2026-08-21, per @docs/design-guidance.md@'s
+-- missing-framework-capability protocol): see @docs/design-guidance.md@'s
+-- \"Follow-up decision — BV\" for the full record of why this catches the
+-- crash rather than implementing TH-quote support.
+--
+-- 'Meta.parseExp' does not return a 'Left' for every unsupported
+-- expression: a bare Template Haskell name quote (@'Just@) parses, then
+-- throws an uncaught 'ErrorCall' from deep inside @haskell-src-meta@'s own
+-- AST translation the moment the result is forced (@toExp: not implemented:
+-- VarQuote ...@) — confirmed directly against @haskell-src-meta-0.8.16@,
+-- not assumed. Left uncaught, that crash would surface as a confusing
+-- GHC-internal panic at the *calling* module's compile time, far from
+-- where the actual mistake is. Forcing the result here, inside 'Q' (which
+-- runs in 'IO'), converts that crash into the same kind of clean,
+-- positioned parse failure an ordinary syntax error already gets. This
+-- only catches the name quote written as the expression's own outermost
+-- syntax (@{'Just}@, matching the finding's own examples); one nested
+-- inside a larger expression (@{f 'Just}@) is not forced by this WHNF
+-- check and may still surface as an unhelpful panic — a known, narrower
+-- residual gap, not silently claimed as closed.
 parseExpression :: Position -> String -> Q Exp
 parseExpression position expressionSource =
   case Meta.parseExp expressionSource of
     Left message -> failAt position ("invalid Haskell expression: " <> message)
-    Right expression -> pure expression
+    Right expression -> do
+      forcedExpression <- runIO (try (evaluate expression))
+      case forcedExpression of
+        Left (ErrorCall message) ->
+          failAt position ("unsupported Haskell expression syntax: " <> message)
+        Right validExpression -> pure validExpression
 
 textLiteral :: String -> Exp
 textLiteral literal = AppE (VarE 'Text.pack) (LitE (StringL literal))

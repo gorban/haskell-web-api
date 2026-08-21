@@ -1316,6 +1316,33 @@ itself needed — lost every one of those imports to `-Wunused-imports`, confirm
 existed *only* to satisfy the old unhygienic splice resolution, exactly the coupling this fix was
 meant to remove.
 
+### Follow-up decision — BV: catch the crash instead of chasing full TH-quote support (2026-08-21)
+
+**Decision: convert `haskell-src-meta`'s uncaught crash on Template Haskell name-quote syntax into
+a clean parse failure, rather than implementing actual support for that syntax.** This is the
+missing-framework-capability protocol's third fork in a form worth naming precisely: the capability
+gap here is not in this codebase's own framework at all, but in a third-party dependency
+(`haskell-src-meta-0.8.16`'s `toExp` has no case for `VarQuote`/name-quote AST nodes and calls
+`error` instead). Confirmed directly (`cabal repl`, forcing `Meta.parseExp "'Just"`), not assumed
+from the task's own note, since that note's "distinct lowering-capability decision" framing
+undersold the actual severity: the failure is not a graceful `Left` the existing `case` already
+handles, it is an *uncaught* `ErrorCall` that would surface as a confusing library-internal panic at
+whichever application module happens to compile the offending markup literal — far from where the
+real mistake is.
+
+Genuinely adding TH-quote support means either waiting on an upstream fix to a dependency this
+project doesn't control, or hand-writing quote-syntax parsing to bypass `haskell-src-meta` for this
+one construct — real, open-ended scope for a syntactic form no call site in this codebase, in any
+example app, has ever needed. That tips this toward "flag and stop" for the *feature*, while still
+leaving a small, clearly-bounded, unambiguously-beneficial fix available for the *crash*: force
+`Meta.parseExp`'s result inside `Q` (`runIO` wrapping `try (evaluate expression)`) and reroute a
+caught `ErrorCall` through the same `failAt` path an ordinary parse error already takes. This is
+deliberately scoped to the *direct* case — a name quote written as the entire `{...}` expression,
+matching the finding's own example — since WHNF forcing does not reach a quote buried inside a
+larger expression tree (`{f 'Just}`); reaching that would need full-AST forcing (an `NFData`
+instance and `deepseq`, or a hand-written traversal) for a case with, again, no demonstrated need.
+Recorded as a named, narrower residual gap rather than silently treated as closed by the WHNF fix.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

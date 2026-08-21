@@ -61,6 +61,16 @@ literalChildrenRejected :: Bool
 literalChildrenRejected =
   $(rejectedMarkup "<Account.HeroCard heroTitle=\"First\" children=\"not-a-list\" />")
 
+-- | A bare Template Haskell name quote is not a supported {...} expression
+-- (see 'parseExpression'\'s Haddock): without the WHNF-forcing fix, this
+-- crashes 'haskell-src-meta' with an uncaught 'ErrorCall' instead of
+-- failing this splice cleanly, so 'rejectedMarkup' (which only catches a
+-- clean 'Q'-level failure via 'Language.Haskell.TH.recover') would not
+-- even compile this test module.
+thNameQuoteRejected :: Bool
+thNameQuoteRejected =
+  $(rejectedMarkup "{'Just}")
+
 newtype ControlRoute = ControlRoute Text.Text
 
 controlRouteHref :: ControlRoute -> SafeUrl
@@ -199,7 +209,8 @@ spec = do
                  mixedPropsRejected `shouldBe` True,
                  duplicateChildrenRejected `shouldBe` True,
                  mixedChildrenRejected `shouldBe` True,
-                 literalChildrenRejected `shouldBe` True
+                 literalChildrenRejected `shouldBe` True,
+                 thNameQuoteRejected `shouldBe` True
                ]
         )
 

@@ -127,6 +127,9 @@
     to — usually an inscrutable type error, and in the worst case an escaping bypass with no
     diagnostic. An unsupported native element name (e.g. a typo'd tag) is now a parse-time failure
     with its own source position, rather than a deferred lowering-time failure.
+20. A `{...}` markup interpolation containing a bare Template Haskell name quote (e.g. `{'Just}`)
+    now fails to compile with a clean, positioned error instead of crashing the calling module's
+    compile with an uncaught exception from deep inside a parsing dependency.
 
 ## 0.1.1.0
 
