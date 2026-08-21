@@ -486,7 +486,6 @@ requestMethodText :: Wai.Request -> Text
 requestMethodText = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode . Wai.requestMethod
 
 reportEarlyRequestObservability ::
-  (Eq route) =>
   Application route action context ->
   Wai.Request ->
   Word64 ->

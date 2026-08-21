@@ -108,7 +108,6 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
         )
 
 toRuntimeWaiApplication ::
-  (Eq route) =>
   Wai.Application ->
   AcmeChallengeStore ->
   CertbotWebrootStore ->
@@ -124,7 +123,6 @@ toRuntimeWaiApplication renderedWaiApplication challengeStore webrootStore webAp
     maybeChallengeResponse
 
 respondAcmeChallenge ::
-  (Eq route) =>
   Application route action context ->
   Wai.Request ->
   RequestPolicyConfig ->

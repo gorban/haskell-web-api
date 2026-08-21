@@ -152,10 +152,9 @@ newtype ApiStreamingRequest = ApiStreamingRequest
 data ApiRequestBody body where
   ApiNoRequestBody :: ApiRequestBody ()
   ApiBufferedRequestBody ::
-    { apiRequestBodyMissingContentTypePolicy :: MissingContentTypePolicy,
-      apiRequestBodyMaximumBytes :: Int,
-      apiRequestBodyDecoders :: [ApiBodyDecoder body]
-    } ->
+    MissingContentTypePolicy ->
+    Int ->
+    [ApiBodyDecoder body] ->
     ApiRequestBody body
   ApiUrlEncodedFormRequestBody ::
     MissingContentTypePolicy ->

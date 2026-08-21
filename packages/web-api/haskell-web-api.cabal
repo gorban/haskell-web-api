@@ -42,7 +42,6 @@ extra-doc-files: CHANGELOG.md
 custom-setup
   setup-depends:
     base ^>=4.22.0.0,
-    Cabal ^>=3.16.0.0,
     Cabal-hooks ==3.16.*,
     Cabal-syntax ^>=3.16.0.0,
     core ^>=0.1.2.0,
@@ -54,7 +53,14 @@ custom-setup
 -- extra-source-files:
 common common
   -- Common warning flags.
-  ghc-options: -Wall
+  ghc-options:
+    -Wall
+    -Wcompat
+    -Wincomplete-uni-patterns
+    -Wincomplete-record-updates
+    -Wredundant-constraints
+    -Wunused-packages
+
   -- Common settings.
   default-language: GHC2024
 
@@ -215,9 +221,7 @@ test-suite haskell-web-api-tests
     hspec ^>=2.11.17,
     http-types ^>=0.12.5,
     network ^>=3.2.8.0,
-    postgresql-libpq ^>=0.11.0.0,
     process ^>=1.6.26.1,
-    template-haskell ^>=2.24.0.0,
     temporary ^>=1.3,
     test-core ^>=0.1.2.0,
     text ^>=2.1.3,
