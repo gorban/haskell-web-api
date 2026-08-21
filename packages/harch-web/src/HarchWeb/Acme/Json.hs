@@ -1,186 +1,31 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Private JSON subset used by the ACME protocol implementation.
+-- | Minimal JSON byte-level encoding helpers backing
+-- "HarchWeb.Observability.Otlp.Wire"'s OTLP JSON export. Public only so this
+-- package's own test suite can exercise it directly; nothing outside
+-- "HarchWeb.Observability.Otlp.Wire" is expected to depend on it, and it is
+-- deliberately not re-exported through the "HarchWeb.Acme" facade.
 --
--- The facade keeps its compatibility exports while ACME protocol code shares
--- this parser and encoder without growing the framework boundary.
+-- This module predates OTLP export: it began as JSON support (both encoding
+-- and a hand-rolled parser into a 'JsonValue' tree) for ACME's native
+-- protocol client, which was removed for having zero production callers
+-- (see the DG decision record in @docs/design-guidance.md@). The parsing
+-- half had no other caller either — OTLP export only ever used these three
+-- byte-builder encoders — so it was not carried forward (see the DH decision
+-- record in @docs/design-guidance.md@).
 module HarchWeb.Acme.Json
-  ( JsonValue (..),
-    escapeJsonCharacter,
-    jsonArrayBytes,
-    jsonArrayItems,
-    jsonBoolBytes,
+  ( jsonArrayBytes,
     jsonObjectBytes,
-    jsonObjectEntryParser,
-    jsonObjectFields,
-    jsonOptionalTextArrayField,
-    jsonOptionalTextField,
-    jsonRequiredField,
-    jsonRequiredTextField,
-    jsonStringCharacterParser,
     jsonStringBytes,
-    jsonTextField,
-    jsonValueParser,
-    parseJsonValue,
-    unicodeJsonCharacterParser,
   )
 where
 
-import Control.Monad (replicateM)
 import Data.Aeson qualified as Aeson
 import Data.ByteString.Lazy qualified as LazyByteString
-import Data.Functor (($>))
 import Data.Text (Text)
-import Data.Text qualified as Text
-import Data.Text.Encoding qualified as TextEncoding
-import Text.ParserCombinators.ReadP (ReadP, char, choice, eof, get, manyTill, pfail, readP_to_S, sepBy, skipSpaces, string, (<++))
-import Text.Read (readMaybe)
-
-data JsonValue
-  = JsonObject [(Text, JsonValue)]
-  | JsonArray [JsonValue]
-  | JsonString Text
-  | JsonBool Bool
-  | JsonNull
-
-jsonObjectFields :: String -> JsonValue -> Either String [(Text, JsonValue)]
-jsonObjectFields label value =
-  case value of
-    JsonObject fields -> Right fields
-    _ -> Left (label <> " was not a JSON object")
-
-jsonArrayItems :: String -> JsonValue -> Either String [JsonValue]
-jsonArrayItems label value =
-  case value of
-    JsonArray items -> Right items
-    _ -> Left (label <> " was not a JSON array")
-
-jsonRequiredField :: Text -> [(Text, JsonValue)] -> Either String JsonValue
-jsonRequiredField fieldName fields =
-  maybe
-    (Left ("missing required field " <> Text.unpack fieldName))
-    Right
-    (lookup fieldName fields)
-
-jsonRequiredTextField :: Text -> [(Text, JsonValue)] -> Either String Text
-jsonRequiredTextField fieldName fields =
-  jsonTextField fieldName =<< jsonRequiredField fieldName fields
-
-jsonOptionalTextField :: Text -> [(Text, JsonValue)] -> Either String (Maybe Text)
-jsonOptionalTextField !fieldName fields =
-  case lookup fieldName fields of
-    Nothing -> Right Nothing
-    Just JsonNull -> Right Nothing
-    Just fieldValue -> Just <$> jsonTextField fieldName fieldValue
-
-jsonOptionalTextArrayField :: Text -> [(Text, JsonValue)] -> Either String (Maybe [Text])
-jsonOptionalTextArrayField !fieldName fields =
-  case lookup fieldName fields of
-    Nothing -> Right Nothing
-    Just JsonNull -> Right Nothing
-    Just fieldValue -> Just <$> (jsonArrayItems (Text.unpack fieldName) fieldValue >>= traverse (jsonTextField fieldName))
-
-jsonTextField :: Text -> JsonValue -> Either String Text
-jsonTextField fieldName fieldValue =
-  case fieldValue of
-    JsonString fieldText -> Right fieldText
-    _ -> Left ("field " <> Text.unpack fieldName <> " was not a JSON string")
-
-parseJsonValue :: LazyByteString.ByteString -> Either String JsonValue
-parseJsonValue inputBytes =
-  case [parsedValue | (parsedValue, _remainingInput) <- readP_to_S (jsonValueParser <* skipSpaces <* eof) inputText] of
-    parsedValue : _ -> Right parsedValue
-    [] -> Left "invalid JSON"
-  where
-    inputText = Text.unpack (TextEncoding.decodeUtf8 (LazyByteString.toStrict inputBytes))
-
-jsonValueParser :: ReadP JsonValue
-jsonValueParser =
-  skipSpaces
-    *> choice
-      [ JsonObject <$> jsonObjectParser,
-        JsonArray <$> jsonArrayParser,
-        JsonString . Text.pack <$> jsonStringParser,
-        JsonBool True <$ string "true",
-        JsonBool False <$ string "false",
-        JsonNull <$ string "null"
-      ]
-    <* skipSpaces
-
-jsonObjectParser :: ReadP [(Text, JsonValue)]
-jsonObjectParser = do
-  _ <- char '{'
-  skipSpaces
-  (char '}' $> [])
-    <++ do
-      fields <- sepBy jsonObjectEntryParser (skipSpaces *> char ',' <* skipSpaces)
-      skipSpaces
-      _ <- char '}'
-      pure fields
-
-jsonObjectEntryParser :: ReadP (Text, JsonValue)
-jsonObjectEntryParser = do
-  fieldName <- Text.pack <$> jsonStringParser
-  skipSpaces
-  _ <- char ':'
-  fieldValue <- jsonValueParser
-  pure (fieldName, fieldValue)
-
-jsonArrayParser :: ReadP [JsonValue]
-jsonArrayParser = do
-  _ <- char '['
-  skipSpaces
-  (char ']' $> [])
-    <++ do
-      items <- sepBy jsonValueParser (skipSpaces *> char ',' <* skipSpaces)
-      skipSpaces
-      _ <- char ']'
-      pure items
-
-jsonStringParser :: ReadP String
-jsonStringParser =
-  char '"' *> manyTill jsonStringCharacterParser (char '"')
-
-jsonStringCharacterParser :: ReadP Char
-jsonStringCharacterParser = do
-  nextCharacter <- get
-  if nextCharacter == '\\'
-    then escapedJsonCharacterParser
-    else pure nextCharacter
-
-escapedJsonCharacterParser :: ReadP Char
-escapedJsonCharacterParser = do
-  choice
-    [ '"' <$ char '"',
-      '\\' <$ char '\\',
-      '/' <$ char '/',
-      '\b' <$ char 'b',
-      '\f' <$ char 'f',
-      '\n' <$ char 'n',
-      '\r' <$ char 'r',
-      '\t' <$ char 't',
-      unicodeJsonCharacterParser
-    ]
-
-unicodeJsonCharacterParser :: ReadP Char
-unicodeJsonCharacterParser = do
-  _ <- char 'u'
-  hexDigits <- replicateM 4 get
-  maybe pfail (pure . toEnum) (readMaybe ("0x" <> hexDigits))
 
 jsonStringBytes :: Text -> LazyByteString.ByteString
 jsonStringBytes = Aeson.encode . Aeson.String
-
-escapeJsonCharacter :: Char -> Text
-escapeJsonCharacter =
-  Text.dropEnd 1 . Text.drop 1 . TextEncoding.decodeUtf8 . LazyByteString.toStrict . Aeson.encode . Text.singleton
-
-jsonBoolBytes :: Bool -> LazyByteString.ByteString
-jsonBoolBytes boolValue =
-  if boolValue
-    then "true"
-    else "false"
 
 jsonArrayBytes :: [LazyByteString.ByteString] -> LazyByteString.ByteString
 jsonArrayBytes items =

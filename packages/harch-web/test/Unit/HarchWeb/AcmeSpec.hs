@@ -14,6 +14,7 @@ import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
 import HarchWeb.Acme qualified as Acme
+import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import System.Directory (removePathForcibly)
@@ -22,7 +23,6 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
-import Text.ParserCombinators.ReadP (readP_to_S)
 
 sampleEndpoint :: ListenerEndpoint
 sampleEndpoint =
@@ -104,18 +104,9 @@ spec = do
                 activeAcmeChallengeToken = "token",
                 activeAcmeChallengeResponse = "token.thumbprint"
               }
-          jsonValue =
-            JsonObject
-              [ ("bool", JsonBool True),
-                ("null", JsonNull),
-                ("array", JsonArray [JsonString "value"])
-              ]
       expectAll
         ( (challenge `shouldBe` challenge)
-            :| [ show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\"",
-                 jsonValue `shouldBe` jsonValue,
-                 show jsonValue `shouldContain` "JsonBool True"
-               ]
+            :| [show challenge `shouldContain` "activeAcmeChallengeDomain = \"example.com\""]
         )
 
     it "covers certbot argument helpers and certificate-name selection branches" $ do
@@ -294,72 +285,18 @@ spec = do
       unregisterAcmeChallenges challengeStore [challenge]
       unwrapChallengeStore challengeStore `shouldReturn` []
 
-  describe "ACME JSON parsing helpers" $ do
-    it "parses JSON values including escapes, booleans, nulls, arrays, and empty collections" $ do
+  describe "ACME JSON encoding helpers" $ do
+    it "encodes strings, arrays, and objects as JSON bytes" $ do
       expectAll
-        ( (parseJsonValue "{}" `shouldBe` Right (JsonObject []))
-            :| [ parseJsonValue "[]" `shouldBe` Right (JsonArray []),
-                 parseJsonValue " [ \"a\" , \"b\" ] " `shouldBe` Right (JsonArray [JsonString "a", JsonString "b"]),
-                 parseJsonValue "{\"field\":\"value\"}" `shouldBe` Right (JsonObject [("field", JsonString "value")]),
-                 parseJsonValue "{\"a\": \"1\", \"b\": \"2\"}" `shouldBe` Right (JsonObject [("a", JsonString "1"), ("b", JsonString "2")]),
-                 parseJsonValue "true" `shouldBe` Right (JsonBool True),
-                 parseJsonValue "false" `shouldBe` Right (JsonBool False),
-                 parseJsonValue "null" `shouldBe` Right JsonNull
+        ( ( jsonStringBytes "\"\\\b\f\n\r\tplain"
+              `shouldBe` "\"\\\"\\\\\\u0008\\u000c\\n\\r\\tplain\""
+          )
+            :| [ jsonArrayBytes [] `shouldBe` "[]",
+                 jsonArrayBytes ["1", "2"] `shouldBe` "[1,2]",
+                 jsonObjectBytes [] `shouldBe` "{}",
+                 jsonObjectBytes [("a", "1"), ("b", "2")] `shouldBe` "{\"a\":1,\"b\":2}"
                ]
         )
-      parseJsonValue "\"\\\"\\\\\\/\\b\\f\\n\\r\\t\\u263a\""
-        `shouldBe` Right (JsonString "\"\\/\b\f\n\r\t☺")
-      parseJsonValue "\"\\uZZZZ\"" `shouldBe` Left "invalid JSON"
-      parseJsonValue "not-json" `shouldBe` Left "invalid JSON"
-
-    it "covers JSON field accessors, encoders, and ACME response decoders" $ do
-      let objectFields =
-            [ ("name", JsonString "value"),
-              ("items", JsonArray [JsonString "a", JsonString "b"]),
-              ("missingOrNull", JsonNull),
-              ("flag", JsonBool False)
-            ]
-          objectValue = JsonObject objectFields
-      jsonObjectFields "label" objectValue `shouldBe` Right objectFields
-      jsonObjectFields "label" (JsonArray []) `shouldBe` Left "label was not a JSON object"
-      jsonArrayItems "items" (JsonArray [JsonString "a"]) `shouldBe` Right [JsonString "a"]
-      jsonArrayItems "items" (JsonString "a") `shouldBe` Left "items was not a JSON array"
-      jsonRequiredField "name" objectFields `shouldBe` Right (JsonString "value")
-      jsonRequiredField "missing" objectFields `shouldBe` Left "missing required field missing"
-      jsonRequiredTextField "name" objectFields `shouldBe` Right "value"
-      jsonRequiredTextField "flag" objectFields `shouldBe` Left "field flag was not a JSON string"
-      jsonOptionalTextField "missing" objectFields `shouldBe` Right Nothing
-      jsonOptionalTextField "missingOrNull" objectFields `shouldBe` Right Nothing
-      jsonOptionalTextField "name" objectFields `shouldBe` Right (Just "value")
-      jsonOptionalTextField "flag" objectFields `shouldBe` Left "field flag was not a JSON string"
-      jsonOptionalTextArrayField "missing" objectFields `shouldBe` Right Nothing
-      jsonOptionalTextArrayField "missingOrNull" objectFields `shouldBe` Right Nothing
-      jsonOptionalTextArrayField "items" objectFields `shouldBe` Right (Just ["a", "b"])
-      jsonOptionalTextArrayField "flag" objectFields `shouldBe` Left "flag was not a JSON array"
-      jsonOptionalTextArrayField
-        "items"
-        [("items", JsonArray [JsonBool False])]
-        `shouldBe` Left "field items was not a JSON string"
-      jsonTextField "name" (JsonString "value") `shouldBe` Right "value"
-      jsonTextField "flag" (JsonBool False) `shouldBe` Left "field flag was not a JSON string"
-      jsonStringBytes "\"\\\b\f\n\r\tplain"
-        `shouldBe` "\"\\\"\\\\\\u0008\\u000c\\n\\r\\tplain\""
-      escapeJsonCharacter '"' `shouldBe` "\\\""
-      escapeJsonCharacter '\\' `shouldBe` "\\\\"
-      escapeJsonCharacter '\b' `shouldBe` "\\u0008"
-      escapeJsonCharacter '\f' `shouldBe` "\\u000c"
-      escapeJsonCharacter '\n' `shouldBe` "\\n"
-      escapeJsonCharacter '\r' `shouldBe` "\\r"
-      escapeJsonCharacter '\t' `shouldBe` "\\t"
-      escapeJsonCharacter 'x' `shouldBe` "x"
-      jsonBoolBytes True `shouldBe` "true"
-      jsonBoolBytes False `shouldBe` "false"
-      jsonArrayBytes [] `shouldBe` "[]"
-      jsonArrayBytes ["1", "2"] `shouldBe` "[1,2]"
-      jsonObjectBytes [("a", "1"), ("b", "2")] `shouldBe` "{\"a\":1,\"b\":2}"
-    it "parses low-level JSON string-escape characters directly" $ do
-      readP_to_S jsonStringCharacterParser "" `shouldBe` []
-      readP_to_S unicodeJsonCharacterParser "ZZZZ" `shouldBe` []
 
 instance Eq ActiveAcmeChallenge where
   left == right =
@@ -387,21 +324,6 @@ instance Show ActiveAcmeChallenge where
       <> ", activeAcmeChallengeResponse = "
       <> show (activeAcmeChallengeResponse challenge)
       <> "}"
-
-instance Eq JsonValue where
-  JsonObject left == JsonObject right = left == right
-  JsonArray left == JsonArray right = left == right
-  JsonString left == JsonString right = left == right
-  JsonBool left == JsonBool right = left == right
-  JsonNull == JsonNull = True
-  _ == _ = False
-
-instance Show JsonValue where
-  show (JsonObject fields) = "JsonObject " <> show fields
-  show (JsonArray items) = "JsonArray " <> show items
-  show (JsonString textValue) = "JsonString " <> show textValue
-  show (JsonBool boolValue) = "JsonBool " <> show boolValue
-  show JsonNull = "JsonNull"
 
 isLeftWith :: String -> Either String a -> Bool
 isLeftWith expectedMessage result =

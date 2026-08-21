@@ -71,6 +71,13 @@
     acquisition is, and has always been, exclusively certbot-backed (`AcmeConfig` requires a
     `CertbotConfig`); nothing else changes for existing certbot-based deployments. `HarchWeb.Acme`'s
     module documentation now states this plainly.
+14. **Breaking:** removed `HarchWeb.Acme`'s hand-rolled `ReadP` JSON parser, `JsonValue` tree, and
+    field accessors, along with their re-export through the `HarchWeb.Acme` facade. This parsing
+    code was, like the client removed above, unreachable in production: OTLP trace/metric export
+    (`HarchWeb.Observability.Otlp.Wire`) only ever used the three byte-builder JSON encoders it sat
+    alongside. Those three encoders (`jsonArrayBytes`, `jsonObjectBytes`, `jsonStringBytes`) are
+    unchanged in behavior and now live at the small, directly-importable `HarchWeb.Acme.Json` module
+    instead of the `HarchWeb.Acme` facade.
 
 ## 0.1.1.0
 

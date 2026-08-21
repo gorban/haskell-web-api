@@ -968,6 +968,37 @@ client, it also backs `HarchWeb.Observability.Otlp.Wire`'s live OTLP JSON encodi
 still-open task) targets this exact file's hand-rolled `ReadP` parser; its own findings remain real
 and its task text was updated to stop pointing at the now-deleted ACME-response decoder types.
 
+### Follow-up decision — DH: delete `Acme/Json.hs`'s parser rather than fixing it, once DG proved it dead too (2026-08-20)
+
+**Decision: delete the whole `ReadP`-based JSON parser, `JsonValue`, and every field accessor from
+`Acme/Json.hs`, rather than fixing the four concrete defects DH found in them; keep only the three
+byte-builder encoders (`jsonArrayBytes`, `jsonObjectBytes`, `jsonStringBytes`), and make the module
+directly importable (`exposed-modules`, not re-exported through `HarchWeb.Acme`) so the package's
+own tests can still reach them.** DG's note above assumed `Otlp/Wire.hs` used `Json.hs`'s
+`JsonValue`/field-helper reading side; tracing its actual import list
+(`import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)`) showed that
+assumption was wrong — OTLP export only ever used the encoder half. With DG having already deleted
+every parser caller, `parseJsonValue` and everything under it were exactly as dead as the code DG
+removed, for the same reason: fixing partial `decodeUtf8`, unbounded materialization, ambiguous-parse
+enumeration, and missing surrogate-pair handling in a parser nothing calls would have hardened
+unreachable code, not closed a real gap. Deleting it removes DH's findings outright, the same
+resolution DG reached, and also closes DH's "exported as public API through the `Acme` facade"
+finding, since the facade no longer mentions `Json.hs` at all.
+
+The one wrinkle deleting the parser exposed: a Cabal test-suite component cannot see a library's
+`other-modules`, so once the facade re-export (the very thing DH flagged) was gone, nothing let
+`AcmeSpec.hs` reach the three encoders — and no other test in the repository drives the real OTLP
+HTTP-export path, so simply deleting the test would have silently regressed coverage to 0% on code
+`Otlp/Wire.hs` genuinely depends on. This is the missing-framework-capability fork in miniature:
+rather than mocking OTLP export or reaching into a hidden module some other way, `HarchWeb.Acme.Json`
+moved to `exposed-modules` on its own — not through the `Acme` facade, so nothing implies it is ACME
+functionality — trading a small, honest, directly-named public surface for keeping a real coverage
+source for live code. This is a smaller and more legible exposure than what DH originally flagged:
+previously the *entire* parser, `JsonValue`, and every accessor were re-exported through a facade
+that implied they were curated ACME functionality; now three leaf functions are importable by their
+own name, from a module whose Haddock says plainly it exists only for the test suite and for
+`Otlp/Wire.hs`.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
