@@ -16,9 +16,6 @@ import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
 import Test.Hspec
 
-application :: Wai.Application
-application = declarativeApiApplication
-
 performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
 performWaiRequest webApplication request = do
   responseReference <- newIORef Nothing
@@ -55,7 +52,12 @@ jsonRequestChunks requestMethod requestPath bodyChunks = do
     )
 
 main :: IO ()
-main = hspec $ describe "Unit.App.Api.Declarative" $ do
+main = do
+  application <- declarativeApiApplication
+  hspec $ mainSpec application
+
+mainSpec :: Wai.Application -> Spec
+mainSpec application = describe "Unit.App.Api.Declarative" $ do
   it "exposes an API-only site composition root with its declared name and empty context" $ do
     Site.siteName declarativeApiSite `shouldBe` "custom-api"
     Site.siteDefaultRequestContext declarativeApiSite `shouldBe` ()

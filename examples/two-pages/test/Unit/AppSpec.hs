@@ -606,8 +606,9 @@ waiRequest segments =
         [] -> "/"
         _ -> "/" <> Text.intercalate "/" segments
 
-performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
-performWaiRequest webApplication request = do
+performWaiRequest :: IO Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest buildWebApplication request = do
+  webApplication <- buildWebApplication
   responseReference <- newIORef Nothing
   _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
   maybeResponse <- readIORef responseReference

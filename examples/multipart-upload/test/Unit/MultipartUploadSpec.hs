@@ -215,7 +215,8 @@ newUploadApplication = fst <$> newUploadApplicationWithState
 newUploadApplicationWithState :: IO (Wai.Application, NativeUploadState)
 newUploadApplicationWithState = do
   state <- newNativeUploadState
-  pure (HarchWeb.toWaiApplication (multipartUploadApplication state), state)
+  waiApplication <- HarchWeb.toWaiApplication (multipartUploadApplication state)
+  pure (waiApplication, state)
 
 currentCsrfToken :: Wai.Application -> IO Text
 currentCsrfToken application = do

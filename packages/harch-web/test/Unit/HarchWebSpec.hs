@@ -574,8 +574,9 @@ renderSampleResponse request =
           }
     MissingRoute -> PageResponse (sampleMissingPage request)
 
-performWaiRequest :: Wai.Application -> Wai.Request -> IO Wai.Response
-performWaiRequest webApplication request = do
+performWaiRequest :: IO Wai.Application -> Wai.Request -> IO Wai.Response
+performWaiRequest buildWebApplication request = do
+  webApplication <- buildWebApplication
   responseReference <- newIORef Nothing
   _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
   maybeResponse <- readIORef responseReference
@@ -5190,10 +5191,11 @@ spec = do
                     tlsCredentialSourceKind = ManualTlsCredentials,
                     tlsStartupMode = RequireCertificateFiles
                   }
+          gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ _ -> ioError (userError "synthetic tls startup failure"))
             manualTlsPlan
-            (toWaiApplication sampleApplication)
+            gatedApplication
             (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic tls startup failure)")
           reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
@@ -5212,10 +5214,11 @@ spec = do
                     tlsCredentialSourceKind = SharedTlsCredentials,
                     tlsStartupMode = RequireCertificateFiles
                   }
+          gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
-            (toWaiApplication sampleApplication)
+            gatedApplication
             (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Shared TLS certificate file does not exist: " <> certificatePath <> ")")
 
@@ -5231,10 +5234,11 @@ spec = do
                     tlsCredentialSourceKind = SharedTlsCredentials,
                     tlsStartupMode = AwaitCertificateFiles (Just 0)
                   }
+          gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
-            (toWaiApplication sampleApplication)
+            gatedApplication
             (const (pure ()))
             `shouldThrow` (\exception -> show (exception :: IOError) == "user error (Timed out waiting for shared TLS certificate files at " <> certificatePath <> " and " <> privateKeyPath <> " after 0 seconds)")
 
@@ -5252,10 +5256,11 @@ spec = do
                   }
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
+          gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
-            (toWaiApplication sampleApplication)
+            gatedApplication
             (const (pure ()))
             `shouldThrow` ( \exception ->
                               let renderedException = show (exception :: IOError)
@@ -5281,10 +5286,11 @@ spec = do
                   }
           writeFile certificatePath "not a certificate"
           writeFile privateKeyPath "not a private key"
+          gatedApplication <- toWaiApplication sampleApplication
           startManualTlsRuntimeServerWithStarter
             (\_ _ _ _ _ -> expectationFailure "unexpected TLS starter invocation" >> pure undefined)
             manualTlsPlan
-            (toWaiApplication sampleApplication)
+            gatedApplication
             (const (pure ()))
             `shouldThrow` ( \exception ->
                               let renderedException = show (exception :: IOError)
@@ -5313,11 +5319,12 @@ spec = do
             threadDelay 100000
             writeFile certificatePath manualTlsCertificatePem
             writeFile privateKeyPath manualTlsPrivateKeyPem
+          gatedApplication <- toWaiApplication sampleApplication
           _ <-
             startManualTlsRuntimeServerWithStarter
               (\_ _ socket _ _ -> writeIORef starterInvoked True >> Socket.close socket >> forkIO (pure ()))
               manualTlsPlan
-              (toWaiApplication sampleApplication)
+              gatedApplication
               (const (pure ()))
           readIORef starterInvoked `shouldReturn` True
 
@@ -5864,10 +5871,11 @@ spec = do
     it "closes the listener socket when HTTP startup throws before the server thread starts" $
       withUnusedLoopbackPort $ \httpPort -> do
         let endpoint = ListenerEndpoint {endpointHost = "127.0.0.1", endpointPort = httpPort}
+        gatedApplication <- toWaiApplication sampleApplication
         startHttpRuntimeServerWithStarter
           (\_ _ _ -> ioError (userError "synthetic HTTP startup failure"))
           endpoint
-          (toWaiApplication sampleApplication)
+          gatedApplication
           `shouldThrow` (\exception -> show (exception :: IOError) == "user error (synthetic HTTP startup failure)")
         reboundSocket <- Socket.socket Socket.AF_INET Socket.Stream Socket.defaultProtocol
         Socket.bind reboundSocket (Socket.SockAddrInet (fromIntegral httpPort) (Socket.tupleToHostAddress (127, 0, 0, 1)))
@@ -7613,19 +7621,20 @@ spec = do
           )
 
   describe "withLocalTestServerForApplication" $ do
-    it "serves an already-built Wai.Application over a real loopback HTTP listener" $
+    it "serves an already-built Wai.Application over a real loopback HTTP listener" $ do
+      gatedApplication <- toWaiApplication sampleApplication
       let markedWaiApplication request respond =
             if Wai.rawPathInfo request == "/middleware-marker"
               then respond (Wai.responseLBS Http.status200 [] "handled by middleware")
-              else toWaiApplication sampleApplication request respond
-       in withLocalTestServerForApplication markedWaiApplication $ \localTestServer -> do
-            localServerHost localTestServer `shouldBe` "127.0.0.1"
-            knownResponseText <- readLocalTestServerResponse localTestServer "/known"
-            markerResponseText <- readLocalTestServerResponse localTestServer "/middleware-marker"
-            expectAll
-              ( (Text.isInfixOf "<h1>Known</h1>" knownResponseText `shouldBe` True)
-                  :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
-              )
+              else gatedApplication request respond
+      withLocalTestServerForApplication markedWaiApplication $ \localTestServer -> do
+        localServerHost localTestServer `shouldBe` "127.0.0.1"
+        knownResponseText <- readLocalTestServerResponse localTestServer "/known"
+        markerResponseText <- readLocalTestServerResponse localTestServer "/middleware-marker"
+        expectAll
+          ( (Text.isInfixOf "<h1>Known</h1>" knownResponseText `shouldBe` True)
+              :| [Text.isInfixOf "handled by middleware" markerResponseText `shouldBe` True]
+          )
 
   describe "withLocalTestServer startup cleanup" $ do
     it "closes its loopback listener when Warp rejects the transport settings" $ do

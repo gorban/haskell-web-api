@@ -16,7 +16,7 @@ import Network.Wai qualified as Wai
 -- | Build the complete WAI application once per running server so the
 -- single-use CSRF state is shared by its form GET and POST requests.
 newMultipartUploadApplication :: IO Wai.Application
-newMultipartUploadApplication = multipartUploadWaiApplication <$> newNativeUploadState
+newMultipartUploadApplication = newNativeUploadState >>= multipartUploadWaiApplication
 
 -- | Build the typed application for one upload-state lifetime.
 --
@@ -29,7 +29,7 @@ multipartUploadApplication :: NativeUploadState -> HarchWeb.Application ApiPath 
 multipartUploadApplication state =
   Site.buildSiteApplication (multipartUploadSite state)
 
-multipartUploadWaiApplication :: NativeUploadState -> Wai.Application
+multipartUploadWaiApplication :: NativeUploadState -> IO Wai.Application
 multipartUploadWaiApplication = HarchWeb.toWaiApplication . multipartUploadApplication
 
 multipartUploadSite :: NativeUploadState -> Site.Site ApiPath () ()

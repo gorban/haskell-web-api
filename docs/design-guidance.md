@@ -1066,6 +1066,53 @@ that implied they were curated ACME functionality; now three leaf functions are 
 own name, from a module whose Haddock says plainly it exists only for the test suite and for
 `Otlp/Wire.hs`.
 
+### Follow-up decision — DK: make `toWaiApplication` self-gating instead of adding a gated variant (2026-08-21)
+
+**Decision: bake AF's concurrency admission gate directly into `toWaiApplication` — "the public WAI
+adapter" itself — rather than adding a second, gated entry point alongside the existing ungated
+one.** DK's finding traced cleanly: `HarchWeb.Server.Runtime` and `HarchWeb.Server.LocalTest` both
+already composed `concurrencyLimitedMiddleware` around `toWaiApplication` correctly (AF's own fix
+covered both), but `toWaiApplication` is also the *only* function the public `HarchWeb`/
+`HarchWeb.Server` facade exposes for turning a typed `Application` into a `Wai.Application` at all —
+`concurrencyLimitedMiddleware` itself lives in `other-modules`, unreachable by application code. Both
+shipped examples that build their own exported `Wai.Application` (`examples/custom-api`,
+`examples/multipart-upload`) necessarily went through bare `toWaiApplication`, and
+`multipart-upload`'s real `app/Main.hs` runs the result via `Warp.run 8080` directly, entirely
+outside `HarchWeb.Server.Runtime` — a configured `RequestConcurrencyLimit` would have been silently
+inert there, and there was no public alternative constructor an application could have reached for
+instead, even if the gap had been noticed.
+
+This is the "extend an existing boundary before adding a parallel one" rule applied to a case where
+the "boundary" in question is a single function's safety guarantee rather than a whole dispatch
+abstraction: the tempting alternative — leave `toWaiApplication` as-is and add a new
+`toGatedWaiApplication` (or similar) that composes the gate — would have reproduced the exact defect
+under discussion, just with a different name to forget. None of the rule's three conditions for a
+parallel surface held (no existing caller's meaning would change — the gate is a no-op for every
+current test and example, none of which configures a `RequestConcurrencyLimit` today; it is not a
+disjoint concern, it is the same request lifecycle `toWaiApplication` already owns; and DK's text
+does not authorize a new surface), so the default applied: extend `toWaiApplication` itself.
+
+Implementation consequence: `toWaiApplication`'s type changed from
+`Application route action context -> Wai.Application` to `... -> IO Wai.Application`, since the
+gate's in-flight-request counter is real mutable state (an `IORef`) that must be allocated once per
+running server and shared across every request that server handles — allocating it fresh per request
+(which calling it from inside a per-request `Wai.Application` closure would do) would make the
+counter always read zero and never actually limit anything. `Runtime.hs`'s and `LocalTest.hs`'s own
+gate composition became redundant and was removed; both now call `toWaiApplication` once at server
+startup instead of once per request, which is also strictly more efficient than the previous
+per-request re-construction (harmless before only because the ungated function had no per-call cost).
+Every caller of `toWaiApplication` — the two examples and roughly 150 test call sites across
+`HarchWebSpec.hs`, `WebApiSpec.hs`, `SiteSpec.hs`, `AppSpec.hs`, `FacadeSpec.hs`, and
+`MultipartUploadSpec.hs` — needed a mechanical update for the new `IO` return type; the overwhelming
+majority fit the single `performWaiRequest (toWaiApplication X) request` shape and were fixed by
+changing each file's local `performWaiRequest` helper to accept `IO Wai.Application` and bind it
+internally, leaving the call sites themselves untouched. A handful of call sites that pass
+`toWaiApplication X` to something other than `performWaiRequest` (`startManualTlsRuntimeServerWithStarter`,
+`startHttpRuntimeServerWithStarter`, a raw `Wai.Application`-shaped lambda for
+`withLocalTestServerForApplication`) needed an explicit `<-` bind instead. No new tests were needed:
+the existing suite's extensive `toWaiApplication` coverage and AF's own dedicated gate tests already
+exercise every changed branch, confirmed by a genuine 100% coverage re-run rather than assumed.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

@@ -16,10 +16,10 @@ import Control.Concurrent (ThreadId, killThread)
 import Control.Exception (bracket, onException)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.Security (RequestHeadLimits, RequestTransportLimits, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
+import HarchWeb.Security (RequestHeadLimits, RequestTransportLimits, requestHeadLimits, requestTransportLimits, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config (ListenerEndpoint (..), ListenerScheme (..))
-import HarchWeb.Server.RequestExecution (concurrencyLimitedMiddleware, toWaiApplication)
+import HarchWeb.Server.RequestExecution (toWaiApplication)
 import HarchWeb.Server.Transport (listenerSchemeText, openLoopbackSocket, socketPort, startWarpServerOnSocketWithRequestTransportLimits)
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
@@ -39,16 +39,17 @@ data RunningLocalTestServer = RunningLocalTestServer
 
 -- | Serve a typed 'Application' over a real loopback HTTP listener for the
 -- lifetime of the callback, honoring its 'RequestPolicyConfig' exactly as
--- 'HarchWeb.Server.Runtime' would — including 'requestConcurrencyLimit' —
--- so a real-socket test observes the same admission behaviour a deployed
+-- 'HarchWeb.Server.Runtime' would — including its concurrency admission
+-- gate, which 'toWaiApplication' now applies unconditionally — so a
+-- real-socket test observes the same admission behaviour a deployed
 -- runtime would, not a narrower test-only approximation of it.
 withLocalTestServer :: (Eq route) => Application route action context -> (LocalTestServer -> IO a) -> IO a
 withLocalTestServer webApplication useLocalServer = do
-  gateMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit (applicationRequestPolicy webApplication)) id
+  gatedWaiApplication <- toWaiApplication webApplication
   withLocalTestServerWithRequestHeadLimits
     (requestHeadLimits (applicationRequestPolicy webApplication))
     (requestTransportLimits (applicationRequestPolicy webApplication))
-    (gateMiddleware (toWaiApplication webApplication))
+    gatedWaiApplication
     useLocalServer
 
 -- | Serve an already-built 'Wai.Application' over a real loopback HTTP

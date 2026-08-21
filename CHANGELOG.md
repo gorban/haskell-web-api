@@ -78,6 +78,15 @@
     alongside. Those three encoders (`jsonArrayBytes`, `jsonObjectBytes`, `jsonStringBytes`) are
     unchanged in behavior and now live at the small, directly-importable `HarchWeb.Acme.Json` module
     instead of the `HarchWeb.Acme` facade.
+15. **Breaking:** `toWaiApplication` now applies the opt-in concurrent-in-flight-request admission
+    gate unconditionally, sourced from the application's own `requestConcurrencyLimit` (a `Nothing`
+    limit preserves the existing unbounded default). Previously only `HarchWeb.Server.Runtime` and
+    `HarchWeb.Server.LocalTest` composed that gate themselves; an application building its own
+    `Wai.Application` directly from `toWaiApplication` — the only path the public facade exposes for
+    that — silently never had a configured limit enforced at all. `toWaiApplication`'s type changes
+    from `Application route action context -> Wai.Application` to `... -> IO Wai.Application`, since
+    the gate's admission counter must be allocated once per running server and shared across every
+    request, not rebuilt per request; call it once at server startup rather than per request.
 
 ## 0.1.1.0
 

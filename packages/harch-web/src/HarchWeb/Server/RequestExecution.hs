@@ -127,9 +127,23 @@ data RoutedRequestExecution route action context = RoutedRequestExecution
   }
 
 -- | Adapt a typed application to WAI. Framework-owned early responses,
--- middleware, route dispatch, and finalization all converge here.
-toWaiApplication :: (Eq route) => Application route action context -> Wai.Application
-toWaiApplication webApplication request respond =
+-- middleware, route dispatch, and finalization all converge here. The
+-- returned application unconditionally honors 'requestConcurrencyLimit'
+-- from the application's own 'RequestPolicyConfig' (a 'Nothing' limit is
+-- the framework's established unbounded default): every caller reaches
+-- this same admission gate by construction, whether it composes this
+-- adapter through 'HarchWeb.Server.Runtime'/'HarchWeb.Server.LocalTest' or
+-- builds its own 'Wai.Application' from it directly. Called once per
+-- running server, since the gate's in-flight counter is allocated here and
+-- must be shared across every request that server handles, not
+-- reallocated per request.
+toWaiApplication :: (Eq route) => Application route action context -> IO Wai.Application
+toWaiApplication webApplication = do
+  gateMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit (applicationRequestPolicy webApplication)) id
+  pure (gateMiddleware (headLimitedWaiApplication webApplication))
+
+headLimitedWaiApplication :: (Eq route) => Application route action context -> Wai.Application
+headLimitedWaiApplication webApplication request respond =
   case validateRequestHead (requestHeadLimits (applicationRequestPolicy webApplication)) request of
     Left limitFailure -> respond (requestHeadLimitResponse limitFailure)
     Right () -> toValidatedWaiApplication webApplication request respond

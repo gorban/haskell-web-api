@@ -58,7 +58,7 @@ declarativeApiSite =
     (apiRouteEndpointFamilyCodec declarativeApiEndpoints)
     (apiRouteEndpointFamilyDefinition declarativeApiEndpoints)
 
-declarativeApiApplication :: Wai.Application
+declarativeApiApplication :: IO Wai.Application
 declarativeApiApplication = HarchWeb.toWaiApplication (Site.buildSiteApplication declarativeApiSite)
 
 newtype GreetingRequest = GreetingRequest {requestedName :: Text}

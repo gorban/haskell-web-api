@@ -33,7 +33,7 @@ spec =
                                         startWarpRuntimeServerOnSocket `seq`
                                           (pure () :: IO ())
 
-facadeWaiApplication :: Application Bool () () -> Wai.Application
+facadeWaiApplication :: Application Bool () () -> IO Wai.Application
 facadeWaiApplication = toWaiApplication
 
 facadeLocalTestServer :: Application Bool () () -> (LocalTestServer -> IO ()) -> IO ()

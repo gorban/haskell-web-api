@@ -21,10 +21,10 @@ import HarchWeb.Acme
 import HarchWeb.Acme.Certbot.Runtime (runtimeAcmeBindPlans, startAcmeRuntimeServersWithRequestTransportLimits, stopAcmeRuntimeServers)
 import HarchWeb.Acme.Challenge (acmeChallengeRoutePath)
 import HarchWeb.Observability (planObservabilityStartup)
-import HarchWeb.Security (RequestPolicyConfig, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits)
+import HarchWeb.Security (RequestPolicyConfig, requestHeadLimits, requestTransportLimits)
 import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.Config
-import HarchWeb.Server.RequestExecution (concurrencyLimitedMiddleware, reportEarlyRequestObservability, toWaiApplication)
+import HarchWeb.Server.RequestExecution (reportEarlyRequestObservability, toWaiApplication)
 import HarchWeb.Server.Transport
   ( startHttpRuntimeServersWithRequestTransportLimits,
     startManualTlsRuntimeServersWithRequestTransportLimits,
@@ -78,8 +78,8 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
   let observabilityPlan = planObservabilityStartup (observability (toServerConfig config))
   challengeStore <- AcmeChallengeStore <$> newMVar []
   let runtimeRequestPolicy = requestPolicy (toServerConfig config)
-  concurrencyGatedMiddleware <- concurrencyLimitedMiddleware (requestConcurrencyLimit runtimeRequestPolicy) waiMiddleware
-  let runtimeApplication = toRuntimeWaiApplication concurrencyGatedMiddleware challengeStore webApplication
+  gatedWaiApplication <- toWaiApplication webApplication
+  let runtimeApplication = toRuntimeWaiApplication (waiMiddleware gatedWaiApplication) challengeStore webApplication
       connectionReporter = reportConnectionObservability webApplication
       runtimeRequestHeadLimits = requestHeadLimits runtimeRequestPolicy
       runtimeRequestTransportLimits = requestTransportLimits runtimeRequestPolicy
@@ -108,16 +108,16 @@ runServerWithStartupPlan waiMiddleware outputHandle config webApplication startu
 
 toRuntimeWaiApplication ::
   (Eq route) =>
-  Wai.Middleware ->
+  Wai.Application ->
   AcmeChallengeStore ->
   Application route action context ->
   Wai.Application
-toRuntimeWaiApplication waiMiddleware challengeStore webApplication request respond = do
+toRuntimeWaiApplication renderedWaiApplication challengeStore webApplication request respond = do
   requestStartedAt <- getMonotonicTimeNSec
   let requestPolicyConfig = applicationRequestPolicy webApplication
   maybeChallengeResponse <- acmeChallengeResponseForRequest requestPolicyConfig challengeStore request
   maybe
-    (waiMiddleware (toWaiApplication webApplication) request respond)
+    (renderedWaiApplication request respond)
     (respondAcmeChallenge webApplication request requestPolicyConfig requestStartedAt respond)
     maybeChallengeResponse
 
