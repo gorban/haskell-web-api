@@ -101,40 +101,45 @@ buildProfilePageModel routeRequest profileState =
   case profileState of
     ProfileUnauthenticated ->
       SignedOutProfilePage
-        { profileHeading = localizedText routeRequest "Profile" "Perfil",
-          profileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
-          profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
-          profileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
-        }
+        SignedOutProfilePageDetails
+          { signedOutProfileHeading = localizedText routeRequest "Profile" "Perfil",
+            signedOutProfileSummary = localizedText routeRequest "Sign in to view and manage your profile." "Inicia sesión para ver y administrar tu perfil.",
+            signedOutProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión"),
+            signedOutProfileRegistrationAction = buildCallToAction routeRequest RegistrationRoute (localizedText routeRequest "Create account" "Crear cuenta")
+          }
     ProfilePending profile ->
       PendingProfilePage
-        { profileHeading = localizedText routeRequest "Profile" "Perfil",
-          profileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
-          profileEmail = Email.emailAddressText (accountProfileEmail profile),
-          profileUsername = Username.usernameText <$> accountProfileUsername profile,
-          profileDisplayName = accountProfileDisplayName profile,
-          profileResendPath = UpdateProfileTarget,
-          profileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
-          profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
-        }
+        PendingProfilePageDetails
+          { pendingProfileHeading = localizedText routeRequest "Profile" "Perfil",
+            pendingProfileSummary = localizedText routeRequest "Verify your email address before continuing." "Verifica tu dirección de correo antes de continuar.",
+            pendingProfileEmail = Email.emailAddressText (accountProfileEmail profile),
+            pendingProfileUsername = Username.usernameText <$> accountProfileUsername profile,
+            pendingProfileDisplayName = accountProfileDisplayName profile,
+            pendingProfileResendPath = UpdateProfileTarget,
+            pendingProfileResendLabel = localizedText routeRequest "Resend verification email" "Reenviar correo de verificacion",
+            pendingProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+          }
     ProfileAuthenticated profile ->
       AuthenticatedProfilePage
-        { profileHeading = localizedText routeRequest "Profile" "Perfil",
-          profileSummary = localizedText routeRequest "You are signed in." "Has iniciado sesión.",
-          profileEmail = Email.emailAddressText (accountProfileEmail profile),
-          profileUsername = Username.usernameText <$> accountProfileUsername profile,
-          profileDisplayName = accountProfileDisplayName profile,
-          profileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
-        }
+        AuthenticatedProfilePageDetails
+          { authenticatedProfileHeading = localizedText routeRequest "Profile" "Perfil",
+            authenticatedProfileSummary = localizedText routeRequest "You are signed in." "Has iniciado sesión.",
+            authenticatedProfileEmail = Email.emailAddressText (accountProfileEmail profile),
+            authenticatedProfileUsername = Username.usernameText <$> accountProfileUsername profile,
+            authenticatedProfileDisplayName = accountProfileDisplayName profile,
+            authenticatedProfileSignOutAction = buildCallToAction routeRequest LogoutRoute (localizedText routeRequest "Sign out" "Cerrar sesión")
+          }
 
 buildUnavailableProfilePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppPageModel
 buildUnavailableProfilePageModel routeRequest =
   ProfilePage
-    UnavailableProfilePage
-      { profileHeading = localizedText routeRequest "Profile" "Perfil",
-        profileSummary = localizedText routeRequest "Your profile is temporarily unavailable." "Tu perfil no está disponible temporalmente.",
-        profileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión")
-      }
+    ( UnavailableProfilePage
+        UnavailableProfilePageDetails
+          { unavailableProfileHeading = localizedText routeRequest "Profile" "Perfil",
+            unavailableProfileSummary = localizedText routeRequest "Your profile is temporarily unavailable." "Tu perfil no está disponible temporalmente.",
+            unavailableProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión")
+          }
+    )
 
 buildHomePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError HomeRouteData -> AppPageModel
 buildHomePageModel routeRequest homeRouteDataResult =

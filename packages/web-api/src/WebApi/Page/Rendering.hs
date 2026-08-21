@@ -80,14 +80,14 @@ renderPageBodyForLocale context locale pageModel =
 renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
 renderProfilePageBody context profilePage =
   case profilePage of
-    SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
-      profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
-    PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml context profileResendPath ((PendingProfileForm profileEmail Nothing $! False) profileResendLabel), renderCallToAction profileSignOutAction]
-    AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
-    UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->
-      profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction]
+    SignedOutProfilePage SignedOutProfilePageDetails {signedOutProfileHeading, signedOutProfileSummary, signedOutProfileSignInAction, signedOutProfileRegistrationAction} ->
+      profilePageSection signedOutProfileHeading signedOutProfileSummary [renderCallToAction signedOutProfileSignInAction, renderCallToAction signedOutProfileRegistrationAction]
+    PendingProfilePage PendingProfilePageDetails {pendingProfileHeading, pendingProfileSummary, pendingProfileEmail, pendingProfileUsername, pendingProfileDisplayName, pendingProfileResendPath, pendingProfileResendLabel, pendingProfileSignOutAction} ->
+      profilePageSection pendingProfileHeading pendingProfileSummary [renderProfileIdentity pendingProfileUsername pendingProfileDisplayName, renderPendingProfileRegionHtml context pendingProfileResendPath ((PendingProfileForm pendingProfileEmail Nothing $! False) pendingProfileResendLabel), renderCallToAction pendingProfileSignOutAction]
+    AuthenticatedProfilePage AuthenticatedProfilePageDetails {authenticatedProfileHeading, authenticatedProfileSummary, authenticatedProfileEmail, authenticatedProfileUsername, authenticatedProfileDisplayName, authenticatedProfileSignOutAction} ->
+      profilePageSection authenticatedProfileHeading authenticatedProfileSummary [renderProfileIdentity authenticatedProfileUsername authenticatedProfileDisplayName, renderProfileEmail authenticatedProfileEmail, renderCallToAction authenticatedProfileSignOutAction]
+    UnavailableProfilePage UnavailableProfilePageDetails {unavailableProfileHeading, unavailableProfileSummary, unavailableProfileSignInAction} ->
+      profilePageSection unavailableProfileHeading unavailableProfileSummary [renderCallToAction unavailableProfileSignInAction]
 
 profilePageSection :: Text -> Text -> [HarchWeb.Html] -> HarchWeb.Html
 profilePageSection heading summary content =

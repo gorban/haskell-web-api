@@ -2,6 +2,11 @@
 
 ## 0.1.2.0
 
+* **Breaking:** enabled `-Wpartial-fields` and fixed the two flagged types.
+  `TlsCertificateSource`'s `ManualCertificateFiles`/`SharedCertificateFiles` constructors each now
+  carry a single nested detail record (`ManualTlsCertificateFiles`, `SharedTlsCertificateFiles`)
+  instead of record fields directly on the sum type, and `TlsStartupMode`'s `AwaitCertificateFiles`
+  is now a plain positional `Maybe Int` rather than a single-field record. No other behavior change.
 * Added an opt-in, non-blocking concurrent-in-flight-request admission gate:
   `RequestConcurrencyLimit`/`mkRequestConcurrencyLimit` (`HarchWeb.Security`) and
   `HarchWeb.Server.RequestExecution.concurrencyLimitedMiddleware`, composed around the same

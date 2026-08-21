@@ -1262,6 +1262,55 @@ forcing one — meaning an ignore pragma here would itself be an unverified, unn
 exactly what the never-mask-a-gate-finding rule warns against. All three `$!` additions ship with a
 plain comment explaining the HPC gap; none carries `{-# ANN ... "HLint: ignore Redundant $!" #-}`.
 
+### Follow-up decision — CK: nested per-constructor detail records close `-Wpartial-fields`, following each type's own sibling convention (2026-08-21)
+
+**Decision: wrap the fields specific to each flagged constructor in its own single-constructor
+nested record, rather than a blocklist, a `DuplicateRecordFields` merge, or leaving the flag
+unset.** CK's own deferred-scope note already named the two remaining flagged types
+(`HarchWeb.Server.Config`'s `TlsCertificateSource`/`TlsStartupMode` and `WebApi.Page.Model`'s
+`ProfilePageModel`) and the mechanical cost (restructuring plus ~100 pinned derived-`Show` string
+assertions across two multi-thousand-line files); this closes both.
+
+**Field-name collisions were resolved by matching each file's own already-demonstrated convention,
+not by reaching for `DuplicateRecordFields`.** `ProfilePageModel`'s four constructors shared bare
+names (`profileHeading`, `profileSignInAction`, …) that would collide once split into four separate
+record types. `HarchWeb.Server.Config` and `WebApi.Config.Internal` both already carry a
+`{-# LANGUAGE DuplicateRecordFields #-}` pragma, which looked like precedent for keeping the bare
+names and letting the extension disambiguate by usage-site type inference — but checking rather
+than assuming: neither file has ever actually declared two types sharing a field name (confirmed
+by grep), so the pragma is vestigial in both, not a demonstrated pattern to extend. `WebApi.Page.Model`
+itself settles the question instead: `HomePageModel`, `SecondPageModel`, and `NotFoundPageModel` —
+sibling types in the exact same file — already give their own `heading`/`summary`-shaped fields a
+type-specific prefix (`homeHeading`, `secondHeading`, `notFoundHeading`). `ProfilePageModel` was the
+one type in that file that hadn't followed suit, which is what let its fields go unprefixed long
+enough to become genuinely partial. The fix applies that file's own dominant convention to its one
+outlier (`signedOutProfileHeading`, `pendingProfileHeading`, …) rather than introducing
+`DuplicateRecordFields` as new precedent on the strength of an unused pragma. `TlsCertificateSource`
+needed no such renaming: `ManualTlsCertificateFiles`'s and `SharedTlsCertificateFiles`'s field sets
+are already disjoint.
+
+**`TlsStartupMode`'s `AwaitCertificateFiles` stayed positional rather than gaining a nested record.**
+Its one field, `certificateWaitTimeoutSeconds`, has zero external accessor use (confirmed by grep,
+not assumed) — every caller either constructs or pattern-matches it, never calls it as a bare
+function. A single-field record with no reader beyond its own declaration would exist solely to
+satisfy the linter, so it became a plain positional `Maybe Int` instead — the same choice CK's own
+first `-Wpartial-fields` fix already made for `HarchWeb.Api.Endpoint.Internal`'s `ApiRequestBody`
+GADT, whose one record-syntax constructor also had zero external accessor use.
+
+**Nesting reopened two derived-instance coverage gaps this session had already named as a general
+pattern, in a new shape.** BZ's and CB's own lessons (a deleted tautological `x == x` losing a
+derived `Eq`'s default `/=` credit) covered the *within-one-type* case. Nesting surfaced a second
+variant: a nested type's own `deriving (Eq, Show)` is credited only when something calls `==`,
+`/=`, `show`, `showsPrec`, or `showList` **directly at that nested type**, not merely reached
+indirectly through the outer sum type's own derived instances delegating to it — even when a test
+already exercises the outer type exhaustively. Verified directly against the coverage gate, not
+assumed: fixing required, for each of the six new nested types, all of (a) an equality assertion
+against a same-value/different-construction pair, (b) an inequality assertion against a
+same-shape/different-field pair, (c) a direct `show`, (d) a direct `showsPrec` at a precedence high
+enough to require parenthesization, and (e) a direct `show` of a one-element list (`showList`) —
+five distinct HPC-tracked boxes per type, discovered one at a time by re-running the coverage gate
+after each partial fix rather than guessed in one pass.
+
 ### Follow-up decision — BA: give a taken username its own outcome, and target the conflict the insert is actually protecting (2026-08-21)
 
 **Decision: replace `AccountStore.createPendingAccount`'s `Bool` result with a three-way

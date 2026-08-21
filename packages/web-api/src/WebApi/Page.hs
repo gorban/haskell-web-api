@@ -2,12 +2,16 @@
 
 module WebApi.Page
   ( AppPageModel (..),
+    AuthenticatedProfilePageDetails (..),
     CallToAction (..),
     HomePageModel (..),
     NotFoundPageModel (..),
+    PendingProfilePageDetails (..),
     ProfilePageModel (..),
     SecondPageModel (..),
+    SignedOutProfilePageDetails (..),
     SpacesPageModel (..),
+    UnavailableProfilePageDetails (..),
     buildPageModelFromRouteData,
     buildPageModelWithDatabase,
     buildPageModel,

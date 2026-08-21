@@ -58,6 +58,7 @@ common common
     -Wcompat
     -Wincomplete-uni-patterns
     -Wincomplete-record-updates
+    -Wpartial-fields
     -Wredundant-constraints
     -Wunused-packages
 

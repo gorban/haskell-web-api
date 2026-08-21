@@ -15,12 +15,14 @@ module HarchWeb.Server.Config
     ListenerScheme (..),
     ListenerStartupError (..),
     ManualTlsBindPlan (..),
+    ManualTlsCertificateFiles (..),
     ServerConfig (..),
     ServerStartupPlan (..),
     ObservabilityConfig (..),
     ObservabilityStartupPlan (..),
     OtlpExporter (..),
     OtlpExporterStartup (..),
+    SharedTlsCertificateFiles (..),
     TelemetrySignal (..),
     TlsCertificateSource (..),
     TlsConfig (..),
@@ -66,22 +68,31 @@ data AcmeConfig = AcmeConfig
   deriving (Eq, Show)
 
 data TlsCertificateSource
-  = ManualCertificateFiles
-      { certificateFile :: FilePath,
-        privateKeyFile :: FilePath
-      }
-  | SharedCertificateFiles
-      { certificateDirectory :: FilePath,
-        sharedCertificateStartupMode :: TlsStartupMode
-      }
+  = ManualCertificateFiles ManualTlsCertificateFiles
+  | SharedCertificateFiles SharedTlsCertificateFiles
   | AcmeCertificateSource AcmeConfig
   deriving (Eq, Show)
 
+data ManualTlsCertificateFiles = ManualTlsCertificateFiles
+  { certificateFile :: FilePath,
+    privateKeyFile :: FilePath
+  }
+  deriving (Eq, Show)
+
+data SharedTlsCertificateFiles = SharedTlsCertificateFiles
+  { certificateDirectory :: FilePath,
+    sharedCertificateStartupMode :: TlsStartupMode
+  }
+  deriving (Eq, Show)
+
+-- | 'AwaitCertificateFiles' is plain positional, not a named record: its
+-- one field has zero external accessor use (confirmed by grep, not
+-- assumed), so wrapping it in its own nested record purely to satisfy
+-- '-Wpartial-fields' would add a type with no reader beyond this
+-- declaration. 'RequireCertificateFiles' has no fields to be partial about.
 data TlsStartupMode
   = RequireCertificateFiles
-  | AwaitCertificateFiles
-      { certificateWaitTimeoutSeconds :: Maybe Int
-      }
+  | AwaitCertificateFiles (Maybe Int)
   deriving (Eq, Show)
 
 data TlsCredentialSourceKind
@@ -229,7 +240,7 @@ classifyListener listenerConfig =
       Left (InvalidListenerAcmeConfiguration listenerConfig)
     (Https, Nothing, Nothing) ->
       Left (InvalidListenerTlsConfiguration listenerConfig)
-    (Https, Just TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
+    (Https, Just TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = certificatePath, privateKeyFile = privateKeyPath}}, Nothing) ->
       Right
         [ PlannedManualTls
             ManualTlsBindPlan
@@ -240,7 +251,7 @@ classifyListener listenerConfig =
                 tlsStartupMode = RequireCertificateFiles
               }
         ]
-    (Https, Just TlsConfig {certificateSource = SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
+    (Https, Just TlsConfig {certificateSource = SharedCertificateFiles SharedTlsCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode}}, Nothing) ->
       let (certificatePath, privateKeyPath) = sharedCertificatePaths sharedDirectory
        in Right
             [ PlannedManualTls

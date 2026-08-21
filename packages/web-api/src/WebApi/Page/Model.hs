@@ -1,11 +1,15 @@
 module WebApi.Page.Model
   ( AppPageModel (..),
+    AuthenticatedProfilePageDetails (..),
     CallToAction (..),
     HomePageModel (..),
     NotFoundPageModel (..),
+    PendingProfilePageDetails (..),
     ProfilePageModel (..),
     SecondPageModel (..),
+    SignedOutProfilePageDetails (..),
     SpacesPageModel (..),
+    UnavailableProfilePageDetails (..),
   )
 where
 
@@ -58,35 +62,54 @@ data NotFoundPageModel = NotFoundPageModel
   deriving (Eq, Show)
 
 data ProfilePageModel
-  = SignedOutProfilePage
-      { profileHeading :: Text,
-        profileSummary :: Text,
-        profileSignInAction :: CallToAction,
-        profileRegistrationAction :: CallToAction
-      }
-  | PendingProfilePage
-      { profileHeading :: Text,
-        profileSummary :: Text,
-        profileEmail :: Text,
-        profileUsername :: Maybe Text,
-        profileDisplayName :: Maybe Text,
-        profileResendPath :: AccountActionTarget,
-        profileResendLabel :: Text,
-        profileSignOutAction :: CallToAction
-      }
-  | AuthenticatedProfilePage
-      { profileHeading :: Text,
-        profileSummary :: Text,
-        profileEmail :: Text,
-        profileUsername :: Maybe Text,
-        profileDisplayName :: Maybe Text,
-        profileSignOutAction :: CallToAction
-      }
-  | UnavailableProfilePage
-      { profileHeading :: Text,
-        profileSummary :: Text,
-        profileSignInAction :: CallToAction
-      }
+  = SignedOutProfilePage SignedOutProfilePageDetails
+  | PendingProfilePage PendingProfilePageDetails
+  | AuthenticatedProfilePage AuthenticatedProfilePageDetails
+  | UnavailableProfilePage UnavailableProfilePageDetails
+  deriving (Eq, Show)
+
+-- | Every 'ProfilePageModel' constructor's fields are wrapped in their own
+-- single-constructor record like this one, following this module's own
+-- 'HomePageModel'\/'SecondPageModel'\/'NotFoundPageModel' convention of a
+-- type-specific field prefix, so each accessor is total: a field once
+-- absent from some 'ProfilePageModel' constructors (e.g. only
+-- 'SignedOutProfilePage' and 'UnavailableProfilePage' had a sign-in action)
+-- made every other constructor's use of that field partial.
+data SignedOutProfilePageDetails = SignedOutProfilePageDetails
+  { signedOutProfileHeading :: Text,
+    signedOutProfileSummary :: Text,
+    signedOutProfileSignInAction :: CallToAction,
+    signedOutProfileRegistrationAction :: CallToAction
+  }
+  deriving (Eq, Show)
+
+data PendingProfilePageDetails = PendingProfilePageDetails
+  { pendingProfileHeading :: Text,
+    pendingProfileSummary :: Text,
+    pendingProfileEmail :: Text,
+    pendingProfileUsername :: Maybe Text,
+    pendingProfileDisplayName :: Maybe Text,
+    pendingProfileResendPath :: AccountActionTarget,
+    pendingProfileResendLabel :: Text,
+    pendingProfileSignOutAction :: CallToAction
+  }
+  deriving (Eq, Show)
+
+data AuthenticatedProfilePageDetails = AuthenticatedProfilePageDetails
+  { authenticatedProfileHeading :: Text,
+    authenticatedProfileSummary :: Text,
+    authenticatedProfileEmail :: Text,
+    authenticatedProfileUsername :: Maybe Text,
+    authenticatedProfileDisplayName :: Maybe Text,
+    authenticatedProfileSignOutAction :: CallToAction
+  }
+  deriving (Eq, Show)
+
+data UnavailableProfilePageDetails = UnavailableProfilePageDetails
+  { unavailableProfileHeading :: Text,
+    unavailableProfileSummary :: Text,
+    unavailableProfileSignInAction :: CallToAction
+  }
   deriving (Eq, Show)
 
 data AppPageModel

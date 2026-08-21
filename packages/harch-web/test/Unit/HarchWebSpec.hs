@@ -400,9 +400,10 @@ sharedHttpsListenerWithStartupMode host port certificateDirectory startupMode =
           TlsConfig
             { certificateSource =
                 SharedCertificateFiles
-                  { certificateDirectory = certificateDirectory,
-                    sharedCertificateStartupMode = startupMode
-                  }
+                  SharedTlsCertificateFiles
+                    { certificateDirectory = certificateDirectory,
+                      sharedCertificateStartupMode = startupMode
+                    }
             },
       listenerAcme = Nothing
     }
@@ -1246,9 +1247,10 @@ spec = do
               }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/harch-web/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           tlsSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = tlsSource}
           staticRoot = StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = "public"}
@@ -1323,7 +1325,7 @@ spec = do
       acmeCertificateDirectory acmeConfig `shouldBe` Nothing
       acmeCertbotConfig acmeConfig `shouldBe` challengeBackend
       case sharedCertificateSource of
-        SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
+        SharedCertificateFiles SharedTlsCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
           sharedDirectory `shouldBe` "/var/lib/harch-web/shared-certs"
           startupMode `shouldBe` AwaitCertificateFiles Nothing
         _ ->
@@ -1447,12 +1449,13 @@ spec = do
                 acmeCertificateDirectory = Just "/var/lib/harch-web/staging-certs",
                 acmeCertbotConfig = otherCertbotConfig
               }
-          manualCertificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+          manualCertificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/harch-web/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
@@ -1574,10 +1577,41 @@ spec = do
       show requestPolicyConfig `shouldContain` "responseSecurityHeaders = ResponseSecurityHeadersConfig {contentSecurityPolicy = Just \"default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'\""
       show certbotConfig `shouldBe` "CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}"
       show acmeConfig `shouldBe` "AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}"
-      show manualCertificateSource `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
-      show sharedCertificateSource `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
+      show manualCertificateSource `shouldBe` "ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})"
+      show sharedCertificateSource `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
+      -- 'deriving (Eq, Show)' on 'ManualTlsCertificateFiles'/'SharedTlsCertificateFiles'
+      -- themselves is only ever reached indirectly above, through the outer
+      -- 'TlsCertificateSource' constructor's own derived instances; HPC does
+      -- not credit those two declarations from that alone, confirmed
+      -- directly by the coverage gate rather than assumed, so both are
+      -- exercised here too, directly and on their own. Same-value,
+      -- different-construction (not 'x == x') per this codebase's own
+      -- derived-instance coverage lesson.
+      ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+        `shouldBe` ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+      SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}
+        `shouldBe` SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}
+      -- 'deriving (Eq)' writes only '=='; the unoverridden '/=' default
+      -- method HPC boxes separately (this codebase's own established
+      -- derived-instance lesson), so a genuine inequality is exercised too.
+      ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+        `shouldNotBe` ManualTlsCertificateFiles {certificateFile = "other.pem", privateKeyFile = "key.pem"}
+      SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}
+        `shouldNotBe` SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/other-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}
+      shouldBeParenthesized (showsPrec 11 (ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}) "")
+      shouldBeParenthesized (showsPrec 11 (SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}) "")
+      show (ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"})
+        `shouldBe` "ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
+      show (SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})
+        `shouldBe` "SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}"
+      -- Derived 'Show' also writes a 'showList' method (used to render a
+      -- list of these values), a third box distinct from 'show'/'showsPrec'.
+      show [ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}]
+        `shouldBe` "[ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}]"
+      show [SharedTlsCertificateFiles {certificateDirectory = "/var/lib/harch-web/shared-certs", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]
+        `shouldBe` "[SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}]"
       show acmeCertificateSource `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
-      show (TlsConfig {certificateSource = manualCertificateSource}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
+      show (TlsConfig {certificateSource = manualCertificateSource}) `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})}"
       show listenerConfig `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}"
       show httpAcmeListenerConfig `shouldBe` "ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
@@ -1589,7 +1623,7 @@ spec = do
       show tracingConfig `shouldBe` "OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityConfig `shouldBe` "ObservabilityConfig {tracingExporter = Just (OtlpExporter {otlpEndpoint = \"http://collector:4318/v1/traces\", otlpHeaders = [(\"authorization\",\"Bearer token\")]}), metricsExporter = Nothing}"
       show ManualTlsCredentials `shouldBe` "ManualTlsCredentials"
-      show (AwaitCertificateFiles (Just 15)) `shouldBe` "AwaitCertificateFiles {certificateWaitTimeoutSeconds = Just 15}"
+      show (AwaitCertificateFiles (Just 15)) `shouldBe` "AwaitCertificateFiles (Just 15)"
       show TracingSignal `shouldBe` "TracingSignal"
       show exporterStartup `shouldBe` "OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}"
       show observabilityPlan `shouldBe` "ObservabilityStartupPlan {startupExporters = [OtlpExporterStartup {startupSignal = TracingSignal, startupEndpoint = \"http://collector:4318/v1/traces\", startupHeaders = [(\"authorization\",\"Bearer token\")]}]}"
@@ -1616,7 +1650,7 @@ spec = do
       shouldBeParenthesized (showsPrec 11 serverConfig "")
       show [Http, Https] `shouldBe` "[Http,Https]"
       show [ManualTlsCredentials, SharedTlsCredentials] `shouldBe` "[ManualTlsCredentials,SharedTlsCredentials]"
-      show [RequireCertificateFiles, AwaitCertificateFiles Nothing] `shouldBe` "[RequireCertificateFiles,AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}]"
+      show [RequireCertificateFiles, AwaitCertificateFiles Nothing] `shouldBe` "[RequireCertificateFiles,AwaitCertificateFiles Nothing]"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [strictTransportSecurityConfig] `shouldBe` "[StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}]"
       show [corsPolicyConfig] `shouldBe` "[CorsPolicyConfig {corsAllowedOrigins = [\"https://client.example.com\"], corsAllowedMethods = [\"GET\",\"HEAD\",\"OPTIONS\"], corsAllowedHeaders = [\"Content-Type\",\"X-Requested-With\"], corsMaxAgeSeconds = Just 600}]"
@@ -1624,7 +1658,7 @@ spec = do
       show [requestPolicyConfig] `shouldContain` "RequestPolicyConfig {redirectHttpToHttps = True, httpsRedirectPort = Just 5443, httpsRedirectAuthority = Just \"app.example.com\", strictTransportSecurity = Just (StrictTransportSecurityConfig {strictTransportSecurityMaxAgeSeconds = 31536000, strictTransportSecurityIncludeSubDomains = True, strictTransportSecurityPreload = True}), forwardedHeaderTrust = NeverTrustForwarded"
       show [certbotConfig] `shouldBe` "[CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}]"
       show [acmeConfig] `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
-      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},SharedCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
+      show [manualCertificateSource, sharedCertificateSource, acmeCertificateSource] `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/harch-web/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
       show [tlsConfig] `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})}]"
       show [listenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Https, listenerTls = Just (TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})})}]"
       show [httpAcmeListenerConfig] `shouldBe` "[ListenerConfig {listenerHost = \"0.0.0.0\", listenerPort = 80, listenerScheme = Http, listenerTls = Nothing, listenerAcme = AcmeConfig {acmeDirectoryUrl = \"https://acme-staging-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"staging.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Just \"/var/lib/harch-web/staging-certs\", acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"renew\"]}}}]"
@@ -4825,7 +4859,7 @@ spec = do
 
     it "translates manual certificate files into TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5443}
-          certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+          certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
           listener =
             ListenerConfig
               { listenerHost = endpointHost endpoint,
@@ -4858,9 +4892,10 @@ spec = do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5444}
           certificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/harch-web/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/harch-web/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           listener =
             ListenerConfig
               { listenerHost = endpointHost endpoint,
@@ -4886,16 +4921,17 @@ spec = do
             }
       manualPlan `shouldBe` manualPlan
       manualPlan `shouldNotBe` manualPlan {tlsPrivateKeyFile = "other-privkey.pem"}
-      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
-      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}]"
+      show manualPlan `shouldBe` "ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing}"
+      show [manualPlan] `shouldBe` "[ManualTlsBindPlan {tlsEndpoint = ListenerEndpoint {endpointHost = \"0.0.0.0\", endpointPort = 5444}, tlsCertificateFile = \"/var/lib/harch-web/shared-certs/fullchain.pem\", tlsPrivateKeyFile = \"/var/lib/harch-web/shared-certs/privkey.pem\", tlsCredentialSourceKind = SharedTlsCredentials, tlsStartupMode = AwaitCertificateFiles Nothing}]"
 
     it "translates fail-fast shared certificate directories into immediate TLS startup parameters" $ do
       let endpoint = ListenerEndpoint {endpointHost = "0.0.0.0", endpointPort = 5445}
           certificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/harch-web/preprovisioned-certs",
-                sharedCertificateStartupMode = RequireCertificateFiles
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/harch-web/preprovisioned-certs",
+                  sharedCertificateStartupMode = RequireCertificateFiles
+                }
           listener =
             ListenerConfig
               { listenerHost = endpointHost endpoint,
@@ -4976,7 +5012,7 @@ spec = do
               { listenerHost = "127.0.0.1",
                 listenerPort = 5001,
                 listenerScheme = Http,
-                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}),
+                listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}),
                 listenerAcme = Nothing
               }
           httpsWithoutTls =
@@ -4993,7 +5029,7 @@ spec = do
         `shouldBe` Left (InvalidListenerTlsConfiguration httpsWithoutTls)
       InvalidListenerTlsConfiguration httpTlsListener `shouldNotBe` InvalidListenerTlsConfiguration httpsWithoutTls
       show (InvalidListenerTlsConfiguration httpTlsListener)
-        `shouldBe` "InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}})})"
+        `shouldBe` "InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Just (TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})})})"
       show [InvalidListenerTlsConfiguration httpsWithoutTls]
         `shouldBe` "[InvalidListenerTlsConfiguration (ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5443, listenerScheme = Https, listenerTls = Nothing})]"
 
@@ -5035,7 +5071,7 @@ spec = do
                 listenerTls =
                   Just
                     TlsConfig
-                      { certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
+                      { certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}
                       },
                 listenerAcme = Nothing
               }
@@ -5993,9 +6029,10 @@ spec = do
                               TlsConfig
                                 { certificateSource =
                                     ManualCertificateFiles
-                                      { certificateFile = certificatePath,
-                                        privateKeyFile = privateKeyPath
-                                      }
+                                      ManualTlsCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
                                 },
                           listenerAcme = Nothing
                         }
@@ -6037,9 +6074,10 @@ spec = do
                               TlsConfig
                                 { certificateSource =
                                     ManualCertificateFiles
-                                      { certificateFile = certificatePath,
-                                        privateKeyFile = privateKeyPath
-                                      }
+                                      ManualTlsCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
                                 },
                           listenerAcme = Nothing
                         }
@@ -6088,9 +6126,10 @@ spec = do
                               TlsConfig
                                 { certificateSource =
                                     ManualCertificateFiles
-                                      { certificateFile = certificatePath,
-                                        privateKeyFile = privateKeyPath
-                                      }
+                                      ManualTlsCertificateFiles
+                                        { certificateFile = certificatePath,
+                                          privateKeyFile = privateKeyPath
+                                        }
                                 },
                           listenerAcme = Nothing
                         }
@@ -6131,9 +6170,10 @@ spec = do
                             TlsConfig
                               { certificateSource =
                                   ManualCertificateFiles
-                                    { certificateFile = "missing-cert.pem",
-                                      privateKeyFile = privateKeyPath
-                                    }
+                                    ManualTlsCertificateFiles
+                                      { certificateFile = "missing-cert.pem",
+                                        privateKeyFile = privateKeyPath
+                                      }
                               },
                         listenerAcme = Nothing
                       }
@@ -6155,9 +6195,10 @@ spec = do
                             TlsConfig
                               { certificateSource =
                                   ManualCertificateFiles
-                                    { certificateFile = certificatePath,
-                                      privateKeyFile = "missing-key.pem"
-                                    }
+                                    ManualTlsCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = "missing-key.pem"
+                                      }
                               },
                         listenerAcme = Nothing
                       }
@@ -6181,9 +6222,10 @@ spec = do
                             TlsConfig
                               { certificateSource =
                                   ManualCertificateFiles
-                                    { certificateFile = certificatePath,
-                                      privateKeyFile = privateKeyPath
-                                    }
+                                    ManualTlsCertificateFiles
+                                      { certificateFile = certificatePath,
+                                        privateKeyFile = privateKeyPath
+                                      }
                               },
                         listenerAcme = Nothing
                       }
@@ -7415,9 +7457,10 @@ spec = do
                                 TlsConfig
                                   { certificateSource =
                                       ManualCertificateFiles
-                                        { certificateFile = certificatePath,
-                                          privateKeyFile = privateKeyPath
-                                        }
+                                        ManualTlsCertificateFiles
+                                          { certificateFile = certificatePath,
+                                            privateKeyFile = privateKeyPath
+                                          }
                                   },
                             listenerAcme = Nothing
                           }
@@ -7442,9 +7485,10 @@ spec = do
                                 TlsConfig
                                   { certificateSource =
                                       ManualCertificateFiles
-                                        { certificateFile = certificatePath,
-                                          privateKeyFile = privateKeyPath
-                                        }
+                                        ManualTlsCertificateFiles
+                                          { certificateFile = certificatePath,
+                                            privateKeyFile = privateKeyPath
+                                          }
                                   },
                             listenerAcme = Nothing
                           },
@@ -7457,9 +7501,10 @@ spec = do
                                 TlsConfig
                                   { certificateSource =
                                       ManualCertificateFiles
-                                        { certificateFile = certificatePath,
-                                          privateKeyFile = privateKeyPath
-                                        }
+                                        ManualTlsCertificateFiles
+                                          { certificateFile = certificatePath,
+                                            privateKeyFile = privateKeyPath
+                                          }
                                   },
                             listenerAcme = Nothing
                           }

@@ -65,13 +65,13 @@ import WebApi.App (buildAppWithDatabase, buildRuntimeAccountWorkflow, buildRunti
 import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.App.Shell (buildAppPageShell, buildAppPageShellConfig)
 import WebApi.AppEffect qualified as AppEffect
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), DatabaseSeed (..), HomePageData (..), PageRepository (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed, defaultPageRepository)
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), LoginThrottleContext (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), PendingProfilePageDetails (..), ProfilePageModel (..), SecondPageModel (..), SignedOutProfilePageDetails (..), SpacesPageModel (..), UnavailableProfilePageDetails (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
@@ -1282,9 +1282,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 ManualCertificateFiles
-                                  { certificateFile = "cert.pem",
-                                    privateKeyFile = "key.pem"
-                                  }
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = "cert.pem",
+                                      privateKeyFile = "key.pem"
+                                    }
                             },
                       listenerAcme = Nothing
                     }
@@ -1336,9 +1337,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = "/var/lib/web-api/shared-certs",
-                                    sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-                                  }
+                                  SharedTlsCertificateFiles
+                                    { certificateDirectory = "/var/lib/web-api/shared-certs",
+                                      sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                                    }
                             },
                       listenerAcme = Nothing
                     },
@@ -1400,9 +1402,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = ".tls/example.com",
-                                    sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-                                  }
+                                  SharedTlsCertificateFiles
+                                    { certificateDirectory = ".tls/example.com",
+                                      sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                                    }
                             },
                       listenerAcme = Nothing
                     },
@@ -1531,9 +1534,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = "/var/lib/web-api/shared-certs",
-                                    sharedCertificateStartupMode = AwaitCertificateFiles (Just 15)
-                                  }
+                                  SharedTlsCertificateFiles
+                                    { certificateDirectory = "/var/lib/web-api/shared-certs",
+                                      sharedCertificateStartupMode = AwaitCertificateFiles (Just 15)
+                                    }
                             },
                       listenerAcme = Nothing
                     },
@@ -1546,9 +1550,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = "/var/lib/web-api/preprovisioned-certs",
-                                    sharedCertificateStartupMode = RequireCertificateFiles
-                                  }
+                                  SharedTlsCertificateFiles
+                                    { certificateDirectory = "/var/lib/web-api/preprovisioned-certs",
+                                      sharedCertificateStartupMode = RequireCertificateFiles
+                                    }
                             },
                       listenerAcme = Nothing
                     }
@@ -1629,9 +1634,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 SharedCertificateFiles
-                                  { certificateDirectory = ".tls/example.com",
-                                    sharedCertificateStartupMode = AwaitCertificateFiles (Just 120)
-                                  }
+                                  SharedTlsCertificateFiles
+                                    { certificateDirectory = ".tls/example.com",
+                                      sharedCertificateStartupMode = AwaitCertificateFiles (Just 120)
+                                    }
                             },
                       listenerAcme = Nothing
                     }
@@ -1691,9 +1697,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 ManualCertificateFiles
-                                  { certificateFile = "cert.pem",
-                                    privateKeyFile = "key.pem"
-                                  }
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = "cert.pem",
+                                      privateKeyFile = "key.pem"
+                                    }
                             },
                       listenerAcme = Nothing
                     },
@@ -2113,9 +2120,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 ManualCertificateFiles
-                                  { certificateFile = "cert.pem",
-                                    privateKeyFile = "key.pem"
-                                  }
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = "cert.pem",
+                                      privateKeyFile = "key.pem"
+                                    }
                             },
                       listenerAcme = Nothing
                     }
@@ -2176,9 +2184,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 ManualCertificateFiles
-                                  { certificateFile = "https-443-cert.pem",
-                                    privateKeyFile = "https-443-key.pem"
-                                  }
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = "https-443-cert.pem",
+                                      privateKeyFile = "https-443-key.pem"
+                                    }
                             },
                       listenerAcme = Nothing
                     },
@@ -2191,9 +2200,10 @@ spec = do
                           TlsConfig
                             { certificateSource =
                                 ManualCertificateFiles
-                                  { certificateFile = "https-5443-cert.pem",
-                                    privateKeyFile = "https-5443-key.pem"
-                                  }
+                                  ManualTlsCertificateFiles
+                                    { certificateFile = "https-5443-cert.pem",
+                                      privateKeyFile = "https-5443-key.pem"
+                                    }
                             },
                       listenerAcme = Nothing
                     }
@@ -3555,36 +3565,40 @@ spec = do
         `shouldBe` LogoutPage LogoutAccountTarget
       buildPageModelFromRouteData profileRequestValue ProfileRouteDataResult
         `shouldBe` ProfilePage
-          SignedOutProfilePage
-            { profileHeading = "Profile",
-              profileSummary = "Sign in to view and manage your profile.",
-              profileSignInAction = CallToAction "Sign in" LoginRoute "/login",
-              profileRegistrationAction = CallToAction "Create account" RegistrationRoute "/register"
-            }
+          ( SignedOutProfilePage
+              SignedOutProfilePageDetails
+                { signedOutProfileHeading = "Profile",
+                  signedOutProfileSummary = "Sign in to view and manage your profile.",
+                  signedOutProfileSignInAction = CallToAction "Sign in" LoginRoute "/login",
+                  signedOutProfileRegistrationAction = CallToAction "Create account" RegistrationRoute "/register"
+                }
+          )
       let spanishProfileRequest = HarchWeb.RouteRequest ProfileRoute spanishRequestContext
           spanishProfileModel =
             SignedOutProfilePage
-              { profileHeading = "Perfil",
-                profileSummary = "Inicia sesión para ver y administrar tu perfil.",
-                profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
-                profileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
-              }
+              SignedOutProfilePageDetails
+                { signedOutProfileHeading = "Perfil",
+                  signedOutProfileSummary = "Inicia sesión para ver y administrar tu perfil.",
+                  signedOutProfileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
+                  signedOutProfileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
+                }
       buildPageModelFromRouteData spanishProfileRequest ProfileRouteDataResult
         `shouldBe` ProfilePage spanishProfileModel
       let spanishProfileModelCopy =
             SignedOutProfilePage
-              { profileHeading = "Perfil",
-                profileSummary = "Inicia sesión para ver y administrar tu perfil.",
-                profileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
-                profileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
-              }
+              SignedOutProfilePageDetails
+                { signedOutProfileHeading = "Perfil",
+                  signedOutProfileSummary = "Inicia sesión para ver y administrar tu perfil.",
+                  signedOutProfileSignInAction = CallToAction "Iniciar sesión" LoginRoute "/es/login",
+                  signedOutProfileRegistrationAction = CallToAction "Crear cuenta" RegistrationRoute "/es/register"
+                }
       assertSameProfilePageModel spanishProfileModel spanishProfileModelCopy
       show (ProfilePage spanishProfileModel)
-        `shouldSatisfy` (Text.isPrefixOf "ProfilePage (SignedOutProfilePage" . Text.pack)
+        `shouldSatisfy` (Text.isPrefixOf "ProfilePage (SignedOutProfilePage (SignedOutProfilePageDetails" . Text.pack)
       show spanishProfileModel
-        `shouldSatisfy` (Text.isPrefixOf "SignedOutProfilePage {profileHeading = \"Perfil\"" . Text.pack)
+        `shouldSatisfy` (Text.isPrefixOf "SignedOutProfilePage (SignedOutProfilePageDetails {signedOutProfileHeading = \"Perfil\"" . Text.pack)
       show [spanishProfileModel]
-        `shouldSatisfy` (Text.isPrefixOf "[SignedOutProfilePage {profileHeading = \"Perfil\"" . Text.pack)
+        `shouldSatisfy` (Text.isPrefixOf "[SignedOutProfilePage (SignedOutProfilePageDetails {signedOutProfileHeading = \"Perfil\"" . Text.pack)
       renderPageFromRouteData defaultAppConfig verificationRequest EmailVerificationRouteDataResult
         `shouldSatisfy` \page ->
           HarchWeb.pageTitle page == "web-api: Verify email"
@@ -7014,9 +7028,10 @@ spec = do
               }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/web-api/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           tlsSource =
             AcmeCertificateSource
               AcmeConfig
@@ -7032,10 +7047,10 @@ spec = do
               { otlpEndpoint = "http://otel-collector:4318",
                 otlpHeaders = [("x-api-key", "secret")]
               }
-      TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
-        `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
+      TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
+        `shouldBe` TlsConfig {certificateSource = ManualCertificateFiles ManualTlsCertificateFiles {certificateFile = "cert.pem", privateKeyFile = "key.pem"}}
       show sharedCertificateSource
-        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
+        `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
       show tlsSource
         `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
       show exporter
@@ -7044,9 +7059,10 @@ spec = do
     it "reads exported selectors from the remaining public config and page-model types" $ do
       let manualCertificateSource =
             ManualCertificateFiles
-              { certificateFile = "cert.pem",
-                privateKeyFile = "key.pem"
-              }
+              ManualTlsCertificateFiles
+                { certificateFile = "cert.pem",
+                  privateKeyFile = "key.pem"
+                }
           inProcessAcmeConfig =
             AcmeConfig
               { acmeDirectoryUrl = "https://acme-staging-v02.api.letsencrypt.org/directory",
@@ -7062,9 +7078,10 @@ spec = do
               }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/web-api/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
             ListenerConfig
@@ -7146,11 +7163,11 @@ spec = do
                 secondPrimaryAction = callToAction
               }
       case manualCertificateSource of
-        source@ManualCertificateFiles {} -> do
+        ManualCertificateFiles source -> do
           certificateFile source `shouldBe` "cert.pem"
           privateKeyFile source `shouldBe` "key.pem"
         AcmeCertificateSource _ -> expectationFailure "expected manual certificate files"
-        SharedCertificateFiles {} -> expectationFailure "expected manual certificate files"
+        SharedCertificateFiles _ -> expectationFailure "expected manual certificate files"
       acmeDirectoryUrl inProcessAcmeConfig `shouldBe` "https://acme-staging-v02.api.letsencrypt.org/directory"
       acmeContactEmails inProcessAcmeConfig `shouldBe` ["ops@example.com", "alerts@example.com"]
       acmeDomains inProcessAcmeConfig `shouldBe` ["example.com", "www.example.com"]
@@ -7162,7 +7179,7 @@ spec = do
             certbotArguments = []
           }
       case sharedCertificateSource of
-        SharedCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
+        SharedCertificateFiles SharedTlsCertificateFiles {certificateDirectory = sharedDirectory, sharedCertificateStartupMode = startupMode} -> do
           sharedDirectory `shouldBe` "/var/lib/web-api/shared-certs"
           startupMode `shouldBe` AwaitCertificateFiles Nothing
         _ ->
@@ -7213,9 +7230,10 @@ spec = do
               }
           manualCertificateSource =
             ManualCertificateFiles
-              { certificateFile = "cert.pem",
-                privateKeyFile = "key.pem"
-              }
+              ManualTlsCertificateFiles
+                { certificateFile = "cert.pem",
+                  privateKeyFile = "key.pem"
+                }
           acmeCertificateSource =
             AcmeCertificateSource
               AcmeConfig
@@ -7228,9 +7246,10 @@ spec = do
                 }
           sharedCertificateSource =
             SharedCertificateFiles
-              { certificateDirectory = "/var/lib/web-api/shared-certs",
-                sharedCertificateStartupMode = AwaitCertificateFiles Nothing
-              }
+              SharedTlsCertificateFiles
+                { certificateDirectory = "/var/lib/web-api/shared-certs",
+                  sharedCertificateStartupMode = AwaitCertificateFiles Nothing
+                }
           staticRoot =
             StaticAssetRoot
               { staticUrlPrefix = "/assets",
@@ -7311,11 +7330,11 @@ spec = do
       show acmeCertificateSource
         `shouldBe` "AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})"
       show (TlsConfig {certificateSource = manualCertificateSource})
-        `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}}"
+        `shouldBe` "TlsConfig {certificateSource = ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})}"
       show sharedCertificateSource
-        `shouldBe` "SharedCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles {certificateWaitTimeoutSeconds = Nothing}}"
+        `shouldBe` "SharedCertificateFiles (SharedTlsCertificateFiles {certificateDirectory = \"/var/lib/web-api/shared-certs\", sharedCertificateStartupMode = AwaitCertificateFiles Nothing})"
       show manualCertificateSource
-        `shouldBe` "ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}"
+        `shouldBe` "ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"})"
       show (ListenerConfig {listenerHost = "127.0.0.1", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing, listenerAcme = Nothing})
         `shouldBe` "ListenerConfig {listenerHost = \"127.0.0.1\", listenerPort = 5001, listenerScheme = Http, listenerTls = Nothing}"
       show staticRoot `shouldBe` "StaticAssetRoot {staticUrlPrefix = \"/assets\", staticDirectory = \"public\"}"
@@ -7427,9 +7446,10 @@ spec = do
               }
           manualCertificateSource =
             ManualCertificateFiles
-              { certificateFile = "cert.pem",
-                privateKeyFile = "key.pem"
-              }
+              ManualTlsCertificateFiles
+                { certificateFile = "cert.pem",
+                  privateKeyFile = "key.pem"
+                }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = manualCertificateSource}
           listenerConfig =
@@ -7569,7 +7589,7 @@ spec = do
       MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
       LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
       LogoutPage LogoutAccountTarget `shouldNotBe` HomePage homePageModel
-      ProfilePage (UnavailableProfilePage "Profile" "Unavailable" callToAction) `shouldNotBe` HomePage homePageModel
+      ProfilePage (UnavailableProfilePage (UnavailableProfilePageDetails "Profile" "Unavailable" callToAction)) `shouldNotBe` HomePage homePageModel
       NotFoundPage notFoundPageModel `shouldNotBe` HomePage homePageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
       Page WebApi.Route.HomePage `shouldNotBe` Api WebApi.Route.StatusApi
@@ -7600,9 +7620,10 @@ spec = do
               }
           manualCertificateSource =
             ManualCertificateFiles
-              { certificateFile = "cert.pem",
-                privateKeyFile = "key.pem"
-              }
+              ManualTlsCertificateFiles
+                { certificateFile = "cert.pem",
+                  privateKeyFile = "key.pem"
+                }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
@@ -7737,9 +7758,10 @@ spec = do
               }
           manualCertificateSource =
             ManualCertificateFiles
-              { certificateFile = "cert.pem",
-                privateKeyFile = "key.pem"
-              }
+              ManualTlsCertificateFiles
+                { certificateFile = "cert.pem",
+                  privateKeyFile = "key.pem"
+                }
           acmeCertificateSource = AcmeCertificateSource acmeConfig
           tlsConfig = TlsConfig {certificateSource = acmeCertificateSource}
           listenerConfig =
@@ -7824,7 +7846,7 @@ spec = do
       show [acmeConfig]
         `shouldBe` "[AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}}]"
       show [manualCertificateSource, acmeCertificateSource]
-        `shouldBe` "[ManualCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"},AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
+        `shouldBe` "[ManualCertificateFiles (ManualTlsCertificateFiles {certificateFile = \"cert.pem\", privateKeyFile = \"key.pem\"}),AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})]"
       show [tlsConfig]
         `shouldBe` "[TlsConfig {certificateSource = AcmeCertificateSource (AcmeConfig {acmeDirectoryUrl = \"https://acme-v02.api.letsencrypt.org/directory\", acmeContactEmails = [\"ops@example.com\"], acmeDomains = [\"example.com\",\"www.example.com\"], acmeHttp01Port = 80, acmeCertificateDirectory = Nothing, acmeCertbotConfig = CertbotConfig {certbotExecutable = \"certbot\", certbotArguments = [\"certonly\",\"--webroot\"]}})}]"
       show [listenerConfig]
@@ -8738,14 +8760,16 @@ spec = do
             renderPageBody
               ( ProfilePage
                   ( PendingProfilePage
-                      "Profile"
-                      "Verify your email address before continuing."
-                      "person@example.test"
-                      (Just "person_01")
-                      (Just "Person Example")
-                      resendTarget
-                      "Resend verification email"
-                      (CallToAction "Sign out" LogoutRoute "/logout")
+                      ( PendingProfilePageDetails
+                          "Profile"
+                          "Verify your email address before continuing."
+                          "person@example.test"
+                          (Just "person_01")
+                          (Just "Person Example")
+                          resendTarget
+                          "Resend verification email"
+                          (CallToAction "Sign out" LogoutRoute "/logout")
+                      )
                   )
               )
       pendingProfile
@@ -8754,12 +8778,14 @@ spec = do
             renderPageBody
               ( ProfilePage
                   ( AuthenticatedProfilePage
-                      "Profile"
-                      "Signed in."
-                      "person@example.test"
-                      Nothing
-                      Nothing
-                      (CallToAction "Sign out" LogoutRoute "/logout")
+                      ( AuthenticatedProfilePageDetails
+                          "Profile"
+                          "Signed in."
+                          "person@example.test"
+                          Nothing
+                          Nothing
+                          (CallToAction "Sign out" LogoutRoute "/logout")
+                      )
                   )
               )
       anonymousProfile `shouldNotSatisfy` Text.isInfixOf "data-profile-username"
@@ -9736,9 +9762,10 @@ spec = do
                                 TlsConfig
                                   { certificateSource =
                                       ManualCertificateFiles
-                                        { certificateFile = "/tmp/missing-cert.pem",
-                                          privateKeyFile = "/tmp/missing-key.pem"
-                                        }
+                                        ManualTlsCertificateFiles
+                                          { certificateFile = "/tmp/missing-cert.pem",
+                                            privateKeyFile = "/tmp/missing-key.pem"
+                                          }
                                   },
                             listenerAcme = Nothing
                           }

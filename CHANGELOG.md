@@ -170,6 +170,15 @@
     siblings) now takes the pool instead of a bare `DatabaseConfig`. Database migrations are
     unaffected: they still run each statement through its own `psql` subprocess, a separate concern
     tracked by its own task.
+26. Enabled `-Wpartial-fields` in every project-owned package. **Breaking:** `harch-web`'s
+    `TlsCertificateSource`'s `ManualCertificateFiles`/`SharedCertificateFiles` constructors and
+    `web-api`'s `ProfilePageModel`'s four constructors now each carry a single nested detail record
+    (`ManualTlsCertificateFiles`, `SharedTlsCertificateFiles`, `SignedOutProfilePageDetails`,
+    `PendingProfilePageDetails`, `AuthenticatedProfilePageDetails`, `UnavailableProfilePageDetails`)
+    instead of record fields directly on the sum type, so every field accessor is total instead of
+    partial. `TlsStartupMode`'s `AwaitCertificateFiles` is now a plain positional `Maybe Int` rather
+    than a single-field record, matching its complete absence of external accessor use. No other
+    behavior change.
 
 ## 0.1.1.0
 

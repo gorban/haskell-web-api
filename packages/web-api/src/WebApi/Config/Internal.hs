@@ -17,10 +17,12 @@ module WebApi.Config.Internal
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
+    ManualTlsCertificateFiles (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
     RequestPolicyConfig (..),
     ResponseSecurityHeadersConfig (..),
+    SharedTlsCertificateFiles (..),
     SmtpDeliveryConfig (..),
     StaticAssetsConfig (..),
     StaticAssetRoot (..),
@@ -83,6 +85,7 @@ import HarchWeb
     HasServerConfig (..),
     ListenerConfig (..),
     ListenerScheme (..),
+    ManualTlsCertificateFiles (..),
     ObservabilityConfig (..),
     OtlpExporter (..),
     RequestByteLimit,
@@ -95,6 +98,7 @@ import HarchWeb
     RequestTransportLimits (..),
     ResponseSecurityHeadersConfig (..),
     ServerConfig (..),
+    SharedTlsCertificateFiles (..),
     StaticAssetRoot (..),
     StaticAssetsConfig (..),
     StrictTransportSecurityConfig (..),
@@ -666,7 +670,7 @@ parseListenerTlsConfigP listenerIndex Https = do
 parseTlsCertificateSourceP :: Int -> Text -> ConfigParser TlsCertificateSource
 parseTlsCertificateSourceP listenerIndex tlsSource =
   case tlsSource of
-    "manual" -> ManualCertificateFiles <$> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE" <*> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE"
+    "manual" -> ManualCertificateFiles <$> (ManualTlsCertificateFiles <$> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_CERTIFICATE_FILE" <*> requiredIndexedFilePathValueP "LISTENER" listenerIndex "TLS_PRIVATE_KEY_FILE")
     "shared" -> parseSharedCertificateSourceP listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeoutP listenerIndex)
     "shared-wait" -> parseSharedCertificateSourceP listenerIndex (AwaitCertificateFiles <$> parseSharedTlsWaitTimeoutP listenerIndex)
     "shared-fail-fast" -> parseSharedCertificateSourceP listenerIndex (parseSharedTlsFailFastModeP listenerIndex)
@@ -674,7 +678,7 @@ parseTlsCertificateSourceP listenerIndex tlsSource =
     _ -> throwError (InvalidConfigValue (indexedConfigKey "LISTENER" listenerIndex "TLS_SOURCE") tlsSource)
 
 parseSharedCertificateSourceP :: Int -> ConfigParser TlsStartupMode -> ConfigParser TlsCertificateSource
-parseSharedCertificateSourceP listenerIndex parseStartupMode = SharedCertificateFiles <$> resolveSharedCertificateDirectoryP listenerIndex <*> parseStartupMode
+parseSharedCertificateSourceP listenerIndex parseStartupMode = SharedCertificateFiles <$> (SharedTlsCertificateFiles <$> resolveSharedCertificateDirectoryP listenerIndex <*> parseStartupMode)
 
 parseSharedTlsWaitTimeoutP :: Int -> ConfigParser (Maybe Int)
 parseSharedTlsWaitTimeoutP listenerIndex = do
