@@ -85,9 +85,9 @@ module_declaration_count_for() {
   ' "$1"
 }
 
-module_export_count_for() {
+module_export_entries_for() {
   awk '
-    function count_entries(text, pieces, count, piece_index, entry) {
+    function emit_entries(text,    pieces, count, piece_index, entry) {
       sub(/--.*/, "", text)
       sub(/[[:space:]]*where.*/, "", text)
       count = split(text, pieces, ",")
@@ -95,7 +95,13 @@ module_export_count_for() {
         entry = pieces[piece_index]
         gsub(/^[[:space:]()]*/, "", entry)
         gsub(/[[:space:]()]*$/, "", entry)
-        if (entry != "") exports++
+        if (entry == "") continue
+        if (entry ~ /^module[[:space:]]+/) {
+          sub(/^module[[:space:]]+/, "", entry)
+          print "M:" entry
+        } else {
+          print "E:" entry
+        }
       }
     }
     /^module[[:space:]]+/ { module_started = 1 }
@@ -104,29 +110,70 @@ module_export_count_for() {
         exports_started = 1
         line = $0
         sub(/^[^(]*\(/, "", line)
-        count_entries(line)
+        emit_entries(line)
       }
       if ($0 ~ /where/) exit
       next
     }
     exports_started {
-      count_entries($0)
+      emit_entries($0)
       if ($0 ~ /where/) exit
     }
-    END { print exports + 0 }
   ' "$1"
 }
 
 module_max_arity_for() {
   awk '
+    # Prefer a top-level type signature over the equation head: an equation
+    # LHS pattern (cons chains, character literals, operator sections) is
+    # not reliably splittable by whitespace, and an import list can itself
+    # contain a bare "=" (e.g. the "(.=)" aeson operator), so those must be
+    # skipped rather than misread as an equation. A signature is only
+    # recognised on the line it starts on; a continuation line of a
+    # multi-line signature is not merged in, which can undercount but never
+    # fabricates a violation.
+    /^import[[:space:]]+/ { next }
+    /^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/ {
+      name = $1
+      signature_text = $0
+      sub(/^[A-Za-z_][A-Za-z0-9_\047]*[[:space:]]*::/, "", signature_text)
+      depth = 0
+      arrow_count = 0
+      position = 1
+      signature_length = length(signature_text)
+      while (position <= signature_length) {
+        character = substr(signature_text, position, 1)
+        if (character == "(" || character == "[") {
+          depth++
+          position++
+        } else if (character == ")" || character == "]") {
+          depth--
+          position++
+        } else if (depth == 0 && substr(signature_text, position, 2) == "->") {
+          arrow_count++
+          position += 2
+        } else {
+          position++
+        }
+      }
+      signature_arity[name] = arrow_count
+      next
+    }
     /^[A-Za-z_][A-Za-z0-9_\047]*([[:space:]]+[^=]+)?[[:space:]]*=/ {
       left = $0
       sub(/[[:space:]]*=.*/, "", left)
       if (left ~ /::/) next
+      name = $1
+      if (name in signature_arity) next
       count = split(left, pieces, /[[:space:]]+/) - 1
       if (count > maximum) maximum = count
     }
-    END { print maximum + 0 }
+    END {
+      for (signature_name in signature_arity) {
+        if (signature_arity[signature_name] > maximum) maximum = signature_arity[signature_name]
+      }
+      print maximum + 0
+    }
   ' "$1"
 }
 
@@ -141,6 +188,9 @@ print_module_health_reports() {
   declare -A declaration_count_by_key=()
   declare -A import_count_by_key=()
   declare -A export_count_by_key=()
+  declare -A own_export_count_by_key=()
+  declare -A reexport_modules_by_key=()
+  declare -A export_resolution_state=()
   declare -A arity_by_key=()
   declare -A imports_by_key=()
   declare -A keys_by_module=()
@@ -170,11 +220,63 @@ print_module_health_reports() {
     line_count_by_key["$key"]="$(wc -l < "$path" | tr -d ' ')"
     declaration_count_by_key["$key"]="$(module_declaration_count_for "$path")"
     import_count_by_key["$key"]="$(printf '%s\n' "$imports" | sed '/^$/d' | wc -l | tr -d ' ')"
-    export_count_by_key["$key"]="$(module_export_count_for "$path")"
+
+    own_count=0
+    reexports=()
+    while IFS= read -r entry_line; do
+      case "$entry_line" in
+        M:*) reexports+=("${entry_line#M:}") ;;
+        E:*) own_count=$((own_count + 1)) ;;
+        '') ;;
+      esac
+    done < <(module_export_entries_for "$path")
+    own_export_count_by_key["$key"]="$own_count"
+    reexport_modules_by_key["$key"]="${reexports[*]}"
+
     arity_by_key["$key"]="$(module_max_arity_for "$path")"
     imports_by_key["$key"]="$imports"
     keys_by_module["$module_name"]="${keys_by_module[$module_name]:-} $key"
   done < <(find "${health_paths[@]}" -type f -name '*.hs' -print | sort)
+
+  # A `module X` export entry re-exports X's full surface, not one name; a
+  # flat comma-split over the export list scores it as 1 regardless of how
+  # many names X actually carries (the DJ/DZ finding). Resolve each such
+  # entry against X's own resolved count when X is a local module this scan
+  # also measured; an external package module (not found here) falls back
+  # to counting as a single opaque name, since its true width isn't
+  # knowable from this repository.
+  resolve_export_count() {
+    local resolve_key="$1"
+    case "${export_resolution_state[$resolve_key]:-}" in
+      done) return ;;
+      visiting)
+        export_count_by_key["$resolve_key"]="${own_export_count_by_key[$resolve_key]:-0}"
+        return
+        ;;
+    esac
+    export_resolution_state["$resolve_key"]='visiting'
+    local total="${own_export_count_by_key[$resolve_key]:-0}"
+    local reexported_module target_key target_count found_target
+    for reexported_module in ${reexport_modules_by_key[$resolve_key]:-}; do
+      target_count=0
+      found_target=false
+      for target_key in ${keys_by_module[$reexported_module]:-}; do
+        found_target=true
+        resolve_export_count "$target_key"
+        target_count=$((target_count + ${export_count_by_key[$target_key]:-0}))
+      done
+      if [ "$found_target" = false ]; then
+        target_count=1
+      fi
+      total=$((total + target_count))
+    done
+    export_count_by_key["$resolve_key"]="$total"
+    export_resolution_state["$resolve_key"]='done'
+  }
+
+  for key in "${health_keys[@]}"; do
+    resolve_export_count "$key"
+  done
 
   for key in "${health_keys[@]}"; do
     unset seen_targets

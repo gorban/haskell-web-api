@@ -791,6 +791,73 @@ internal reorganization, not a public API change, and needed no `CHANGELOG.md` e
 exports. Full CI-equivalent pipeline passed with zero test changes, since the moved code's behavior
 and existing coverage carried over unchanged.
 
+Correction (DJ, 2026-08-21): the "30 exports … under the 40-export threshold" framing above conflated
+own-name count with consumer-facing surface. `tools/haskell-quality-report.sh`'s counter, before DJ's
+fix, scored a `module X` re-export entry as 1 no matter how many names `X` carries — so
+`HarchWeb.Security`'s real surface was 48 both before and after this split (30 − 1 + 19), and is 60
+now that DE (2026-08-20) added a second re-export. The split's real justification was never "gets
+under 40" — it was the call-graph-verified genuine decoupling above, which stands unchanged. See the
+DJ decision record below for the general rule this falls under: a facade wholesale-re-exporting an
+already-split, self-contained sibling module is exempt from the export-count threshold regardless of
+the resulting raw number, per this document's own "non-facade public API" qualifier — narrowing such
+a facade further would mean either re-merging the split (undoing real decoupling) or splitting the
+re-exported cluster itself, neither of which this correction is asking for.
+
+### Follow-up decision — DJ: fix the quality-report tool's export/arity counters instead of re-splitting facades that were never actually violations (2026-08-21)
+
+**Decision: fix `tools/haskell-quality-report.sh`'s two counting bugs, then correct the three
+decision-record numbers that depended on them, rather than re-splitting `HarchWeb.Security`,
+`HarchWeb.Markup`, or `WebApi.Config` further.** DJ's finding was concrete: `module_export_count_for`
+split each export-list line on commas and counted every resulting piece as one name, so a
+`module HarchWeb.Security.RequestLimits` re-export line — which actually carries 19 names — scored
+exactly the same as a single ordinary export. Every facade in this codebase (`HarchWeb.Security`,
+`HarchWeb.Markup`, `WebApi.Config`, and `TestCore.Browser`) is built from exactly this pattern
+(`module X, module Y, …` plus a handful of names of its own), so this bug understated every
+facade's true consumer-facing surface, and three separate decision records (AL, Y, and this
+document's own AL entry above) had cited the undercounted number as proof a module-health threshold
+was satisfied.
+
+Fixed the counter in two parts: `module_export_entries_for` now classifies each export-list entry as
+either an ordinary name (`E:`) or a `module X` re-export (`M:`), and `print_module_health_reports`
+resolves each `M:X` entry against `X`'s own resolved count (recursively, with a cycle guard, since
+the same local-import-cycle machinery already in this script proves cycles are possible in principle)
+when `X` is a module this scan also measured, falling back to counting it as a single opaque name
+only when `X` isn't a local module the scan can inspect (an external package). Re-running the fixed
+script against real code gives `HarchWeb.Security` = 60, `HarchWeb.Markup` = 65, `WebApi.Config` = 42
+— all genuinely over 40, not under it as previously claimed.
+
+None of the three needed re-splitting. AGENTS.md's module-health trigger names a **non-facade**
+public API exceeding 40 exports; all three modules here are the facade case it already exempts — each
+is a thin `module X, module Y, …` shell with zero or near-zero names of its own, and the modules
+actually carrying the bulk of the surface (`HarchWeb.Security.RequestLimits`/`.ForwardedTrust`,
+`HarchWeb.Markup.Attributes`/`.Elements`/`.Regions`/`.Syntax`, `WebApi.Config.Defaults`/`.Loading`/
+`.Types`) are each individually well under the threshold on their own. `HarchWeb.Markup.Implementation`
+(65 exports) and `WebApi.Config.Internal` (42 exports) are the two modules DZ separately worried might
+themselves be non-facade violations, but both are Cabal `other-modules` — not part of the package's
+public API at all, only reachable through the facade that re-exports them — so the non-facade rule
+does not apply to them either. Re-splitting any of these three facades further would mean either
+undoing genuine, call-graph-verified decoupling (AL, Y) to shrink the re-export count, or splitting an
+already-cohesive sibling module apart purely to move its name count somewhere else — exactly the
+"relocation, not a genuine shrink" pattern this document's AK and AL entries already warn against
+chasing. AL's and Y's closure notes (and this document's own AL entry above) were corrected in place
+to state the true numbers and the correct (facade-exemption) justification, not reopened.
+
+CS's arity-metric finding was fixed alongside the export counter, in the same script.
+`module_max_arity_for` matched any line shaped like `identifier … =` and counted whitespace-separated
+tokens on the left of that `=`, excluding only lines containing `::`. Two failure modes followed
+directly: an `import` line can itself contain a bare `=` (`(.=)`, aeson's `Value` combinator), so
+`import Data.Aeson (Value (Null), …, (.=))` was read as a 10-argument equation; and a cons-pattern
+clause written with spaced `:` (`stripSpecMode ('E' : '2' : … : rest) = …`) split into one token per
+character and colon, reporting arity 17 for a genuinely one-argument function. Fixed by skipping
+`import` lines outright and, wherever a top-level `::` signature is present, deriving arity by
+counting depth-0 `->` occurrences in the signature instead of tokenizing the equation head at all —
+the equation-head heuristic now runs only for the rarer case of a top-level binding with no preceding
+signature. Re-running against the two files DJ's report cited confirms the fix: `TestCore.Browser.Protocol`
+now reports arity 3 (was 10) and `TestCore.SpecPreprocessor` reports arity 3 (was 17), both matching
+their real signatures. A multi-line signature's continuation lines are not merged in, which can still
+undercount arity but — unlike the bug just fixed — can never fabricate a violation, which is the
+failure mode that actually mattered here.
+
 ### Follow-up decision — BP: total action-target and API-family matching (2026-08-18)
 
 **Decision: extend the existing `ActionCodec` and route-family interpreter (option 1), rather
