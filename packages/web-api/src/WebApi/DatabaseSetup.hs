@@ -71,11 +71,21 @@ parseDatabaseSetupConfig environmentEntries =
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_NAME"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_USER"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_PASSWORD"
+    -- Not sourced from the environment: this one-shot batch command has no
+    -- concurrent-request thread to starve, and its psql subprocess
+    -- invocations don't currently read this field (see AY's note on why
+    -- threading a timeout into the psql environment as well was judged out
+    -- of scope). It exists here only because 'DatabaseConfig' is a single
+    -- shared record; the value is otherwise inert on this path.
+    <*> pure migrationDatabaseConnectTimeoutSeconds
   where
     requiredConfigValue key =
       case lookup key environmentEntries of
         Just value -> Right value
         Nothing -> Left (MissingConfigValue key)
+
+migrationDatabaseConnectTimeoutSeconds :: Int
+migrationDatabaseConnectTimeoutSeconds = 10
 
 parseDatabaseSetupCommand :: [String] -> Either DatabaseSetupError DatabaseSetupCommand
 parseDatabaseSetupCommand arguments =

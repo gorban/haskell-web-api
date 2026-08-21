@@ -555,7 +555,8 @@ databaseConfig =
       databasePort = 5432,
       databaseName = "web_api_test",
       databaseUser = "web_api_runtime",
-      databasePassword = "password"
+      databasePassword = "password",
+      databaseConnectTimeoutSeconds = 10
     }
 
 shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation

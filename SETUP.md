@@ -544,6 +544,7 @@ DATABASE_PORT=5432
 DATABASE_NAME=web_api_dev
 DATABASE_USER=web_api_runtime
 DATABASE_PASSWORD=web_api
+DATABASE_CONNECT_TIMEOUT_SECONDS=10
 EOF
 
 cat > ./podman.env.local <<'EOF'

@@ -260,7 +260,8 @@ runtimeConnectionString databaseConfig =
         "port=" <> Text.pack (show (databasePort databaseConfig)),
         "dbname=" <> libpqConnectionValue (databaseName databaseConfig),
         "user=" <> libpqConnectionValue (databaseUser databaseConfig),
-        "password=" <> libpqConnectionValue (databasePassword databaseConfig)
+        "password=" <> libpqConnectionValue (databasePassword databaseConfig),
+        "connect_timeout=" <> Text.pack (show (databaseConnectTimeoutSeconds databaseConfig))
       ]
 
 -- | Quote a value for libpq's connection-string syntax. Backslashes must be

@@ -447,7 +447,8 @@ postgresTestConfig =
       databasePort = 6543,
       databaseName = "web_api_prod",
       databaseUser = "web_api_app",
-      databasePassword = "super-secret"
+      databasePassword = "super-secret",
+      databaseConnectTimeoutSeconds = 10
     }
 
 -- | An independently written decoder for libpq's single-quoted conninfo
@@ -664,7 +665,8 @@ setupMigrationPostgresTestConfig =
       databasePort = 5432,
       databaseName = "web_api_dev",
       databaseUser = "web_api_owner",
-      databasePassword = "owner-secret"
+      databasePassword = "owner-secret",
+      databaseConnectTimeoutSeconds = 10
     }
 
 runtimeSetupPostgresTestConfig :: DatabaseConfig
@@ -674,7 +676,8 @@ runtimeSetupPostgresTestConfig =
       databasePort = 5432,
       databaseName = "web_api_dev",
       databaseUser = "web_api_runtime",
-      databasePassword = "runtime-secret"
+      databasePassword = "runtime-secret",
+      databaseConnectTimeoutSeconds = 10
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult
@@ -2604,6 +2607,7 @@ spec = do
                      ("DATABASE_NAME", "web_api_dev"),
                      ("DATABASE_USER", "web_api_runtime"),
                      ("DATABASE_PASSWORD", "web_api"),
+                     ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
                      ("SMTP_HOST", "127.0.0.1"),
                      ("SMTP_PORT", "5025"),
                      ("SMTP_HELO_NAME", "localhost"),
@@ -2629,7 +2633,7 @@ spec = do
               }
           dynamicEnvironmentConfig = defaultAppEnvironmentConfig {smtpDeliveryConfig = dynamicSmtpConfig}
       show dynamicEnvironmentConfig
-        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
+        `shouldBe` ( "AppEnvironmentConfig {appMode = Development, databaseConfig = DatabaseConfig {databaseHost = \"127.0.0.1\", databasePort = 5432, databaseName = \"web_api_dev\", databaseUser = \"web_api_runtime\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}, smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = "
                        <> show dynamicSmtpPort
                        <> ", smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
                    )
@@ -2724,7 +2728,8 @@ spec = do
                 databasePort = 6543,
                 databaseName = "web_api_prod",
                 databaseUser = "web_api_app",
-                databasePassword = "super-secret"
+                databasePassword = "super-secret",
+                databaseConnectTimeoutSeconds = 10
               }
           productionEnvironmentConfig =
             defaultAppEnvironmentConfig
@@ -2757,9 +2762,9 @@ spec = do
       show Production `shouldBe` "Production"
       show [Development, Test, Production] `shouldBe` "[Development,Test,Production]"
       show productionDatabaseConfig
-        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>}"
+        `shouldBe` "DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}"
       show [productionDatabaseConfig]
-        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>}]"
+        `shouldBe` "[DatabaseConfig {databaseHost = \"db.internal\", databasePort = 6543, databaseName = \"web_api_prod\", databaseUser = \"web_api_app\", databasePassword = <redacted>, databaseConnectTimeoutSeconds = 10}]"
       show productionDatabaseConfig `shouldNotContain` "super-secret"
       show productionEnvironmentConfig
         `shouldContain` "smtpDeliveryConfig = SmtpDeliveryConfig {smtpDeliveryHost = \"127.0.0.1\", smtpDeliveryPort = 5025, smtpDeliveryHeloName = \"localhost\", smtpDeliverySender = \"noreply@localhost\", smtpDeliveryUsername = \"test@localhost\", smtpDeliveryPassword = <redacted>}, publicBaseUrl = \"http://127.0.0.1:5001\", totpEncryptionKey = <redacted>}"
@@ -5480,7 +5485,8 @@ spec = do
                     databasePort = 6432,
                     databaseName = "web_api_local",
                     databaseUser = "local_user",
-                    databasePassword = "local_password"
+                    databasePassword = "local_password",
+                    databaseConnectTimeoutSeconds = 10
                   }
             }
 
@@ -5508,7 +5514,8 @@ spec = do
                     databasePort = 7432,
                     databaseName = "web_api_local",
                     databaseUser = "local_user",
-                    databasePassword = "runtime_password"
+                    databasePassword = "runtime_password",
+                    databaseConnectTimeoutSeconds = 10
                   }
             }
 
@@ -5563,7 +5570,8 @@ spec = do
                         databasePort = 7432,
                         databaseName = "shared_db",
                         databaseUser = "shared_user",
-                        databasePassword = "local_password"
+                        databasePassword = "local_password",
+                        databaseConnectTimeoutSeconds = 10
                       }
                 }
 
@@ -5588,7 +5596,8 @@ spec = do
                               databasePort = 8432,
                               databaseName = "shared_db",
                               databaseUser = "shared_user",
-                              databasePassword = "runtime_password"
+                              databasePassword = "runtime_password",
+                              databaseConnectTimeoutSeconds = 10
                             }
                       }
 
@@ -5644,7 +5653,8 @@ spec = do
                           databasePort = 6432,
                           databaseName = "shared_db",
                           databaseUser = "shared_user",
-                          databasePassword = "local_password"
+                          databasePassword = "local_password",
+                          databaseConnectTimeoutSeconds = 10
                         }
                   }
 
@@ -5693,7 +5703,8 @@ spec = do
                                 databasePort = 6432,
                                 databaseName = "web_api_dev",
                                 databaseUser = "web_api_runtime",
-                                databasePassword = "local_password"
+                                databasePassword = "local_password",
+                                databaseConnectTimeoutSeconds = 10
                               }
                         },
                     startupAppConfig =
@@ -5735,7 +5746,8 @@ spec = do
                                       databasePort = 6432,
                                       databaseName = "web_api_dev",
                                       databaseUser = "web_api_runtime",
-                                      databasePassword = "local_password"
+                                      databasePassword = "local_password",
+                                      databaseConnectTimeoutSeconds = 10
                                     }
                               },
                           startupAppConfig =
@@ -5938,7 +5950,8 @@ spec = do
                           databasePort = 5432,
                           databaseName = "web_api_dev",
                           databaseUser = "web_api_runtime",
-                          databasePassword = "web_api"
+                          databasePassword = "web_api",
+                          databaseConnectTimeoutSeconds = 10
                         }
                   },
               setupAppConfig = defaultAppConfig,
@@ -5949,7 +5962,8 @@ spec = do
                       databasePort = 5432,
                       databaseName = "web_api_dev",
                       databaseUser = "web_api_owner",
-                      databasePassword = "owner-secret"
+                      databasePassword = "owner-secret",
+                      databaseConnectTimeoutSeconds = 10
                     },
               setupAutostartConfig = defaultSetupAutostartConfig
             }
@@ -6064,7 +6078,8 @@ spec = do
                                   databasePort = 5432,
                                   databaseName = "web_api_dev",
                                   databaseUser = "web_api_runtime",
-                                  databasePassword = "web_api"
+                                  databasePassword = "web_api",
+                                  databaseConnectTimeoutSeconds = 10
                                 }
                           },
                       setupAppConfig = defaultAppConfig,
@@ -6075,7 +6090,8 @@ spec = do
                               databasePort = 5432,
                               databaseName = "web_api_dev",
                               databaseUser = "web_api_owner",
-                              databasePassword = "owner-secret"
+                              databasePassword = "owner-secret",
+                              databaseConnectTimeoutSeconds = 10
                             },
                       setupAutostartConfig = defaultSetupAutostartConfig
                     }
@@ -6152,7 +6168,8 @@ spec = do
                         databasePort = 5432,
                         databaseName = "web_api_dev",
                         databaseUser = "web_api_owner",
-                        databasePassword = "owner-secret"
+                        databasePassword = "owner-secret",
+                        databaseConnectTimeoutSeconds = 10
                       },
                 setupAutostartConfig =
                   SetupAutostartConfig
@@ -6171,7 +6188,8 @@ spec = do
               databasePort = 5432,
               databaseName = "web_api_dev",
               databaseUser = "web_api_owner",
-              databasePassword = "owner-secret"
+              databasePassword = "owner-secret",
+              databaseConnectTimeoutSeconds = 10
             }
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig
@@ -6228,7 +6246,8 @@ spec = do
                             databasePort = 6543,
                             databaseName = "web_api_build",
                             databaseUser = "web_api_runtime",
-                            databasePassword = "secret"
+                            databasePassword = "secret",
+                            databaseConnectTimeoutSeconds = 10
                           }
                     }
               }
@@ -6253,7 +6272,8 @@ spec = do
                             databasePort = 6543,
                             databaseName = "web_api_build",
                             databaseUser = "web_api_runtime",
-                            databasePassword = "secret"
+                            databasePassword = "secret",
+                            databaseConnectTimeoutSeconds = 10
                           }
                     },
                 setupAutostartConfig =
@@ -6633,7 +6653,8 @@ spec = do
               databasePort = 5432,
               databaseName = "web_api_dev",
               databaseUser = "web_api_owner",
-              databasePassword = "owner-secret"
+              databasePassword = "owner-secret",
+              databaseConnectTimeoutSeconds = 10
             }
 
     it "fails missing or invalid migration environment values explicitly" $ do
@@ -6667,7 +6688,8 @@ spec = do
                         databasePort = 5432,
                         databaseName = "web_api_dev",
                         databaseUser = "web_api_owner",
-                        databasePassword = "owner-secret"
+                        databasePassword = "owner-secret",
+                        databaseConnectTimeoutSeconds = 10
                       }
 
   describe "runDatabaseSetupCommand"

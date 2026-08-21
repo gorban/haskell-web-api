@@ -131,7 +131,8 @@ data DatabaseConfig = DatabaseConfig
     databasePort :: Int,
     databaseName :: Text,
     databaseUser :: Text,
-    databasePassword :: Text
+    databasePassword :: Text,
+    databaseConnectTimeoutSeconds :: Int
   }
   deriving (Eq)
 
@@ -148,7 +149,9 @@ instance Show DatabaseConfig where
       <> show (databaseName config)
       <> ", databaseUser = "
       <> show (databaseUser config)
-      <> ", databasePassword = <redacted>}"
+      <> ", databasePassword = <redacted>, databaseConnectTimeoutSeconds = "
+      <> show (databaseConnectTimeoutSeconds config)
+      <> "}"
 
 data AppEnvironmentConfig = AppEnvironmentConfig
   { appMode :: AppMode,
@@ -257,6 +260,7 @@ committedEnvDefaults =
     ("DATABASE_NAME", "web_api_dev"),
     ("DATABASE_USER", "web_api_runtime"),
     ("DATABASE_PASSWORD", "web_api"),
+    ("DATABASE_CONNECT_TIMEOUT_SECONDS", "10"),
     ("SMTP_HOST", "127.0.0.1"),
     ("SMTP_PORT", "5025"),
     ("SMTP_HELO_NAME", "localhost"),
@@ -287,6 +291,14 @@ defaultCertbotExecutable = "certbot"
 defaultCertificateDirectoryRoot :: FilePath
 defaultCertificateDirectoryRoot = ".tls"
 
+-- | libpq's own @connect_timeout@ default is to wait indefinitely, which
+-- lets a wedged database server pin a request thread forever and, with a
+-- concurrency limit configured, eventually starve every other request
+-- behind it. Ten seconds bounds that wait without being so short that a
+-- momentarily slow server causes spurious failures.
+defaultDatabaseConnectTimeoutSeconds :: Int
+defaultDatabaseConnectTimeoutSeconds = 10
+
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
   AppEnvironmentConfig
@@ -297,7 +309,8 @@ defaultAppEnvironmentConfig =
             databasePort = 5432,
             databaseName = "web_api_dev",
             databaseUser = "web_api_runtime",
-            databasePassword = "web_api"
+            databasePassword = "web_api",
+            databaseConnectTimeoutSeconds = defaultDatabaseConnectTimeoutSeconds
           },
       smtpDeliveryConfig =
         SmtpDeliveryConfig
@@ -412,6 +425,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedDatabaseName <- requiredConfigValue "DATABASE_NAME"
   parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
   parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
+  parsedDatabaseConnectTimeoutSeconds <- parseConnectTimeout =<< requiredConfigValue "DATABASE_CONNECT_TIMEOUT_SECONDS"
   parsedSmtpHost <- requiredConfigValue "SMTP_HOST"
   parsedSmtpPort <- parseSmtpPort =<< requiredConfigValue "SMTP_PORT"
   parsedSmtpHeloName <- requiredConfigValue "SMTP_HELO_NAME"
@@ -430,7 +444,8 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
               databasePort = parsedDatabasePort,
               databaseName = parsedDatabaseName,
               databaseUser = parsedDatabaseUser,
-              databasePassword = parsedDatabasePassword
+              databasePassword = parsedDatabasePassword,
+              databaseConnectTimeoutSeconds = parsedDatabaseConnectTimeoutSeconds
             },
         smtpDeliveryConfig =
           SmtpDeliveryConfig
@@ -472,6 +487,21 @@ parseMode value =
 
 parsePort :: Text -> Either ConfigParseError Int
 parsePort = parsePositiveInt "DATABASE_PORT"
+
+{-# ANN parseConnectTimeout ("HLint: ignore Redundant $!" :: String) #-}
+
+-- | Non-negative, not positive: libpq treats a @connect_timeout@ below 2
+-- seconds (including 0) as "wait indefinitely", which is a legitimate,
+-- explicit opt-out of the bound this field otherwise provides.
+--
+-- The `$!` forces the key-name literal at its own call site: GHC's CSE
+-- otherwise shares that literal's evaluation with its other textual
+-- occurrences in this module, and HPC then leaves this specific source
+-- span permanently unticked despite the declaration itself running on
+-- every test that parses 'DatabaseConfig' (see the coverage-gate memory's
+-- CSE-sharing technique).
+parseConnectTimeout :: Text -> Either ConfigParseError Int
+parseConnectTimeout = parseNonNegativeInt $! "DATABASE_CONNECT_TIMEOUT_SECONDS"
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do

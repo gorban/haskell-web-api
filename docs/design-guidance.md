@@ -1113,6 +1113,54 @@ internally, leaving the call sites themselves untouched. A handful of call sites
 the existing suite's extensive `toWaiApplication` coverage and AF's own dedicated gate tests already
 exercise every changed branch, confirmed by a genuine 100% coverage re-run rather than assumed.
 
+### Follow-up decision — AY: add `connect_timeout` now, defer `sslmode=require` to a deployment decision this codebase can't make alone (2026-08-21)
+
+**Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do
+not default `sslmode` to `require`.** AY's own text proposed both changes as one step ("Add
+`sslmode=require connect_timeout=…` now"). Investigating before implementing split them: this
+project's own local/CI PostgreSQL — the stock `postgres:17` image — has `ssl=off`
+(`SHOW ssl;` confirmed it directly), so `sslmode=require` would refuse every connection this
+project's own test suite and local dev setup make. That is this document's "when implementation
+hits a missing framework capability" case 2 turned around — the *workaround* asked for by the task
+(hardcoding `require`) is the one that would silently substitute a materially different property
+(the app refuses to start against any non-TLS Postgres, including every environment this repository
+ships with today) for what the task assumed (a security hardening that just works). Provisioning
+TLS on a Postgres server is infrastructure this codebase does not control; enforcing it is a
+deployment decision, not a Haskell code change, so it was left unmade rather than picked
+unilaterally — matching AW's precedent of naming a real blocker instead of shipping a workaround
+with unstated consequences.
+
+`connect_timeout` has no such dependency (a client-side setting, identical behavior regardless of
+server TLS) and directly closes the concurrency-starvation half of AY's finding ("a wedged server
+pins a request thread indefinitely, and the AF concurrency gate then 503s everyone"), so it shipped
+now: a new `databaseConnectTimeoutSeconds :: Int` field on `DatabaseConfig`, sourced from
+`DATABASE_CONNECT_TIMEOUT_SECONDS` (default `10`, following the existing committed-default pattern
+every other `DATABASE_*` field uses) and applied to every libpq conninfo string
+`runtimeConnectionString` builds. The migration-side `WEB_API_MIGRATION_DATABASE_*` parser needed
+the same field populated (one shared `DatabaseConfig` record), but supplied it as a hardcoded
+constant rather than a second required environment variable: that parser's psql-subprocess path
+doesn't read the field at all, and a one-shot batch migration command has no concurrent-request
+thread for a wedged connection to starve. Threading the timeout into the psql subprocess environment
+too (`PGCONNECT_TIMEOUT`) was considered and rejected — `passwordEnvironment` is shared by every
+psql invocation, and widening it would have broken several `Integration/WebApiSpec.hs` tests that
+assert its exact environment against real subprocess runs, for a code path with no starvation risk
+to close in the first place.
+
+A genuine coverage-gate CSE-literal gap surfaced while closing this out:
+`parseConnectTimeout = parseNonNegativeInt "DATABASE_CONNECT_TIMEOUT_SECONDS"` left the string
+literal permanently unticked despite the declaration itself running on every config-parsing test,
+the same documented pattern this memory/document has already closed twice before (AZ, DE) — `$!`
+at the literal's call site (`parseNonNegativeInt $! "DATABASE_CONNECT_TIMEOUT_SECONDS"`) fixed it
+immediately, confirmed by re-running the full coverage gate rather than assumed.
+
+Follow-up: AX already identified that genuine migration atomicity needs a persistent-connection
+Postgres runtime replacing the current per-statement `psql` subprocess model; AY's own deferred
+connection pool is the natural companion piece to design alongside it, per AX's note. `sslmode`
+becomes safely defaultable to `require` only once that follow-up (or a separate deployment change)
+actually provisions TLS on the Postgres server(s) this project deploys against — until then,
+defaulting it on would be optimizing for a security property this project cannot yet exercise in
+its own test suite.
+
 ## Current capability and remaining design direction
 
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means

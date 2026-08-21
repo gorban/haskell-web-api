@@ -87,6 +87,15 @@
     from `Application route action context -> Wai.Application` to `... -> IO Wai.Application`, since
     the gate's admission counter must be allocated once per running server and shared across every
     request, not rebuilt per request; call it once at server startup rather than per request.
+16. **Breaking:** `DatabaseConfig` gained `databaseConnectTimeoutSeconds`, applied as
+    `connect_timeout` on every libpq connection the runtime query path opens. Previously a wedged
+    or unreachable database server left a connection attempt waiting indefinitely, pinning a
+    request thread and, with a concurrency limit configured, eventually starving every request
+    behind it. Configured via the new `DATABASE_CONNECT_TIMEOUT_SECONDS` environment variable
+    (default `10`); `sslmode` is unchanged and remains `prefer` (libpq's own default), since
+    requiring TLS unconditionally would refuse every connection to a Postgres server that doesn't
+    have it configured, including this project's own default local/CI setup — see the AY note in
+    `docs/design-guidance.md` for why that half of the finding is deferred rather than defaulted on.
 
 ## 0.1.1.0
 
