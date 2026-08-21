@@ -9,7 +9,6 @@ where
 
 import Data.Char (isAlphaNum, isLower, isSpace, toLower)
 import Data.List (intercalate)
-import Data.Maybe (fromMaybe)
 import Language.Haskell.TH (Loc, loc_filename, loc_start)
 
 data Position = Position
@@ -82,7 +81,9 @@ parseNode initialState = do
   (nodePosition, tagName, afterTagName) <- parseTagName afterOpen
   (attributes, selfClosing, afterAttributes) <- parseAttributes afterTagName
   case tagKind tagName of
-    NativeTag tagConstructor isVoid ->
+    NativeTag Nothing _ ->
+      parseFailure initialState ("unsupported native element <" <> tagName <> ">")
+    NativeTag (Just tagConstructor) isVoid ->
       case (isVoid, selfClosing) of
         (True, False) -> parseFailure initialState ("void element <" <> tagName <> "> must be self-closing")
         (True, True) -> Right (NativeNode nodePosition tagConstructor True attributes [], afterAttributes)
@@ -107,19 +108,20 @@ parseRegionNode initialState attributes selfClosing nextState
         _ -> parseFailure initialState "<Region> requires exactly one value={...} attribute"
 
 data TagKind
-  = NativeTag String Bool
+  = NativeTag (Maybe String) Bool
   | ComponentTag String
 
 tagKind :: String -> TagKind
 tagKind tagName =
-  let tagConstructor = nativeTagConstructor tagName
-   in case tagName of
-        firstCharacter : _
-          | isLower firstCharacter -> NativeTag tagConstructor (tagConstructor `elem` voidTagConstructors)
-        _ -> ComponentTag (componentFunctionName tagName)
+  case tagName of
+    firstCharacter : _
+      | isLower firstCharacter ->
+          let maybeTagConstructor = nativeTagConstructor tagName
+           in NativeTag maybeTagConstructor (maybe False (`elem` voidTagConstructors) maybeTagConstructor)
+    _ -> ComponentTag (componentFunctionName tagName)
 
-nativeTagConstructor :: String -> String
-nativeTagConstructor tagName = fromMaybe "" (lookup tagName nativeTagConstructors)
+nativeTagConstructor :: String -> Maybe String
+nativeTagConstructor tagName = lookup tagName nativeTagConstructors
 
 nativeTagConstructors :: [(String, String)]
 nativeTagConstructors =

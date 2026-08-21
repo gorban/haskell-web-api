@@ -41,7 +41,6 @@ module HarchWeb.Markup.Implementation
     inputTag,
     inputType,
     inputMode,
-    harch,
     labelFor,
     labelTag,
     literalElementId,
@@ -102,7 +101,6 @@ import HarchWeb.Markup.Internal
     voidElement,
   )
 import HarchWeb.Markup.Internal qualified as Internal
-import HarchWeb.Markup.Quasi (harch)
 import HarchWeb.StaticAssets (CssClass, cssClassText)
 
 -- | Values that may be embedded between markup tags. Text is escaped by the

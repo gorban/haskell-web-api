@@ -3,4 +3,4 @@ module HarchWeb.Markup.Syntax
   )
 where
 
-import HarchWeb.Markup.Implementation (harch)
+import HarchWeb.Markup.Quasi (harch)

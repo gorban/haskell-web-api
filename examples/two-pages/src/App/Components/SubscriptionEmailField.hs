@@ -9,21 +9,7 @@ where
 
 import HarchWeb
   ( Html,
-    autocomplete,
-    element,
-    elementId,
-    fragment,
     harch,
-    inputTag,
-    inputType,
-    labelFor,
-    labelTag,
-    literalElementId,
-    name,
-    required,
-    text,
-    toHtml,
-    voidElement,
   )
 
 data SubscriptionEmailFieldProps = SubscriptionEmailFieldProps

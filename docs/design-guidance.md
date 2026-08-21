@@ -1268,6 +1268,54 @@ own direct test forcing it via a deliberately malformed `OverloadedStrings` lite
 matching the `requiredXOrDie` extract-and-directly-test pattern rather than trying to make production
 code take that branch.
 
+### Follow-up decision — BS: quoted `Name`s for framework identifiers, and breaking the module cycle that stood in the way (2026-08-21)
+
+**Decision: resolve every framework identifier the quasiquoter splices through a quoted `Name`
+('`Impl.foo`) against `HarchWeb.Markup.Implementation`'s own compile-time scope, not `mkName`
+resolved dynamically at the splice site — and restructure the module graph first, since the direct
+fix was blocked by a genuine import cycle.** This is the extend-vs-new-abstraction call applied to
+the module's *own* documented fix ("Lowering.hs:367 (hygienic, correct) … Lowering.hs:358
+(unhygienic)"): `textLiteral`'s `'Text.pack` was already the correct pattern sitting one function
+away; the fix is extending that same quoted-`Name` approach to every other framework identifier the
+module splices, not inventing a new resolution mechanism.
+
+Implementing it hit a missing-framework-capability gap the task's own text did not anticipate:
+`HarchWeb.Markup.Implementation qualified as Impl` cannot be imported from `Lowering.hs` as written,
+because `Implementation` already imports `HarchWeb.Markup.Quasi (harch)` (re-exporting it purely so
+`HarchWeb.Markup.Syntax` — the module `HarchWeb.Markup`'s facade actually re-exports the quasiquoter
+from — can get it from one place), and `Quasi` imports `Lowering`. Adding `Lowering → Implementation`
+on top of that closes a genuine cycle:
+`Implementation → Quasi → Lowering → Implementation`. Per this document's missing-capability
+protocol, the options were: add the primitive despite the obstacle (impossible — GHC will not
+compile a module import cycle, TH or not), work around it in the application layer (not applicable
+— this is a framework-internal structural problem, not something callers can route around), or flag
+and stop. A fourth option existed here that the protocol's three-way fork doesn't name explicitly
+but is really a variant of "add the primitive": restructure the *dependency*, not the fix. Since
+`Implementation` doesn't use `harch` itself — it only re-exports it for `Syntax`'s convenience —
+retargeting `Syntax`'s import to `HarchWeb.Markup.Quasi (harch)` directly and dropping the
+re-export from `Implementation` removes the only edge causing the cycle, with no behavior change to
+any public facade (`HarchWeb.Markup`'s own exports are unaffected — `Syntax` still exports `harch`,
+just sourced one hop closer to its actual definition).
+
+Two smaller decisions followed the same shape as the module's own analysis. First, component names
+(`lowerComponentNode`, `reifyComponentProps`'s `lookupValueName`) are deliberately **not** resolved
+through quoted `Name`s — they are the framework's intended open extension point, meant to resolve
+against whatever the splice site has in scope, and treating them as unhygienic would misread the
+bug: the finding is specifically about identifiers meant to be *fixed and framework-owned* being
+resolved as if they were as open as a component reference. Second, `nativeTagConstructor`'s
+`fromMaybe ""` sentinel (also named in the task's own "after" sketch) was closed by making
+`Parser.hs`'s `TagKind`'s native branch carry a `Maybe String` rather than by giving `Parser.hs` a
+new dependency on TH `Name`s: `Parser.hs` stays a plain, TH-free recognizer of a closed tag
+vocabulary, and *all* `String → Name` resolution stays centralized in `Lowering.hs`'s own tables —
+extending the existing division of labor between the two modules rather than blurring it.
+
+The hygiene fix surfaced concrete, previously-load-bearing evidence rather than a byproduct: with
+`mkName` gone, six `examples/two-pages` modules that had explicitly imported framework identifiers
+(`text`, `element`, `fragment`, `dataAttribute`, …) unqualified — for no reason the application code
+itself needed — lost every one of those imports to `-Wunused-imports`, confirming those imports
+existed *only* to satisfy the old unhygienic splice resolution, exactly the coupling this fix was
+meant to remove.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

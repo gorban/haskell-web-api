@@ -118,6 +118,15 @@
     inside `[harch| ... |]` quasiquoted markup) keeps compiling unchanged; a caller building either
     value from a runtime `Text` value must go through the explicit `mkDataAttributeSuffix`/
     `mkSafeUrl` smart constructor and handle rejection.
+19. The `[harch| ... |]` quasiquoter now resolves every framework identifier it splices (`text`,
+    `element`, `dataAttribute`, native tag constructors, attribute constructors, …) through a
+    compile-time-quoted name against the framework's own implementation module, instead of an
+    unqualified name resolved dynamically at the splice site. Previously, a component with a
+    parameter or local binding named `value`, `name`, `method`, or `text` (among others) could
+    silently rebind the framework's own constructor at every markup literal that name was visible
+    to — usually an inscrutable type error, and in the worst case an escaping bypass with no
+    diagnostic. An unsupported native element name (e.g. a typo'd tag) is now a parse-time failure
+    with its own source position, rather than a deferred lowering-time failure.
 
 ## 0.1.1.0
 

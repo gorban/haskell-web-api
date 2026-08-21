@@ -9,18 +9,7 @@ import App.Routes qualified as Routes
 import HarchWeb
   ( Page (..),
     RouteRequest (..),
-    dataAttribute,
-    dataFlag,
-    element,
-    elementId,
-    fragment,
     harch,
-    headingOneTag,
-    literalElementId,
-    paragraphTag,
-    role,
-    sectionTag,
-    text,
   )
 import HarchWeb.Site (RouteDefinition)
 import HarchWeb.Site qualified as Site

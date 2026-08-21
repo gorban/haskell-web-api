@@ -9,6 +9,7 @@ import Data.Functor ((<&>))
 import Data.List (find, intercalate)
 import Data.String (fromString)
 import Data.Text qualified as Text
+import HarchWeb.Markup.Implementation qualified as Impl
 import HarchWeb.Markup.Quasi.Parser
   ( MarkupAttribute (..),
     MarkupNode (..),
@@ -31,7 +32,7 @@ import Language.Haskell.TH
   )
 
 lowerNodes :: [MarkupNode] -> Q Exp
-lowerNodes nodes = traverse lowerNode nodes <&> (AppE (VarE (mkName "fragment")) . ListE)
+lowerNodes nodes = traverse lowerNode nodes <&> (AppE (VarE 'Impl.fragment) . ListE)
 
 lowerNode :: MarkupNode -> Q Exp
 lowerNode node =
@@ -41,23 +42,23 @@ lowerNode node =
     ComponentNode position componentName attributes children ->
       lowerComponentNode position componentName attributes children
     RegionNode position expressionSource ->
-      AppE (VarE (mkName "regionHtml")) <$> parseExpression position expressionSource
+      AppE (VarE 'Impl.regionHtml) <$> parseExpression position expressionSource
     InterpolationNode position expressionSource ->
-      AppE (VarE (mkName "toHtml")) <$> parseExpression position expressionSource
-    LiteralNode literal -> pure (AppE (VarE (mkName "text")) (textLiteral literal))
+      AppE (VarE 'Impl.toHtml) <$> parseExpression position expressionSource
+    LiteralNode literal -> pure (AppE (VarE 'Impl.text) (textLiteral literal))
 
 lowerNativeNode :: Position -> String -> Bool -> [MarkupAttribute] -> [MarkupNode] -> Q Exp
 lowerNativeNode position tagConstructor isVoid attributes children = do
-  tagExpression <- namedValue position tagConstructor
+  tagExpression <- resolveNativeTag position tagConstructor
   attributeExpressions <- traverse lowerAttribute attributes
   childExpressions <- traverse lowerNode children
   if isVoid
     then
-      pure (AppE (AppE (VarE (mkName "voidElement")) tagExpression) (ListE attributeExpressions))
+      pure (AppE (AppE (VarE 'Impl.voidElement) tagExpression) (ListE attributeExpressions))
     else
       pure
         ( AppE
-            (AppE (AppE (VarE (mkName "element")) tagExpression) (ListE attributeExpressions))
+            (AppE (AppE (VarE 'Impl.element) tagExpression) (ListE attributeExpressions))
             (ListE childExpressions)
         )
 
@@ -292,8 +293,8 @@ lowerAttribute markupAttribute =
 lowerLiteralAttribute :: Position -> String -> String -> Q Exp
 lowerLiteralAttribute position attributeName literal =
   case attributeName of
-    "id" -> applyNamed "elementId" [applyNamedPure "literalElementId" [textLiteral literal]]
-    "for" -> applyNamed "labelFor" [applyNamedPure "literalElementId" [textLiteral literal]]
+    "id" -> applyNamed 'Impl.elementId [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
+    "for" -> applyNamed 'Impl.labelFor [applyNamedPure 'Impl.literalElementId [textLiteral literal]]
     "class" -> failAt position "class requires an interpolated CssClass expression"
     -- 'href' takes a 'SafeUrl', not 'Text': a quoted literal in markup
     -- source is the template author's own text, validated once at compile
@@ -307,17 +308,17 @@ lowerExpressionAttribute :: Position -> String -> String -> Q Exp
 lowerExpressionAttribute position attributeName expressionSource = do
   expression <- parseExpression position expressionSource
   case attributeName of
-    "id" -> applyNamed "elementId" [expression]
-    "for" -> applyNamed "labelFor" [expression]
-    "class" -> applyNamed "className" [expression]
+    "id" -> applyNamed 'Impl.elementId [expression]
+    "for" -> applyNamed 'Impl.labelFor [expression]
+    "class" -> applyNamed 'Impl.className [expression]
     _ -> lowerTextAttribute position attributeName expression
 
 lowerFlagAttribute :: Position -> String -> Q Exp
 lowerFlagAttribute position attributeName =
   case attributeName of
-    "required" -> namedValue position "required"
+    "required" -> pure (VarE 'Impl.required)
     _
-      | Just suffix <- dataAttributeSuffix attributeName -> applyNamed "dataFlag" [fromStringLiteral suffix]
+      | Just suffix <- dataAttributeSuffix attributeName -> applyNamed 'Impl.dataFlag [fromStringLiteral suffix]
       | otherwise -> failAt position ("unsupported boolean attribute " <> attributeName)
 
 lowerTextAttribute :: Position -> String -> Exp -> Q Exp
@@ -331,25 +332,77 @@ lowerTextAttribute position attributeName valueExpression =
           -- it goes through 'DataAttributeSuffix'\'s 'IsString' instance
           -- via 'fromStringLiteral' regardless of whether the *value* half
           -- was a literal or an interpolated expression.
-          applyNamed "dataAttribute" [fromStringLiteral suffix, valueExpression]
+          applyNamed 'Impl.dataAttribute [fromStringLiteral suffix, valueExpression]
       | otherwise -> failAt position ("unsupported attribute " <> attributeName)
 
-textAttributeConstructors :: [(String, String)]
+-- | Decision (BS, 2026-08-21, per @docs/design-guidance.md@'s
+-- extend-vs-new-abstraction rule and missing-framework-capability protocol):
+-- see @docs/design-guidance.md@'s \"Follow-up decision — BS\" for the full
+-- record, including the module-cycle restructuring this required.
+--
+-- Every framework identifier below is resolved through a quoted 'Name'
+-- ('Impl.foo'), not 'mkName', so a splice site's own local bindings can
+-- never shadow it: 'mkName' produces a dynamically bound, unqualified name
+-- resolved against whatever is in scope where @[harch| ... |]@ appears, so
+-- a component with a parameter named @value@, @name@, or @method@ would
+-- otherwise silently rebind the framework's own constructor at every splice
+-- site that parameter is visible — usually an inscrutable type error, and in
+-- the worst case (a module defining its own non-escaping @text :: Text ->
+-- Html@) an escaping bypass with no diagnostic. A component's own name
+-- ('lowerComponentNode', 'reifyComponentProps') is deliberately NOT resolved
+-- this way: it is the intended open extension point, meant to resolve
+-- against whatever the splice site itself has in scope.
+textAttributeConstructors :: [(String, Name)]
 textAttributeConstructors =
-  [ ("action", "formAction"),
-    ("aria-label", "ariaLabel"),
-    ("aria-live", "ariaLive"),
-    ("autocomplete", "autocomplete"),
-    ("href", "href"),
-    ("inputmode", "inputMode"),
-    ("maxlength", "maxLength"),
-    ("method", "method"),
-    ("minlength", "minLength"),
-    ("name", "name"),
-    ("role", "role"),
-    ("type", "inputType"),
-    ("value", "value")
+  [ ("action", 'Impl.formAction),
+    ("aria-label", 'Impl.ariaLabel),
+    ("aria-live", 'Impl.ariaLive),
+    ("autocomplete", 'Impl.autocomplete),
+    ("href", 'Impl.href),
+    ("inputmode", 'Impl.inputMode),
+    ("maxlength", 'Impl.maxLength),
+    ("method", 'Impl.method),
+    ("minlength", 'Impl.minLength),
+    ("name", 'Impl.name),
+    ("role", 'Impl.role),
+    ("type", 'Impl.inputType),
+    ("value", 'Impl.value)
   ]
+
+-- | Mirrors 'HarchWeb.Markup.Quasi.Parser.nativeTagConstructors'\' set of
+-- constructor-name strings; the parser only ever produces a
+-- 'HarchWeb.Markup.Quasi.Parser.MarkupNode' native-tag constructor string
+-- that is a key here; 'resolveNativeTag'\'s 'Nothing' case exists as a
+-- defensive fallback if the two tables were ever to drift, not because a
+-- real parse can reach it today.
+nativeTagNames :: [(String, Name)]
+nativeTagNames =
+  [ ("anchorTag", 'Impl.anchorTag),
+    ("breakTag", 'Impl.breakTag),
+    ("buttonTag", 'Impl.buttonTag),
+    ("codeTag", 'Impl.codeTag),
+    ("divTag", 'Impl.divTag),
+    ("formTag", 'Impl.formTag),
+    ("headingOneTag", 'Impl.headingOneTag),
+    ("headingTwoTag", 'Impl.headingTwoTag),
+    ("horizontalRuleTag", 'Impl.horizontalRuleTag),
+    ("imageTag", 'Impl.imageTag),
+    ("inputTag", 'Impl.inputTag),
+    ("labelTag", 'Impl.labelTag),
+    ("listItemTag", 'Impl.listItemTag),
+    ("listTag", 'Impl.listTag),
+    ("metaTag", 'Impl.metaTag),
+    ("optionTag", 'Impl.optionTag),
+    ("paragraphTag", 'Impl.paragraphTag),
+    ("sectionTag", 'Impl.sectionTag),
+    ("selectTag", 'Impl.selectTag)
+  ]
+
+resolveNativeTag :: Position -> String -> Q Exp
+resolveNativeTag position tagConstructor =
+  case lookup tagConstructor nativeTagNames of
+    Just name -> pure (VarE name)
+    Nothing -> failAt position ("unsupported native element " <> tagConstructor)
 
 dataAttributeSuffix :: String -> Maybe String
 dataAttributeSuffix attributeName =
@@ -358,16 +411,11 @@ dataAttributeSuffix attributeName =
       | not (null suffix) -> Just suffix
     _ -> Nothing
 
-namedValue :: Position -> String -> Q Exp
-namedValue position valueName
-  | null valueName = failAt position "unsupported native element"
-  | otherwise = pure (VarE (mkName valueName))
+applyNamed :: Name -> [Exp] -> Q Exp
+applyNamed name arguments = pure (applyNamedPure name arguments)
 
-applyNamed :: String -> [Exp] -> Q Exp
-applyNamed valueName arguments = pure (applyNamedPure valueName arguments)
-
-applyNamedPure :: String -> [Exp] -> Exp
-applyNamedPure valueName = foldl AppE (VarE (mkName valueName))
+applyNamedPure :: Name -> [Exp] -> Exp
+applyNamedPure name = foldl AppE (VarE name)
 
 parseExpression :: Position -> String -> Q Exp
 parseExpression position expressionSource =
