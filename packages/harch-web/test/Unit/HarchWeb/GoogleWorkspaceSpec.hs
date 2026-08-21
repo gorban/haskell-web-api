@@ -130,7 +130,14 @@ spec = do
           emptyPem = "\n"
           wrongPemLabel = pemText "RSA PRIVATE KEY" ""
           emptyPkcs8 = pemText "PRIVATE KEY" ""
-          invalidPkcs8 = pemText "PRIVATE KEY" "\x03\&\x00"
+          -- A zero-length DER BIT STRING (its content must start with an
+          -- "unused bits" byte, so empty content is itself malformed) crashes
+          -- asn1-encoding's decoder with an uncaught partial-function error
+          -- instead of returning a clean parse failure — confirmed directly,
+          -- not assumed. Regression for that crash being caught and turned
+          -- into the same "Google Workspace ..." domain error every other
+          -- rejection here already surfaces; see eitherToIoError's Haddock.
+          crashingBitStringPkcs8 = pemText "PRIVATE KEY" "\x03\&\x00"
           incompleteTag = pemText "PRIVATE KEY" "\x30"
           incompleteContent = pemText "PRIVATE KEY" "\x30\x01"
           nonRsaPkcs8 = pemText "PRIVATE KEY" (encodeASN1' DER [Null])
@@ -138,13 +145,13 @@ spec = do
           invalidRsaData = pemText "PRIVATE KEY" (pkcs8PrivateKey "not DER")
           malformedRsa = pemText "PRIVATE KEY" (pkcs8PrivateKey (encodeASN1' DER [Null]))
           unsignableRsa = pemText "PRIVATE KEY" (pkcs8PrivateKey (rsaPrivateKeyDer 1 1 1 1 1 1 1 1))
-      failures <- mapM tryInvalidPrivateKey [malformedPem, emptyPem, wrongPemLabel, emptyPkcs8, invalidPkcs8, incompleteTag, incompleteContent, nonRsaPkcs8, nonRsaOid, invalidRsaData, malformedRsa, unsignableRsa]
+      failures <- mapM tryInvalidPrivateKey [malformedPem, emptyPem, wrongPemLabel, emptyPkcs8, crashingBitStringPkcs8, incompleteTag, incompleteContent, nonRsaPkcs8, nonRsaOid, invalidRsaData, malformedRsa, unsignableRsa]
       map displayException failures
         `shouldBe` [ "user error (Google Workspace private key is not valid PEM)",
                      "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
                      "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
-                     "user error (Google Workspace private key is not valid PKCS#8)",
-                     "user error (Google Workspace private key is not valid PKCS#8)",
+                     "user error (Google Workspace private key must be an RSA PKCS#8 key)",
+                     "user error (Google Workspace request could not be prepared: Data.ByteString.head: empty ByteString)",
                      "user error (Google Workspace private key is not valid PKCS#8)",
                      "user error (Google Workspace private key is not valid PKCS#8)",
                      "user error (Google Workspace private key must be an RSA PKCS#8 key)",

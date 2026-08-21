@@ -137,6 +137,13 @@
     exchange on every call. `HarchWeb.Gmail.runGmailHttpRequest` now takes an explicit
     `HttpClient.Manager` (first argument) instead of creating a new TLS manager per request,
     enabling connection reuse.
+22. Google Workspace service-account private-key parsing now decodes DER with `asn1-encoding`'s
+    real ASN.1 decoder instead of a hand-rolled byte-level parser, closing three defects that could
+    previously turn a malformed key into successfully-parsed wrong key material: acceptance of
+    indefinite-length DER encoding as zero-length content, unbounded `Int` overflow on a long-form
+    length reinterpreting as negative, and unsigned (rather than two's-complement) integer decoding.
+    A malformed key that crashes the underlying ASN.1 decoder now fails with a clean error instead
+    of an uncaught exception.
 
 ## 0.1.1.0
 

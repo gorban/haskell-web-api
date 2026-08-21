@@ -12,11 +12,15 @@ module HarchWeb.GoogleWorkspace
 where
 
 import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
+import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (unless)
 import Crypto.Hash.Algorithms (SHA256 (..))
 import Crypto.Number.Serialize (i2osp)
 import Crypto.PubKey.RSA.PKCS15 qualified as RSA
 import Crypto.PubKey.RSA.Types qualified as RSA
+import Data.ASN1.BinaryEncoding (DER (..))
+import Data.ASN1.Encoding (decodeASN1')
+import Data.ASN1.Types (ASN1 (..), ASN1ConstructionType (..))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types qualified as AesonTypes
 import Data.ByteString (ByteString)
@@ -29,7 +33,6 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
-import Data.Word (Word8)
 import HarchWeb.Gmail
   ( GmailAccessTokenProvider,
     GmailHttpRequest (..),
@@ -169,44 +172,88 @@ signRs256 pem signingInput = do
       Right signature -> ByteString.length signature `seq` Right signature
 {-# ANN signRs256 ("HLint: ignore Redundant $!" :: String) #-}
 
+-- | Decision (BY, 2026-08-21, per @docs/design-guidance.md@'s
+-- missing-framework-capability protocol): see @docs/design-guidance.md@'s
+-- \"Follow-up decision — BY\" for why this hand-adapts the structural match
+-- instead of reusing @crypton-x509@'s ready-made decoder wholesale.
+--
+-- Decodes DER bytes with @asn1-encoding@ (a real ASN.1 decoder with proper
+-- indefinite-length rejection, length-overflow checking, and two's-complement
+-- 'IntVal' decoding) instead of the previous hand-rolled byte-level DER walk,
+-- then pattern-matches the decoded token stream against the fixed PKCS#8/
+-- PKCS#1 RSA shape directly — mirroring @crypton-x509@'s own
+-- @Data.X509.PrivateKey.rsaFromASN1@ pattern, but built from this project's
+-- own @cryptonite@ 'RSA.PrivateKey' rather than @crypton-x509@'s, since that
+-- package is built against the incompatible @crypton@ fork of this project's
+-- cryptography library. See @docs/design-guidance.md@'s
+-- \"Follow-up decision — BY\" for the full record.
+--
+-- The @$!@ below (on the nullary 'DER' constructor) exists for the same HPC
+-- CSE-sharing reason documented elsewhere in this codebase: the bare 'DER'
+-- value is reused at a second call site in 'rsaPrivateKeyFromPkcs8Asn1',
+-- and GHC otherwise merges both into one shared CAF, crediting only one
+-- call site's own HPC tick despite both genuinely running in tests.
+{-# ANN rsaPrivateKeyFromPem ("HLint: ignore Redundant $!" :: String) #-}
 rsaPrivateKeyFromPem :: Text -> Either Text RSA.PrivateKey
 rsaPrivateKeyFromPem pem = do
   parsedPem <- mapFailure "Google Workspace private key is not valid PEM" (PEM.pemParseBS (TextEncoding.encodeUtf8 pem))
   der <-
     case parsedPem of
-      [privateKey] ->
-        case PEM.pemName privateKey of
-          "PRIVATE KEY" -> Right (PEM.pemContent privateKey)
+      [privateKeyPem] ->
+        case PEM.pemName privateKeyPem of
+          "PRIVATE KEY" -> Right (PEM.pemContent privateKeyPem)
           _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
       _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
-  parsedKey <- maybeToEither "Google Workspace private key is not valid PKCS#8" (decodeDer der)
-  pkcs1Der <-
-    case parsedKey of
-      [DerSequence [DerInteger 0, DerSequence [DerObjectIdentifier rsaEncryptionOid, DerNull], DerOctetString encodedKey]]
-        | rsaEncryptionOid == rsaEncryptionObjectIdentifier -> Right encodedKey
-      _ -> Left "Google Workspace private key must be an RSA PKCS#8 key"
-  pkcs1 <- maybeToEither "Google Workspace private key is not valid RSA data" (decodeDer pkcs1Der)
-  case pkcs1 of
-    [DerSequence [DerInteger 0, DerInteger modulus, DerInteger publicExponent, DerInteger privateExponent, DerInteger primeOne, DerInteger primeTwo, DerInteger exponentOne, DerInteger exponentTwo, DerInteger coefficient]] ->
-      modulus `seq`
-        publicExponent `seq`
-          privateExponent `seq`
-            primeOne `seq`
-              primeTwo `seq`
-                exponentOne `seq`
-                  exponentTwo `seq`
-                    coefficient `seq`
-                      Right
-                        ( RSA.PrivateKey
-                            (RSA.PublicKey (ByteString.length (i2osp modulus)) modulus publicExponent)
-                            privateExponent
-                            primeOne
-                            primeTwo
-                            exponentOne
-                            exponentTwo
-                            coefficient
-                        )
+  asn1 <- mapFailure "Google Workspace private key is not valid PKCS#8" ((decodeASN1' $! DER) der)
+  rsaPrivateKeyFromPkcs8Asn1 asn1
+
+{-# ANN rsaPrivateKeyFromPkcs8Asn1 ("HLint: ignore Redundant $!" :: String) #-}
+rsaPrivateKeyFromPkcs8Asn1 :: [ASN1] -> Either Text RSA.PrivateKey
+rsaPrivateKeyFromPkcs8Asn1 asn1 =
+  case asn1 of
+    [ Start Sequence,
+      IntVal 0,
+      Start Sequence,
+      OID rsaEncryptionOid,
+      Null,
+      End Sequence,
+      OctetString encodedKey,
+      End Sequence
+      ]
+        | rsaEncryptionOid == rsaEncryptionObjectIdentifier -> do
+            pkcs1 <- mapFailure "Google Workspace private key is not valid RSA data" ((decodeASN1' $! DER) encodedKey)
+            rsaPrivateKeyFromPkcs1Asn1 pkcs1
+    _ -> Left "Google Workspace private key must be an RSA PKCS#8 key"
+
+rsaPrivateKeyFromPkcs1Asn1 :: [ASN1] -> Either Text RSA.PrivateKey
+rsaPrivateKeyFromPkcs1Asn1 asn1 =
+  case asn1 of
+    [ Start Sequence,
+      IntVal 0,
+      IntVal modulus,
+      IntVal publicExponent,
+      IntVal privateExponent,
+      IntVal primeOne,
+      IntVal primeTwo,
+      IntVal exponentOne,
+      IntVal exponentTwo,
+      IntVal coefficient,
+      End Sequence
+      ] ->
+        Right
+          ( RSA.PrivateKey
+              (RSA.PublicKey (ByteString.length (i2osp modulus)) modulus publicExponent)
+              privateExponent
+              primeOne
+              primeTwo
+              exponentOne
+              exponentTwo
+              coefficient
+          )
     _ -> Left "Google Workspace private key must contain an RSA private key"
+
+rsaEncryptionObjectIdentifier :: [Integer]
+rsaEncryptionObjectIdentifier = [1, 2, 840, 113549, 1, 1, 1]
 
 forceRsaPrivateKey :: RSA.PrivateKey -> ()
 forceRsaPrivateKey privateKey =
@@ -220,70 +267,6 @@ forceRsaPrivateKey privateKey =
                 RSA.private_dQ privateKey `seq`
                   RSA.private_qinv privateKey `seq`
                     ()
-
-rsaEncryptionObjectIdentifier :: ByteString
-rsaEncryptionObjectIdentifier = "\x2a\x86\x48\x86\xf7\x0d\x01\x01\x01"
-
-data DerValue
-  = DerSequence [DerValue]
-  | DerInteger Integer
-  | DerObjectIdentifier ByteString
-  | DerNull
-  | DerOctetString ByteString
-
-decodeDer :: ByteString -> Maybe [DerValue]
-decodeDer value =
-  if ByteString.null value
-    then Nothing
-    else parseDerValues value
-
-parseDerValues :: ByteString -> Maybe [DerValue]
-parseDerValues value =
-  if ByteString.null value
-    then Just []
-    else do
-      (derValue, remaining) <- parseDerValue value
-      values <- parseDerValues remaining
-      pure (derValue : values)
-
-parseDerValue :: ByteString -> Maybe (DerValue, ByteString)
-parseDerValue value = do
-  (tag, afterTag) <- takeDerByte value
-  (contentLength, afterLength) <- parseDerLength afterTag
-  (content, remaining) <- takeDerBytes contentLength afterLength
-  derValue <-
-    case tag of
-      2 -> Just (DerInteger (ByteString.foldl' appendDerByte 0 content))
-      4 -> Just (DerOctetString content)
-      5 -> Just DerNull
-      6 -> Just (DerObjectIdentifier content)
-      48 -> DerSequence <$> decodeDer content
-      _ -> Nothing
-  pure (derValue, remaining)
-
-parseDerLength :: ByteString -> Maybe (Int, ByteString)
-parseDerLength value = do
-  (firstByte, remaining) <- takeDerByte value
-  if firstByte < 128
-    then Just (fromIntegral firstByte, remaining)
-    else do
-      (lengthBytes, afterLength) <- takeDerBytes (fromIntegral (firstByte - 128)) remaining
-      pure (ByteString.foldl' appendDerLengthByte 0 lengthBytes, afterLength)
-
-takeDerByte :: ByteString -> Maybe (Word8, ByteString)
-takeDerByte = ByteString.uncons
-
-takeDerBytes :: Int -> ByteString -> Maybe (ByteString, ByteString)
-takeDerBytes contentLength value =
-  if contentLength <= ByteString.length value
-    then Just (ByteString.splitAt contentLength value)
-    else Nothing
-
-appendDerByte :: Integer -> Word8 -> Integer
-appendDerByte total byte = total * 256 + fromIntegral byte
-
-appendDerLengthByte :: Int -> Word8 -> Int
-appendDerLengthByte total byte = total * 256 + fromIntegral byte
 
 accessTokenFromResponse :: Text -> Either Text (Text, Integer)
 accessTokenFromResponse response = do
@@ -320,11 +303,24 @@ ensureNonEmpty message value =
 mapFailure :: Text -> Either error value -> Either Text value
 mapFailure message = either (const (Left message)) Right
 
-maybeToEither :: Text -> Maybe value -> Either Text value
-maybeToEither message = maybe (Left message) Right
-
+-- | @asn1-encoding@'s decoder is not exception-safe against every malformed
+-- input: a zero-length DER @BIT STRING@ (its content must start with an
+-- "unused bits" byte, so a genuinely empty content is itself malformed)
+-- crashes with an uncaught partial-function 'ErrorCall'
+-- (@Data.ByteString.head: empty ByteString@) rather than returning a 'Left',
+-- confirmed directly rather than assumed. Forcing the result here, inside
+-- 'IO', catches that (and any other pure crash this module's decoding chain
+-- might hit) and turns it into the same kind of "Google Workspace ..."
+-- domain error every other rejection in this module already surfaces,
+-- instead of an uncaught exception with no such prefix a caller's own error
+-- handling might not expect.
 eitherToIoError :: Either Text value -> IO value
-eitherToIoError = either (ioError . userError . Text.unpack) pure
+eitherToIoError result = do
+  forced <- try (evaluate result)
+  case forced of
+    Left exception -> ioError (userError ("Google Workspace request could not be prepared: " <> displayException (exception :: SomeException)))
+    Right (Left message) -> ioError (userError (Text.unpack message))
+    Right (Right value) -> pure value
 
 validAccessToken :: Text -> Bool
 validAccessToken value =

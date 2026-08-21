@@ -134,6 +134,8 @@ library
   -- Other library packages from which modules are imported.
   build-depends:
     aeson ^>=2.3.1.0,
+    asn1-encoding ^>=0.9.6,
+    asn1-types ^>=0.3.4,
     base ^>=4.22.0.0,
     base16-bytestring ^>=1.0.2.0,
     base64-bytestring ^>=1.2.1.0,

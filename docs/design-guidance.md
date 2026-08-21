@@ -1374,6 +1374,42 @@ as requested rather than unilaterally deleting a subsystem with real tests and n
 meant to go away — but the "no live caller" fact is recorded here so a future task touching this
 area doesn't have to rediscover it.
 
+### Follow-up decision — BY: real ASN.1 decoding, hand-adapted structural matching (2026-08-21)
+
+**Decision: replace the hand-rolled byte-level DER walk with `asn1-encoding`'s real decoder, but
+hand-write the RSA/PKCS#8 structural pattern-match against its `[ASN1]` output rather than reusing
+`crypton-x509`'s ready-made `PrivKey`/`fromASN1` decoder.** BY's own text named `crypton-x509` as
+available and already used by the test suite, which reads as an implicit recommendation to reuse
+its private-key decoder wholesale — the natural extend-vs-new-abstraction choice would have been to
+do exactly that. Trying it first (rather than assuming the hand-adapted route was necessary) surfaced
+a real blocker: `crypton-x509`'s `PrivKey` wraps the `crypton` package's `RSA.PrivateKey`, and this
+project's own RSA usage throughout `GoogleWorkspace.hs` (`RSA.sign`, `RSA.PublicKey`, `signRs256`) is
+built on `cryptonite`'s `RSA.PrivateKey` — a same-named, structurally-identical, but *nominally
+distinct* type from a different package, confirmed by a genuine `Couldn't match expected type`
+compile error, not assumed from documentation. This is the missing-framework-capability protocol's
+"the workaround silently substitutes a materially different property" case: reusing `crypton-x509`
+verbatim would have meant migrating this module (or the whole package) from `cryptonite` to
+`crypton`, a materially larger, differently-scoped change than "replace a DER parser." Given that,
+the fix keeps `asn1-encoding`'s real decoder (the part that was actually buggy — indefinite-length
+acceptance, `Int` overflow, unsigned-integer folding) but writes the RSA/PKCS#8 structural match by
+hand against its `[ASN1]` token output, mirroring `crypton-x509`'s own `rsaFromASN1` pattern shape
+(read directly from its source as a reference) adapted to construct this project's own `cryptonite`
+`RSA.PrivateKey` instead.
+
+A second, unplanned finding surfaced while verifying the fix against every one of the original
+task's malformed-input test cases rather than assuming the replacement was correct by construction:
+`asn1-encoding` itself is not exception-safe against every malformed input. A zero-length DER `BIT
+STRING` — invalid per the DER spec, since its content must begin with an "unused bits" count byte —
+crashes the decoder with an uncaught `Data.ByteString.head: empty ByteString` partial-function error
+instead of returning a `Left`, discovered because the test asserting on that specific malformed input
+failed with a raw exception message rather than a clean domain error. `eitherToIoError` (the shared
+`Either Text value -> IO value` boundary every rejection in this module already passes through) now
+forces its argument inside `IO` and catches any exception this decoding chain might raise, converting
+it into the same "Google Workspace ..." domain error every other rejection already surfaces — closing
+the actual security property BY cared about (malformed key material must fail cleanly, not succeed
+silently or crash unexpectedly) more completely than reusing `crypton-x509` alone would have, since
+that library's own decoder shares the same underlying `asn1-encoding` crash risk.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
