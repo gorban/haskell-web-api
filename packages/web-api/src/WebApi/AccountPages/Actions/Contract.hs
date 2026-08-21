@@ -14,6 +14,7 @@ module WebApi.AccountPages.Actions.Contract
 where
 
 import Data.Text (Text)
+import Data.Text qualified as Text
 import HarchWeb qualified
 import HarchWeb.Action
   ( ActionCodec,
@@ -103,39 +104,50 @@ accountActionEndpoints =
     action
       UpdateProfileTarget
       (postAt "/profile" (`accountActionPath` ProfileRoute))
-      (UpdateProfile . ProfileSubmission <$> singleOrDefault "" (formField "intent" textValue)),
+      (UpdateProfile . ProfileSubmission <$> singleOrDefault emptyFieldDefault (formField "intent" textValue)),
     action LogoutAccountTarget (postAt "/logout" (`accountActionPath` LogoutRoute)) (pure LogoutAccount)
   ]
 
--- The `$!` applications below (on already-WHNF empty-`Text` defaults) exist
--- so HPC ticks each field's default on every invocation instead of treating
--- the shared literal as a once-ticked CAF reference; they have no runtime
--- effect.
+-- | The empty-'Text' default, named once instead of written at each call site
+-- below: identical bare literal defaults written separately at multiple
+-- top-level definitions get merged by GHC into one shared CAF, crediting only
+-- the first call site's own HPC tick even though every one genuinely runs in
+-- tests. Naming the shared value once removes the *duplicate-literal* form
+-- of that gap (see 'UpdateProfileTarget'\'s own single, unforced use above),
+-- but does not fully close it: confirmed directly rather than assumed, since
+-- 'emptyFieldDefault' is trivial enough that GHC's @-O2@ optimizer inlines it
+-- back to a bare @""@ at each of the applicative-chain call sites below,
+-- reproducing the same CSE-sharing gap the naming was meant to remove. The
+-- @$!@ on each remaining reference is the last-resort fix per
+-- @docs/design-guidance.md@'s never-mask-a-gate-finding rule.
+emptyFieldDefault :: Text
+emptyFieldDefault = Text.empty
+
 {-# ANN registrationSubmission ("HLint: ignore Redundant $!" :: String) #-}
 registrationSubmission :: ActionDecoder RegistrationSubmission
 registrationSubmission =
   RegistrationSubmission
-    <$> (singleOrDefault $! "") (formField "username" textValue)
-    <*> (singleOrDefault $! "") (formField "email" textValue)
-    <*> (singleOrDefault $! "") (formField "displayName" textValue)
-    <*> (singleOrDefault $! "") (formField "password" textValue)
+    <$> (singleOrDefault $! emptyFieldDefault) (formField "username" textValue)
+    <*> (singleOrDefault $! emptyFieldDefault) (formField "email" textValue)
+    <*> singleOrDefault emptyFieldDefault (formField "displayName" textValue)
+    <*> (singleOrDefault $! emptyFieldDefault) (formField "password" textValue)
 
 {-# ANN mfaEnrollmentSubmission ("HLint: ignore Redundant $!" :: String) #-}
 mfaEnrollmentSubmission :: ActionDecoder MfaEnrollmentSubmission
 mfaEnrollmentSubmission =
   MfaEnrollmentSubmission
-    <$> (singleOrDefault $! "") (formField "intent" textValue)
-    <*> (singleOrDefault $! "") (formField "code" textValue)
+    <$> (singleOrDefault $! emptyFieldDefault) (formField "intent" textValue)
+    <*> singleOrDefault emptyFieldDefault (formField "code" textValue)
 
 {-# ANN loginSubmission ("HLint: ignore Redundant $!" :: String) #-}
 loginSubmission :: ActionDecoder LoginSubmission
 loginSubmission =
   LoginSubmission
-    <$> (singleOrDefault $! "") (formField "email" textValue)
-    <*> (singleOrDefault $! "") (formField "username" textValue)
-    <*> (singleOrDefault $! "") (formField "password" textValue)
-    <*> (singleOrDefault $! "") (formField "proof" textValue)
-    <*> (singleOrDefault $! "") (formField "code" textValue)
+    <$> (singleOrDefault $! emptyFieldDefault) (formField "email" textValue)
+    <*> singleOrDefault emptyFieldDefault (formField "username" textValue)
+    <*> (singleOrDefault $! emptyFieldDefault) (formField "password" textValue)
+    <*> (singleOrDefault $! emptyFieldDefault) (formField "proof" textValue)
+    <*> (singleOrDefault $! emptyFieldDefault) (formField "code" textValue)
 
 accountActionPath :: AppRequestContext -> AppRoute -> Text
 accountActionPath requestContext route =

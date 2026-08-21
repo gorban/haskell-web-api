@@ -158,7 +158,6 @@ spec = do
                  certbotHasOption "--missing" ["certonly"] `shouldBe` False,
                  splitCertbotDomainValue " example.com , www.example.com ,, " `shouldBe` ["example.com", "www.example.com"],
                  firstCertbotDomain ["-d", "one.example.com", "--domains=two.example.com,three.example.com"] `shouldBe` Just "one.example.com",
-                 (certbotBackend == certbotBackend) `shouldBe` True,
                  (certbotBackend == CertbotConfig "other-certbot" []) `shouldBe` False,
                  certbotBackend
                    `shouldBe` CertbotConfig

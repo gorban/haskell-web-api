@@ -71,7 +71,7 @@ import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..),
 import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), LoginThrottleContext (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
+import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase, renderPage, renderPageBody, renderPageFromRouteData, renderPageWithDatabase)
 import WebApi.PageShell qualified as LegacyPageShell
 import WebApi.Postgres (buildPostgresPageRepository)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
@@ -8479,6 +8479,12 @@ spec = do
       firstResponse <- selectResponse defaultAppConfig apiStatusRequest
       secondResponse <- selectResponse defaultAppConfig apiStatusRequest
       firstResponse `shouldBe` secondResponse
+
+  describe "buildCallToActionHref" $ do
+    it "raises the unsafe-URL diagnostic when a rendered path is not a safe URL" $
+      evaluate (buildCallToActionHref "javascript:alert(1)" Nothing `seq` ())
+        `shouldThrow` \case
+          ErrorCall message -> "buildCallToAction: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 
   describe "buildPageModel" $ do
     it "builds stubbed home page data with a navigation affordance" $

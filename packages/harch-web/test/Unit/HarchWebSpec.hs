@@ -760,7 +760,6 @@ spec = do
                  mkRequestConcurrencyLimit 0 `shouldBe` Nothing,
                  mkRequestConcurrencyLimit (-1) `shouldBe` Nothing,
                  requestConcurrencyLimitValue <$> mkRequestConcurrencyLimit 4 `shouldBe` Just 4,
-                 (concurrencyLimitValue == concurrencyLimitValue) `shouldBe` True,
                  (concurrencyLimitValue /= fromMaybe (error "expected distinct concurrency limit") (mkRequestConcurrencyLimit 5))
                    `shouldBe` True,
                  length (show concurrencyLimitValue) + length (showList [concurrencyLimitValue] "")
@@ -815,6 +814,12 @@ spec = do
                  declaredOversizedResult `shouldBe` Left RequestBodyLimitExceeded,
                  malformedDeclaredLengthResult `shouldBe` Right "",
                  negativeLimitResult `shouldBe` Left RequestBodyLimitExceeded,
+                 -- 'RequestBodyReadFailure' has exactly one nullary constructor, so
+                 -- there is no other value to distinguish it from; these reflexivity
+                 -- checks are the only way to exercise its derived 'Eq' at all. Both
+                 -- '==' and '/=' are needed: 'deriving' only writes '==' itself, and
+                 -- GHC's HPC instrumentation attributes the unoverridden '/=' default
+                 -- method to its own separate, otherwise-permanently-unticked box.
                  RequestBodyLimitExceeded == RequestBodyLimitExceeded `shouldBe` True,
                  RequestBodyLimitExceeded /= RequestBodyLimitExceeded `shouldBe` False,
                  length (show RequestBodyLimitExceeded) `shouldSatisfy` (> 0),
@@ -1037,9 +1042,8 @@ spec = do
               Action.InvalidClientActionDecoder
             ]
       expectAll
-        ( (methods == methods `shouldBe` True)
-            :| [ methods /= reverse methods `shouldBe` True,
-                 sum [fromEnum (left == right) | left <- methods, right <- methods] `shouldBe` length methods,
+        ( (methods /= reverse methods `shouldBe` True)
+            :| [ sum [fromEnum (left == right) | left <- methods, right <- methods] `shouldBe` length methods,
                  sum [fromEnum (left /= right) | left <- methods, right <- methods] `shouldBe` length methods * (length methods - 1),
                  sum [length (show methodValue) + length (showList [methodValue] "") | methodValue <- methods] `shouldSatisfy` (> 0),
                  sum [fromEnum (left == right) | left <- payloads, right <- payloads] `shouldBe` length payloads,
@@ -1049,7 +1053,6 @@ spec = do
                  sum [fromEnum (left == right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors,
                  sum [fromEnum (left /= right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors * (length parseErrors - 1),
                  sum [length (show parseError) + length (showList [parseError] "") | parseError <- parseErrors] `shouldSatisfy` (> 0),
-                 decodedResults == decodedResults `shouldBe` True,
                  decodedResults /= reverse decodedResults `shouldBe` True,
                  sum [fromEnum (left == right) | left <- decodedResults, right <- decodedResults] `shouldBe` length decodedResults,
                  sum [fromEnum (left /= right) | left <- decodedResults, right <- decodedResults] `shouldBe` length decodedResults * (length decodedResults - 1),
@@ -1861,105 +1864,92 @@ spec = do
       runtimeNonce <- generateRuntimeNonce
       otherRuntimeNonce <- generateRuntimeNonce
 
-      (request == request) `shouldBe` True
       (request /= otherRequest) `shouldBe` True
       show request `shouldBe` "RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
       show [request] `shouldBe` "[RouteRequest {requestRoute = KnownRoute, requestContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}]"
-      (page == page) `shouldBe` True
       (page /= otherPage) `shouldBe` True
       show page `shouldBe` "Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}"
       show [page] `shouldBe` "[Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}]"
-      (attribute == attribute) `shouldBe` True
       (attribute /= otherAttribute) `shouldBe` True
       show attribute `shouldBe` "HtmlAttribute {attributeName = \"data-app\", attributeValue = \"sample\"}"
-      (navigationItem == navigationItem) `shouldBe` True
       (navigationItem /= otherNavigationItem) `shouldBe` True
       show navigationItem `shouldBe` "NavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute}"
-      (navigationRuntime == navigationRuntime) `shouldBe` True
       (navigationRuntime /= otherNavigationRuntime) `shouldBe` True
       show navigationRuntime `shouldBe` "NavigationRuntime {navigationRuntimePath = \"/assets/navigation.js\", navigationRuntimeScript = \"console.log('nav');\"}"
       show [navigationRuntime] `shouldBe` "[NavigationRuntime {navigationRuntimePath = \"/assets/navigation.js\", navigationRuntimeScript = \"console.log('nav');\"}]"
-      (inlineBootstrap == inlineBootstrap) `shouldBe` True
       (inlineBootstrap /= otherInlineBootstrap) `shouldBe` True
       show inlineBootstrap `shouldBe` "InlineBootstrap {runtimeDescriptorName = \"capture\", runtimeDescriptorSource = \"window.capture = true;\"}"
-      (runtimeNonce == runtimeNonce) `shouldBe` True
       (runtimeNonce /= otherRuntimeNonce) `shouldBe` True
+      -- 'deriving' only writes '==' itself; GHC's HPC instrumentation
+      -- attributes the same-value '==' path to its own box, separate from
+      -- the different-value path the '/=' check above already exercises.
+      (runtimeNonce == runtimeNonce) `shouldBe` True
       show runtimeNonce `shouldContain` "RuntimeNonce {runtimeNonceValue = \""
       show [runtimeNonce] `shouldContain` "[RuntimeNonce {runtimeNonceValue = \""
-      (stylesheetPath == stylesheetPath) `shouldBe` True
       (stylesheetPath /= otherStylesheetPath) `shouldBe` True
       show stylesheetPath `shouldBe` "AssetPath {assetPathText = \"/assets/sample.css\"}"
       show [stylesheetPath] `shouldBe` "[AssetPath {assetPathText = \"/assets/sample.css\"}]"
-      (stylesheetValue == stylesheetValue) `shouldBe` True
       (stylesheetValue /= otherStylesheetValue) `shouldBe` True
       show stylesheetValue `shouldBe` "Stylesheet {stylesheetAsset = AssetPath {assetPathText = \"/assets/sample.css\"}}"
-      (scopedCssScope == scopedCssScope) `shouldBe` True
       (scopedCssScope /= otherScopedCssScope) `shouldBe` True
       show scopedCssScope `shouldBe` "CssScope {cssScopeName = \"sample\"}"
       show [scopedCssScope] `shouldBe` "[CssScope {cssScopeName = \"sample\"}]"
-      (scopedCssClass == scopedCssClass) `shouldBe` True
       (scopedCssClass /= otherScopedCssClass) `shouldBe` True
-      (globalCssClass == globalCssClass) `shouldBe` True
       (globalCssClass /= otherGlobalCssClass) `shouldBe` True
       show scopedCssClass `shouldBe` "ScopedCssClass (CssScope {cssScopeName = \"sample\"}) \"title\""
       show globalCssClass `shouldBe` "GlobalCssClass \"visually-hidden\""
       show [scopedCssClass, globalCssClass]
         `shouldBe` "[ScopedCssClass (CssScope {cssScopeName = \"sample\"}) \"title\",GlobalCssClass \"visually-hidden\"]"
-      (resolvedNavigationItem == resolvedNavigationItem) `shouldBe` True
       (resolvedNavigationItem /= otherResolvedNavigationItem) `shouldBe` True
       show resolvedNavigationItem `shouldBe` "ResolvedNavigationItem {navigationLabel = \"Known\", navigationRoute = KnownRoute, navigationHref = \"/known\", navigationIsActive = True}"
-      (document == document) `shouldBe` True
       (document /= otherDocument) `shouldBe` True
       show document `shouldContain` "documentRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       show [document] `shouldContain` "documentRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
-      (localTestServer == localTestServer) `shouldBe` True
       (localTestServer /= otherLocalTestServer) `shouldBe` True
       show localTestServer `shouldBe` "LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}"
       show [localTestServer] `shouldBe` "[LocalTestServer {localServerHost = \"127.0.0.1\", localServerPort = 5001, localServerBaseUrl = \"http://127.0.0.1:5001\"}]"
-      (shell == shell) `shouldBe` True
       (shell /= otherShell) `shouldBe` True
       show shell `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       show [shell] `shouldContain` "shellRuntimeDescriptors = [DeferredModule {runtimeDescriptorName = \"navigation\", runtimeDescriptorSource = \"/assets/navigation.js\"}]"
       expectAll
-        ( ((liveRegion == liveRegion) `shouldBe` True)
-            :| [ (liveRegion /= otherLiveRegion) `shouldBe` True,
-                 show liveRegion `shouldBe` "PoliteStatus",
+        ( ((liveRegion /= otherLiveRegion) `shouldBe` True)
+            :| [ show liveRegion `shouldBe` "PoliteStatus",
                  show [liveRegion] `shouldBe` "[PoliteStatus]",
-                 (serverSentEvent == serverSentEvent) `shouldBe` True,
                  (serverSentEvent /= otherServerSentEvent) `shouldBe` True,
                  show serverSentEvent `shouldBe` "ServerSentEvent {serverSentEventName = Just \"status\", serverSentEventId = Just \"42\", serverSentEventData = \"Ready\"}",
                  show [serverSentEvent] `shouldBe` "[ServerSentEvent {serverSentEventName = Just \"status\", serverSentEventId = Just \"42\", serverSentEventData = \"Ready\"}]"
                ]
         )
-      (body == body) `shouldBe` True
       (body /= otherBody) `shouldBe` True
       show body `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}"
       show [body] `shouldBe` "[ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}]"
-      (pageMetadata == pageMetadata) `shouldBe` True
       (pageMetadata /= otherPageMetadata) `shouldBe` True
       show pageMetadata `shouldBe` "ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}"
-      (pageResponse == pageResponse) `shouldBe` True
       (pageResponse /= otherPageResponse) `shouldBe` True
       show pageResponse `shouldBe` "PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
-      (pageResponseWithMetadata == pageResponseWithMetadata) `shouldBe` True
       (pageResponseWithMetadata /= otherPageResponseWithMetadata) `shouldBe` True
+      -- 'Response'\'s 'Eq' short-circuits its '&&': a same-'ResponseBody',
+      -- different-'Page' comparison is the only way to reach its second
+      -- operand, since 'otherPageResponseWithMetadata' above differs in
+      -- both fields at once and never gets that far.
+      (pageResponseWithMetadata /= PageResponseWithMetadata pageMetadata otherPage) `shouldBe` True
       show pageResponseWithMetadata `shouldBe` "PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]})"
-      (bodyResponseValue == bodyResponseValue) `shouldBe` True
       (bodyResponseValue /= otherBodyResponseValue) `shouldBe` True
       show bodyResponseValue `shouldBe` "BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})"
-      (redirectResponseValue == redirectResponseValue) `shouldBe` True
       (redirectResponseValue /= otherRedirectResponseValue) `shouldBe` True
+      -- Same reason as 'pageResponseWithMetadata' above: a same-body,
+      -- different-location comparison reaches 'Eq'\'s second '&&' operand,
+      -- which 'otherRedirectResponseValue' (differing in both fields) does
+      -- not.
+      (redirectResponseValue /= RedirectResponse body "/other") `shouldBe` True
       show redirectResponseValue `shouldBe` "RedirectResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []}) \"/spaces\""
       show [pageResponse, pageResponseWithMetadata, bodyResponseValue] `shouldBe` "[PageResponse (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),PageResponseWithMetadata (ResponseBody {responseStatus = Status {statusCode = 500, statusMessage = \"Internal Server Error\"}, responseContentType = \"text/html; charset=utf-8\", responseBody = \"\", responseObservabilityAttributes = [ObservabilityAttribute {attributeName = \"exception.type\", attributeValue = TextAttribute \"SampleError\"}], responseLogEntries = [\"ERROR page\"], responseDatabaseOperations = []}) (Page {pageTitle = \"Known\", pageRoute = KnownRoute, pageContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}, pageBody = \"<h1>Known</h1>\", pageBootstrapHooks = [\"known-page\"]}),BodyResponse (ResponseBody {responseStatus = Status {statusCode = 202, statusMessage = \"Accepted\"}, responseContentType = \"application/json\", responseBody = \"{\\\"route\\\":\\\"data\\\"}\", responseObservabilityAttributes = [], responseLogEntries = [], responseDatabaseOperations = []})]"
-      (clientActionRequest == clientActionRequest) `shouldBe` True
       (clientActionRequest /= otherClientActionRequest) `shouldBe` True
       show clientActionRequest `shouldBe` "ClientActionRequest {clientAction = \"/actions/subscribe\", clientActionRequestIdempotencyKey = Nothing, clientActionContext = TestContext {requestLanguage = \"en\", testContextPathPrefix = \"\"}}"
       show [clientActionRequest] `shouldContain` "ClientActionRequest {clientAction = \"/actions/subscribe\""
-      (regionPatch == regionPatch) `shouldBe` True
       (regionPatch /= otherRegionPatch) `shouldBe` True
       show regionPatch `shouldContain` "ReplaceRegion"
       show [regionPatch] `shouldContain` "ReplaceRegion"
-      (clientActionResponse == clientActionResponse) `shouldBe` True
       (clientActionResponse /= otherClientActionResponse) `shouldBe` True
       show clientActionResponse `shouldContain` "ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}"
       show [clientActionResponse] `shouldContain` "ClientActionResponse {clientActionStatus = Status {statusCode = 200, statusMessage = \"OK\"}"
@@ -2240,7 +2230,6 @@ spec = do
       runRequestMiddlewarePipeline [enrichMiddleware, haltMiddleware, skippedMiddleware] Wai.defaultRequest defaultContext
         `shouldReturn` haltedResult
       readIORef visitedMiddleware `shouldReturn` ["enrich", "enrich", "halt"]
-      continuedResult == continuedResult `shouldBe` True
       continuedResult == haltedResult `shouldBe` False
       continuedResult /= haltedResult `shouldBe` True
       show continuedResult `shouldBe` "ContinueMiddleware (TestContext {requestLanguage = \"es\", testContextPathPrefix = \"\"})"

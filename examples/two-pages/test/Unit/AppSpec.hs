@@ -13,10 +13,12 @@ import App.Pages.Route.Generated
   )
 import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, routeHref, twoPageNavigationPath)
 import App.Routes qualified as ExampleRoutes
+import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -148,7 +150,7 @@ spec =
                  ]
           )
 
-    describe "routeCodec" $
+    describe "routeCodec" $ do
       it "parses and renders the supported two-page routes" $ do
         let previewSlug =
               maybe (error "expected valid test preview slug") id (mkPreviewSlug "summer-release")
@@ -231,6 +233,11 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/assets/navigation.js" `shouldBe` Nothing
                  ]
           )
+
+      it "raises the unsafe-URL diagnostic when a rendered navigation path is not a safe URL" $
+        evaluate (ExampleRoutes.twoPageNavigationHref "javascript:alert(1)" Nothing `seq` ())
+          `shouldThrow` \case
+            ErrorCall message -> "twoPageNavigationPath: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 
     describe "buildApplication" $ do
       it "decodes only the modeled subscription action and preserves an absent email as validation input" $ do

@@ -73,13 +73,17 @@ renderPageBodyForLocale context locale pageModel =
           renderCallToAction (notFoundPrimaryAction notFoundPage)
         ]
 
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on the pending form's @False@ literal is a last resort, confirmed
+-- directly rather than assumed against this module's own test suite.
+{-# ANN renderProfilePageBody ("HLint: ignore Redundant $!" :: String) #-}
 renderProfilePageBody :: AppRequestContext -> ProfilePageModel -> HarchWeb.Html
 renderProfilePageBody context profilePage =
   case profilePage of
     SignedOutProfilePage {profileHeading, profileSummary, profileSignInAction, profileRegistrationAction} ->
       profilePageSection profileHeading profileSummary [renderCallToAction profileSignInAction, renderCallToAction profileRegistrationAction]
     PendingProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileResendPath, profileResendLabel, profileSignOutAction} ->
-      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml context profileResendPath (PendingProfileForm profileEmail Nothing False profileResendLabel), renderCallToAction profileSignOutAction]
+      profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderPendingProfileRegionHtml context profileResendPath ((PendingProfileForm profileEmail Nothing $! False) profileResendLabel), renderCallToAction profileSignOutAction]
     AuthenticatedProfilePage {profileHeading, profileSummary, profileEmail, profileUsername, profileDisplayName, profileSignOutAction} ->
       profilePageSection profileHeading profileSummary [renderProfileIdentity profileUsername profileDisplayName, renderProfileEmail profileEmail, renderCallToAction profileSignOutAction]
     UnavailableProfilePage {profileHeading, profileSummary, profileSignInAction} ->

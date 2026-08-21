@@ -6,6 +6,7 @@ module WebApi.Page.Building
     buildPageModelWithDatabase,
     buildProfilePageModel,
     buildUnavailableProfilePageModel,
+    buildCallToActionHref,
   )
 where
 
@@ -179,6 +180,14 @@ buildSecondPageModel routeRequest secondRouteDataResult =
                 secondPrimaryAction = returnHome
               }
 
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on 'renderedPath'\'s first reference is a last resort, confirmed
+-- directly rather than assumed. 'renderedPath' is already a single,
+-- correctly-factored local binding, used once as 'buildCallToActionHref'\'s
+-- first argument and once inside 'HarchWeb.mkSafeUrl' — the correct shape
+-- for this code, not duplication to remove. GHC shares the two references
+-- to this one thunk, and only the second (inside 'HarchWeb.mkSafeUrl')
+-- earns its own HPC tick when forced; the first does not.
 {-# ANN buildCallToAction ("HLint: ignore Redundant $!" :: String) #-}
 buildCallToAction :: HarchWeb.RouteRequest AppRoute AppRequestContext -> AppRoute -> Text -> CallToAction
 buildCallToAction routeRequest route label =
@@ -189,15 +198,13 @@ buildCallToAction routeRequest route label =
       -- route table, never from unvalidated caller text — a rejection here
       -- would mean a route itself renders an unsafe URL, a programming
       -- mistake in the route table, not a runtime condition this
-      -- function's own callers need to handle. See
-      -- 'HarchWeb.requiredSafeUrlOrDie' for why the failure path is
-      -- extracted rather than inlined; the @$!@ forces the diagnostic
-      -- message eagerly since it is otherwise only demanded on the
-      -- (never-taken, by construction) failure path, leaving it a
-      -- permanently-unticked thunk under HPC.
-      callToActionHref =
-        (HarchWeb.requiredSafeUrlOrDie $! ("buildCallToAction: rendered an unsafe URL: " <> renderedPath))
-          (HarchWeb.mkSafeUrl renderedPath)
+      -- function's own callers need to handle. The failure path is
+      -- extracted into 'buildCallToActionHref' (same shape as
+      -- 'WebApi.Login.requiredPasswordHashOrDie') so a dedicated test can
+      -- force it directly with a deliberately unsafe 'Nothing', rather than
+      -- forcing the diagnostic message eagerly at this always-safe call
+      -- site.
+      callToActionHref = (buildCallToActionHref $! renderedPath) (HarchWeb.mkSafeUrl renderedPath)
     }
   where
     renderedPath =
@@ -206,6 +213,14 @@ buildCallToAction routeRequest route label =
           { HarchWeb.requestRoute = route,
             HarchWeb.requestContext = HarchWeb.requestContext routeRequest
           }
+
+-- | Requires a route's rendered path to already be a safe relative URL,
+-- taking the rendered path itself (rather than just the resulting
+-- 'Maybe') so the failure diagnostic can be forced directly by a test —
+-- see 'Unit.WebApiSpec' for the case that exercises the 'Nothing' branch.
+buildCallToActionHref :: Text -> Maybe HarchWeb.SafeUrl -> HarchWeb.SafeUrl
+buildCallToActionHref renderedPath =
+  HarchWeb.requiredSafeUrlOrDie ("buildCallToAction: rendered an unsafe URL: " <> renderedPath)
 
 localizedText :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Text -> Text -> Text
 localizedText routeRequest englishText spanishText =

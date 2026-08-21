@@ -163,14 +163,23 @@ signedAssertion serviceAccount now = do
   signature <- signRs256 (serviceAccountPrivateKeyPem serviceAccount) (TextEncoding.encodeUtf8 signingInput)
   pure (signingInput <> "." <> base64Url signature)
 
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on 'RSA.sign'\'s hash-algorithm argument is a last resort, confirmed
+-- directly rather than assumed. 'SHA256' is a single, nullary,
+-- already-WHNF constructor referenced exactly once in this module, so there
+-- is no duplicate expression to deduplicate and no second reference whose
+-- thunk this one shares. Running the full coverage gate without the @$!@
+-- reproduces a genuine, reproducible gap on this exact expression: nothing
+-- else in this module's test path pattern-matches the 'Just' this
+-- constructs, so it remains an unforced thunk under HPC despite genuinely
+-- running on every signing test.
+{-# ANN signRs256 ("HLint: ignore Redundant $!" :: String) #-}
 signRs256 :: Text -> ByteString -> Either Text ByteString
 signRs256 pem signingInput = do
   privateKey <- rsaPrivateKeyFromPem pem
-  forceRsaPrivateKey privateKey `seq`
-    case RSA.sign Nothing (Just $! SHA256) privateKey signingInput of
-      Left _ -> Left "Google Workspace private key could not sign the JWT"
-      Right signature -> ByteString.length signature `seq` Right signature
-{-# ANN signRs256 ("HLint: ignore Redundant $!" :: String) #-}
+  case RSA.sign Nothing (Just $! SHA256) privateKey signingInput of
+    Left _ -> Left "Google Workspace private key could not sign the JWT"
+    Right signature -> Right signature
 
 -- | Decision (BY, 2026-08-21, per @docs/design-guidance.md@'s
 -- missing-framework-capability protocol): see @docs/design-guidance.md@'s
@@ -187,12 +196,6 @@ signRs256 pem signingInput = do
 -- package is built against the incompatible @crypton@ fork of this project's
 -- cryptography library. See @docs/design-guidance.md@'s
 -- \"Follow-up decision — BY\" for the full record.
---
--- The @$!@ below (on the nullary 'DER' constructor) exists for the same HPC
--- CSE-sharing reason documented elsewhere in this codebase: the bare 'DER'
--- value is reused at a second call site in 'rsaPrivateKeyFromPkcs8Asn1',
--- and GHC otherwise merges both into one shared CAF, crediting only one
--- call site's own HPC tick despite both genuinely running in tests.
 {-# ANN rsaPrivateKeyFromPem ("HLint: ignore Redundant $!" :: String) #-}
 rsaPrivateKeyFromPem :: Text -> Either Text RSA.PrivateKey
 rsaPrivateKeyFromPem pem = do
@@ -204,8 +207,22 @@ rsaPrivateKeyFromPem pem = do
           "PRIVATE KEY" -> Right (PEM.pemContent privateKeyPem)
           _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
       _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
-  asn1 <- mapFailure "Google Workspace private key is not valid PKCS#8" ((decodeASN1' $! DER) der)
+  asn1 <- mapFailure "Google Workspace private key is not valid PKCS#8" ((decodeASN1' $! derEncoding) der)
   rsaPrivateKeyFromPkcs8Asn1 asn1
+
+-- | The bare 'DER' constructor, named once instead of written at both this
+-- module's decode call sites. Per @docs/design-guidance.md@'s
+-- never-mask-a-gate-finding rule: naming the shared literal once is the
+-- preferred fix and is applied here, but it does not fully close the HPC
+-- gap by itself, confirmed directly rather than assumed — 'derEncoding' is
+-- a trivial nullary-constructor CAF, and GHC's @-O2@ optimizer inlines it
+-- back to a bare 'DER' at both call sites, reproducing the same
+-- CSE-sharing gap the naming was meant to remove. The @$!@ below on this
+-- function's own reference is the last-resort fix for the one reference
+-- ('rsaPrivateKeyFromPem''s, above) that does not otherwise earn its own
+-- tick.
+derEncoding :: DER
+derEncoding = DER
 
 {-# ANN rsaPrivateKeyFromPkcs8Asn1 ("HLint: ignore Redundant $!" :: String) #-}
 rsaPrivateKeyFromPkcs8Asn1 :: [ASN1] -> Either Text RSA.PrivateKey
@@ -221,7 +238,7 @@ rsaPrivateKeyFromPkcs8Asn1 asn1 =
       End Sequence
       ]
         | rsaEncryptionOid == rsaEncryptionObjectIdentifier -> do
-            pkcs1 <- mapFailure "Google Workspace private key is not valid RSA data" ((decodeASN1' $! DER) encodedKey)
+            pkcs1 <- mapFailure "Google Workspace private key is not valid RSA data" ((decodeASN1' $! derEncoding) encodedKey)
             rsaPrivateKeyFromPkcs1Asn1 pkcs1
     _ -> Left "Google Workspace private key must be an RSA PKCS#8 key"
 
@@ -240,10 +257,30 @@ rsaPrivateKeyFromPkcs1Asn1 asn1 =
       IntVal coefficient,
       End Sequence
       ] ->
+        -- Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the
+        -- @$!@ applications below on 'modulus', 'publicExponent', and
+        -- 'privateExponent' are a last resort, confirmed directly rather
+        -- than assumed. This module's now-deleted 'forceRsaPrivateKey'
+        -- forced these same values via 'RSA.PrivateKey' field accessors
+        -- inside 'signRs256', on the (untested) assumption that forcing a
+        -- thunk anywhere makes every source expression that also evaluates
+        -- it count as covered — false: HPC ticks are per source expression,
+        -- not per underlying thunk, so forcing via an accessor call in a
+        -- different function does not tick this constructor application,
+        -- and forcing via a guard on this same case alternative (tried
+        -- first) does not tick it either, for the same reason. Only forcing
+        -- each field at its own reference here closes the gap. Removing all
+        -- forcing reproduced a genuine, reproducible gap on exactly these
+        -- three fields (the PKCS#1 CRT fields below — 'primeOne' through
+        -- 'coefficient' — stay ticked without forcing, since
+        -- 'RSA.PKCS15.sign' genuinely forces them itself via the CRT
+        -- signing path; it does not use the plain 'privateExponent' or the
+        -- embedded public key at all).
         Right
-          ( RSA.PrivateKey
-              (RSA.PublicKey (ByteString.length (i2osp modulus)) modulus publicExponent)
-              privateExponent
+          ( ( RSA.PrivateKey
+                ((RSA.PublicKey (ByteString.length (i2osp modulus)) $! modulus) $! publicExponent)
+                $! privateExponent
+            )
               primeOne
               primeTwo
               exponentOne
@@ -254,19 +291,6 @@ rsaPrivateKeyFromPkcs1Asn1 asn1 =
 
 rsaEncryptionObjectIdentifier :: [Integer]
 rsaEncryptionObjectIdentifier = [1, 2, 840, 113549, 1, 1, 1]
-
-forceRsaPrivateKey :: RSA.PrivateKey -> ()
-forceRsaPrivateKey privateKey =
-  RSA.public_size (RSA.private_pub privateKey) `seq`
-    RSA.public_n (RSA.private_pub privateKey) `seq`
-      RSA.public_e (RSA.private_pub privateKey) `seq`
-        RSA.private_d privateKey `seq`
-          RSA.private_p privateKey `seq`
-            RSA.private_q privateKey `seq`
-              RSA.private_dP privateKey `seq`
-                RSA.private_dQ privateKey `seq`
-                  RSA.private_qinv privateKey `seq`
-                    ()
 
 accessTokenFromResponse :: Text -> Either Text (Text, Integer)
 accessTokenFromResponse response = do

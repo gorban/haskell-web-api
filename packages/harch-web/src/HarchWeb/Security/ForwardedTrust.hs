@@ -23,12 +23,6 @@ import Data.Word (Word32, Word8)
 import Network.Socket qualified as Socket
 import Text.Read (readMaybe)
 
--- The `$!` applications below (on already-WHNF values) exist so HPC ticks
--- each expression on every invocation instead of treating the compiled
--- code as a once-ticked shared reference; they have no runtime effect. See
--- 'WebApi.Login.recordCredentialCheckOutcome' for the same pattern.
-{-# ANN module ("HLint: ignore Redundant $!" :: String) #-}
-
 -- | Which peers, if any, a deployment trusts to supply proxy-forwarded
 -- request context. 'NeverTrustForwarded' is the safe default: every
 -- @X-Forwarded-*@\/@Forwarded@ header is ignored regardless of who sends it.
@@ -54,7 +48,7 @@ instance Show ForwardedHeaderTrust where
   showsPrec _ NeverTrustForwarded = showString "NeverTrustForwarded"
   showsPrec precedence (TrustForwardedFrom cidrBlocks) =
     showParen (precedence > 10) $
-      showString "TrustForwardedFrom " . (showsPrec 11 $! cidrBlocks)
+      showString "TrustForwardedFrom " . showsPrec 11 cidrBlocks
 
 -- | An IPv4 CIDR block (for example @10.0.0.0\/8@), stored with its host
 -- bits already masked off so two blocks naming the same network compare
@@ -135,7 +129,7 @@ prefixMask :: Word8 -> Word32
 prefixMask prefixLength
   | prefixLength >= 32 = maxBound
   | prefixLength == 0 = 0
-  | otherwise = maxBound `shiftL` (fromIntegral $! (32 - prefixLength))
+  | otherwise = maxBound `shiftL` fromIntegral (32 - prefixLength)
 
 -- | The single choke point every proxy-forwarded header trust decision goes
 -- through: the *actual* TCP peer (never client-supplied) must fall within a

@@ -47,8 +47,6 @@ import WebApi.Login
   )
 import WebApi.Postgres.Runtime (runRuntimeParameterizedRowsQuery)
 
-{-# ANN module ("HLint: ignore Redundant $!" :: String) #-}
-
 buildRuntimePostgresAccountStore :: DatabaseConfig -> AccountStore
 buildRuntimePostgresAccountStore !databaseConfig =
   buildRuntimePostgresAccountStoreWithRunner runRuntimeParameterizedRowsQuery databaseConfig
@@ -107,20 +105,15 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
         usernameTaken <- case pendingAccountUsername pendingAccount of
           Nothing -> pure False
           Just username -> do
-            -- `$!` on the constructor position: this is the same CSE-shared-atom
-            -- coverage gap the project's coverage-gate memory documents (usually
-            -- against a string literal; here against a data constructor
-            -- partially applied identically to several other call sites in this
-            -- module), not a real reachability gap.
             availabilityRows <-
-              (runStoreQuery $! AccountStoreUnavailable) $
+              unavailableAccountStoreQuery $
                 runQuery databaseConfig usernameAvailabilityQuery [usernameText username]
             pure (not (null availabilityRows))
         if usernameTaken
           then pure PendingAccountUsernameTaken
           else do
             rows <-
-              runStoreQuery AccountStoreUnavailable $
+              unavailableAccountStoreQuery $
                 runQuery
                   databaseConfig
                   createPendingAccountQuery
@@ -138,7 +131,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
     replaceVerification verification =
       runExceptT $ do
         rows <-
-          runStoreQuery AccountStoreUnavailable $
+          unavailableAccountStoreQuery $
             runQuery
               databaseConfig
               replaceEmailVerificationQuery
@@ -152,14 +145,14 @@ buildRuntimePostgresAccountStoreWithRunner runQuery databaseConfig =
     findVerification tokenDigest =
       runExceptT $ do
         rows <-
-          runStoreQuery AccountStoreUnavailable $
+          unavailableAccountStoreQuery $
             runQuery databaseConfig findEmailVerificationQuery [emailVerificationTokenDigestText tokenDigest]
         liftEither (decodeStoredVerification tokenDigest rows)
 
     consumeVerification tokenDigest now =
       runExceptT $ do
         rows <-
-          runStoreQuery AccountStoreUnavailable $
+          unavailableAccountStoreQuery $
             runQuery
               databaseConfig
               consumeEmailVerificationQuery
@@ -174,12 +167,20 @@ buildRuntimePostgresAccountProfileStoreWithRunner runQuery databaseConfig =
   AccountProfileStore $ \accountId ->
     runExceptT $ do
       rows <-
-        runStoreQuery AccountStoreUnavailable $
+        unavailableAccountStoreQuery $
           runQuery databaseConfig findAccountProfileQuery [accountIdText accountId]
       liftEither (decodeAccountProfileRows accountId rows)
 
 runStoreQuery :: (Text -> storeError) -> IO (Either Text value) -> ExceptT storeError IO value
 runStoreQuery = liftEitherWith
+
+-- | 'AccountStoreUnavailable' partially applied to 'runStoreQuery', named
+-- once instead of written at each call site above: an identical partial
+-- application of the same constructor written separately at multiple call
+-- sites gets merged by GHC into one shared CAF, crediting only the first
+-- call site's own HPC tick even though every one genuinely runs in tests.
+unavailableAccountStoreQuery :: IO (Either Text value) -> ExceptT AccountStoreError IO value
+unavailableAccountStoreQuery = runStoreQuery AccountStoreUnavailable
 
 decodeAccountCredentialRows :: [[Text]] -> Either AccountCredentialStoreError (Maybe AccountCredential)
 decodeAccountCredentialRows rows =

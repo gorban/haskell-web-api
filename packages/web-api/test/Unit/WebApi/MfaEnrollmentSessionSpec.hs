@@ -110,10 +110,7 @@ spec = do
       loadMfaEnrollmentSession (buildRuntimePostgresMfaEnrollmentSessionStore defaultRealPostgresConfig) unknownSessionId `shouldReturnEqual` Right Nothing
 
     it "keeps the MFA-enrollment-session errors comparable without exposing persistence details" $ do
-      expectAll
-        ( (MfaEnrollmentSessionStoreUnavailable == MfaEnrollmentSessionStoreUnavailable `shouldBe` True)
-            :| [MfaEnrollmentSessionStoreUnavailable /= MfaEnrollmentSessionStoreCorruptData `shouldBe` True]
-        )
+      MfaEnrollmentSessionStoreUnavailable /= MfaEnrollmentSessionStoreCorruptData `shouldBe` True
 
     it "uses a distinct, short-lived cookie separate from the ordinary login session" $ do
       sessionCookieNameText (sessionCookieName mfaEnrollmentSessionCookiePolicy) `shouldBe` "__Host-harch-mfa-enrollment"

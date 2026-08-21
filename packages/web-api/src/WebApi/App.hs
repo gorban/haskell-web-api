@@ -106,28 +106,27 @@ buildAppWithDatabaseAndReporters ::
   (Text.Text -> IO ()) ->
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestObservabilityReporter connectionObservabilityReporter applicationLogReporter =
-  config `seq`
-    Site.buildSiteApplication
-      ( ( Site.simpleSite
-            "web-api"
-            defaultRequestContext
-            routeCodec
-            (buildAppPageShellConfig config)
-            appNavigationRoutes
-            (buildAppRouteDefinition config pageRepository accountWorkflow)
-        )
-          { Site.siteRequestContextFromRequest =
-              requestContextFromWaiRequest (HarchWeb.forwardedHeaderTrust (requestPolicy config)),
-            Site.siteStaticAssets = staticAssets config,
-            Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
-            Site.siteRequestPolicy = requestPolicy config,
-            Site.siteDecodeClientAction = decodeAction accountActions,
-            Site.siteReportRequestObservability = requestObservabilityReporter,
-            Site.siteReportConnectionObservability = connectionObservabilityReporter,
-            Site.siteReportApplicationLog = applicationLogReporter,
-            Site.siteHandleClientAction = handleAccountAction accountWorkflow
-          }
+  Site.buildSiteApplication
+    ( ( Site.simpleSite
+          "web-api"
+          defaultRequestContext
+          routeCodec
+          (buildAppPageShellConfig config)
+          appNavigationRoutes
+          (buildAppRouteDefinition config pageRepository accountWorkflow)
       )
+        { Site.siteRequestContextFromRequest =
+            requestContextFromWaiRequest (HarchWeb.forwardedHeaderTrust (requestPolicy config)),
+          Site.siteStaticAssets = staticAssets config,
+          Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
+          Site.siteRequestPolicy = requestPolicy config,
+          Site.siteDecodeClientAction = decodeAction accountActions,
+          Site.siteReportRequestObservability = requestObservabilityReporter,
+          Site.siteReportConnectionObservability = connectionObservabilityReporter,
+          Site.siteReportApplicationLog = applicationLogReporter,
+          Site.siteHandleClientAction = handleAccountAction accountWorkflow
+        }
+    )
 
 buildApp :: AppConfig -> HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildApp config =
@@ -175,15 +174,13 @@ buildRuntimeApp config environmentConfig =
   let databaseConfiguration = databaseConfig environmentConfig
       pageRepository = buildRuntimePostgresPageRepository databaseConfiguration
       accountWorkflow = buildRuntimeAccountWorkflow environmentConfig
-   in pageRepository `seq`
-        accountWorkflow `seq`
-          buildAppWithDatabaseAndReporters
-            (withPublicBaseUrlRedirectAuthority environmentConfig config)
-            pageRepository
-            accountWorkflow
-            (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
-            (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
-            runtimeApplicationLogReporter
+   in buildAppWithDatabaseAndReporters
+        (withPublicBaseUrlRedirectAuthority environmentConfig config)
+        pageRepository
+        accountWorkflow
+        (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
+        (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
+        runtimeApplicationLogReporter
 
 buildRuntimeAppWithDatabaseBuilder ::
   AppConfig ->
@@ -192,34 +189,32 @@ buildRuntimeAppWithDatabaseBuilder ::
   HarchWeb.Application AppRoute AccountAction AppRequestContext
 buildRuntimeAppWithDatabaseBuilder config buildPageRepository environmentConfig =
   let pageRepository = buildPageRepository (databaseConfig environmentConfig)
-   in pageRepository `seq`
-        buildAppWithDatabaseAndReporters
-          (withPublicBaseUrlRedirectAuthority environmentConfig config)
-          pageRepository
-          unavailableAccountWorkflow
-          (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
-          (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
-          runtimeApplicationLogReporter
+   in buildAppWithDatabaseAndReporters
+        (withPublicBaseUrlRedirectAuthority environmentConfig config)
+        pageRepository
+        unavailableAccountWorkflow
+        (runtimeRequestObservabilityReporter (appMode environmentConfig) config)
+        (runtimeConnectionObservabilityReporter (appMode environmentConfig) config)
+        runtimeApplicationLogReporter
 
 buildRuntimeAccountWorkflow :: AppEnvironmentConfig -> AccountWorkflow
 buildRuntimeAccountWorkflow !environmentConfig =
   let databaseConfiguration = databaseConfig environmentConfig
-   in databaseConfiguration `seq`
-        AccountWorkflow
-          { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
-            accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
-            accountWorkflowPasswordHasher = Password.hashPassword,
-            accountWorkflowClock = getMonotonicTimeNSec,
-            accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
-            accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
-            accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore databaseConfiguration,
-            accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
-            accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore databaseConfiguration,
-            accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
-            accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
-            accountWorkflowTotpClock = floor <$> getPOSIXTime,
-            accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
-          }
+   in AccountWorkflow
+        { accountWorkflowStore = buildRuntimePostgresAccountStore databaseConfiguration,
+          accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
+          accountWorkflowPasswordHasher = Password.hashPassword,
+          accountWorkflowClock = getMonotonicTimeNSec,
+          accountWorkflowMfaStore = buildRuntimePostgresMfaStore databaseConfiguration,
+          accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore databaseConfiguration,
+          accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore databaseConfiguration,
+          accountWorkflowSessionStore = buildRuntimePostgresAccountSessionStore databaseConfiguration,
+          accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore databaseConfiguration,
+          accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore databaseConfiguration,
+          accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
+          accountWorkflowTotpClock = floor <$> getPOSIXTime,
+          accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
+        }
 
 runtimeEmailDelivery :: SmtpDeliveryConfig -> Email.EmailDelivery
 runtimeEmailDelivery smtpConfig =

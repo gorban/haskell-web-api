@@ -23,7 +23,6 @@ spec = do
             :| [ isNothing (mkSecretEncryptionKey "not-base64") `shouldBe` True,
                  isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded "short"))) `shouldBe` True,
                  isNothing (mkSecretEncryptionKey (TextEncoding.decodeUtf8 (Base64Url.encodeUnpadded (ByteString.replicate 16 1)))) `shouldBe` True,
-                 requiredKey == requiredKey `shouldBe` True,
                  requiredKey /= otherKey `shouldBe` True
                ]
         )

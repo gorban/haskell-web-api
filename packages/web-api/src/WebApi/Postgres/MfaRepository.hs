@@ -84,8 +84,11 @@ decodeMatchingAccount errorPrefix accountId rows =
       | returnedAccountId == accountIdText accountId -> Right True
     _ -> Left (MfaStoreCorruptData (errorPrefix <> Text.pack (show rows)))
 
--- The `$!` below (on an already-WHNF 'Text' literal) exists for the same HPC
--- CSE-sharing reason documented on 'WebApi.Login.recordCredentialCheckOutcome'.
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on the second field label is a last resort, confirmed directly
+-- rather than assumed. @"last-used counter"@ is a unique literal, not
+-- written anywhere else in this module, so there is no duplicate expression
+-- to deduplicate.
 {-# ANN decodeTotpEnrollment ("HLint: ignore Redundant $!" :: String) #-}
 decodeTotpEnrollment :: [[Text]] -> Either MfaStoreError (Maybe StoredTotpEnrollment)
 decodeTotpEnrollment rows =

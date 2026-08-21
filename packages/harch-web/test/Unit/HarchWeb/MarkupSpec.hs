@@ -122,7 +122,6 @@ spec = do
             :| [ firstHtml /= otherHtml `shouldBe` True,
                  length (show firstHtml) `shouldSatisfy` (> 0),
                  length (show [firstHtml]) `shouldSatisfy` (> 0),
-                 firstAttribute == firstAttribute `shouldBe` True,
                  firstAttribute /= otherAttribute `shouldBe` True,
                  length (show firstAttribute) `shouldSatisfy` (> 0),
                  length (show [firstAttribute]) `shouldSatisfy` (> 0)
@@ -287,14 +286,18 @@ spec = do
           urlNext = fromMaybe (error "expected a valid url") (Markup.mkSafeUrl "/next")
           urlOther = fromMaybe (error "expected a valid url") (Markup.mkSafeUrl "/other")
        in expectAll
-            ( (suffixKind == suffixKind `shouldBe` True)
-                :| [ suffixKind /= suffixAction `shouldBe` True,
-                     suffixKind /= suffixKind `shouldBe` False,
+            ( (suffixKind /= suffixAction `shouldBe` True)
+                -- 'deriving' only writes '=='; GHC's HPC instrumentation
+                -- attributes the same-value '==' path to its own box,
+                -- separate from the different-value path above. Comparing
+                -- two independently-parsed-but-equal values (rather than a
+                -- bare self-comparison) exercises it without proving
+                -- nothing.
+                :| [ Markup.mkDataAttributeSuffix "kind" == Just suffixKind `shouldBe` True,
                      show suffixKind `shouldBe` "DataAttributeSuffix \"kind\"",
                      show [suffixKind] `shouldBe` "[DataAttributeSuffix \"kind\"]",
-                     urlNext == urlNext `shouldBe` True,
                      urlNext /= urlOther `shouldBe` True,
-                     urlNext /= urlNext `shouldBe` False,
+                     Markup.mkSafeUrl "/next" == Just urlNext `shouldBe` True,
                      show urlNext `shouldBe` "SafeUrl \"/next\"",
                      show [urlNext] `shouldBe` "[SafeUrl \"/next\"]"
                    ]
@@ -344,11 +347,8 @@ spec = do
             ]
       expectAll
         ( (attributeValue /= booleanValue `shouldBe` True)
-            :| [ htmlValue == htmlValue `shouldBe` True,
-                 htmlValue /= otherHtmlValue `shouldBe` True,
-                 regionValue == regionValue `shouldBe` True,
+            :| [ htmlValue /= otherHtmlValue `shouldBe` True,
                  regionValue /= otherRegionValue `shouldBe` True,
-                 patchValue == patchValue `shouldBe` True,
                  patchValue /= otherPatchValue `shouldBe` True,
                  show [attributeValue, booleanValue] `shouldSatisfy` (not . null),
                  showList [attributeValue, booleanValue] "" `shouldSatisfy` (not . null),
@@ -359,8 +359,14 @@ spec = do
                  regionIdentifier /= otherRegionIdentifier `shouldBe` True,
                  showList [regionIdentifier, otherRegionIdentifier] "" `shouldSatisfy` (not . null),
                  show [trustedValue, otherTrustedValue] `shouldSatisfy` (not . null),
-                 trustedValue == trustedValue `shouldBe` True,
                  trustedValue /= otherTrustedValue `shouldBe` True,
+                 -- 'deriving' only writes '=='; GHC's HPC instrumentation
+                 -- attributes the same-value '==' path to its own box,
+                 -- separate from the different-value path above. Comparing
+                 -- two independently-constructed-but-equal values (rather
+                 -- than a bare self-comparison) exercises it without
+                 -- proving nothing.
+                 trustedValue == Unsafe.unsafeTrustHtml "<em>trusted</em>" `shouldBe` True,
                  showList [trustedValue, otherTrustedValue] "" `shouldSatisfy` (not . null),
                  Markup.divTag /= Markup.sectionTag `shouldBe` True,
                  showList [Markup.divTag, Markup.sectionTag] "" `shouldSatisfy` (not . null),

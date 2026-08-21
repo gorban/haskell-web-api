@@ -1243,7 +1243,6 @@ spec =
                        sum [fromEnum (left == right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors,
                        sum [fromEnum (left /= right) | left <- parseErrors, right <- parseErrors] `shouldBe` length parseErrors * (length parseErrors - 1),
                        sum [length (show parseError) + length (showList [parseError] "") | parseError <- parseErrors] `shouldSatisfy` (> 0),
-                       (sampleRequestData == sampleRequestData) `shouldBe` True,
                        (sampleRequestData /= sampleRequestData {apiRequestQueryParameters = []}) `shouldBe` True,
                        length (show sampleRequestData) + length (showList [sampleRequestData] "") `shouldSatisfy` (> 0)
                      ]

@@ -94,9 +94,8 @@ isCookieNameByte byte =
     || byte == 124
     || byte == 126
 
-{-# ANN decodeUtf8Leniently ("HLint: ignore Eta reduce" :: String) #-}
 decodeUtf8Leniently :: ByteString -> Text
-decodeUtf8Leniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
+decodeUtf8Leniently = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
 
 data ApiRequestSource
   = ApiQuerySource

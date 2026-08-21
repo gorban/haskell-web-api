@@ -59,7 +59,6 @@ spec = do
                 :| [ (parseCidrBlock "10.0.0.0/8" == parseCidrBlock "172.16.0.0/12") `shouldBe` False,
                      (parseCidrBlock "10.0.0.0/8" == parseCidrBlock "10.0.0.0/16") `shouldBe` False,
                      (firstBlock /= secondBlock) `shouldBe` True,
-                     (firstBlock /= firstBlock) `shouldBe` False,
                      -- A bare 'show' call, exercising CidrBlock's own explicit
                      -- 'show' method (distinct from 'showsPrec', which every
                      -- other assertion here reaches only indirectly).
@@ -121,7 +120,6 @@ spec = do
         ( ((NeverTrustForwarded == proxyTrust) `shouldBe` False)
             :| [ (proxyTrust == NeverTrustForwarded) `shouldBe` False,
                  (proxyTrust == TrustForwardedFrom (trustedBlock :| [])) `shouldBe` True,
-                 (NeverTrustForwarded /= proxyTrust) `shouldBe` True,
-                 (NeverTrustForwarded /= NeverTrustForwarded) `shouldBe` False
+                 (NeverTrustForwarded /= proxyTrust) `shouldBe` True
                ]
         )

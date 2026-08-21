@@ -84,12 +84,8 @@ import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Numeric.Natural (Natural)
 
--- Kept eta-expanded (not point-free), and reused for both header and field
--- body bytes, so HPC ticks the decode call on every invocation rather than
--- treating it as a once-shared CAF reference.
-{-# ANN decodeLeniently ("HLint: ignore Eta reduce" :: String) #-}
 decodeLeniently :: ByteString -> Text
-decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
+decodeLeniently = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
 
 -- | A non-negative byte budget for multipart parsing and retained request
 -- data. A 'Natural' input makes a negative literal unrepresentable; use

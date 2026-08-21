@@ -15,8 +15,7 @@ spec = do
     it "round-trips canonical Base32 enrollment secrets" $ do
       expectAll
         ( (renderTotpSecret rfcSecret `shouldBe` "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
-            :| [ rfcSecret == rfcSecret `shouldBe` True,
-                 rfcSecret /= alternateSecret `shouldBe` True,
+            :| [ rfcSecret /= alternateSecret `shouldBe` True,
                  fmap (== rfcSecret) (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just True,
                  fmap renderTotpSecret (mkTotpSecret (renderTotpSecret rfcSecret)) `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
                  fmap renderTotpSecret (mkTotpSecret "gezdgnbvgy3tqojqgezdgnbvgy3tqojq") `shouldBe` Just "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
@@ -55,8 +54,7 @@ spec = do
       let correctCode = required (mkTotpCode "287082")
       expectAll
         ( (mkTotpCode "287082" `shouldBe` Just correctCode)
-            :| [ correctCode == correctCode `shouldBe` True,
-                 correctCode /= required (mkTotpCode "287083") `shouldBe` True,
+            :| [ correctCode /= required (mkTotpCode "287083") `shouldBe` True,
                  show correctCode `shouldBe` "TotpCode \"287082\"",
                  show [correctCode] `shouldBe` "[TotpCode \"287082\"]",
                  isNothing (mkTotpCode "28708") `shouldBe` True,

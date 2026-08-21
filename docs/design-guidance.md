@@ -113,20 +113,33 @@ ignore pragma is acceptable only as a last resort, after the restructuring optio
 genuinely been tried and shown not to apply, and it must say so: the comment next to it must name
 what was tried and why it did not work, not merely restate that HPC/HLint disagrees with the code.
 
-**Worked example — the fix that should have generalized.** The CAF-sharing gap documented under
-"API transport helpers and the shared endpoint boundary" above (`[HarchWeb.RouteGet]` and `pure ()`
-literals shared into one CAF across two definitions) tried `$!`/`seq` forcing first, found HLint
-correctly flagged it as forcing an already-WHNF value, and *did not* suppress that finding — it
-deduplicated the literal into one named, exported binding (`noApiRequestFields`) used by both call
-sites instead. That is the shape every future CSE-sharing gap should take: find the shared literal
-or constructor reference and give it one name, rather than forcing each call site and telling the
-linter to stop complaining about it.
+**Worked example — the fix that should have generalized, with a caveat found while generalizing it.**
+The CAF-sharing gap documented under "API transport helpers and the shared endpoint boundary" above
+(`[HarchWeb.RouteGet]` and `pure ()` literals shared into one CAF across two definitions) tried
+`$!`/`seq` forcing first, found HLint correctly flagged it as forcing an already-WHNF value, and *did
+not* suppress that finding — it deduplicated the literal into one named, exported binding
+(`noApiRequestFields`) used by both call sites instead. That is the shape every future CSE-sharing gap
+should take: find the shared literal or constructor reference and give it one name, rather than
+forcing each call site and telling the linter to stop complaining about it.
 
-**Follow-up:** see task CB in `TASKS.md` for the audit of every existing ignore pragma in this
-codebase against this rule, and the cleanup that follows from it. CB's own inventory predates
-several tasks this session (BR, BX, BY, BZ) that added more instances of the exact pattern it
-describes while fixing unrelated findings — a reminder that this rule needed to be a standing one,
-not a one-time cleanup: re-verify CB's inventory is current before treating it as complete.
+**But naming alone does not reliably survive `-O2`, confirmed while closing task CB (2026-08-21).**
+`noApiRequestFields`'s own type (`RequestCodec ()`, a `newtype`-wrapped function) has enough shape
+that GHC keeps it as a real reference. A *trivial* nullary value — a bare data constructor, a `Text`
+literal, `Just True` — does not: GHC's `-O2` optimizer inlines the named binding back to the literal
+at each call site, silently reproducing the exact CSE-sharing gap the naming was meant to remove, with
+compilation succeeding either way (the only way to catch it is rerunning the full coverage gate and
+reading the per-line HPC HTML markup, not trusting that a build succeeded or extrapolating from one
+prior fix). CB's own inventory hit this on `emptyFieldDefault`, `databaseConnectTimeoutSecondsKey`,
+`derEncoding`, and `throttleCountsAsSuccess`/`noThrottleRecordingNeeded` — each needed a named binding
+*and* a follow-up `$!` at the specific reference(s) still left unticked. Prefer naming first for types
+with real shape (functions, `IO` actions, records); for a trivial nullary value referenced at 2+ call
+sites, expect to need both, and verify with the full gate before considering it closed.
+
+**Follow-up: complete.** Task CB in `TASKS.md` audited and fixed every existing ignore pragma in this
+codebase against this rule (2026-08-21) — see its own completion note for the full list and the two
+lessons (this one, and a companion one about deleting tautological `x == x` test assertions
+regressing a *derived* instance's own coverage) discovered while verifying the fix, not just applying
+it.
 
 ### Naming a partial slice in the status table
 

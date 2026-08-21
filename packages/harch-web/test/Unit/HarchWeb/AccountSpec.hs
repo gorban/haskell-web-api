@@ -58,16 +58,8 @@ spec = do
           stored = mkStoredEmailVerification accountId emailAddress 500 token
           accepted = EmailVerificationAccepted accountId emailAddress
       expectAll
-        ( (accountId == accountId `shouldBe` True)
-            :| [ digest == digest `shouldBe` True,
-                 emailVerificationTokenDigestText digest `shouldBe` "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA",
-                 stored == stored `shouldBe` True,
-                 accepted == accepted `shouldBe` True,
-                 [accountId] == [accountId] `shouldBe` True,
-                 [digest] == [digest] `shouldBe` True,
-                 [stored] == [stored] `shouldBe` True,
-                 [accepted] == [accepted] `shouldBe` True,
-                 accountId /= required (mkAccountId "account_02") `shouldBe` True,
+        ( (emailVerificationTokenDigestText digest `shouldBe` "ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA")
+            :| [ accountId /= required (mkAccountId "account_02") `shouldBe` True,
                  stored /= mkStoredEmailVerification accountId emailAddress 501 token `shouldBe` True,
                  accepted /= EmailVerificationRejected `shouldBe` True,
                  show accountId `shouldBe` "AccountId \"account_01\"",

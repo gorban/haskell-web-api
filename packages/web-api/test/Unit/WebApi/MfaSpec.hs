@@ -113,11 +113,8 @@ spec = do
           confirmedEnrollment = StoredTotpEnrollment "other-envelope" (Just 500) Nothing
           unavailableError = MfaStoreUnavailable "database unavailable"
       expectAll
-        ( (pendingEnrollment == pendingEnrollment `shouldBe` True)
-            :| [ pendingEnrollment /= confirmedEnrollment `shouldBe` True,
-                 unavailableError == unavailableError `shouldBe` True,
-                 unavailableError /= MfaStoreCorruptData "database unavailable" `shouldBe` True
-               ]
+        ( (pendingEnrollment /= confirmedEnrollment `shouldBe` True)
+            :| [unavailableError /= MfaStoreCorruptData "database unavailable" `shouldBe` True]
         )
 
     it "executes the native libpq MFA adapter against a migrated PostgreSQL database" $ do

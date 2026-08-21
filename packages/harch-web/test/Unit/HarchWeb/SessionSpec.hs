@@ -106,7 +106,6 @@ spec = do
                  sessionCsrfToken sampleSession `shouldBe` sampleCsrfToken,
                  sessionIssuedAtNanoseconds sampleSession `shouldBe` 100,
                  sessionExpiresAtNanoseconds sampleSession `shouldBe` 200,
-                 sampleSession == sampleSession `shouldBe` True,
                  sampleSession /= sampleSession {sessionExpiresAtNanoseconds = 201} `shouldBe` True,
                  show sampleSession `shouldContain` "sessionPrincipal = \"account-123\"",
                  show sampleSession `shouldNotContain` Text.unpack validSessionToken,
@@ -141,7 +140,13 @@ spec = do
       expectAll
         ( (renderSafeReturnPath returnPath `shouldBe` "/account/settings?tab=security")
             :| [ returnPath /= required "other safe return path" (mkSafeReturnPath "/") `shouldBe` True,
-                 returnPath == returnPath `shouldBe` True,
+                 -- 'deriving' only writes '=='; GHC's HPC instrumentation
+                 -- attributes the same-value '==' path to its own box,
+                 -- separate from the different-value path above. Comparing
+                 -- two independently-parsed-but-equal values (rather than a
+                 -- bare self-comparison) exercises it without proving
+                 -- nothing.
+                 mkSafeReturnPath "/account/settings?tab=security" == Just returnPath `shouldBe` True,
                  show returnPath `shouldBe` "SafeReturnPath \"/account/settings?tab=security\"",
                  show [returnPath] `shouldBe` "[SafeReturnPath \"/account/settings?tab=security\"]",
                  mkSafeReturnPath "https://attacker.test" `shouldBe` Nothing,

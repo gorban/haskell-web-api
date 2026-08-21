@@ -71,11 +71,8 @@ splitOnCrlf bytes =
       | ByteString.null rest -> [line]
       | otherwise -> line : splitOnCrlf (ByteString.drop 2 rest)
 
--- Kept eta-expanded so HPC ticks decoding for every parsed header rather than
--- treating it as a once-shared CAF reference.
-{-# ANN decodeLeniently ("HLint: ignore Eta reduce" :: String) #-}
 decodeLeniently :: ByteString -> Text
-decodeLeniently bytes = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode bytes
+decodeLeniently = TextEncoding.decodeUtf8With TextEncodingError.lenientDecode
 
 -- | Split a @Content-Disposition@ value's @;@-separated parameters,
 -- respecting quoted-string boundaries so a semicolon inside a quoted

@@ -199,10 +199,8 @@ spec = do
       let totpProof = TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))
           recoveryProof = RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))
       expectAll
-        ( (AccountCredentialStoreUnavailable "unavailable" == AccountCredentialStoreUnavailable "unavailable" `shouldBe` True)
-            :| [ AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True,
-                 AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True,
-                 PasswordLoginRejected == PasswordLoginRejected `shouldBe` True,
+        ( (AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreUnavailable "other" `shouldBe` True)
+            :| [ AccountCredentialStoreUnavailable "unavailable" /= AccountCredentialStoreCorruptData "unavailable" `shouldBe` True,
                  PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True,
                  PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
                  PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,

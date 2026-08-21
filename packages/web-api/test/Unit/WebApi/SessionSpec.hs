@@ -107,10 +107,7 @@ spec = do
       loadAccountSession (buildRuntimePostgresAccountSessionStore defaultRealPostgresConfig) unknownSessionId `shouldReturnEqual` Right Nothing
 
     it "keeps the account-session errors comparable without exposing persistence details" $ do
-      expectAll
-        ( (AccountSessionStoreUnavailable == AccountSessionStoreUnavailable `shouldBe` True)
-            :| [AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True]
-        )
+      AccountSessionStoreUnavailable /= AccountSessionStoreCorruptData `shouldBe` True
 
   describe "account-session issuance" $ do
     it "generates and persists an opaque session after authentication succeeds" $ do

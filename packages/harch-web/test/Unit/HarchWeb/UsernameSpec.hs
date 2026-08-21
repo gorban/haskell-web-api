@@ -32,8 +32,14 @@ spec =
       case (mkUsername "eve_42-dev", mkUsername "other_user") of
         (Just username, Just otherUsername) ->
           expectAll
-            ( ((username == username) `shouldBe` True)
-                :| [ (username /= otherUsername) `shouldBe` True,
+            ( ((username /= otherUsername) `shouldBe` True)
+                -- 'deriving' only writes '=='; GHC's HPC instrumentation
+                -- attributes the same-value '==' path to its own box,
+                -- separate from the different-value path above. Comparing
+                -- two independently-parsed-but-equal values (rather than a
+                -- bare self-comparison) exercises it without proving
+                -- nothing.
+                :| [ mkUsername "eve_42-dev" == Just username `shouldBe` True,
                      show username `shouldBe` "Username {usernameText = \"eve_42-dev\"}",
                      show [username] `shouldBe` "[Username {usernameText = \"eve_42-dev\"}]"
                    ]

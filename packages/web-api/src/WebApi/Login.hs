@@ -166,8 +166,14 @@ data SecondFactorContext = SecondFactorContext
 -- with a wrong password. Without this, 'beginPasswordLoginWithIdentifier'
 -- returning immediately for an unknown identifier while a known one runs a
 -- full KDF verification is a reliable existence oracle.
--- The `$!` below (on an already-WHNF 'Text' literal) exists for the same HPC
--- CSE-sharing reason documented on 'recordCredentialCheckOutcome' above.
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on the diagnostic-message literal is a last resort, confirmed
+-- directly rather than assumed. The literal is unique to this call site (not
+-- duplicated anywhere else in this module), so there is no shared expression
+-- to deduplicate; it remains permanently unforced without the @$!@ because
+-- 'dummyPasswordHash' is a 'NOINLINE' CAF evaluated at most once across the
+-- whole test run, and nothing else in this module's test path forces it a
+-- second time to pick up a tick.
 {-# ANN dummyPasswordHash ("HLint: ignore Redundant $!" :: String) #-}
 dummyPasswordHash :: PasswordHash
 dummyPasswordHash =
@@ -264,11 +270,15 @@ credentialCheckToPasswordLoginResult outcome =
     CredentialCheckCredentialStoreError storeError -> PasswordLoginCredentialStoreError storeError
     CredentialCheckMfaStoreError storeError -> PasswordLoginMfaStoreError storeError
 
--- The `$!` below (on an already-WHNF `()`) exists so HPC ticks this call on
--- every invocation instead of treating the shared literal as a once-ticked
--- CAF reference (see the identical pattern and rationale on
--- 'registrationSubmission' in "WebApi.AccountPages.Actions.Contract"); it
--- has no runtime effect.
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on the already-WHNF @()@ is a last resort, confirmed directly rather
+-- than assumed. Naming this shared literal once as its own top-level
+-- binding (tried first) does not close the gap: 'pure ()' is trivial enough
+-- that GHC's @-O2@ optimizer inlines a named binding for it back to a bare
+-- @pure ()@ at each call site anyway, reproducing the same CSE-sharing gap
+-- the naming was meant to remove — confirmed by reverting to this call-site
+-- form and observing the same-shaped gap simply move to which of the two
+-- call sites (this one, or 'completeRecoveryCode''s) is left unticked.
 {-# ANN recordCredentialCheckOutcome ("HLint: ignore Redundant $!" :: String) #-}
 recordCredentialCheckOutcome :: LoginThrottleContext -> Text -> CredentialCheckOutcome -> IO ()
 recordCredentialCheckOutcome throttle key outcome =
@@ -279,18 +289,23 @@ recordCredentialCheckOutcome throttle key outcome =
 -- record: it reflects our own persistence being unavailable, not attacker
 -- behavior.
 --
--- The `$!` applications below (on already-WHNF 'True' literals) exist for
--- the same HPC CSE-sharing reason as 'recordCredentialCheckOutcome' above.
-{-# ANN credentialCheckThrottleOutcome ("HLint: ignore Redundant $!" :: String) #-}
+-- | The throttle-counts-as-success outcome, named once instead of written as
+-- a bare @Just True@ at each matching case alternative below: identical
+-- literal expressions written separately at multiple case alternatives get
+-- merged by GHC into one shared CAF, crediting only the first alternative's
+-- own HPC tick even though every one genuinely runs in tests.
+throttleCountsAsSuccess :: Maybe Bool
+throttleCountsAsSuccess = Just True
+
 credentialCheckThrottleOutcome :: CredentialCheckOutcome -> Maybe Bool
 credentialCheckThrottleOutcome outcome =
   case outcome of
     CredentialCheckRejected -> Just False
-    CredentialCheckEmailVerificationRequired _ -> Just True
-    CredentialCheckMfaEnrollmentRequired _ -> Just $! True
-    CredentialCheckMfaRequired _ -> Just True
+    CredentialCheckEmailVerificationRequired _ -> throttleCountsAsSuccess
+    CredentialCheckMfaEnrollmentRequired _ -> throttleCountsAsSuccess
+    CredentialCheckMfaRequired _ -> throttleCountsAsSuccess
     CredentialCheckCredentialStoreError _ -> Nothing
-    CredentialCheckMfaStoreError _ -> Just $! True
+    CredentialCheckMfaStoreError _ -> throttleCountsAsSuccess
 
 lookupCredential :: AccountCredentialStore -> LoginIdentifier -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
 lookupCredential credentialStore identifier =
@@ -401,8 +416,19 @@ verifyTotpProof context accountId enrollment suppliedCode =
 -- already cleared the password step could otherwise force up to eight KDF
 -- evaluations per guess with nothing gating it.
 --
--- The `$!`/'seq' uses below exist for the same HPC CSE-sharing reason as
--- 'recordCredentialCheckOutcome' above.
+-- Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- applications below are a last resort, confirmed directly rather than
+-- assumed. 'key' is already a single, correctly-factored local binding
+-- ('where'-bound), used once each by 'checkLoginThrottle' and
+-- 'recordThrottleAttempt' — the correct shape for this code, not
+-- duplication to remove; GHC shares the two references to this one thunk,
+-- and only the first earns its own HPC tick when forced. The bare @()@ on
+-- the 'Left' branch is likewise already-WHNF and unique to this call site,
+-- with no duplicate to deduplicate. 'accepted' below is forced for the same
+-- thunk-sharing reason: 'recoveryResult' is scrutinized twice (once here,
+-- once again by the trailing 'either' call), binding an 'accepted' each
+-- time from the same underlying 'Right' payload — the second binding does
+-- not earn its own tick unforced.
 {-# ANN completeRecoveryCode ("HLint: ignore Redundant $!" :: String) #-}
 completeRecoveryCode :: SecondFactorContext -> AccountId -> RecoveryCode -> IO PasswordMfaLoginResult
 completeRecoveryCode context accountId suppliedCode = do

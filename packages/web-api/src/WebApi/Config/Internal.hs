@@ -425,7 +425,7 @@ parseAppEnvironmentConfig committedDefaults localOverrides environmentOverrides 
   parsedDatabaseName <- requiredConfigValue "DATABASE_NAME"
   parsedDatabaseUser <- requiredConfigValue "DATABASE_USER"
   parsedDatabasePassword <- requiredConfigValue "DATABASE_PASSWORD"
-  parsedDatabaseConnectTimeoutSeconds <- parseConnectTimeout =<< requiredConfigValue "DATABASE_CONNECT_TIMEOUT_SECONDS"
+  parsedDatabaseConnectTimeoutSeconds <- parseConnectTimeout =<< requiredConfigValue databaseConnectTimeoutSecondsKey
   parsedSmtpHost <- requiredConfigValue "SMTP_HOST"
   parsedSmtpPort <- parseSmtpPort =<< requiredConfigValue "SMTP_PORT"
   parsedSmtpHeloName <- requiredConfigValue "SMTP_HELO_NAME"
@@ -488,20 +488,26 @@ parseMode value =
 parsePort :: Text -> Either ConfigParseError Int
 parsePort = parsePositiveInt "DATABASE_PORT"
 
-{-# ANN parseConnectTimeout ("HLint: ignore Redundant $!" :: String) #-}
+-- | The @DATABASE_CONNECT_TIMEOUT_SECONDS@ env var name, named once instead
+-- of written at both this module's uses (the required-value lookup in
+-- 'parseAppEnvironmentConfig' and 'parseConnectTimeout''s own error label).
+-- Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: naming the
+-- shared literal once is the preferred fix and is applied here, but it does
+-- not fully close the HPC gap by itself, confirmed directly rather than
+-- assumed — 'databaseConnectTimeoutSecondsKey' is a trivial 'Text' literal
+-- CAF, and GHC's @-O2@ optimizer inlines it back to a bare literal at
+-- 'parseConnectTimeout''s reference, reproducing the same CSE-sharing gap
+-- the naming was meant to remove. The @$!@ below is the last-resort fix for
+-- that one remaining reference.
+databaseConnectTimeoutSecondsKey :: Text
+databaseConnectTimeoutSecondsKey = "DATABASE_CONNECT_TIMEOUT_SECONDS"
 
 -- | Non-negative, not positive: libpq treats a @connect_timeout@ below 2
 -- seconds (including 0) as "wait indefinitely", which is a legitimate,
 -- explicit opt-out of the bound this field otherwise provides.
---
--- The `$!` forces the key-name literal at its own call site: GHC's CSE
--- otherwise shares that literal's evaluation with its other textual
--- occurrences in this module, and HPC then leaves this specific source
--- span permanently unticked despite the declaration itself running on
--- every test that parses 'DatabaseConfig' (see the coverage-gate memory's
--- CSE-sharing technique).
+{-# ANN parseConnectTimeout ("HLint: ignore Redundant $!" :: String) #-}
 parseConnectTimeout :: Text -> Either ConfigParseError Int
-parseConnectTimeout = parseNonNegativeInt $! "DATABASE_CONNECT_TIMEOUT_SECONDS"
+parseConnectTimeout = parseNonNegativeInt $! databaseConnectTimeoutSecondsKey
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do

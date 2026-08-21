@@ -11,6 +11,7 @@ module WebApi.Page
     buildPageModelFromRouteData,
     buildPageModelWithDatabase,
     buildPageModel,
+    buildCallToActionHref,
     renderPageFromRouteData,
     renderUnavailableProfilePage,
     renderProfilePageWithState,
@@ -26,7 +27,8 @@ import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.Config (AppConfig (..))
 import WebApi.Database (PageRepository, defaultPageRepository)
 import WebApi.Page.Building
-  ( buildPageModel,
+  ( buildCallToActionHref,
+    buildPageModel,
     buildPageModelFromRouteData,
     buildPageModelWithDatabase,
     buildProfilePageModel,

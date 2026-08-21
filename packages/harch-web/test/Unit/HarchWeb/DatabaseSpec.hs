@@ -107,7 +107,6 @@ spec = do
       expectAll
         ( (databaseResultValue result `shouldBe` Right 7)
             :| [ databaseResultOperations result `shouldBe` [loginCountOperation],
-                 result == result `shouldBe` True,
                  result /= otherResult `shouldBe` True,
                  show result `shouldBe` "DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}",
                  show [result] `shouldBe` "[DatabaseResult {databaseResultValue = Right 7, databaseResultOperations = [DatabaseOperation {databaseOperationName = \"load-login-count\", databaseOperationSystem = \"postgresql\", databaseQueryTemplate = \"SELECT login_count FROM account WHERE id = ?;\"}]}]"

@@ -15,6 +15,7 @@ module App.Routes
     twoPageActionContext,
     twoPageActions,
     twoPageNavigationPath,
+    twoPageNavigationHref,
     twoPageActionPath,
   )
 where
@@ -142,21 +143,40 @@ twoPageActions =
 -- 'mkSafeUrl' rejecting it here would only ever mean a route itself was
 -- defined to render an unsafe URL — a programming mistake in this
 -- function, not a runtime condition 'pageLink' callers need to handle.
--- See 'requiredSafeUrlOrDie' for why the failure path is extracted rather
--- than inlined. The @$!@ below forces the diagnostic message eagerly for
--- the same HPC CSE-sharing reason documented on other forced call sites
--- in this codebase: 'requiredSafeUrlOrDie' only demands this argument on
--- the (never-taken, by construction) failure path, so it would otherwise
--- stay an unevaluated, permanently-unticked thunk in every real run.
+-- The failure path is extracted into 'twoPageNavigationHref' so a
+-- dedicated test can force it directly with a deliberately unsafe
+-- 'Nothing', rather than forcing the diagnostic message eagerly at this
+-- always-safe call site.
+-- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
+-- below on 'twoPageNavigationHref'\'s first argument is a last resort, tried
+-- only after the rule's own preferred fix did not apply here. That fix
+-- (deduplicating a literal shared across two source positions into one named
+-- binding) does not apply: 'renderedPath' is already exactly that — one
+-- named, correctly-factored local binding — used once as
+-- 'twoPageNavigationHref'\'s first argument and once inside 'mkSafeUrl', which
+-- is the correct shape for this code, not duplication to remove. Confirmed
+-- directly, not assumed: running the full coverage gate without the @$!@
+-- reproduces a genuine, reproducible gap on this exact expression (72%
+-- boolean coverage, 934/935 expressions). GHC shares the two references to
+-- this one @let@-bound thunk, and only the second (inside 'mkSafeUrl') earns
+-- its own HPC tick when forced; the first — evaluating an already-WHNF
+-- thunk — does not.
 {-# ANN twoPageNavigationPath ("HLint: ignore Redundant $!" :: String) #-}
 twoPageNavigationPath :: TwoPageNavigationTarget -> SafeUrl
 twoPageNavigationPath navigationTarget =
-  (requiredSafeUrlOrDie $! ("twoPageNavigationPath: rendered an unsafe URL: " <> renderedPath))
-    (mkSafeUrl renderedPath)
+  (twoPageNavigationHref $! renderedPath) (mkSafeUrl renderedPath)
   where
     renderedPath = case navigationTarget of
       NavigationPage page -> pageRoutePath page
       NavigationPreview previewSlug -> "/preview/" <> previewSlugText previewSlug
+
+-- | Requires a navigation target's rendered path to already be a safe
+-- relative URL, taking the rendered path itself (rather than just the
+-- resulting 'Maybe') so the failure diagnostic can be forced directly by a
+-- test.
+twoPageNavigationHref :: Text -> Maybe SafeUrl -> SafeUrl
+twoPageNavigationHref renderedPath =
+  requiredSafeUrlOrDie ("twoPageNavigationPath: rendered an unsafe URL: " <> renderedPath)
 
 mkPreviewSlug :: Text -> Maybe PreviewSlug
 mkPreviewSlug value =

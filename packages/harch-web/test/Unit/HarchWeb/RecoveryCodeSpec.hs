@@ -18,8 +18,14 @@ spec = do
     it "canonicalizes user-entered hexadecimal codes and generates 80-bit codes" $ do
       expectAll
         ( (recoveryCodeText knownCode `shouldBe` "12345-6789A-BCDEF-01234")
-            :| [ knownCode == knownCode `shouldBe` True,
-                 knownCode /= otherCode `shouldBe` True,
+            :| [ knownCode /= otherCode `shouldBe` True,
+                 -- 'deriving' only writes '=='; GHC's HPC instrumentation
+                 -- attributes the same-value '==' path to its own box,
+                 -- separate from the different-value path above. Comparing
+                 -- two independently-parsed-but-equal values (rather than a
+                 -- bare self-comparison) exercises it without proving
+                 -- nothing.
+                 mkRecoveryCode "12345-6789a-bcdef-01234" == Just knownCode `shouldBe` True,
                  fmap recoveryCodeText (mkRecoveryCode "12345-6789a-bcdef-01234") `shouldBe` Just (recoveryCodeText knownCode),
                  fmap recoveryCodeText (mkRecoveryCode "123456789ABCDEF01234") `shouldBe` Just (recoveryCodeText knownCode),
                  map (isNothing . mkRecoveryCode) ["", "12345-6789A-BCDEF-0123", "12345-6789A-BCDEF-012345", "12345-6789A-BCDEF-0123G"] `shouldBe` [True, True, True, True]

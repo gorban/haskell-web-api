@@ -831,11 +831,9 @@ spec =
             itemLimit = multipartItemLimit 3
             otherItemLimit = multipartItemLimit 4
          in expectAll
-              ( (byteLimit == byteLimit `shouldBe` True)
-                  :| [ byteLimit /= otherByteLimit `shouldBe` True,
-                       show byteLimit `shouldSatisfy` (not . null),
+              ( (byteLimit /= otherByteLimit `shouldBe` True)
+                  :| [ show byteLimit `shouldSatisfy` (not . null),
                        showList [byteLimit] "" `shouldSatisfy` (not . null),
-                       itemLimit == itemLimit `shouldBe` True,
                        itemLimit /= otherItemLimit `shouldBe` True,
                        show itemLimit `shouldSatisfy` (not . null),
                        showList [itemLimit] "" `shouldSatisfy` (not . null)

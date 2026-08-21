@@ -263,10 +263,6 @@ uploadFormBody csrfToken =
       Markup.element Markup.buttonTag [Markup.inputType "submit"] [Markup.text "Upload"]
     ]
 
--- The `$!` on the content type (already-WHNF) exists so HPC ticks this call
--- on every invocation instead of treating the closed literal as a once-shared
--- reference; it has no runtime effect.
-{-# ANN renderNativeUploadPage ("HLint: ignore Redundant $!" :: String) #-}
 renderNativeUploadPage :: HttpTypes.Status -> Text -> Markup.Html -> IO (ApiResponse ByteString.ByteString)
 renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
   let renderedHtml =
@@ -275,4 +271,4 @@ renderNativeUploadPage statusCode pageTitleText pageBodyHtml = do
           <> "</title></head><body><main id=\"app-main\">"
           <> Markup.renderHtml pageBodyHtml
           <> "</main></body></html>"
-  pure ((apiResponse $! TextEncoding.encodeUtf8 renderedHtml) {apiEndpointResponseStatus = statusCode})
+  pure ((apiResponse (TextEncoding.encodeUtf8 renderedHtml)) {apiEndpointResponseStatus = statusCode})
