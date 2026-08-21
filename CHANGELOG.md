@@ -154,6 +154,12 @@
     `HarchWeb.Observability.export{Request,Connection}ObservabilityToOtlp` likewise now take an
     explicit `HttpClient.Manager` (constructed via the new `HarchWeb.newOtlpHttpManager`) instead of
     reaching for a framework-owned global one.
+24. Replaced the deprecated, unmaintained `cryptonite` dependency with its maintained fork `crypton`
+    in `harch-web` and `web-api`. Both packages previously resolved `cryptonite` *and* `crypton` into
+    the same binary (the latter arriving transitively via `tls`/`crypton-x509`), linking two
+    incompatible copies of the same cryptographic primitives that back every password hash, session
+    token, TOTP secret, and JWT signature in the framework. No behavior change; `crypton` is a
+    module-for-module drop-in replacement.
 
 ## 0.1.1.0
 
