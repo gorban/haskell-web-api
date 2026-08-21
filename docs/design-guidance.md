@@ -1343,6 +1343,37 @@ larger expression tree (`{f 'Just}`); reaching that would need full-AST forcing 
 instance and `deepseq`, or a hand-written traversal) for a case with, again, no demonstrated need.
 Recorded as a named, narrower residual gap rather than silently treated as closed by the WHNF fix.
 
+### Follow-up decision — BX: explicit-prop caching, not a second global CAF (2026-08-21)
+
+**Decision: cache the Gmail access token behind an explicitly-owned `GoogleWorkspaceTokenCache`
+prop, and pass the Gmail HTTP manager explicitly, rather than reaching for `unsafePerformIO`/
+`NOINLINE` globals the way `Otlp.hs`'s existing manager does.** BX's own text points at
+`Otlp.hs:103` as the correct precedent to copy ("`Otlp.hs:103` in the same package does it
+correctly with a `NOINLINE` global"), but by the time this task was reached, BZ (later in the same
+file) had already named that exact pattern — `Otlp.hs`'s global manager and span counter,
+`Acme/Challenge.hs`'s global challenge-directory `MVar` — as a violation of this document's
+explicit-props rule ("the `NOINLINE` pragmas are all present and correct — the objection is the
+ambient ownership, not the CAF mechanics"). Copying BX's own suggested fix verbatim would have
+added a *third* instance of a pattern this project already has an open task to remove, the turn
+right after finding it. Instead, both the new token cache and the HTTP manager are threaded as
+ordinary explicit parameters: `newGoogleWorkspaceTokenCache :: IO GoogleWorkspaceTokenCache`
+allocates the `MVar` once, for whoever constructs the provider to own and pass in, and
+`runGmailHttpRequest` now takes a `Manager` argument instead of minting one per call. A caller that
+wants two independently-refreshing providers, or a test that wants isolated state per case, simply
+allocates two — the same flexibility a global CAF forecloses.
+
+Investigating before implementing also surfaced that neither `HarchWeb.GoogleWorkspace` nor
+`HarchWeb.Gmail` has a real caller: `web-api`'s composition root wires email delivery through plain
+SMTP only (`WebApi/App.hs`'s `runtimeEmailDelivery`), and neither module is even re-exported through
+the `HarchWeb` facade — confirmed by grep, not assumed. Unlike DG's ACME native protocol client
+(where commit history documented an explicit prior removal-and-replacement, making deletion the
+right call), there is no such evidence here that this subsystem was tried and abandoned; it reads
+as a partially-built alternate email-delivery path not yet wired to a configuration choice, not dead
+code from a superseded design. Absent that distinguishing evidence, this fix was scoped and shipped
+as requested rather than unilaterally deleting a subsystem with real tests and no signal it is
+meant to go away — but the "no live caller" fact is recorded here so a future task touching this
+area doesn't have to rediscover it.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

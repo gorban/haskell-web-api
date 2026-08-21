@@ -3,12 +3,15 @@
 module HarchWeb.GoogleWorkspace
   ( GoogleWorkspaceServiceAccount,
     GoogleWorkspaceClock,
+    GoogleWorkspaceTokenCache,
     decodeGoogleWorkspaceServiceAccount,
     gmailSendScope,
     mkGoogleWorkspaceAccessTokenProvider,
+    newGoogleWorkspaceTokenCache,
   )
 where
 
+import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Monad (unless)
 import Crypto.Hash.Algorithms (SHA256 (..))
 import Crypto.Number.Serialize (i2osp)
@@ -69,9 +72,51 @@ serviceAccountFields value =
         _ -> Left "Google Workspace credentials must contain client_email and private_key"
     _ -> Left "Google Workspace credentials must contain client_email and private_key"
 
-mkGoogleWorkspaceAccessTokenProvider :: GmailHttpRunner -> GoogleWorkspaceClock -> GoogleWorkspaceServiceAccount -> GmailAccessTokenProvider
-mkGoogleWorkspaceAccessTokenProvider runRequest currentTime serviceAccount = do
-  now <- currentTime
+-- | Decision (BX, 2026-08-21, per @docs/design-guidance.md@'s
+-- explicit-props rule): see @docs/design-guidance.md@'s
+-- \"Follow-up decision — BX\" for why this is an explicit prop rather than
+-- a global CAF matching 'HarchWeb.Observability.Otlp'\'s existing manager.
+--
+-- An opaque, explicitly-owned holder for the most recently minted access
+-- token and the time it should be treated as expired. Passed as a prop to
+-- 'mkGoogleWorkspaceAccessTokenProvider' rather than kept as global mutable
+-- state, per @docs/design-guidance.md@'s explicit-props rule — a caller that
+-- wants two independently-refreshing providers (or a test that wants a
+-- fresh cache per case) allocates two.
+newtype GoogleWorkspaceTokenCache = GoogleWorkspaceTokenCache (MVar (Maybe CachedAccessToken))
+
+data CachedAccessToken = CachedAccessToken
+  { cachedAccessTokenValue :: Text,
+    -- | POSIX seconds after which this cached token must be re-minted.
+    cachedAccessTokenExpiresAt :: Integer
+  }
+
+newGoogleWorkspaceTokenCache :: IO GoogleWorkspaceTokenCache
+newGoogleWorkspaceTokenCache = GoogleWorkspaceTokenCache <$> newMVar Nothing
+
+-- | A signed JWT is exchanged for an access token good for (typically) one
+-- hour; re-minting one for every email costs an RSA-2048 signature and two
+-- extra HTTPS round trips, and risks Google's token endpoint rate limits
+-- under volume. Cached to @expires_in - 'accessTokenCacheMarginSeconds'@ so
+-- a token already close to expiry is refreshed early rather than risking a
+-- send that starts just before it lapses. `modifyMVar` serializes concurrent
+-- callers onto one in-flight mint rather than each racing their own.
+accessTokenCacheMarginSeconds :: Integer
+accessTokenCacheMarginSeconds = 60
+
+mkGoogleWorkspaceAccessTokenProvider :: GoogleWorkspaceTokenCache -> GmailHttpRunner -> GoogleWorkspaceClock -> GoogleWorkspaceServiceAccount -> GmailAccessTokenProvider
+mkGoogleWorkspaceAccessTokenProvider (GoogleWorkspaceTokenCache cacheVar) runRequest currentTime serviceAccount =
+  modifyMVar cacheVar $ \cached -> do
+    now <- currentTime
+    let nowSeconds = floor (utcTimeToPOSIXSeconds now) :: Integer
+    case cached of
+      Just existing | cachedAccessTokenExpiresAt existing > nowSeconds -> pure (cached, cachedAccessTokenValue existing)
+      _ -> do
+        fresh <- mintAccessToken runRequest now serviceAccount
+        pure (Just fresh, cachedAccessTokenValue fresh)
+
+mintAccessToken :: GmailHttpRunner -> UTCTime -> GoogleWorkspaceServiceAccount -> IO CachedAccessToken
+mintAccessToken runRequest now serviceAccount = do
   assertion <- eitherToIoError (signedAssertion serviceAccount now)
   response <-
     runRequest
@@ -83,10 +128,14 @@ mkGoogleWorkspaceAccessTokenProvider runRequest currentTime serviceAccount = do
         }
   unless (gmailHttpStatus response >= 200 && gmailHttpStatus response < 300) $
     ioError (userError ("Google Workspace token exchange failed with status " <> show (gmailHttpStatus response)))
-  accessToken <- eitherToIoError (accessTokenFromResponse (gmailHttpResponseBody response))
+  (accessToken, expiresInSeconds) <- eitherToIoError (accessTokenFromResponse (gmailHttpResponseBody response))
   unless (validAccessToken accessToken) $
     ioError (userError "Google Workspace token exchange returned an invalid access token")
-  pure accessToken
+  pure
+    CachedAccessToken
+      { cachedAccessTokenValue = accessToken,
+        cachedAccessTokenExpiresAt = floor (utcTimeToPOSIXSeconds now) + max 0 (expiresInSeconds - accessTokenCacheMarginSeconds)
+      }
 
 signedAssertion :: GoogleWorkspaceServiceAccount -> UTCTime -> Either Text Text
 signedAssertion serviceAccount now = do
@@ -236,14 +285,17 @@ appendDerByte total byte = total * 256 + fromIntegral byte
 appendDerLengthByte :: Int -> Word8 -> Int
 appendDerLengthByte total byte = total * 256 + fromIntegral byte
 
-accessTokenFromResponse :: Text -> Either Text Text
+accessTokenFromResponse :: Text -> Either Text (Text, Integer)
 accessTokenFromResponse response = do
   value <- mapFailure "Google Workspace token exchange returned invalid JSON" (Aeson.eitherDecodeStrict (TextEncoding.encodeUtf8 response) :: Either String Aeson.Value)
   case value of
     Aeson.Object object ->
       case AesonTypes.parseMaybe (Aeson..: "access_token") object of
-        Just accessToken -> Right accessToken
         Nothing -> Left "Google Workspace token exchange response did not contain access_token"
+        Just accessToken ->
+          case AesonTypes.parseMaybe (Aeson..: "expires_in") object of
+            Nothing -> Left "Google Workspace token exchange response did not contain expires_in"
+            Just expiresIn -> Right (accessToken, expiresIn)
     _ -> Left "Google Workspace token exchange returned invalid JSON"
 
 base64Url :: ByteString -> Text

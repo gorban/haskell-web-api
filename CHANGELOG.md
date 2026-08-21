@@ -130,6 +130,13 @@
 20. A `{...}` markup interpolation containing a bare Template Haskell name quote (e.g. `{'Just}`)
     now fails to compile with a clean, positioned error instead of crashing the calling module's
     compile with an uncaught exception from deep inside a parsing dependency.
+21. **Breaking:** `HarchWeb.GoogleWorkspace.mkGoogleWorkspaceAccessTokenProvider` now caches the
+    minted Gmail API access token behind a new `GoogleWorkspaceTokenCache` (first argument,
+    allocated once via `newGoogleWorkspaceTokenCache`), re-minting only once the token is within 60
+    seconds of Google's returned `expires_in`, instead of performing a full RSA-signed token
+    exchange on every call. `HarchWeb.Gmail.runGmailHttpRequest` now takes an explicit
+    `HttpClient.Manager` (first argument) instead of creating a new TLS manager per request,
+    enabling connection reuse.
 
 ## 0.1.1.0
 

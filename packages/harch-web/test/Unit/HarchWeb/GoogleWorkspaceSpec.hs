@@ -15,7 +15,7 @@ import Data.ByteString qualified as ByteString
 import Data.ByteString.Base64 qualified as Base64
 import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Either (fromLeft, fromRight)
-import Data.IORef (newIORef, readIORef, writeIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Data.PEM qualified as PEM
 import Data.Text (Text)
@@ -50,9 +50,10 @@ spec = do
     it "exchanges a signed domain-wide-delegation JWT for an access token" $ do
       (encodedCredentials, publicKey) <- generatedCredentials
       let serviceAccount = requiredEither (decodeGoogleWorkspaceServiceAccount encodedCredentials "mailer@example.test")
+      cache <- newGoogleWorkspaceTokenCache
       receivedRequest <- newIORef Nothing
-      let runner request = writeIORef receivedRequest (Just request) >> pure (GmailHttpResponse 200 "{\"access_token\":\"delegated-token\"}")
-      mkGoogleWorkspaceAccessTokenProvider runner fixedClock serviceAccount `shouldReturn` "delegated-token"
+      let runner request = writeIORef receivedRequest (Just request) >> pure (GmailHttpResponse 200 "{\"access_token\":\"delegated-token\",\"expires_in\":3600}")
+      mkGoogleWorkspaceAccessTokenProvider cache runner fixedClock serviceAccount `shouldReturn` "delegated-token"
       request <- required <$> readIORef receivedRequest
       gmailHttpMethod request `shouldBe` "POST"
       gmailHttpUrl request `shouldBe` "https://oauth2.googleapis.com/token"
@@ -68,13 +69,35 @@ spec = do
     it "surfaces token failures without exposing the signed assertion" $ do
       (encodedCredentials, _) <- generatedCredentials
       let serviceAccount = requiredEither (decodeGoogleWorkspaceServiceAccount encodedCredentials "mailer@example.test")
+      cache <- newGoogleWorkspaceTokenCache
       let runner _ = pure (GmailHttpResponse 403 "domain-wide delegation is missing")
-      result <- try (mkGoogleWorkspaceAccessTokenProvider runner fixedClock serviceAccount) :: IO (Either SomeException Text)
+      result <- try (mkGoogleWorkspaceAccessTokenProvider cache runner fixedClock serviceAccount) :: IO (Either SomeException Text)
       case result of
         Left failure -> do
           displayException failure `shouldContain` "Google Workspace token exchange failed with status 403"
           displayException failure `shouldNotContain` "BEGIN PRIVATE KEY"
         Right _ -> expectationFailure "Expected token exchange to fail"
+
+    it "mints a token once and reuses it until it is close to expiring, then re-mints" $ do
+      (encodedCredentials, _) <- generatedCredentials
+      let serviceAccount = requiredEither (decodeGoogleWorkspaceServiceAccount encodedCredentials "mailer@example.test")
+      cache <- newGoogleWorkspaceTokenCache
+      mintCount <- newIORef (0 :: Int)
+      clockRef <- newIORef (UTCTime (fromGregorian 2026 1 2) (secondsToDiffTime 0))
+      let stepClock = readIORef clockRef
+          runner _ = do
+            modifyIORef' mintCount (+ 1)
+            count <- readIORef mintCount
+            pure (GmailHttpResponse 200 ("{\"access_token\":\"token-" <> Text.pack (show count) <> "\",\"expires_in\":3600}"))
+          provider = mkGoogleWorkspaceAccessTokenProvider cache runner stepClock serviceAccount
+      provider `shouldReturn` "token-1"
+      writeIORef clockRef (UTCTime (fromGregorian 2026 1 2) (secondsToDiffTime 10))
+      provider `shouldReturn` "token-1"
+      readIORef mintCount `shouldReturn` 1
+      -- Past expires_in (3600s) minus the 60s safety margin: must re-mint.
+      writeIORef clockRef (UTCTime (fromGregorian 2026 1 2) (secondsToDiffTime 3541))
+      provider `shouldReturn` "token-2"
+      readIORef mintCount `shouldReturn` 2
 
     it "rejects failed token statuses before accepting their response bodies" $ do
       (encodedCredentials, _) <- generatedCredentials
@@ -92,11 +115,13 @@ spec = do
       malformed <- tryProvider serviceAccount "not json"
       missing <- tryProvider serviceAccount "{}"
       nonObject <- tryProvider serviceAccount "[]"
-      unsafe <- tryProvider serviceAccount "{\"access_token\":\"bad\\ntoken\"}"
-      map displayException [malformed, missing, nonObject, unsafe]
+      missingExpiry <- tryProvider serviceAccount "{\"access_token\":\"only-token\"}"
+      unsafe <- tryProvider serviceAccount "{\"access_token\":\"bad\\ntoken\",\"expires_in\":3600}"
+      map displayException [malformed, missing, nonObject, missingExpiry, unsafe]
         `shouldBe` [ "user error (Google Workspace token exchange returned invalid JSON)",
                      "user error (Google Workspace token exchange response did not contain access_token)",
                      "user error (Google Workspace token exchange returned invalid JSON)",
+                     "user error (Google Workspace token exchange response did not contain expires_in)",
                      "user error (Google Workspace token exchange returned an invalid access token)"
                    ]
 
@@ -137,14 +162,16 @@ fixedClock = pure (UTCTime (fromGregorian 2026 1 2) (secondsToDiffTime 3))
 
 tryProvider :: GoogleWorkspaceServiceAccount -> Text -> IO SomeException
 tryProvider serviceAccount body = do
-  result <- try (mkGoogleWorkspaceAccessTokenProvider (const (pure (GmailHttpResponse 200 body))) fixedClock serviceAccount) :: IO (Either SomeException Text)
+  cache <- newGoogleWorkspaceTokenCache
+  result <- try (mkGoogleWorkspaceAccessTokenProvider cache (const (pure (GmailHttpResponse 200 body))) fixedClock serviceAccount) :: IO (Either SomeException Text)
   case result of
     Left failure -> pure failure
     Right _ -> expectationFailure "Expected token exchange to fail" >> error "unreachable"
 
 tryStatus :: GoogleWorkspaceServiceAccount -> Int -> IO SomeException
 tryStatus serviceAccount status = do
-  result <- try (mkGoogleWorkspaceAccessTokenProvider (const (pure (GmailHttpResponse status "response body is not exposed"))) fixedClock serviceAccount) :: IO (Either SomeException Text)
+  cache <- newGoogleWorkspaceTokenCache
+  result <- try (mkGoogleWorkspaceAccessTokenProvider cache (const (pure (GmailHttpResponse status "response body is not exposed"))) fixedClock serviceAccount) :: IO (Either SomeException Text)
   case result of
     Left failure -> pure failure
     Right _ -> expectationFailure "Expected token exchange to fail" >> error "unreachable"

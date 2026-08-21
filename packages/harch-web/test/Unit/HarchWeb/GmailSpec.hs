@@ -15,6 +15,7 @@ import HarchWeb.Gmail
     mkGmailApiConfig,
     runGmailHttpRequest,
   )
+import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
@@ -80,8 +81,10 @@ spec = do
 
     it "executes configured HTTP requests and preserves the status and body" $
       withHttpServer $ \baseUrl -> do
+        manager <- HttpClient.newManager HttpClient.defaultManagerSettings
         response <-
           runGmailHttpRequest
+            manager
             GmailHttpRequest
               { gmailHttpMethod = "POST",
                 gmailHttpUrl = baseUrl <> "/gmail-send",

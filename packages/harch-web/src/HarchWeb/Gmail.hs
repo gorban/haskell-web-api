@@ -26,7 +26,6 @@ import HarchWeb.Email
     renderEmailMessage,
   )
 import Network.HTTP.Client qualified as HttpClient
-import Network.HTTP.Client.TLS qualified as HttpClientTls
 import Network.HTTP.Types qualified as HttpTypes
 
 type GmailAccessTokenProvider = IO Text
@@ -74,9 +73,14 @@ gmailSendRequest config accessToken message =
       gmailHttpBody = "{\"raw\":\"" <> base64Url (renderEmailMessage (gmailSender config) message) <> "\"}"
     }
 
-runGmailHttpRequest :: GmailHttpRunner
-runGmailHttpRequest request = do
-  manager <- HttpClientTls.newTlsManager
+-- | Takes an explicit 'HttpClient.Manager' rather than minting one per
+-- request (which defeats TLS connection reuse) or reaching for a process-
+-- global one: a caller constructs a manager once, e.g. via
+-- 'HttpClientTls.newTlsManager', and passes it here for every request it
+-- makes, matching @docs/design-guidance.md@'s explicit-props rule rather
+-- than ambient application state.
+runGmailHttpRequest :: HttpClient.Manager -> GmailHttpRunner
+runGmailHttpRequest manager request = do
   initialRequest <- HttpClient.parseRequest (Text.unpack (gmailHttpUrl request))
   response <-
     HttpClient.httpLbs
