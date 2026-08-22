@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.LoginAttemptRepositorySpec (spec) where
+module Unit.WebApi.Postgres.LoginAttemptRepositorySpec (spec) where
 
 import Control.Monad (unless)
 import Data.IORef (modifyIORef', newIORef, readIORef)

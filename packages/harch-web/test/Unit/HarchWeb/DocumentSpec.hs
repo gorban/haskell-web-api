@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.AccessibilitySpec (spec) where
+module Unit.HarchWeb.DocumentSpec (spec) where
 
 import HarchWeb (HtmlAttribute (..), LiveRegion (..), liveRegionAttributes)
 import Test.Hspec

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.ServerSentEventSpec (spec) where
+module Unit.HarchWeb.Server.SseSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.ForwardedTrustSpec (spec) where
+module Unit.HarchWeb.Security.ForwardedTrustSpec (spec) where
 
 import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
