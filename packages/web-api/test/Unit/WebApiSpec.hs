@@ -10,9 +10,7 @@ import Control.Monad (forM_)
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
-import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
-import Data.ByteString.Lazy qualified as LazyByteString
 import Data.Char (toLower)
 import Data.Foldable (toList)
 import Data.IORef (IORef, atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
@@ -45,7 +43,6 @@ import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (St
 import Network.Socket qualified as NetworkSocket
 import Network.Socket.ByteString qualified as SocketByteString
 import Network.Wai qualified as Wai
-import Network.Wai.Internal qualified as WaiInternal
 import Numeric (readHex)
 import System.Directory (createDirectory, getCurrentDirectory, removePathForcibly, setCurrentDirectory)
 import System.Environment (getEnv, getEnvironment, lookupEnv, setEnv, unsetEnv)
@@ -54,6 +51,7 @@ import System.IO (hClose)
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (callProcess)
+import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Text.Read (readMaybe)
 import WebApi (buildApp, run)
@@ -119,98 +117,12 @@ typedAccountActionRequest method path fields requestContext =
             }
     )
 
-equalValues :: (Eq value) => value -> value -> Bool
-equalValues = (==)
-{-# NOINLINE equalValues #-}
-
-renderedValue :: (Show value) => value -> String
-renderedValue = show
-{-# NOINLINE renderedValue #-}
-
-notEqualValues :: (Eq value) => value -> value -> Bool
-notEqualValues = (/=)
-{-# NOINLINE notEqualValues #-}
-
-renderedWithPrecedence :: (Show value) => Int -> value -> ShowS
-renderedWithPrecedence = showsPrec
-{-# NOINLINE renderedWithPrecedence #-}
-
-renderedValueList :: (Show value) => [value] -> ShowS
-renderedValueList = showList
-{-# NOINLINE renderedValueList #-}
-
-minimumValue :: (Bounded value) => value
-minimumValue = minBound
-{-# NOINLINE minimumValue #-}
-
-maximumValue :: (Bounded value) => value
-maximumValue = maxBound
-{-# NOINLINE maximumValue #-}
-
 productionTotpEncryptionKey :: Secret.SecretEncryptionKey
 productionTotpEncryptionKey =
   fromMaybe
     (error "expected a valid production TOTP encryption key fixture")
     (Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
 {-# NOINLINE productionTotpEncryptionKey #-}
-
-successorValue :: (Enum value) => value -> value
-successorValue = succ
-{-# NOINLINE successorValue #-}
-
-predecessorValue :: (Enum value) => value -> value
-predecessorValue = pred
-{-# NOINLINE predecessorValue #-}
-
-valueToEnum :: (Enum value) => Int -> value
-valueToEnum = toEnum
-{-# NOINLINE valueToEnum #-}
-
-valueFromEnum :: (Enum value) => value -> Int
-valueFromEnum = fromEnum
-{-# NOINLINE valueFromEnum #-}
-
-valuesFrom :: (Enum value) => value -> [value]
-valuesFrom = enumFrom
-{-# NOINLINE valuesFrom #-}
-
-valuesFromThen :: (Enum value) => value -> value -> [value]
-valuesFromThen = enumFromThen
-{-# NOINLINE valuesFromThen #-}
-
-valuesFromTo :: (Enum value) => value -> value -> [value]
-valuesFromTo = enumFromTo
-{-# NOINLINE valuesFromTo #-}
-
-valuesFromThenTo :: (Enum value) => value -> value -> value -> [value]
-valuesFromThenTo = enumFromThenTo
-{-# NOINLINE valuesFromThenTo #-}
-
-exerciseClosedRouteFamily ::
-  (Bounded value, Enum value, Eq value, Show value) =>
-  [value] ->
-  value ->
-  value ->
-  value ->
-  value ->
-  Expectation
-exerciseClosedRouteFamily values firstValue secondValue penultimateValue lastValue = do
-  minimumValue `shouldBe` firstValue
-  maximumValue `shouldBe` lastValue
-  successorValue firstValue `shouldBe` secondValue
-  predecessorValue lastValue `shouldBe` penultimateValue
-  valueToEnum 0 `shouldBe` firstValue
-  valueFromEnum firstValue `shouldBe` 0
-  valuesFrom firstValue `shouldBe` values
-  valuesFromThen firstValue secondValue `shouldBe` values
-  valuesFromTo firstValue lastValue `shouldBe` values
-  valuesFromThenTo firstValue secondValue lastValue `shouldBe` values
-  equalValues firstValue firstValue `shouldBe` True
-  notEqualValues firstValue lastValue `shouldBe` True
-  renderedValue firstValue `shouldSatisfy` not . null
-  renderedWithPrecedence 11 firstValue "" `shouldSatisfy` not . null
-  renderedValueList values "" `shouldSatisfy` not . null
-{-# NOINLINE exerciseClosedRouteFamily #-}
 
 loadHomePageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult HomePageData)
 loadHomePageForRequest pageRepository requestContext =
@@ -402,43 +314,6 @@ data CapturedOtlpRequest = CapturedOtlpRequest
     capturedOtlpHeaders :: [(ByteString.ByteString, ByteString.ByteString)],
     capturedOtlpBody :: ByteString.ByteString
   }
-
-performWaiRequest :: IO Wai.Application -> Wai.Request -> IO Wai.Response
-performWaiRequest buildWebApplication request = do
-  webApplication <- buildWebApplication
-  responseReference <- newIORef Nothing
-  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
-  maybeResponse <- readIORef responseReference
-  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
-
-readResponseBody :: Wai.Response -> IO Text
-readResponseBody response = do
-  let (_, _, withStreamingBody) = Wai.responseToStream response
-  chunksReference <- newIORef []
-  withStreamingBody $ \streamingBody ->
-    streamingBody
-      (\builder -> modifyIORef' chunksReference (<> [Builder.toLazyByteString builder]))
-      (pure ())
-  chunks <- readIORef chunksReference
-  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
-
-nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
-nextRequestBodyChunk chunksReference =
-  atomicModifyIORef' chunksReference $ \case
-    [] -> ([], ByteString.empty)
-    chunk : remainingChunks -> (remainingChunks, chunk)
-
-waiRequest :: [Text] -> Wai.Request
-waiRequest segments =
-  Wai.defaultRequest
-    { Wai.rawPathInfo = TextEncoding.encodeUtf8 renderedPath,
-      Wai.pathInfo = segments
-    }
-  where
-    renderedPath =
-      case segments of
-        [] -> "/"
-        _ -> "/" <> Text.intercalate "/" segments
 
 postgresTestConfig :: DatabaseConfig
 postgresTestConfig =
@@ -7801,13 +7676,13 @@ spec = do
     it "keeps every page and API constructor enumerable, comparable, and inspectable" $ do
       let pageRoutes = [minBound .. maxBound] :: [PageRoute]
           apiRoutes = [minBound .. maxBound] :: [ApiRoute]
-      exerciseClosedRouteFamily
+      exerciseClosedEnumeration
         pageRoutes
         WebApi.Route.HomePage
         WebApi.Route.SecondPage
         WebApi.Route.ProfilePage
         WebApi.Route.PageNotFound
-      exerciseClosedRouteFamily apiRoutes StatusApi SecondApi SecondApi ApiNotFound
+      exerciseClosedEnumeration apiRoutes StatusApi SecondApi SecondApi ApiNotFound
       pageRoutes
         `shouldBe` [ WebApi.Route.HomePage,
                      WebApi.Route.SecondPage,

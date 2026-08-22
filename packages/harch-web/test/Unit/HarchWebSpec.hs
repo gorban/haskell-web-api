@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module Unit.HarchWebSpec (spec) where
@@ -32,7 +31,6 @@ import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
-import Network.Wai.Internal qualified as WaiInternal
 import System.Directory (createDirectoryIfMissing, createFileLink, doesFileExist, removePathForcibly)
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
@@ -44,6 +42,7 @@ import System.Posix.Signals (raiseSignal, sigINT, sigTERM)
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
+import TestCore.Wai (nextRequestBodyChunk, performWaiRequest, readResponseBody, waiRequest)
 import Text.Read (readMaybe)
 
 data TestContext = TestContext
@@ -576,43 +575,6 @@ renderSampleResponse request =
             responseDatabaseOperations = []
           }
     MissingRoute -> PageResponse (sampleMissingPage request)
-
-performWaiRequest :: IO Wai.Application -> Wai.Request -> IO Wai.Response
-performWaiRequest buildWebApplication request = do
-  webApplication <- buildWebApplication
-  responseReference <- newIORef Nothing
-  _ <- webApplication request (\response -> writeIORef responseReference (Just response) >> pure WaiInternal.ResponseReceived)
-  maybeResponse <- readIORef responseReference
-  pure (fromMaybe (error "expected WAI application to produce a response") maybeResponse)
-
-nextRequestBodyChunk :: IORef [ByteString.ByteString] -> IO ByteString.ByteString
-nextRequestBodyChunk chunksReference =
-  atomicModifyIORef' chunksReference $ \case
-    [] -> ([], ByteString.empty)
-    chunk : remainingChunks -> (remainingChunks, chunk)
-
-readResponseBody :: Wai.Response -> IO Text
-readResponseBody response = do
-  let (_, _, withStreamingBody) = Wai.responseToStream response
-  chunksReference <- newIORef []
-  withStreamingBody $ \streamingBody ->
-    streamingBody
-      (\builder -> modifyIORef' chunksReference (<> [Builder.toLazyByteString builder]))
-      (pure ())
-  chunks <- readIORef chunksReference
-  pure (TextEncoding.decodeUtf8 (LazyByteString.toStrict (mconcat chunks)))
-
-waiRequest :: [Text] -> Wai.Request
-waiRequest segments =
-  Wai.defaultRequest
-    { Wai.rawPathInfo = TextEncoding.encodeUtf8 renderedPath,
-      Wai.pathInfo = segments
-    }
-  where
-    renderedPath =
-      case segments of
-        [] -> "/"
-        _ -> "/" <> Text.intercalate "/" segments
 
 waiRequestWithRemoteHostAndHeaders ::
   [Text] ->
