@@ -2,54 +2,45 @@
 
 module Unit.HarchWeb.ForwardedTrustSpec (spec) where
 
+import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
+import Data.Text (Text)
 import HarchWeb.Security
 import Network.Socket qualified as Socket
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 
+-- | Each row is one previously-separate 'it' case, tabled per
+-- @docs/design-guidance.md@'s CN decision record: one act
+-- ('parseCidrBlock'), one comparison ('shouldBe'), differing only in the
+-- input string and expected network. This is "Shape A" — each row keeps its
+-- own name, so nothing is lost from the hspec output; the three cases that
+-- used to be bundled two-per-'it' via 'expectAll' are now reported
+-- separately instead.
+parseCidrBlockCases :: [(String, Text, Maybe Text)]
+parseCidrBlockCases =
+  [ ("round-trips a canonical dotted-quad network address and prefix length", "10.0.0.0/8", Just "10.0.0.0/8"),
+    ("masks off host bits so a non-canonical address still parses to its network", "10.1.2.3/8", Just "10.0.0.0/8"),
+    ("accepts the maximum prefix length", "192.168.1.5/32", Just "192.168.1.5/32"),
+    ("accepts the minimum prefix length", "0.0.0.0/0", Just "0.0.0.0/0"),
+    ("rejects a prefix length outside 0-32", "10.0.0.0/33", Nothing),
+    ("rejects a non-numeric prefix length", "10.0.0.0/eight", Nothing),
+    ("rejects a missing prefix length", "10.0.0.0", Nothing),
+    ("rejects an out-of-range high octet instead of silently wrapping it", "10.0.0.256/8", Nothing),
+    ("rejects a negative octet instead of silently wrapping it", "10.0.0.-1/8", Nothing),
+    ("rejects an out-of-range prefix length instead of silently wrapping it", "10.0.0.0/288", Nothing),
+    ("rejects a dotted quad with too few segments", "10.0.0/8", Nothing),
+    ("rejects a dotted quad with too many segments", "10.0.0.0.1/8", Nothing),
+    ("rejects a non-numeric octet", "10.0.0.x/8", Nothing)
+  ]
+
 spec :: Spec
 spec = do
   describe "parseCidrBlock" $ do
-    it "round-trips a canonical dotted-quad network address and prefix length" $
-      fmap cidrBlockText (parseCidrBlock "10.0.0.0/8") `shouldBe` Just "10.0.0.0/8"
-
-    it "masks off host bits so a non-canonical address still parses to its network" $
-      fmap cidrBlockText (parseCidrBlock "10.1.2.3/8") `shouldBe` Just "10.0.0.0/8"
-
-    it "accepts the full prefix-length range" $
-      expectAll
-        ( (fmap cidrBlockText (parseCidrBlock "192.168.1.5/32") `shouldBe` Just "192.168.1.5/32")
-            :| [fmap cidrBlockText (parseCidrBlock "0.0.0.0/0") `shouldBe` Just "0.0.0.0/0"]
-        )
-
-    it "rejects a prefix length outside 0-32" $
-      parseCidrBlock "10.0.0.0/33" `shouldBe` Nothing
-
-    it "rejects a non-numeric prefix length" $
-      parseCidrBlock "10.0.0.0/eight" `shouldBe` Nothing
-
-    it "rejects a missing prefix length" $
-      parseCidrBlock "10.0.0.0" `shouldBe` Nothing
-
-    it "rejects an out-of-range octet instead of silently wrapping it" $
-      expectAll
-        ( (parseCidrBlock "10.0.0.256/8" `shouldBe` Nothing)
-            :| [parseCidrBlock "10.0.0.-1/8" `shouldBe` Nothing]
-        )
-
-    it "rejects an out-of-range prefix length instead of silently wrapping it" $
-      parseCidrBlock "10.0.0.0/288" `shouldBe` Nothing
-
-    it "rejects a dotted quad with the wrong number of segments" $
-      expectAll
-        ( (parseCidrBlock "10.0.0/8" `shouldBe` Nothing)
-            :| [parseCidrBlock "10.0.0.0.1/8" `shouldBe` Nothing]
-        )
-
-    it "rejects a non-numeric octet" $
-      parseCidrBlock "10.0.0.x/8" `shouldBe` Nothing
+    parseCidrBlockCases `forM_` \(label, input, expected) ->
+      it label $
+        fmap cidrBlockText (parseCidrBlock input) `shouldBe` expected
 
     it "derives comparable Eq and printable Show instances" $
       let firstBlock = fromMaybe (error "expected a valid test CIDR block") (parseCidrBlock "10.0.0.0/8")
