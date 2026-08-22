@@ -8059,25 +8059,22 @@ spec = do
       WebApi.Route.matchRoute WebApi.Route.defaultRequestContext "/second"
         `shouldBe` HarchWeb.matchRoute WebApi.Route.routeCodec WebApi.Route.defaultRequestContext "/second"
 
-    it "matches the home path" $
-      pureRouteMatcher "/" `shouldBe` homeRequest
-
-    it "matches the second page path" $
-      pureRouteMatcher "/second" `shouldBe` secondRequest
-
-    it "matches the app-home spaces path" $
-      pureRouteMatcher "/spaces" `shouldBe` spacesRequest
-
-    it "matches locale-prefixed paths with the merged request context" $
-      pureRouteMatcher "/es" `shouldBe` spanishHomeRequest
-
-    it "matches API paths into the API route family" $ do
-      pureRouteMatcher "/api/status" `shouldBe` apiStatusRequest
-      pureRouteMatcher "/api/second" `shouldBe` apiSecondRequest
-      pureRouteMatcher "/api/missing" `shouldBe` apiNotFoundRequest
-
-    it "falls back to the stable not-found route for unknown paths" $
-      pureRouteMatcher "/missing" `shouldBe` notFoundRequest
+    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- ('pureRouteMatcher'), one comparison, differing only in the path and
+    -- expected route request. The API-path cases were previously bundled
+    -- three-per-'it'; each now reports individually.
+    [ ("matches the home path", "/", homeRequest),
+      ("matches the second page path", "/second", secondRequest),
+      ("matches the app-home spaces path", "/spaces", spacesRequest),
+      ("matches locale-prefixed paths with the merged request context", "/es", spanishHomeRequest),
+      ("matches an API status path into the API route family", "/api/status", apiStatusRequest),
+      ("matches an API second path into the API route family", "/api/second", apiSecondRequest),
+      ("matches an unknown API path into the API route family's not-found outcome", "/api/missing", apiNotFoundRequest),
+      ("falls back to the stable not-found route for unknown paths", "/missing", notFoundRequest)
+      ]
+      `forM_` \(label, path, expected) ->
+        it label $
+          pureRouteMatcher path `shouldBe` expected
 
   describe "renderPage" $ do
     it "selects the expected home page model" $
