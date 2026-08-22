@@ -1,11 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.ObservabilitySpec (spec) where
+{-# SPEC #-}
 
 import HarchWeb.Observability qualified as Observability
-import Test.Hspec
 
-spec :: Spec
 spec =
   describe "newOtlpHttpManager" $
     it "constructs a usable HTTP manager, as an explicit prop rather than a global" $ do

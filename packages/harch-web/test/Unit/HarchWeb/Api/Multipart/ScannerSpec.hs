@@ -1,14 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.Multipart.ScannerSpec (spec) where
+{-# SPEC #-}
 
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.List (mapAccumL)
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Api.Multipart
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 boundaryToken :: ByteString
 boundaryToken = "BOUNDARY123"
@@ -70,7 +68,6 @@ splitAt2 splitPoint body = [ByteString.take splitPoint body, ByteString.drop spl
 allByteChunks :: ByteString -> [ByteString]
 allByteChunks body = map ByteString.singleton (ByteString.unpack body)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Multipart.Scanner" $ do
     it "scans a two-part body delivered as a single chunk" $

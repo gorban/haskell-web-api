@@ -1,16 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Unit.HarchWeb.Markup.ElementsSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb
 import HarchWeb.Markup qualified as Markup
 import HarchWeb.Markup.Unsafe qualified as Unsafe
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Markup.Elements" $ do
     it "supports opaque markup equality and diagnostics without exposing its representation" $ do

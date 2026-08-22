@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.ResponseSpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Control.Monad (forM_)
@@ -13,8 +13,6 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api
 import Network.HTTP.Types qualified as HttpTypes
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
@@ -28,7 +26,6 @@ strictEncodedResponseBytes encodedResponse =
     ApiEncodedResponseBytes bodyBytes -> bodyBytes
     ApiEncodedResponseStream _ -> error "expected a strict encoded response"
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Response" $ do
     describe "apiHeaderValue" $ do
@@ -188,11 +185,13 @@ spec =
          in expectAll
               ( (sum [fromEnum (left == right) | left <- policies, right <- policies] `shouldBe` length policies)
                   :| [ sum [fromEnum (left /= right) | left <- policies, right <- policies]
-                         `shouldBe` length policies * (length policies - 1),
+                         `shouldBe` length policies
+                         * (length policies - 1),
                        sum [length (show p) + length (showList [p] "") | p <- policies] `shouldSatisfy` (> 0),
                        sum [fromEnum (left == right) | left <- outcomes, right <- outcomes] `shouldBe` length outcomes,
                        sum [fromEnum (left /= right) | left <- outcomes, right <- outcomes]
-                         `shouldBe` length outcomes * (length outcomes - 1),
+                         `shouldBe` length outcomes
+                         * (length outcomes - 1),
                        sum [length (show o) + length (showList [o] "") | o <- outcomes] `shouldSatisfy` (> 0)
                      ]
               )

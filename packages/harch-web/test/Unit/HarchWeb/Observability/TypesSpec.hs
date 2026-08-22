@@ -1,14 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Observability.TypesSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Database qualified as Database
 import HarchWeb.Observability qualified as Observability
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec = do
   describe "public record coverage" $ do
     it "reads exported selectors from the observability helper records" $ do

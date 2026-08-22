@@ -2,15 +2,13 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE TemplateHaskell #-}
 
-module Unit.HarchWeb.Markup.Quasi.LoweringSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import HarchWeb
 import HarchWeb.Action qualified as Action
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import Unit.HarchWeb.MarkupComponents qualified as Account
 import Unit.HarchWeb.MarkupRejection (rejectedMarkup)
 
@@ -79,7 +77,6 @@ controlActionCodec =
     Left codecError -> error (show codecError)
     Right codec -> codec
 
-spec :: Spec
 spec =
   describe "HarchWeb.Markup.Quasi.Lowering" $ do
     it "lowers native tags, typed attributes, and void elements to the existing AST" $ do

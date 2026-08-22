@@ -1,16 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.RequestSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api
 import Network.Wai qualified as Wai
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Request" $ do
     it "runs the named no-request-fields codec without errors" $

@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Acme.Certbot.OptionsSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "certbot option-list parsing helpers" $
     it "extracts option values, flags, and domain lists from a certbot argument list" $

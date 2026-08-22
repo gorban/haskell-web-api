@@ -1,16 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Markup.AttributesSpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isJust)
 import Data.Text qualified as Text
 import HarchWeb.Markup qualified as Markup
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Markup.Attributes" $ do
     it "rejects a URL scheme that would execute script when followed, allowlisting relative and http(s) URLs" $

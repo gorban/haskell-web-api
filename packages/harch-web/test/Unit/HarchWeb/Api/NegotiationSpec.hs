@@ -1,19 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.NegotiationSpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import HarchWeb.Api
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Negotiation" $ do
     describe "Content negotiation" $ do

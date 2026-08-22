@@ -2,19 +2,18 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# OPTIONS_GHC -Wno-name-shadowing -Wno-unused-local-binds #-}
 
--- | Isolated in its own module (rather than added to
+-- Isolated in its own module (rather than added to
 -- 'Unit.HarchWeb.Markup.Quasi.LoweringSpec') because its whole point is to
 -- shadow framework identifiers that module otherwise imports unqualified —
 -- the module-wide 'Wno-name-shadowing'\/'Wno-unused-local-binds' suppression
 -- this file needs would otherwise weaken warnings for genuinely unrelated
 -- code in a much larger file.
-module Unit.HarchWeb.Markup.Quasi.LoweringHygieneSpec (spec) where
+
+{-# SPEC #-}
 
 import HarchWeb
 import HarchWeb.Markup qualified as Markup
-import Test.Hspec
 
-spec :: Spec
 spec = do
   describe "quasiquoter splice hygiene" $ do
     it "resolves framework identifiers hygienically even when a local binding shadows their names" $

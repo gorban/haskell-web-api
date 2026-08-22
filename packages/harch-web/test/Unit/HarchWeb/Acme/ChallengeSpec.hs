@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -Wno-orphans #-}
 
-module Unit.HarchWeb.Acme.ChallengeSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (newMVar, readMVar)
 import Data.ByteString.Builder qualified as Builder
@@ -13,8 +13,6 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 defaultRequestPolicy :: RequestPolicyConfig
 defaultRequestPolicy =
@@ -31,7 +29,6 @@ defaultRequestPolicy =
       responseSecurityHeaders = defaultResponseSecurityHeadersConfig
     }
 
-spec :: Spec
 spec =
   describe "ACME challenge matching and store helpers" $ do
     it "covers derived Eq and Show instances for internal ACME helper types" $ do

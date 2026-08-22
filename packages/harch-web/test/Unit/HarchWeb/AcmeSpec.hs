@@ -1,11 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.AcmeSpec (spec) where
+{-# SPEC #-}
 
 import HarchWeb.Acme qualified as Acme
-import Test.Hspec
 
-spec :: Spec
 spec =
   describe "the public HarchWeb.Acme boundary" $
     it "exports supported helpers directly" $

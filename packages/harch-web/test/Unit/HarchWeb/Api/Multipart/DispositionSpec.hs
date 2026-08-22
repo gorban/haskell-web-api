@@ -1,13 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.Multipart.DispositionSpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Api.Multipart
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 fieldPartHeaders :: ByteString
 fieldPartHeaders = "Content-Disposition: form-data; name=\"field1\""
@@ -16,7 +14,6 @@ filePartHeaders :: ByteString
 filePartHeaders =
   "Content-Disposition: form-data; name=\"file1\"; filename=\"a.txt\"\r\nContent-Type: text/plain"
 
-spec :: Spec
 spec =
   describe "parseMultipartFieldDisposition" $ do
     -- Tabled per docs/design-guidance.md's CN decision record: one act,
@@ -60,7 +57,8 @@ spec =
        in expectAll
             ( (sum [fromEnum (left == right) | left <- dispositions, right <- dispositions] `shouldBe` length dispositions)
                 :| [ sum [fromEnum (left /= right) | left <- dispositions, right <- dispositions]
-                       `shouldBe` length dispositions * (length dispositions - 1),
+                       `shouldBe` length dispositions
+                       * (length dispositions - 1),
                      sum [length (show d) + length (showList [d] "") | d <- dispositions] `shouldSatisfy` (> 0)
                    ]
             )

@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Acme.Certbot.RuntimeSpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (evaluate, finally)
 import Data.List (isInfixOf)
@@ -10,8 +10,6 @@ import System.Directory (removePathForcibly)
 import System.FilePath ((</>))
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 sampleEndpoint :: ListenerEndpoint
 sampleEndpoint =
@@ -78,7 +76,6 @@ withFakeCertbotScript scriptLines action =
     callProcess "chmod" ["+x", scriptPath]
     action scriptPath
 
-spec :: Spec
 spec =
   describe "certbot-backed ACME runtime helpers" $ do
     it "derives certbot arguments and resolves certificate names from an ACME configuration" $ do

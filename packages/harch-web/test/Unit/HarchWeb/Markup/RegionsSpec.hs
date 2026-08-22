@@ -1,13 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Unit.HarchWeb.Markup.RegionsSpec (spec) where
+{-# SPEC #-}
 
 import HarchWeb
 import HarchWeb.Markup qualified as Markup
-import Test.Hspec
 
-spec :: Spec
 spec =
   describe "HarchWeb.Markup.Regions" $ do
     it "embeds patchable regions explicitly without changing their SSR root" $ do

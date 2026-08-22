@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Acme.JsonSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Acme.Json (jsonArrayBytes, jsonObjectBytes, jsonStringBytes)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "ACME JSON encoding helpers" $
     it "encodes strings, arrays, and objects as JSON bytes" $ do

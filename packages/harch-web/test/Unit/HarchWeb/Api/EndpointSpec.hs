@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Api.EndpointSpec (spec) where
+{-# SPEC #-}
 
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -13,20 +13,13 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Api
-import HarchWeb.Api.Multipart
-  ( MultipartConsumeError (..),
-    MultipartScopedPart (..),
-    defaultMultipartLimits,
-    inMemoryMultipartStorage,
-  )
+import HarchWeb.Api.Multipart (MultipartConsumeError (..), MultipartScopedPart (..), defaultMultipartLimits, inMemoryMultipartStorage)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Routing (RouteRequest (..))
 import HarchWeb.Server (ProtocolResponse (..), ProtocolResponseBody (..), Response (..))
 import HarchWeb.Site (RouteDefinition (..))
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 testEndpointTable :: [SomeApiRouteEndpoint]
 testEndpointTable =
@@ -146,7 +139,6 @@ pullAllStreamingChunks streamingRequest accumulated = do
       | ByteString.null chunk -> pure (Right (apiResponse (TextEncoding.decodeUtf8 accumulated)))
       | otherwise -> pullAllStreamingChunks streamingRequest (accumulated <> chunk)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Endpoint" $ do
     describe "apiRouteEndpointFamilyCodec and apiRouteEndpointFamilyDefinition" $ do

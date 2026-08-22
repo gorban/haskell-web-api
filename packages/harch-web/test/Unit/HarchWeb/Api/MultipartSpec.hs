@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Unit.HarchWeb.Api.MultipartSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
@@ -19,8 +19,6 @@ import Network.Wai qualified as Wai
 import System.Directory (doesFileExist, removeFile)
 import System.IO (Handle, hClose)
 import System.IO.Temp qualified as Temp
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 boundaryToken :: ByteString
 boundaryToken = "BOUNDARY123"
@@ -205,7 +203,6 @@ singleFieldBody =
 allByteChunks :: ByteString -> [ByteString]
 allByteChunks body = map ByteString.singleton (ByteString.unpack body)
 
-spec :: Spec
 spec =
   describe "HarchWeb.Api.Multipart" $ do
     it "rejects a callback part with the parser-owned generic rejection" $
@@ -597,11 +594,13 @@ spec =
          in expectAll
               ( (sum [fromEnum (left == right) | left <- errors, right <- errors] `shouldBe` length errors)
                   :| [ sum [fromEnum (left /= right) | left <- errors, right <- errors]
-                         `shouldBe` length errors * (length errors - 1),
+                         `shouldBe` length errors
+                         * (length errors - 1),
                        sum [length (show e) + length (showList [e] "") | e <- errors] `shouldSatisfy` (> 0),
                        sum [fromEnum (left == right) | left <- errors, right <- errors] `shouldBe` length errors,
                        sum [fromEnum (left /= right) | left <- errors, right <- errors]
-                         `shouldBe` length errors * (length errors - 1),
+                         `shouldBe` length errors
+                         * (length errors - 1),
                        sum [length (show e) + length (showList [e] "") | e <- errors] `shouldSatisfy` (> 0)
                      ]
               )
@@ -611,7 +610,8 @@ spec =
          in expectAll
               ( (sum [fromEnum (left == right) | left <- limitsValues, right <- limitsValues] `shouldBe` length limitsValues)
                   :| [ sum [fromEnum (left /= right) | left <- limitsValues, right <- limitsValues]
-                         `shouldBe` length limitsValues * (length limitsValues - 1),
+                         `shouldBe` length limitsValues
+                         * (length limitsValues - 1),
                        sum [length (show l) + length (showList [l] "") | l <- limitsValues] `shouldSatisfy` (> 0)
                      ]
               )
