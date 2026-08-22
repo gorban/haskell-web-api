@@ -1493,35 +1493,26 @@ spec =
           it label $
             selectRepresentation jsonAndText acceptHeader `shouldBe` expected
 
-      it "matches an Accept media parameter against a declared response Content-Type" $
-        let plainMediaType = testMediaType "text/plain"
-            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
-         in selectContentTypeRepresentation textContentTypes (Just "text/plain; charset=\"UTF-8\"")
-              `shouldBe` SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
-
-      it "lets a more parameterized Accept range override an otherwise identical range" $
-        let plainMediaType = testMediaType "text/plain"
-            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
-         in selectContentTypeRepresentation textContentTypes (Just "text/plain;q=0.1, text/plain;charset=utf-8;q=0.9")
-              `shouldBe` SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
-
-      it "matches parameterized wildcard ranges against declared Content-Types" $
-        let plainMediaType = testMediaType "text/plain"
-            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
-            expected = SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
-         in expectAll
-              ( (selectContentTypeRepresentation textContentTypes (Just "*/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9") `shouldBe` expected)
-                  :| [ selectContentTypeRepresentation textContentTypes (Just "text/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9") `shouldBe` expected,
-                       selectContentTypeRepresentation textContentTypes (Just "*/*;charset=utf-8, */*;charset=utf-8;charset=utf-8") `shouldBe` expected,
-                       selectContentTypeRepresentation textContentTypes (Just "text/*;charset=utf-8, text/*;charset=utf-8;charset=utf-8") `shouldBe` expected
-                     ]
-              )
-
-      it "does not let an Accept extension after q constrain Content-Type matching" $
-        let plainMediaType = testMediaType "text/plain"
-            textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
-         in selectContentTypeRepresentation textContentTypes (Just "text/plain; q=0.5; charset=us-ascii")
-              `shouldBe` SelectedContentTypeRepresentation (apiContentType plainMediaType)
+      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- (selectContentTypeRepresentation textContentTypes), one comparison,
+      -- differing only in the Accept header and expected negotiation
+      -- result. The parseAcceptHeader cluster below is a separate act and
+      -- stays its own describe-local it blocks.
+      let plainMediaType = testMediaType "text/plain"
+          textContentTypes = apiContentType plainMediaType :| [apiUtf8ContentType plainMediaType]
+          utf8Expected = SelectedContentTypeRepresentation (apiUtf8ContentType plainMediaType)
+          plainExpected = SelectedContentTypeRepresentation (apiContentType plainMediaType)
+       in [ ("matches an Accept media parameter against a declared response Content-Type", "text/plain; charset=\"UTF-8\"", utf8Expected),
+            ("lets a more parameterized Accept range override an otherwise identical range", "text/plain;q=0.1, text/plain;charset=utf-8;q=0.9", utf8Expected),
+            ("matches a full wildcard parameterized range against a declared Content-Type", "*/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9", utf8Expected),
+            ("matches a type-wildcard parameterized range against a declared Content-Type", "text/*;charset=utf-8;q=0.1, text/plain;charset=utf-8;q=0.9", utf8Expected),
+            ("matches a full wildcard range repeated with a redundant charset parameter", "*/*;charset=utf-8, */*;charset=utf-8;charset=utf-8", utf8Expected),
+            ("matches a type-wildcard range repeated with a redundant charset parameter", "text/*;charset=utf-8, text/*;charset=utf-8;charset=utf-8", utf8Expected),
+            ("does not let an Accept extension after q constrain Content-Type matching", "text/plain; q=0.5; charset=us-ascii", plainExpected)
+          ]
+            `forM_` \(label, acceptHeader, expected) ->
+              it label $
+                selectContentTypeRepresentation textContentTypes (Just acceptHeader) `shouldBe` expected
 
       it "lets a more specific range's q=0 exclude a representation despite a permissive wildcard" $
         selectRepresentation jsonAndText (Just "*/*;q=1, application/json;q=0")
