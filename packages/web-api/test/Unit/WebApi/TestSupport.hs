@@ -2,8 +2,10 @@
 
 module Unit.WebApi.TestSupport
   ( shouldReturnEqual,
+    required,
     databaseConfig,
     accountId,
+    emailAddress,
     testSessionId,
     sessionIdValue,
     csrfTokenValue,
@@ -12,8 +14,10 @@ module Unit.WebApi.TestSupport
 where
 
 import Control.Monad (unless)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import HarchWeb.Account (AccountId, mkAccountId)
+import HarchWeb.Email (EmailAddress, mkEmailAddress)
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import Test.Hspec (Expectation, expectationFailure)
 import WebApi.Config (DatabaseConfig (..))
@@ -24,6 +28,11 @@ shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do
   actual <- action
   unless (actual == expected) (expectationFailure "unexpected result")
+
+-- | Unwraps a smart constructor's 'Just', for fixture values whose validity
+-- the fixture itself already guarantees.
+required :: String -> Maybe value -> value
+required label = fromMaybe (error ("expected " <> label))
 
 databaseConfig :: DatabaseConfig
 databaseConfig =
@@ -42,6 +51,9 @@ accountId =
   case mkAccountId "account_01" of
     Just value -> value
     Nothing -> error "expected a valid account id"
+
+emailAddress :: EmailAddress
+emailAddress = required "email address" (mkEmailAddress "person@example.test")
 
 testSessionId :: SessionId
 testSessionId =
