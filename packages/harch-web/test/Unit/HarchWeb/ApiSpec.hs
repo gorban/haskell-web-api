@@ -3,6 +3,7 @@
 module Unit.HarchWeb.ApiSpec (spec) where
 
 import Control.Exception (ErrorCall (..), evaluate)
+import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -1469,29 +1470,28 @@ spec =
     describe "Content negotiation" $ do
       let jsonAndText = testMediaType "application/json" :| [testMediaType "text/plain"]
 
-      it "selects the first declared representation when Accept is absent" $
-        selectRepresentation jsonAndText Nothing `shouldBe` SelectedRepresentation (testMediaType "application/json")
-
-      it "selects an exact match" $
-        selectRepresentation jsonAndText (Just "text/plain") `shouldBe` SelectedRepresentation (testMediaType "text/plain")
-
-      it "prefers the higher client quality between two acceptable representations" $
-        selectRepresentation jsonAndText (Just "application/json;q=0.2, text/plain;q=0.8")
-          `shouldBe` SelectedRepresentation (testMediaType "text/plain")
-
-      it "breaks a quality tie with server declaration order" $
-        selectRepresentation jsonAndText (Just "application/json;q=0.5, text/plain;q=0.5")
-          `shouldBe` SelectedRepresentation (testMediaType "application/json")
-
-      it "matches a type wildcard" $
-        selectRepresentation jsonAndText (Just "text/*") `shouldBe` SelectedRepresentation (testMediaType "text/plain")
-
-      it "matches the full wildcard" $
-        selectRepresentation jsonAndText (Just "*/*") `shouldBe` SelectedRepresentation (testMediaType "application/json")
-
-      it "does not claim a bare media type satisfies an Accept media parameter" $
-        selectRepresentation jsonAndText (Just "text/plain; charset=utf-8")
-          `shouldBe` NoAcceptableRepresentation
+      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- (selectRepresentation jsonAndText), one comparison, differing only
+      -- in the Accept header and expected negotiation result. The
+      -- selectContentTypeRepresentation and parseAcceptHeader clusters below
+      -- are separate acts and stay their own describe-local it blocks.
+      [ ("selects the first declared representation when Accept is absent", Nothing, SelectedRepresentation (testMediaType "application/json")),
+        ("selects an exact match", Just "text/plain", SelectedRepresentation (testMediaType "text/plain")),
+        ("prefers the higher client quality between two acceptable representations", Just "application/json;q=0.2, text/plain;q=0.8", SelectedRepresentation (testMediaType "text/plain")),
+        ("breaks a quality tie with server declaration order", Just "application/json;q=0.5, text/plain;q=0.5", SelectedRepresentation (testMediaType "application/json")),
+        ("matches a type wildcard", Just "text/*", SelectedRepresentation (testMediaType "text/plain")),
+        ("matches the full wildcard", Just "*/*", SelectedRepresentation (testMediaType "application/json")),
+        ("does not claim a bare media type satisfies an Accept media parameter", Just "text/plain; charset=utf-8", NoAcceptableRepresentation),
+        ("lets a more specific range's q=0 exclude a representation despite a permissive wildcard", Just "*/*;q=1, application/json;q=0", SelectedRepresentation (testMediaType "text/plain")),
+        ("returns 406 when every declared representation is excluded", Just "text/html, application/xml", NoAcceptableRepresentation),
+        ("returns 406 when the only match is explicitly q=0", Just "*/*;q=0", NoAcceptableRepresentation),
+        ("keeps the less specific match when a later range in the header is no more specific", Just "application/json, */*", SelectedRepresentation (testMediaType "application/json")),
+        ("lets a type wildcard's specificity win over its own higher quality against a more specific, lower-quality match", Just "*/*;q=0.1, text/*;q=0.9, text/plain;q=0.5", SelectedRepresentation (testMediaType "text/plain")),
+        ("is case-insensitive for the declared media type", Just "APPLICATION/JSON", SelectedRepresentation (testMediaType "application/json"))
+        ]
+        `forM_` \(label, acceptHeader, expected) ->
+          it label $
+            selectRepresentation jsonAndText acceptHeader `shouldBe` expected
 
       it "matches an Accept media parameter against a declared response Content-Type" $
         let plainMediaType = testMediaType "text/plain"
