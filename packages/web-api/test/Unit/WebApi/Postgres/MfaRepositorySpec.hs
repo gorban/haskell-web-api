@@ -1,16 +1,16 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.MfaSpec (spec) where
+module Unit.WebApi.Postgres.MfaRepositorySpec (spec) where
 
-import Control.Monad (unless)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
-import HarchWeb.Account (AccountId, generateAccountId, mkAccountId)
+import HarchWeb.Account (generateAccountId)
 import Test.Hspec
 import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
+import Unit.WebApi.TestSupport (accountId, databaseConfig, shouldReturnEqual)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Mfa
   ( MfaStore (..),
@@ -130,26 +130,3 @@ spec = do
       markTotpCodeUsed store unknownAccountId 700 `shouldReturnEqual` Right False
       loadUnusedRecoveryCodeHashes store unknownAccountId `shouldReturnEqual` Right []
       consumeRecoveryCodeHash store unknownAccountId "hash" 500 `shouldReturnEqual` Right False
-
-shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
-shouldReturnEqual action expected = do
-  actual <- action
-  unless (actual == expected) (expectationFailure "unexpected result")
-
-databaseConfig :: DatabaseConfig
-databaseConfig =
-  DatabaseConfig
-    { databaseHost = "127.0.0.1",
-      databasePort = 5432,
-      databaseName = "web_api_test",
-      databaseUser = "web_api_runtime",
-      databasePassword = "password",
-      databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
-    }
-
-accountId :: AccountId
-accountId =
-  case mkAccountId "account_01" of
-    Just value -> value
-    Nothing -> error "expected a valid account id"
