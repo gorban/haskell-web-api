@@ -5,6 +5,7 @@ module Unit.HarchWebSpec (spec) where
 
 import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, newMVar, putMVar, readMVar, threadDelay)
 import Control.Exception (SomeException, displayException, evaluate, finally, try)
+import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Char8 qualified as ByteStringChar8
@@ -3049,107 +3050,67 @@ spec = do
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
       readResponseBody response `shouldReturn` "Redirecting to HTTPS"
 
-    it "redirects to the configured canonical authority instead of an untrusted Host header" $ do
-      let redirectRequest =
-            (waiRequest ["data"])
-              { Wai.rawQueryString = "?from=plain-http",
-                Wai.requestHeaders = [("Host", "evil.example")]
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data?from=plain-http"
-
-    it "does not redirect at all when no canonical authority is configured" $ do
-      let redirectRequest =
-            (waiRequest ["data"])
-              { Wai.requestHeaders = [("Host", "evil.example")]
-              }
-      response <-
-        performWaiRequest
-          (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectAuthority = Nothing})))
-          redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status202
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Nothing
-
-    it "rewrites redirects to the configured HTTPS listener port" $ do
-      let redirectRequest =
-            (waiRequest ["data"])
-              { Wai.rawQueryString = "?from=runtime-http",
-                Wai.requestHeaders = [("Host", "app.example.com:5001")]
-              }
-          requestPolicyConfig =
-            defaultRequestPolicy
-              { redirectHttpToHttps = True,
-                httpsRedirectPort = Just 5443
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com:5443/data?from=runtime-http"
-
-    it "drops the default HTTPS port from redirect locations when configured explicitly" $ do
-      let redirectRequest =
-            (waiRequest ["data"])
-              { Wai.requestHeaders = [("Host", "app.example.com:80")]
-              }
-          requestPolicyConfig =
-            defaultRequestPolicy
-              { redirectHttpToHttps = True,
-                httpsRedirectPort = Just 443
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/data"
-
-    it "keeps forwarded path prefixes in HTTPS redirect locations" $ do
-      let redirectRequest =
-            Wai.defaultRequest
-              { Wai.rawPathInfo = "/second",
-                Wai.rawQueryString = "?from=plain",
-                Wai.requestHeaders =
-                  [ ("Host", "app.example.com"),
-                    ("X-Forwarded-Prefix", "/app")
-                  ]
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app/second?from=plain"
-
-    it "keeps forwarded path prefixes in HTTPS redirects for the root route" $ do
-      let redirectRequest =
-            Wai.defaultRequest
-              { Wai.rawPathInfo = "/app",
-                Wai.requestHeaders =
-                  [ ("Host", "app.example.com"),
-                    ("X-Forwarded-Prefix", "app")
-                  ]
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy}))) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/app"
-
-    it "does not redirect ACME http-01 challenge paths" $ do
-      let requestPolicyConfig =
-            defaultRequestPolicy
-              { redirectHttpToHttps = True,
-                httpsRedirectPort = Just 5443
-              }
-          acmeRequest =
-            Wai.defaultRequest
-              { Wai.rawPathInfo = "/.well-known/acme-challenge/token",
-                Wai.requestHeaders = [("Host", "app.example.com:5001")]
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) acmeRequest
-      Wai.responseStatus response `shouldBe` Http.status404
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Nothing
-
-    it "redirects the root path without requiring an explicit :80 host suffix" $ do
-      let redirectRequest =
-            Wai.defaultRequest
-              { Wai.requestHeaders = [("Host", "app.example.com")]
-              }
-      response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets (defaultRequestPolicy {redirectHttpToHttps = True}))) redirectRequest
-      Wai.responseStatus response `shouldBe` Http.status308
-      lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` Just "https://app.example.com/"
+    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- (perform a request against toWaiApplication under a given request
+    -- policy, check only its status and Location header), differing in
+    -- the request and the request-policy override. The prior it above
+    -- stays separate: it overrides renderRequestResponse and asserts on
+    -- Content-Type and body too, not just status/Location. The it's
+    -- below (HSTS headers, more assertions) are separate acts too.
+    [ ( "redirects to the configured canonical authority instead of an untrusted Host header",
+        (waiRequest ["data"]) {Wai.rawQueryString = "?from=plain-http", Wai.requestHeaders = [("Host", "evil.example")]},
+        defaultRequestPolicy {redirectHttpToHttps = True},
+        Http.status308,
+        Just "https://app.example.com/data?from=plain-http"
+      ),
+      ( "does not redirect at all when no canonical authority is configured",
+        (waiRequest ["data"]) {Wai.requestHeaders = [("Host", "evil.example")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectAuthority = Nothing},
+        Http.status202,
+        Nothing
+      ),
+      ( "rewrites redirects to the configured HTTPS listener port",
+        (waiRequest ["data"]) {Wai.rawQueryString = "?from=runtime-http", Wai.requestHeaders = [("Host", "app.example.com:5001")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectPort = Just 5443},
+        Http.status308,
+        Just "https://app.example.com:5443/data?from=runtime-http"
+      ),
+      ( "drops the default HTTPS port from redirect locations when configured explicitly",
+        (waiRequest ["data"]) {Wai.requestHeaders = [("Host", "app.example.com:80")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectPort = Just 443},
+        Http.status308,
+        Just "https://app.example.com/data"
+      ),
+      ( "keeps forwarded path prefixes in HTTPS redirect locations",
+        Wai.defaultRequest {Wai.rawPathInfo = "/second", Wai.rawQueryString = "?from=plain", Wai.requestHeaders = [("Host", "app.example.com"), ("X-Forwarded-Prefix", "/app")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy},
+        Http.status308,
+        Just "https://app.example.com/app/second?from=plain"
+      ),
+      ( "keeps forwarded path prefixes in HTTPS redirects for the root route",
+        Wai.defaultRequest {Wai.rawPathInfo = "/app", Wai.requestHeaders = [("Host", "app.example.com"), ("X-Forwarded-Prefix", "app")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, forwardedHeaderTrust = testTrustedForwardedProxy},
+        Http.status308,
+        Just "https://app.example.com/app"
+      ),
+      ( "does not redirect ACME http-01 challenge paths",
+        Wai.defaultRequest {Wai.rawPathInfo = "/.well-known/acme-challenge/token", Wai.requestHeaders = [("Host", "app.example.com:5001")]},
+        defaultRequestPolicy {redirectHttpToHttps = True, httpsRedirectPort = Just 5443},
+        Http.status404,
+        Nothing
+      ),
+      ( "redirects the root path without requiring an explicit :80 host suffix",
+        Wai.defaultRequest {Wai.requestHeaders = [("Host", "app.example.com")]},
+        defaultRequestPolicy {redirectHttpToHttps = True},
+        Http.status308,
+        Just "https://app.example.com/"
+      )
+      ]
+      `forM_` \(label, redirectRequest, requestPolicyConfig, expectedStatus, expectedLocation) ->
+        it label $ do
+          response <- performWaiRequest (toWaiApplication (sampleApplicationWithConfig emptyStaticAssets requestPolicyConfig)) redirectRequest
+          Wai.responseStatus response `shouldBe` expectedStatus
+          lookup Http.hLocation (Wai.responseHeaders response) `shouldBe` expectedLocation
 
     it "uses forwarded HTTPS context to skip redirects and emit HSTS headers" $ do
       let requestPolicyConfig =
