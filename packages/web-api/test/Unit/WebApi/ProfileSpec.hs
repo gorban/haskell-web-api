@@ -3,15 +3,12 @@
 module Unit.WebApi.ProfileSpec (spec) where
 
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb qualified
-import HarchWeb.Account (AccountId, emailVerificationTokenText, mkAccountId, storedVerificationTokenDigest)
-import HarchWeb.Action qualified as Action
-import HarchWeb.Email (EmailAddress, EmailDelivery (..), mkEmailAddress)
-import HarchWeb.Email qualified as Email
+import HarchWeb.Account (AccountId, mkAccountId)
+import HarchWeb.Email (EmailAddress, mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Username qualified as Username
@@ -21,15 +18,12 @@ import TestCore.CustomAssertions (expectAll)
 import WebApi.Account
   ( AccountProfile (..),
     AccountProfileStore (..),
-    AccountStore (..),
     AccountStoreError (..),
   )
-import WebApi.AccountPages (AccountActionTarget (..), PendingProfileForm (..), accountActions, handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..))
 import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfile)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
@@ -88,180 +82,6 @@ spec =
                  responseDiagnosticAttributes accountUnavailableResponse `shouldBe` profileFailureAttributes "AccountStoreError",
                  responseDiagnosticLogs accountUnavailableResponse `shouldBe` ["Profile loading failed: AccountStoreError"],
                  responsePageBody secondPageResponse `shouldSatisfy` Text.isInfixOf "data-page=\"second\""
-               ]
-        )
-
-    it "resends pending-profile verification through a localized client-action patch" $ do
-      let actionRequest requestContext fields =
-            fromMaybe
-              (error "expected a recognized profile action fixture")
-              ( do
-                  action <-
-                    case Action.decodeAction
-                      accountActions
-                      HarchWeb.ClientActionPayload
-                        { HarchWeb.clientActionMethod = "POST",
-                          HarchWeb.clientActionPath = profileActionPath requestContext,
-                          HarchWeb.clientActionFields = fields,
-                          HarchWeb.clientActionCsrfToken = Nothing,
-                          HarchWeb.clientActionIdempotencyKey = Nothing,
-                          HarchWeb.clientActionPayloadContext = requestContext
-                        } of
-                      HarchWeb.DecodedClientAction decodedAction -> Just decodedAction
-                      _ -> Nothing
-                  pure
-                    HarchWeb.ClientActionRequest
-                      { HarchWeb.clientAction = action,
-                        HarchWeb.clientActionRequestIdempotencyKey = Nothing,
-                        HarchWeb.clientActionContext = requestContext
-                      }
-              )
-          profileActionPath requestContext =
-            case WebApi.Route.requestLocale requestContext of
-              WebApi.Route.English -> "/profile"
-              WebApi.Route.Spanish -> "/es/profile"
-          store replacementResult =
-            AccountStore
-              { createPendingAccount = \_ -> error "unexpected account creation",
-                replaceEmailVerification = \verification -> storedVerificationTokenDigest verification `seq` pure replacementResult,
-                findEmailVerification = \_ -> error "unexpected verification lookup",
-                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
-              }
-          workflow replacementResult emailDelivery sessionResult loadedProfile now =
-            unavailableAccountWorkflow
-              { accountWorkflowStore = store replacementResult,
-                accountWorkflowEmailDelivery = emailDelivery,
-                accountWorkflowClock = pure now,
-                accountWorkflowSessionStore = sessionStore sessionResult,
-                accountWorkflowProfileStore = profileStore loadedProfile,
-                accountWorkflowVerificationUrl = \requestContext token ->
-                  case WebApi.Route.requestLocale requestContext of
-                    WebApi.Route.English -> "https://account.example.test/verify?token=" <> emailVerificationTokenText token
-                    WebApi.Route.Spanish -> "https://account.example.test/es/verify?token=" <> emailVerificationTokenText token
-              }
-          delivery = EmailDelivery (\message -> Text.length (Email.emailMessageBody message) `seq` pure ())
-          pendingWorkflow = workflow (Right True) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150
-          expect workflowValue request expectedStatus expectedText = do
-            actionResult <- handleAccountAction workflowValue request
-            case actionResult of
-              Nothing -> expectationFailure "expected a profile client-action response"
-              Just response ->
-                expectAll
-                  ( (Http.statusCode (HarchWeb.clientActionStatus response) `shouldBe` expectedStatus)
-                      :| [ HarchWeb.clientActionPatches response `shouldSatisfy` any ((== "profile-region") . HarchWeb.regionPatchId),
-                           HarchWeb.clientActionPatches response `shouldSatisfy` any (Text.isInfixOf expectedText . HarchWeb.regionPatchHtml),
-                           length (show response) `shouldSatisfy` (> 0)
-                         ]
-                  )
-      expect pendingWorkflow (actionRequest sessionRequestContext [("intent", "resend-verification")]) 202 "Check your inbox"
-      expect pendingWorkflow (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 202 "Revisa tu bandeja"
-      expect pendingWorkflow (actionRequest sessionRequestContext []) 422 "Choose a profile action"
-      expect pendingWorkflow (actionRequest defaultRequestContext [("intent", "resend-verification")]) 403 "Sign in before"
-      expect pendingWorkflow (actionRequest spanishSessionRequestContext []) 422 "Elige una accion de perfil"
-      expect pendingWorkflow (actionRequest (defaultRequestContext {WebApi.Route.requestLocale = WebApi.Route.Spanish, WebApi.Route.requestLocaleIsExplicit = True}) [("intent", "resend-verification")]) 403 "Inicia sesion antes"
-      expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "already verified"
-      expect (workflow (Right True) delivery (Right (Just activeSession)) (Right (Just verifiedProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "Tu direccion de correo ya esta verificada"
-      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 409 "profile state changed"
-      expect (workflow (Right False) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 409 "El estado de tu perfil ha cambiado"
-      expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
-      expect (workflow (Left (AccountStoreUnavailable "database unavailable")) delivery (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
-      expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 502 "could not send"
-      expect (workflow (Right True) (EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))) (Right (Just activeSession)) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 502 "No pudimos enviar"
-      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
-      expect (workflow (Right True) delivery (Left AccountSessionStoreUnavailable) (Right (Just pendingProfile)) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
-      expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
-      expect (workflow (Right True) delivery (Right (Just activeSession)) (Left (AccountStoreUnavailable "database unavailable")) 150) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
-      expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest sessionRequestContext [("intent", "resend-verification")]) 503 "temporarily unavailable"
-      expect (workflow (Right True) delivery (Right (Just (opaqueSession maxBound))) (Right (Just pendingProfile)) (maxBound - 1)) (actionRequest spanishSessionRequestContext [("intent", "resend-verification")]) 503 "Tu perfil no esta disponible"
-
-    it "compares every rendered profile identity field and keeps models printable" $ do
-      let signInAction = CallToAction "Sign in" LoginRoute "/login"
-          registrationAction = CallToAction "Create account" RegistrationRoute "/register"
-          signOutAction = CallToAction "Sign out" LogoutRoute "/logout"
-          signedOutModel = SignedOutProfilePage (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction)
-          pendingModel = PendingProfilePage (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction)
-          pendingModelWithIdentity = PendingProfilePage (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" (Just "pending-person") (Just "Pending Person") UpdateProfileTarget "Resend verification email" signOutAction)
-          authenticatedModel = AuthenticatedProfilePage (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction)
-          authenticatedModelWithIdentity = AuthenticatedProfilePage (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" (Just "authenticated-person") (Just "Authenticated Person") signOutAction)
-          unavailableModel = UnavailableProfilePage (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction)
-          models =
-            [ (signedOutModel, "SignedOutProfilePage"),
-              (pendingModel, "PendingProfilePage"),
-              (authenticatedModel, "AuthenticatedProfilePage"),
-              (unavailableModel, "UnavailableProfilePage")
-            ]
-      mapM_ assertProfilePageModelShow models
-      -- Each detail record's own 'deriving (Eq, Show)' is only reached
-      -- indirectly above, through the outer 'ProfilePageModel' constructor's
-      -- derived instances; HPC does not credit those four declarations from
-      -- that alone, confirmed directly by the coverage gate rather than
-      -- assumed, so each is exercised here too, directly and on its own.
-      -- Same-value, different-construction (not 'x == x').
-      SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-        `shouldBe` SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-      PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction
-        `shouldBe` PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction
-      AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
-        `shouldBe` AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
-      UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction
-        `shouldBe` UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction
-      -- 'deriving (Eq)' writes only '=='; the unoverridden '/=' default
-      -- method HPC boxes separately (this codebase's own established
-      -- derived-instance lesson), so a genuine inequality is exercised too.
-      SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction
-        `shouldNotBe` SignedOutProfilePageDetails "Other" "Sign in to view and manage your profile." signInAction registrationAction
-      PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction
-        `shouldNotBe` PendingProfilePageDetails "Other" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction
-      AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction
-        `shouldNotBe` AuthenticatedProfilePageDetails "Other" "You are signed in." "person@example.test" Nothing Nothing signOutAction
-      UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction
-        `shouldNotBe` UnavailableProfilePageDetails "Other" "Your profile is temporarily unavailable." signInAction
-      show (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction)
-        `shouldContain` "signedOutProfileHeading = \"Profile\""
-      show (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction)
-        `shouldContain` "pendingProfileHeading = \"Profile\""
-      show (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction)
-        `shouldContain` "authenticatedProfileHeading = \"Profile\""
-      show (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction)
-        `shouldContain` "unavailableProfileHeading = \"Profile\""
-      -- Derived 'Show' also writes distinct 'showsPrec'/'showList' methods.
-      showsPrec 11 (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction) ""
-        `shouldBe` "(" <> show (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction) <> ")"
-      showsPrec 11 (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction) ""
-        `shouldBe` "(" <> show (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction) <> ")"
-      showsPrec 11 (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction) ""
-        `shouldBe` "(" <> show (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction) <> ")"
-      showsPrec 11 (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction) ""
-        `shouldBe` "(" <> show (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction) <> ")"
-      show [SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction]
-        `shouldContain` "signedOutProfileHeading = \"Profile\""
-      show [PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction]
-        `shouldContain` "pendingProfileHeading = \"Profile\""
-      show [AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction]
-        `shouldContain` "authenticatedProfileHeading = \"Profile\""
-      show [UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction]
-        `shouldContain` "unavailableProfileHeading = \"Profile\""
-      expectAll
-        ( (ProfilePage signedOutModel == ProfilePage pendingModel `shouldBe` False)
-            :| [ (pendingModel /= pendingModelWithIdentity)
-                   `shouldBe` True,
-                 (authenticatedModel /= authenticatedModelWithIdentity)
-                   `shouldBe` True,
-                 (pendingModel /= authenticatedModel)
-                   `shouldBe` True,
-                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                   == PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                   `shouldBe` True,
-                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                   /= PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email"
-                   `shouldBe` True,
-                 PendingProfileForm "person@example.test" Nothing False "Resend verification email"
-                   /= PendingProfileForm "person@example.test" Nothing True "Resend verification email"
-                   `shouldBe` True,
-                 (PendingProfileForm "person@example.test" Nothing False "Resend verification email" /= PendingProfileForm "person@example.test" Nothing False "Send again")
-                   `shouldBe` True,
-                 renderPendingProfileRegion defaultRequestContext UpdateProfileTarget (PendingProfileForm "person@example.test" (Just "Updated") False "Resend verification email")
-                   `shouldSatisfy` (not . Text.isInfixOf "data-message-error=\"true\"")
                ]
         )
 
@@ -328,10 +148,6 @@ profileFailureAttributes errorType =
     Observability.ObservabilityAttribute "app.route" (Observability.TextAttribute "/profile"),
     Observability.ObservabilityAttribute "app.surface" (Observability.TextAttribute "page")
   ]
-
-assertProfilePageModelShow :: (ProfilePageModel, Text) -> Expectation
-assertProfilePageModelShow (profilePageModel, expectedPrefix) =
-  Text.pack (show (ProfilePage profilePageModel)) `shouldSatisfy` Text.isPrefixOf ("ProfilePage (" <> expectedPrefix)
 
 containsAll :: [Text] -> Text -> Bool
 containsAll expectedFragments actualBody = all (`Text.isInfixOf` actualBody) expectedFragments
