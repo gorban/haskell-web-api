@@ -1273,37 +1273,25 @@ spec =
         evaluate (requireApiMediaType "not-a-media-type") `shouldThrow` \case
           ErrorCall message -> "invalid declared media type: not-a-media-type" `isInfixOf` message
 
-      it "decodes a JSON body when Content-Type matches" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "application/json") "42"
-          `shouldBe` ApiDecodedBody 42
-
-      it "decodes a JSON body when Content-Type includes parameters" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "application/json; charset=utf-8") "7"
-          `shouldBe` ApiDecodedBody 7
-
-      it "matches Content-Type case-insensitively" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "APPLICATION/JSON") "1"
-          `shouldBe` ApiDecodedBody 1
-
-      it "reports unsupported media type for an undeclared Content-Type" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "text/plain") "3"
-          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
-
-      it "reports unsupported media type for a malformed Content-Type header" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "garbage") "3"
-          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
-
-      it "rejects a missing Content-Type when the policy requires one" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] Nothing "42"
-          `shouldBe` ApiUnsupportedMediaType [testMediaType "application/json"]
-
-      it "assumes a declared media type when Content-Type is missing and the policy allows it" $
-        selectApiBodyDecoder (AssumeMediaType (testMediaType "application/json")) [jsonDecoder] Nothing "42"
-          `shouldBe` ApiDecodedBody 42
-
-      it "reports a malformed body when the selected decoder rejects the syntax" $
-        selectApiBodyDecoder RejectMissingContentType [jsonDecoder] (Just "application/json") "not json"
-          `shouldBe` ApiMalformedBody
+      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- (selectApiBodyDecoder against [jsonDecoder]), one comparison,
+      -- differing only in the policy, Content-Type, body, and expected
+      -- outcome. The text/plain and bytes decoder it blocks below use a
+      -- different ApiBodyOutcome result type per decoder (Text,
+      -- ByteString) and stay their own it blocks rather than widen this
+      -- table to an existential.
+      [ ("decodes a JSON body when Content-Type matches", RejectMissingContentType, Just "application/json", "42", ApiDecodedBody 42),
+        ("decodes a JSON body when Content-Type includes parameters", RejectMissingContentType, Just "application/json; charset=utf-8", "7", ApiDecodedBody 7),
+        ("matches Content-Type case-insensitively", RejectMissingContentType, Just "APPLICATION/JSON", "1", ApiDecodedBody 1),
+        ("reports unsupported media type for an undeclared Content-Type", RejectMissingContentType, Just "text/plain", "3", ApiUnsupportedMediaType [testMediaType "application/json"]),
+        ("reports unsupported media type for a malformed Content-Type header", RejectMissingContentType, Just "garbage", "3", ApiUnsupportedMediaType [testMediaType "application/json"]),
+        ("rejects a missing Content-Type when the policy requires one", RejectMissingContentType, Nothing, "42", ApiUnsupportedMediaType [testMediaType "application/json"]),
+        ("assumes a declared media type when Content-Type is missing and the policy allows it", AssumeMediaType (testMediaType "application/json"), Nothing, "42", ApiDecodedBody 42),
+        ("reports a malformed body when the selected decoder rejects the syntax", RejectMissingContentType, Just "application/json", "not json", ApiMalformedBody)
+        ]
+        `forM_` \(label, policy, contentType, body, expected) ->
+          it label $
+            selectApiBodyDecoder policy [jsonDecoder] contentType body `shouldBe` expected
 
       it "carries a non-empty error message when the JSON decoder itself rejects a body" $
         apiBodyDecoderParse jsonDecoder "not json" `shouldSatisfy` \case
