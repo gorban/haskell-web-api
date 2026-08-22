@@ -137,23 +137,27 @@ spec = do
         )
 
   describe "parseBoolean" $ do
-    it "accepts common truthy and falsey values" $ do
+    -- Shape B per docs/design-guidance.md's CN decision record: these rows
+    -- are interchangeable instances of one property ("parseBoolean handles
+    -- this literal correctly"), not individually-named cases, so they stay
+    -- one 'it' and map over a value list through the existing 'expectAll'
+    -- rather than exploding into ten separately-named cases.
+    it "accepts common truthy and falsey values, and rejects anything else explicitly" $
       expectAll
-        ( (CoreConfig.parseBoolean "FLAG" "true" `shouldBe` Right True)
-            :| [ CoreConfig.parseBoolean "FLAG" "TRUE" `shouldBe` Right True,
-                 CoreConfig.parseBoolean "FLAG" "1" `shouldBe` Right True,
-                 CoreConfig.parseBoolean "FLAG" "yes" `shouldBe` Right True,
-                 CoreConfig.parseBoolean "FLAG" "false" `shouldBe` Right False,
-                 CoreConfig.parseBoolean "FLAG" "FALSE" `shouldBe` Right False,
-                 CoreConfig.parseBoolean "FLAG" "0" `shouldBe` Right False,
-                 CoreConfig.parseBoolean "FLAG" "no" `shouldBe` Right False
-               ]
-        )
-
-    it "rejects invalid boolean values explicitly" $ do
-      expectAll
-        ( (CoreConfig.parseBoolean "FLAG" "sometimes" `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "sometimes"))
-            :| [CoreConfig.parseBoolean "FLAG" "" `shouldBe` Left (CoreConfig.InvalidConfigValue "FLAG" "")]
+        ( fmap
+            (\(input, expected) -> CoreConfig.parseBoolean "FLAG" input `shouldBe` expected)
+            ( ("true", Right True)
+                :| [ ("TRUE", Right True),
+                     ("1", Right True),
+                     ("yes", Right True),
+                     ("false", Right False),
+                     ("FALSE", Right False),
+                     ("0", Right False),
+                     ("no", Right False),
+                     ("sometimes", Left (CoreConfig.InvalidConfigValue "FLAG" "sometimes")),
+                     ("", Left (CoreConfig.InvalidConfigValue "FLAG" ""))
+                   ]
+            )
         )
 
   describe "parseDelimitedTexts" $ do
