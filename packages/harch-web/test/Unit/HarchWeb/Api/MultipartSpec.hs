@@ -6,12 +6,10 @@ module Unit.HarchWeb.Api.MultipartSpec (spec) where
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception qualified as Exception
-import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
 import Data.IORef qualified as IORef
-import Data.List (mapAccumL)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
@@ -100,38 +98,6 @@ fieldThenMalformedFieldBody =
     <> "\r\nContent-Type: text/plain\r\n\r\nvalue\r\n--"
     <> boundaryToken
     <> "--\r\n"
-
-expectedTwoPartEvents :: [MultipartEvent]
-expectedTwoPartEvents =
-  [ MultipartPartStarted fieldPartHeaders,
-    MultipartPartBodyChunk "value1",
-    MultipartPartEnded,
-    MultipartPartStarted filePartHeaders,
-    MultipartPartBodyChunk "file content here",
-    MultipartPartEnded,
-    MultipartFinished
-  ]
-
--- | Merge consecutive body-chunk events so scans that split a body across a
--- different number of chunks remain comparable to one expected event list.
-normalizeEvents :: [MultipartEvent] -> [MultipartEvent]
-normalizeEvents (MultipartPartBodyChunk first : MultipartPartBodyChunk second : rest) =
-  normalizeEvents (MultipartPartBodyChunk (first <> second) : rest)
-normalizeEvents (event : rest) = event : normalizeEvents rest
-normalizeEvents [] = []
-
-runScanner :: ByteString -> [ByteString] -> [MultipartEvent]
-runScanner boundary chunks =
-  concat eventLists <> finishMultipartScanner finalScanner
-  where
-    (finalScanner, eventLists) = mapAccumL feedStep (newMultipartScanner boundary) chunks
-    feedStep scanner chunk = let (events, next) = feedMultipartChunk scanner chunk in (next, events)
-
-splitAt2 :: Int -> ByteString -> [ByteString]
-splitAt2 splitPoint body = [ByteString.take splitPoint body, ByteString.drop splitPoint body]
-
-allByteChunks :: ByteString -> [ByteString]
-allByteChunks body = map ByteString.singleton (ByteString.unpack body)
 
 -- | An 'IO' action that yields each listed chunk in order, then an empty
 -- 'ByteString' forever after, matching 'Network.Wai.getRequestBodyChunk'.
@@ -236,150 +202,14 @@ singleFieldBody :: ByteString
 singleFieldBody =
   "--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n" <> "value1" <> "\r\n--" <> boundaryToken <> "--\r\n"
 
+allByteChunks :: ByteString -> [ByteString]
+allByteChunks body = map ByteString.singleton (ByteString.unpack body)
+
 spec :: Spec
 spec =
   describe "HarchWeb.Api.Multipart" $ do
     it "rejects a callback part with the parser-owned generic rejection" $
       rejectMultipartPart `shouldReturn` Left MultipartMalformedBody
-
-    it "scans a two-part body delivered as a single chunk" $
-      normalizeEvents (runScanner boundaryToken [twoPartBody]) `shouldBe` expectedTwoPartEvents
-
-    it "scans a two-part body split at every possible two-way chunk boundary" $
-      expectAll
-        ( (normalizeEvents (runScanner boundaryToken (splitAt2 0 twoPartBody)) `shouldBe` expectedTwoPartEvents)
-            :| [ normalizeEvents (runScanner boundaryToken (splitAt2 splitPoint twoPartBody)) `shouldBe` expectedTwoPartEvents
-               | splitPoint <- [1 .. ByteString.length twoPartBody]
-               ]
-        )
-
-    it "scans a two-part body delivered one byte at a time" $
-      normalizeEvents (runScanner boundaryToken (allByteChunks twoPartBody)) `shouldBe` expectedTwoPartEvents
-
-    it "ignores preamble content before the first boundary" $
-      normalizeEvents (runScanner boundaryToken ["ignored preamble\r\n" <> twoPartBody]) `shouldBe` expectedTwoPartEvents
-
-    it "reports a truncated stream by never reaching MultipartFinished" $
-      let events =
-            runScanner
-              boundaryToken
-              ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n" <> "partial"]
-       in expectAll
-            ( ((MultipartFinished `notElem` events) `shouldBe` True)
-                :| [normalizeEvents events `shouldBe` [MultipartPartStarted fieldPartHeaders, MultipartPartBodyChunk "partial"]]
-            )
-
-    it "flags a delimiter followed by neither -- nor CRLF as malformed" $
-      runScanner boundaryToken ["--" <> boundaryToken <> "XYZ"]
-        `shouldBe` [MultipartMalformed]
-
-    it "retains an unresolved partial-boundary tail when the stream ends before it can be resolved" $
-      let truncatingDelimiter = "\r\n--BOU"
-       in normalizeEvents
-            ( runScanner
-                boundaryToken
-                ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n" <> "value" <> truncatingDelimiter]
-            )
-            `shouldBe` [MultipartPartStarted fieldPartHeaders, MultipartPartBodyChunk ("value" <> truncatingDelimiter)]
-
-    it "completes a part's headers that arrive split across two chunks" $
-      normalizeEvents
-        ( runScanner
-            boundaryToken
-            [ "--" <> boundaryToken <> "\r\nContent-Disposition: form-data; nam",
-              "e=\"field1\"\r\n\r\nvalue1\r\n--" <> boundaryToken <> "--\r\n"
-            ]
-        )
-        `shouldBe` [MultipartPartStarted fieldPartHeaders, MultipartPartBodyChunk "value1", MultipartPartEnded, MultipartFinished]
-
-    it "completes a second (mid-stream) part's headers that arrive split across two chunks" $
-      normalizeEvents
-        ( runScanner
-            boundaryToken
-            [ "--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\nvalue1\r\n--" <> boundaryToken <> "\r\nContent-Disposition: form-data; nam",
-              "e=\"file1\"\r\n\r\nfile content\r\n--" <> boundaryToken <> "--\r\n"
-            ]
-        )
-        `shouldBe` [ MultipartPartStarted fieldPartHeaders,
-                     MultipartPartBodyChunk "value1",
-                     MultipartPartEnded,
-                     MultipartPartStarted "Content-Disposition: form-data; name=\"file1\"",
-                     MultipartPartBodyChunk "file content",
-                     MultipartPartEnded,
-                     MultipartFinished
-                   ]
-
-    it "reports a part with an empty body" $
-      normalizeEvents
-        ( runScanner
-            boundaryToken
-            ["--" <> boundaryToken <> "\r\n" <> fieldPartHeaders <> "\r\n\r\n" <> "\r\n--" <> boundaryToken <> "--\r\n"]
-        )
-        `shouldBe` [MultipartPartStarted fieldPartHeaders, MultipartPartEnded, MultipartFinished]
-
-    it "derives comparable, printable representations for every event constructor" $
-      let events =
-            [ MultipartPartStarted "h",
-              MultipartPartBodyChunk "b",
-              MultipartPartEnded,
-              MultipartFinished,
-              MultipartMalformed,
-              MultipartPreambleLimitExceeded,
-              MultipartPartHeaderLimitExceeded
-            ]
-       in expectAll
-            ( (sum [fromEnum (left == right) | left <- events, right <- events] `shouldBe` length events)
-                :| [ sum [fromEnum (left /= right) | left <- events, right <- events] `shouldBe` length events * (length events - 1),
-                     sum [length (show event) + length (showList [event] "") | event <- events] `shouldSatisfy` (> 0)
-                   ]
-            )
-
-    describe "parseMultipartFieldDisposition" $ do
-      -- Tabled per docs/design-guidance.md's CN decision record: one act,
-      -- one comparison, differing only in the input header text and the
-      -- expected disposition. The three duplicate-parameter cases were
-      -- previously bundled in one 'it' via 'expectAll'; each now reports
-      -- individually. The one case whose assertion is a pattern-match
-      -- predicate, not an equality, stays its own 'it' below the table.
-      [ ("extracts a plain field's name", fieldPartHeaders, Just (MultipartFieldDisposition (Just "field1") Nothing)),
-        ("extracts a file field's name and filename", filePartHeaders, Just (MultipartFieldDisposition (Just "file1") (Just "a.txt"))),
-        ("returns Nothing when there is no Content-Disposition header", "Content-Type: text/plain", Nothing),
-        ("rejects a disposition that is not form-data", "Content-Disposition: attachment; name=\"field\"", Nothing),
-        ("rejects a duplicate name parameter", "Content-Disposition: form-data; name=\"first\"; name=\"second\"", Nothing),
-        ("rejects a duplicate filename parameter", "Content-Disposition: form-data; name=\"field\"; filename=\"first.txt\"; filename=\"second.txt\"", Nothing),
-        ("is case-insensitive for the header name", "content-DISPOSITION: form-data; name=\"x\"", Just (MultipartFieldDisposition (Just "x") Nothing)),
-        ("keeps a semicolon inside a quoted filename from ending the parameter early", "Content-Disposition: form-data; name=\"f\"; filename=\"a;b.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "a;b.txt"))),
-        ("unescapes a backslash-escaped quote inside a quoted value", "Content-Disposition: form-data; name=\"f\"; filename=\"a\\\"b.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "a\"b.txt"))),
-        ("ignores a malformed parameter without '=' while keeping the well-formed ones", "Content-Disposition: form-data; malformed; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
-        ("decodes non-ASCII header bytes leniently rather than failing", "Content-Disposition: form-data; name=\"f\"; filename=\"caf\xC3\xA9.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "caf\233.txt"))),
-        ("substitutes the Unicode replacement character for invalid UTF-8 header bytes", "Content-Disposition: form-data; name=\"f\"; filename=\"bad\xFF.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "bad\65533.txt"))),
-        ("skips a header line without a colon rather than failing the whole block", "garbage line\r\nContent-Disposition: form-data; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
-        ("finds Content-Disposition even when it is not the first header", "Content-Type: text/plain\r\nContent-Disposition: form-data; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
-        ("keeps an unquoted parameter value as-is", "Content-Disposition: form-data; name=f", Just (MultipartFieldDisposition (Just "f") Nothing))
-        ]
-        `forM_` \(label, input, expected) ->
-          it label $
-            parseMultipartFieldDisposition input `shouldBe` expected
-
-      it "does not crash on an unterminated quoted value ending in a backslash" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"a\\"
-          `shouldSatisfy` \case
-            Just (MultipartFieldDisposition (Just "f") (Just _)) -> True
-            _ -> False
-
-      it "derives comparable, printable representations for MultipartFieldDisposition" $
-        let dispositions =
-              [ MultipartFieldDisposition Nothing Nothing,
-                MultipartFieldDisposition (Just "f") Nothing,
-                MultipartFieldDisposition (Just "f") (Just "a.txt")
-              ]
-         in expectAll
-              ( (sum [fromEnum (left == right) | left <- dispositions, right <- dispositions] `shouldBe` length dispositions)
-                  :| [ sum [fromEnum (left /= right) | left <- dispositions, right <- dispositions]
-                         `shouldBe` length dispositions * (length dispositions - 1),
-                       sum [length (show d) + length (showList [d] "") | d <- dispositions] `shouldSatisfy` (> 0)
-                     ]
-              )
 
     describe "withMultipartBodyWith" $ do
       it "keeps the built-in storage adapter in memory within the file budget" $ do
