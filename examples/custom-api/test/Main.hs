@@ -3,6 +3,7 @@
 module Main (main) where
 
 import App.Api.Declarative
+import Control.Monad (forM_)
 import Data.Aeson qualified as Aeson
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
@@ -109,32 +110,22 @@ mainSpec application = describe "Unit.App.Api.Declarative" $ do
       body <- readResponseBody response
       (Aeson.decodeStrict body :: Maybe Aeson.Value) `shouldBe` Just (Aeson.object ["greetingText" Aeson..= ("Hello, Ada!" :: Text)])
 
-    it "reports an unsupported media type without a Content-Type header" $ do
-      response <-
-        performWaiRequest
-          application
-          Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/greeting"}
-      Wai.responseStatus response `shouldBe` HttpTypes.status415
-
-    it "reports an unsupported media type for invalid UTF-8 Content-Type" $ do
-      request <- jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}"
-      response <- performWaiRequest application (request {Wai.requestHeaders = [(HttpTypes.hContentType, "\255")]})
-      Wai.responseStatus response `shouldBe` HttpTypes.status415
-
-    it "reports a malformed body for invalid JSON" $ do
-      request <- jsonRequest "POST" "/api/greeting" "not json"
-      response <- performWaiRequest application request
-      Wai.responseStatus response `shouldBe` HttpTypes.status400
-
-    it "reports an oversized body without decoding it" $ do
-      request <- jsonRequest "POST" "/api/greeting" (ByteString.replicate 20000 65)
-      response <- performWaiRequest application request
-      Wai.responseStatus response `shouldBe` HttpTypes.status413
-
-    it "rejects a chunked body when the next chunk exceeds its byte budget" $ do
-      request <- jsonRequestChunks "POST" "/api/greeting" [ByteString.replicate (16 * 1024) 65, "B"]
-      response <- performWaiRequest application request
-      Wai.responseStatus response `shouldBe` HttpTypes.status413
+    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- (build a request, perform it, check only its status code),
+    -- differing only in how the request is built and the expected
+    -- status. The body-decoding it above stays separate: it asserts on
+    -- the decoded response body, not just the status.
+    [ ("reports an unsupported media type without a Content-Type header", pure Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/greeting"}, HttpTypes.status415),
+      ("reports an unsupported media type for invalid UTF-8 Content-Type", (\request -> request {Wai.requestHeaders = [(HttpTypes.hContentType, "\255")]}) <$> jsonRequest "POST" "/api/greeting" "{\"requestedName\":\"Ada\"}", HttpTypes.status415),
+      ("reports a malformed body for invalid JSON", jsonRequest "POST" "/api/greeting" "not json", HttpTypes.status400),
+      ("reports an oversized body without decoding it", jsonRequest "POST" "/api/greeting" (ByteString.replicate 20000 65), HttpTypes.status413),
+      ("rejects a chunked body when the next chunk exceeds its byte budget", jsonRequestChunks "POST" "/api/greeting" [ByteString.replicate (16 * 1024) 65, "B"], HttpTypes.status413)
+      ]
+      `forM_` \(label, buildRequest, expectedStatus) ->
+        it label $ do
+          request <- buildRequest
+          response <- performWaiRequest application request
+          Wai.responseStatus response `shouldBe` expectedStatus
 
   describe "POST /api/avatar" $ do
     let boundaryToken = "EXAMPLE-BOUNDARY" :: ByteString.ByteString
