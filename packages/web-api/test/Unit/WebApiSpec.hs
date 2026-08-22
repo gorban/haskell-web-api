@@ -2326,55 +2326,12 @@ spec = do
               "x-scope=metrics;broken-entry"
           )
 
-    it "fails invalid runtime values with explicit errors" $ do
-      parseRuntimeAppConfig
-        [ ("APP_TITLE_PREFIX", "runtime-test"),
-          ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "0"),
-          ("LISTENER_0_SCHEME", "http")
-        ]
-        []
-        []
-        `shouldBe` Left (InvalidConfigValue "LISTENER_0_PORT" "0")
-      parseRuntimeAppConfig
-        [ ("APP_TITLE_PREFIX", "runtime-test"),
-          ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "5001"),
-          ("LISTENER_0_SCHEME", "https"),
-          ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
-          ("LISTENER_0_ACME_CONTACT_EMAILS", ""),
-          ("LISTENER_0_ACME_DOMAINS", "")
-        ]
-        []
-        []
-        `shouldBe` Left (InvalidConfigValue "LISTENER_0_ACME_CONTACT_EMAILS" "")
-      parseRuntimeAppConfig
-        [ ("APP_TITLE_PREFIX", "runtime-test"),
-          ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "5001"),
-          ("LISTENER_0_SCHEME", "https"),
-          ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
-          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_DOMAINS", "")
-        ]
-        []
-        []
-        `shouldBe` Left (InvalidConfigValue "LISTENER_0_ACME_DOMAINS" "")
-      parseRuntimeAppConfig
-        [ ("APP_TITLE_PREFIX", "runtime-test"),
-          ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "5001"),
-          ("LISTENER_0_SCHEME", "https"),
-          ("LISTENER_0_TLS_SOURCE", "acme"),
-          ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"),
-          ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"),
-          ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")
-        ]
-        []
-        []
-        `shouldBe` Left (InvalidConfigValue "LISTENER_0_ACME_CHALLENGE_BACKEND" "shell-script")
+    -- The three Right-case its below were split out of what was one
+    -- "fails invalid runtime values with explicit errors" it: each
+    -- asserts a full AppConfig, a different act from the Left-error
+    -- table that follows, and was only ever a fail-fast do-block
+    -- statement rather than its own named case.
+    it "parses an explicit ACME certbot executable override" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
           ("LISTENER_0_HOST", "127.0.0.1"),
@@ -2429,6 +2386,8 @@ spec = do
                     metricsExporter = Nothing
                   }
             }
+
+    it "defaults the ACME certbot executable when not overridden" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
           ("LISTENER_0_HOST", "127.0.0.1"),
@@ -2482,6 +2441,8 @@ spec = do
                     metricsExporter = Nothing
                   }
             }
+
+    it "defaults the ACME certificate directory to a listener-indexed path when no domains are configured" $
       parseRuntimeAppConfig
         [ ("APP_TITLE_PREFIX", "runtime-test"),
           ("LISTENER_0_HOST", "127.0.0.1"),
@@ -2534,82 +2495,36 @@ spec = do
                     metricsExporter = Nothing
                   }
             }
-      parseRuntimeAppConfig
-        [ ("APP_TITLE_PREFIX", "runtime-test"),
-          ("LISTENER_0_HOST", "127.0.0.1"),
-          ("LISTENER_0_PORT", "5001"),
-          ("LISTENER_0_SCHEME", "http"),
-          ("STATIC_CACHE_CONTROL_SECONDS", "-1")
-        ]
-        []
-        []
-        `shouldBe` Left (InvalidConfigValue "STATIC_CACHE_CONTROL_SECONDS" "-1")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [ ("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", "wasm"),
-          ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "application/wasm")
-        ]
-        `shouldBe` Left (InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_EXTENSION" "wasm")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [ ("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", ".wasm"),
-          ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "")
-        ]
-        `shouldBe` Left (InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE" "")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("OTLP_TRACING_HEADERS", "authorization=Bearer token")]
-        `shouldBe` Left (MissingConfigValue "OTLP_TRACING_ENDPOINT")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("OTLP_TRACING_ENABLED", "maybe")]
-        `shouldBe` Left (InvalidConfigValue "OTLP_TRACING_ENABLED" "maybe")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("REDIRECT_HTTP_TO_HTTPS", "maybe")]
-        `shouldBe` Left (InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" "maybe")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("HSTS_INCLUDE_SUBDOMAINS", "true")]
-        `shouldBe` Left (MissingConfigValue "HSTS_MAX_AGE_SECONDS")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [ ("HSTS_MAX_AGE_SECONDS", "31536000"),
-          ("HSTS_PRELOAD", "sometimes")
-        ]
-        `shouldBe` Left (InvalidConfigValue "HSTS_PRELOAD" "sometimes")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("HSTS_MAX_AGE_SECONDS", "-1")]
-        `shouldBe` Left (InvalidConfigValue "HSTS_MAX_AGE_SECONDS" "-1")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("CORS_ALLOWED_ORIGINS", " , ")]
-        `shouldBe` Left (InvalidConfigValue "CORS_ALLOWED_ORIGINS" " , ")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("CORS_MAX_AGE_SECONDS", "-1")]
-        `shouldBe` Left (InvalidConfigValue "CORS_MAX_AGE_SECONDS" "-1")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("CONTENT_SECURITY_POLICY", "")]
-        `shouldBe` Left (InvalidConfigValue "CONTENT_SECURITY_POLICY" "")
-      parseRuntimeAppConfig
-        committedRuntimeDefaults
-        []
-        [("X_CONTENT_TYPE_OPTIONS_NOSNIFF", "maybe")]
-        `shouldBe` Left (InvalidConfigValue "X_CONTENT_TYPE_OPTIONS_NOSNIFF" "maybe")
+
+    -- Tabled per docs/design-guidance.md's CN decision record: one act
+    -- (parseRuntimeAppConfig against three env-pair lists), one
+    -- comparison against a Left ConfigParseError, differing only in the
+    -- env pairs and the expected error. Extracted from what was one
+    -- 284-line "fails invalid runtime values with explicit errors" it
+    -- whose fail-fast do-block statements silently stopped reporting
+    -- after the first failing row; each row is now independently
+    -- reported.
+    [ ("rejects a zero listener port", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "0"), ("LISTENER_0_SCHEME", "http")], [], [], InvalidConfigValue "LISTENER_0_PORT" "0"),
+      ("rejects an ACME listener with an empty ACME_CONTACT_EMAILS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", ""), ("LISTENER_0_ACME_DOMAINS", "")], [], [], InvalidConfigValue "LISTENER_0_ACME_CONTACT_EMAILS" ""),
+      ("rejects an ACME listener with an empty ACME_DOMAINS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"), ("LISTENER_0_ACME_DOMAINS", "")], [], [], InvalidConfigValue "LISTENER_0_ACME_DOMAINS" ""),
+      ("rejects an unrecognized ACME_CHALLENGE_BACKEND value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "https"), ("LISTENER_0_TLS_SOURCE", "acme"), ("LISTENER_0_ACME_DIRECTORY_URL", "https://acme-v02.api.letsencrypt.org/directory"), ("LISTENER_0_ACME_CONTACT_EMAILS", "ops@example.com"), ("LISTENER_0_ACME_CHALLENGE_BACKEND", "shell-script")], [], [], InvalidConfigValue "LISTENER_0_ACME_CHALLENGE_BACKEND" "shell-script"),
+      ("rejects a negative STATIC_CACHE_CONTROL_SECONDS value", [("APP_TITLE_PREFIX", "runtime-test"), ("LISTENER_0_HOST", "127.0.0.1"), ("LISTENER_0_PORT", "5001"), ("LISTENER_0_SCHEME", "http"), ("STATIC_CACHE_CONTROL_SECONDS", "-1")], [], [], InvalidConfigValue "STATIC_CACHE_CONTROL_SECONDS" "-1"),
+      ("rejects a static asset content type extension without a leading dot", committedRuntimeDefaults, [], [("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", "wasm"), ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "application/wasm")], InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_EXTENSION" "wasm"),
+      ("rejects a static asset content type with an empty MIME type", committedRuntimeDefaults, [], [("STATIC_ASSET_CONTENT_TYPE_1_EXTENSION", ".wasm"), ("STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE", "")], InvalidConfigValue "STATIC_ASSET_CONTENT_TYPE_1_MIME_TYPE" ""),
+      ("requires OTLP_TRACING_ENDPOINT when OTLP tracing headers are configured", committedRuntimeDefaults, [], [("OTLP_TRACING_HEADERS", "authorization=Bearer token")], MissingConfigValue "OTLP_TRACING_ENDPOINT"),
+      ("rejects a non-boolean OTLP_TRACING_ENABLED value", committedRuntimeDefaults, [], [("OTLP_TRACING_ENABLED", "maybe")], InvalidConfigValue "OTLP_TRACING_ENABLED" "maybe"),
+      ("rejects a non-boolean REDIRECT_HTTP_TO_HTTPS value", committedRuntimeDefaults, [], [("REDIRECT_HTTP_TO_HTTPS", "maybe")], InvalidConfigValue "REDIRECT_HTTP_TO_HTTPS" "maybe"),
+      ("requires HSTS_MAX_AGE_SECONDS when HSTS_INCLUDE_SUBDOMAINS is set", committedRuntimeDefaults, [], [("HSTS_INCLUDE_SUBDOMAINS", "true")], MissingConfigValue "HSTS_MAX_AGE_SECONDS"),
+      ("rejects a non-boolean HSTS_PRELOAD value", committedRuntimeDefaults, [], [("HSTS_MAX_AGE_SECONDS", "31536000"), ("HSTS_PRELOAD", "sometimes")], InvalidConfigValue "HSTS_PRELOAD" "sometimes"),
+      ("rejects a negative HSTS_MAX_AGE_SECONDS value", committedRuntimeDefaults, [], [("HSTS_MAX_AGE_SECONDS", "-1")], InvalidConfigValue "HSTS_MAX_AGE_SECONDS" "-1"),
+      ("rejects a CORS_ALLOWED_ORIGINS value with only blank entries", committedRuntimeDefaults, [], [("CORS_ALLOWED_ORIGINS", " , ")], InvalidConfigValue "CORS_ALLOWED_ORIGINS" " , "),
+      ("rejects a negative CORS_MAX_AGE_SECONDS value", committedRuntimeDefaults, [], [("CORS_MAX_AGE_SECONDS", "-1")], InvalidConfigValue "CORS_MAX_AGE_SECONDS" "-1"),
+      ("rejects an empty CONTENT_SECURITY_POLICY value", committedRuntimeDefaults, [], [("CONTENT_SECURITY_POLICY", "")], InvalidConfigValue "CONTENT_SECURITY_POLICY" ""),
+      ("rejects a non-boolean X_CONTENT_TYPE_OPTIONS_NOSNIFF value", committedRuntimeDefaults, [], [("X_CONTENT_TYPE_OPTIONS_NOSNIFF", "maybe")], InvalidConfigValue "X_CONTENT_TYPE_OPTIONS_NOSNIFF" "maybe")
+      ]
+      `forM_` \(label, envPairs, listenerPairs, otherPairs, expectedError) ->
+        it label $
+          parseRuntimeAppConfig envPairs listenerPairs otherPairs `shouldBe` Left expectedError
 
   describe "defaultAppEnvironmentConfig" $ do
     it "keeps committed .env defaults aligned with the parsed development config" $ do
