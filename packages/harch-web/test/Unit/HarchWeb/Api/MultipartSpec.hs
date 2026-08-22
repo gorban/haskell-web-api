@@ -6,6 +6,7 @@ module Unit.HarchWeb.Api.MultipartSpec (spec) where
 import Control.Concurrent (forkIO, myThreadId)
 import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception qualified as Exception
+import Control.Monad (forM_)
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Char8 qualified as ByteStringChar8
@@ -334,60 +335,31 @@ spec =
             )
 
     describe "parseMultipartFieldDisposition" $ do
-      it "extracts a plain field's name" $
-        parseMultipartFieldDisposition fieldPartHeaders
-          `shouldBe` Just (MultipartFieldDisposition (Just "field1") Nothing)
-
-      it "extracts a file field's name and filename" $
-        parseMultipartFieldDisposition filePartHeaders
-          `shouldBe` Just (MultipartFieldDisposition (Just "file1") (Just "a.txt"))
-
-      it "returns Nothing when there is no Content-Disposition header" $
-        parseMultipartFieldDisposition "Content-Type: text/plain" `shouldBe` Nothing
-
-      it "accepts only form-data and rejects duplicate disposition parameters" $
-        expectAll
-          ( (parseMultipartFieldDisposition "Content-Disposition: attachment; name=\"field\"" `shouldBe` Nothing)
-              :| [ parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"first\"; name=\"second\"" `shouldBe` Nothing,
-                   parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"field\"; filename=\"first.txt\"; filename=\"second.txt\"" `shouldBe` Nothing
-                 ]
-          )
-
-      it "is case-insensitive for the header name" $
-        parseMultipartFieldDisposition "content-DISPOSITION: form-data; name=\"x\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "x") Nothing)
-
-      it "keeps a semicolon inside a quoted filename from ending the parameter early" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"a;b.txt\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") (Just "a;b.txt"))
-
-      it "unescapes a backslash-escaped quote inside a quoted value" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"a\\\"b.txt\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") (Just "a\"b.txt"))
-
-      it "ignores a malformed parameter without '=' while keeping the well-formed ones" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; malformed; name=\"f\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") Nothing)
-
-      it "decodes non-ASCII header bytes leniently rather than failing" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"caf\xC3\xA9.txt\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") (Just "caf\233.txt"))
-
-      it "substitutes the Unicode replacement character for invalid UTF-8 header bytes" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"bad\xFF.txt\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") (Just "bad\65533.txt"))
-
-      it "skips a header line without a colon rather than failing the whole block" $
-        parseMultipartFieldDisposition "garbage line\r\nContent-Disposition: form-data; name=\"f\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") Nothing)
-
-      it "finds Content-Disposition even when it is not the first header" $
-        parseMultipartFieldDisposition "Content-Type: text/plain\r\nContent-Disposition: form-data; name=\"f\""
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") Nothing)
-
-      it "keeps an unquoted parameter value as-is" $
-        parseMultipartFieldDisposition "Content-Disposition: form-data; name=f"
-          `shouldBe` Just (MultipartFieldDisposition (Just "f") Nothing)
+      -- Tabled per docs/design-guidance.md's CN decision record: one act,
+      -- one comparison, differing only in the input header text and the
+      -- expected disposition. The three duplicate-parameter cases were
+      -- previously bundled in one 'it' via 'expectAll'; each now reports
+      -- individually. The one case whose assertion is a pattern-match
+      -- predicate, not an equality, stays its own 'it' below the table.
+      [ ("extracts a plain field's name", fieldPartHeaders, Just (MultipartFieldDisposition (Just "field1") Nothing)),
+        ("extracts a file field's name and filename", filePartHeaders, Just (MultipartFieldDisposition (Just "file1") (Just "a.txt"))),
+        ("returns Nothing when there is no Content-Disposition header", "Content-Type: text/plain", Nothing),
+        ("rejects a disposition that is not form-data", "Content-Disposition: attachment; name=\"field\"", Nothing),
+        ("rejects a duplicate name parameter", "Content-Disposition: form-data; name=\"first\"; name=\"second\"", Nothing),
+        ("rejects a duplicate filename parameter", "Content-Disposition: form-data; name=\"field\"; filename=\"first.txt\"; filename=\"second.txt\"", Nothing),
+        ("is case-insensitive for the header name", "content-DISPOSITION: form-data; name=\"x\"", Just (MultipartFieldDisposition (Just "x") Nothing)),
+        ("keeps a semicolon inside a quoted filename from ending the parameter early", "Content-Disposition: form-data; name=\"f\"; filename=\"a;b.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "a;b.txt"))),
+        ("unescapes a backslash-escaped quote inside a quoted value", "Content-Disposition: form-data; name=\"f\"; filename=\"a\\\"b.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "a\"b.txt"))),
+        ("ignores a malformed parameter without '=' while keeping the well-formed ones", "Content-Disposition: form-data; malformed; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
+        ("decodes non-ASCII header bytes leniently rather than failing", "Content-Disposition: form-data; name=\"f\"; filename=\"caf\xC3\xA9.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "caf\233.txt"))),
+        ("substitutes the Unicode replacement character for invalid UTF-8 header bytes", "Content-Disposition: form-data; name=\"f\"; filename=\"bad\xFF.txt\"", Just (MultipartFieldDisposition (Just "f") (Just "bad\65533.txt"))),
+        ("skips a header line without a colon rather than failing the whole block", "garbage line\r\nContent-Disposition: form-data; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
+        ("finds Content-Disposition even when it is not the first header", "Content-Type: text/plain\r\nContent-Disposition: form-data; name=\"f\"", Just (MultipartFieldDisposition (Just "f") Nothing)),
+        ("keeps an unquoted parameter value as-is", "Content-Disposition: form-data; name=f", Just (MultipartFieldDisposition (Just "f") Nothing))
+        ]
+        `forM_` \(label, input, expected) ->
+          it label $
+            parseMultipartFieldDisposition input `shouldBe` expected
 
       it "does not crash on an unterminated quoted value ending in a backslash" $
         parseMultipartFieldDisposition "Content-Disposition: form-data; name=\"f\"; filename=\"a\\"
