@@ -1536,10 +1536,6 @@ spec =
       it "only accepts validated declared representations" $
         apiMediaType "not-a-media-type" `shouldBe` Nothing
 
-      it "drops an Accept parameter that has no '=' rather than failing the whole entry" $
-        parseAcceptHeader "text/plain;malformed, application/json"
-          `shouldBe` [AcceptedRange "text" "plain" [] 1.0, AcceptedRange "application" "json" [] 1.0]
-
       it "is case-insensitive for the declared media type" $
         selectRepresentation jsonAndText (Just "APPLICATION/JSON")
           `shouldBe` SelectedRepresentation (testMediaType "application/json")
@@ -1552,31 +1548,29 @@ spec =
                  ]
           )
 
-      it "retains normalized media parameters before q and ignores extensions after it" $
-        parseAcceptHeader "text/plain; charset=\"UTF-8\";q=0.5;level=1"
-          `shouldBe` [AcceptedRange "text" "plain" [("charset", "utf-8")] 0.5]
+      -- Tabled per docs/design-guidance.md's CN decision record: one act
+      -- (parseAcceptHeader), one comparison against the full parsed
+      -- [AcceptedRange] result, differing only in the header text. The
+      -- "parses quality, whitespace..." it above and the boundary-quality
+      -- it below stay separate: they compare a projection of the result
+      -- (acceptedRangeQuality, a tuple), not the full AcceptedRange list.
+      [ ("drops an Accept parameter that has no '=' rather than failing the whole entry", "text/plain;malformed, application/json", [AcceptedRange "text" "plain" [] 1.0, AcceptedRange "application" "json" [] 1.0]),
+        ("retains normalized media parameters before q and ignores extensions after it", "text/plain; charset=\"UTF-8\";q=0.5;level=1", [AcceptedRange "text" "plain" [("charset", "utf-8")] 0.5]),
+        ("keeps quoted commas, semicolons, and escaped quotes inside one Accept parameter", "text/plain; note=\"first, second; \\\"quoted\\\"\";q=0.2, application/json", [AcceptedRange "text" "plain" [("note", "first, second; \\\"quoted\\\"")] 0.2, AcceptedRange "application" "json" [] 1.0]),
+        ("drops a malformed quality value", "text/plain;q=nope", []),
+        ("drops a malformed media range while keeping a valid one later in the header", "not-a-media-type, text/plain", [AcceptedRange "text" "plain" [] 1.0]),
+        ("rejects a quality value above 1", "text/plain;q=1.001", []),
+        ("rejects a quality value with more than three decimal places", "text/plain;q=0.1234", []),
+        ("rejects a quality value with more than one digit before the decimal point", "text/plain;q=2", []),
+        ("rejects a quality value with a non-numeric suffix", "text/plain;q=0.5suffix", [])
+        ]
+        `forM_` \(label, acceptHeader, expected) ->
+          it label $
+            parseAcceptHeader acceptHeader `shouldBe` expected
 
-      it "keeps quoted commas, semicolons, and escaped quotes inside one Accept parameter" $
-        parseAcceptHeader "text/plain; note=\"first, second; \\\"quoted\\\"\";q=0.2, application/json"
-          `shouldBe` [ AcceptedRange "text" "plain" [("note", "first, second; \\\"quoted\\\"")] 0.2,
-                       AcceptedRange "application" "json" [] 1.0
-                     ]
-
-      it "drops a malformed quality value and malformed media range" $
-        expectAll
-          ( (parseAcceptHeader "text/plain;q=nope" `shouldBe` [])
-              :| [parseAcceptHeader "not-a-media-type, text/plain" `shouldBe` [AcceptedRange "text" "plain" [] 1.0]]
-          )
-
-      it "accepts only RFC-bounded quality values with at most three decimal places" $
-        expectAll
-          ( (map acceptedRangeQuality (parseAcceptHeader "text/plain;q=0, application/json;q=0.125, image/svg+xml;q=1.000") `shouldBe` [0.0, 0.125, 1.0])
-              :| [ parseAcceptHeader "text/plain;q=1.001" `shouldBe` [],
-                   parseAcceptHeader "text/plain;q=0.1234" `shouldBe` [],
-                   parseAcceptHeader "text/plain;q=2" `shouldBe` [],
-                   parseAcceptHeader "text/plain;q=0.5suffix" `shouldBe` []
-                 ]
-          )
+      it "parses valid quality values including a zero, a mid-range, and a trailing-zero boundary form" $
+        map acceptedRangeQuality (parseAcceptHeader "text/plain;q=0, application/json;q=0.125, image/svg+xml;q=1.000")
+          `shouldBe` [0.0, 0.125, 1.0]
 
       it "derives comparable, printable representations for negotiation types" $
         let plainMediaType = testMediaType "text/plain"
