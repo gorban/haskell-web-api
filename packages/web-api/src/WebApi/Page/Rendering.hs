@@ -26,15 +26,6 @@ renderPageBody = HarchWeb.renderHtml . renderPageBodyForLocale defaultRequestCon
 renderPageBodyForLocale :: AppRequestContext -> AppLocale -> AppPageModel -> HarchWeb.Html
 renderPageBodyForLocale context locale pageModel =
   case pageModel of
-    HomePage homePage ->
-      HarchWeb.element
-        HarchWeb.sectionTag
-        [HarchWeb.dataAttribute "page" "home"]
-        [ HarchWeb.element HarchWeb.headingOneTag [HarchWeb.dataAttribute "page-title" "true"] [HarchWeb.text (homeHeading homePage)],
-          renderPageError (homeErrorMessage homePage),
-          HarchWeb.element HarchWeb.paragraphTag [] [HarchWeb.text (homeSummary homePage)],
-          renderCallToAction (homePrimaryAction homePage)
-        ]
     SecondPage secondPage ->
       HarchWeb.element
         HarchWeb.sectionTag

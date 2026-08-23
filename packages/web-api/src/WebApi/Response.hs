@@ -6,7 +6,6 @@ module WebApi.Response
     jsonErrorBody,
     jsonText,
     pageFailureDiagnostics,
-    renderApiResponseFromRouteData,
     renderLocale,
     secondRouteApiBody,
     selectResponseWithDatabaseAndAccountWorkflow,
@@ -42,7 +41,6 @@ import WebApi.RouteData
   ( RouteDataResult (..),
     RouteDataSelection (..),
     SecondRouteData (..),
-    StatusApiData (..),
     selectRouteDataSelectionWithDatabase,
   )
 
@@ -54,16 +52,12 @@ selectResponseWithDatabase :: AppConfig -> PageRepository -> HarchWeb.RouteReque
 selectResponseWithDatabase config pageRepository routeRequest =
   if isHomePageRequest routeRequest
     then pure (HarchWeb.redirectResponse Http.status302 (spacesLocation routeRequest))
-    else
-      fmap
-        ( \routeDataSelection ->
-            case HarchWeb.requestRoute routeRequest of
-              Api _ ->
-                HarchWeb.BodyResponse (renderApiResponseFromRouteDataSelection routeDataSelection)
-              Page _ ->
-                renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection
-        )
-        (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
+    else case HarchWeb.requestRoute routeRequest of
+      Api _ -> pure (HarchWeb.BodyResponse apiNotFoundResponse)
+      Page _ ->
+        fmap
+          (renderPageResponseFromRouteDataSelection config routeRequest)
+          (selectRouteDataSelectionWithDatabase pageRepository routeRequest)
 
 selectResponseWithDatabaseAndAccountWorkflow :: AppConfig -> PageRepository -> AccountWorkflow -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO (HarchWeb.Response AppRoute AppRequestContext)
 selectResponseWithDatabaseAndAccountWorkflow config pageRepository accountWorkflow routeRequest =
@@ -125,36 +119,11 @@ renderPageResponseFromRouteDataSelection config routeRequest routeDataSelection 
     routeData = routeDataResult routeDataSelection
     routeDataDatabaseOperationsValue = routeDataDatabaseOperations routeDataSelection
 
-renderApiResponseFromRouteData :: RouteDataResult -> HarchWeb.ResponseBody
-renderApiResponseFromRouteData =
-  renderApiResponseFromRouteDataWithOperations []
-
-renderApiResponseFromRouteDataSelection :: RouteDataSelection -> HarchWeb.ResponseBody
-renderApiResponseFromRouteDataSelection routeDataSelection =
-  renderApiResponseFromRouteDataWithOperations
-    (routeDataDatabaseOperations routeDataSelection)
-    (routeDataResult routeDataSelection)
-
-renderApiResponseFromRouteDataWithOperations :: [DatabaseOperation] -> RouteDataResult -> HarchWeb.ResponseBody
-renderApiResponseFromRouteDataWithOperations databaseOperations routeData =
-  case routeData of
-    StatusApiDataResult statusApiData ->
-      jsonResponseBodyWithOperations Http.status200 (statusApiBody statusApiData) databaseOperations
-    SecondRouteDataResult (Right secondRouteData) ->
-      jsonResponseBodyWithOperations Http.status200 (secondRouteApiBody secondRouteData) databaseOperations
-    SecondRouteDataResult (Left databaseError) ->
-      jsonErrorResponseBody
-        Http.status503
-        (jsonErrorBody "second-page-unavailable")
-        (pageFailureDiagnostics ApiFailureSurface "/second" "second-page" databaseOperations databaseError)
-    _ ->
-      jsonResponseBodyWithOperations Http.status404 (jsonErrorBody "not-found") databaseOperations
-
-statusApiBody :: StatusApiData -> JsonEncoding.Encoding
-statusApiBody statusApiData =
+statusApiBody :: AppLocale -> JsonEncoding.Encoding
+statusApiBody locale =
   JsonEncoding.pairs
     ( JsonEncoding.pair "status" (Aeson.toEncoding ("ok" :: Text))
-        <> JsonEncoding.pair "locale" (Aeson.toEncoding (renderLocale (statusApiLocale statusApiData)))
+        <> JsonEncoding.pair "locale" (Aeson.toEncoding (renderLocale locale))
     )
 
 secondRouteApiBody :: SecondRouteData -> JsonEncoding.Encoding
@@ -174,26 +143,15 @@ renderLocale locale =
     English -> "en"
     Spanish -> "es"
 
-jsonResponseBodyWithOperations :: Http.Status -> JsonEncoding.Encoding -> [DatabaseOperation] -> HarchWeb.ResponseBody
-jsonResponseBodyWithOperations statusCode bodyValue databaseOperations =
+apiNotFoundResponse :: HarchWeb.ResponseBody
+apiNotFoundResponse =
   HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = statusCode,
+    { HarchWeb.responseStatus = Http.status404,
       HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = jsonText bodyValue,
+      HarchWeb.responseBody = jsonText (jsonErrorBody "not-found"),
       HarchWeb.responseObservabilityAttributes = [],
       HarchWeb.responseLogEntries = [],
-      HarchWeb.responseDatabaseOperations = map toHarchDatabaseOperation databaseOperations
-    }
-
-jsonErrorResponseBody :: Http.Status -> JsonEncoding.Encoding -> FailureDiagnostics -> HarchWeb.ResponseBody
-jsonErrorResponseBody statusCode bodyValue diagnostics =
-  HarchWeb.ResponseBody
-    { HarchWeb.responseStatus = statusCode,
-      HarchWeb.responseContentType = "application/json",
-      HarchWeb.responseBody = jsonText bodyValue,
-      HarchWeb.responseObservabilityAttributes = diagnosticsObservabilityAttributes diagnostics,
-      HarchWeb.responseLogEntries = diagnosticsLogEntries diagnostics,
-      HarchWeb.responseDatabaseOperations = diagnosticsDatabaseOperations diagnostics
+      HarchWeb.responseDatabaseOperations = []
     }
 
 jsonText :: JsonEncoding.Encoding -> Text
@@ -237,11 +195,11 @@ pageFailureDiagnostics failureSurface routePath routeLabel databaseOperations da
     { diagnosticsObservabilityAttributes =
         [ Observability.ObservabilityAttribute
             { Observability.attributeName = "error.type",
-              Observability.attributeValue = Observability.TextAttribute (databaseErrorType databaseError)
+              Observability.attributeValue = Observability.TextAttribute "SecondPageDataError"
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.failure.code",
-              Observability.attributeValue = Observability.TextAttribute (databaseFailureCode databaseError)
+              Observability.attributeValue = Observability.TextAttribute "database.second-page-data"
             },
           Observability.ObservabilityAttribute
             { Observability.attributeName = "app.route",
@@ -323,18 +281,6 @@ renderDatabaseOperationsSuffix databaseOperations =
           | databaseOperation <- databaseOperations
           ]
         <> "]"
-
-databaseErrorType :: DatabaseError -> Text
-databaseErrorType databaseError =
-  case databaseError of
-    HomePageDataError _ -> "HomePageDataError"
-    SecondPageDataError _ -> "SecondPageDataError"
-
-databaseFailureCode :: DatabaseError -> Text
-databaseFailureCode databaseError =
-  case databaseError of
-    HomePageDataError _ -> "database.home-page-data"
-    SecondPageDataError _ -> "database.second-page-data"
 
 renderFailureSurface :: FailureSurface -> Text
 renderFailureSurface failureSurface =

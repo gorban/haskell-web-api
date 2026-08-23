@@ -198,10 +198,13 @@ spec = do
 
     it "dispatches /api/status and /api/second through the typed endpoint boundary, not the shared page/API selector" $ do
       apiStatusResult <- HarchWeb.renderResponse pureApplication apiStatusRequest
+      spanishApiStatusResult <- HarchWeb.renderResponse pureApplication spanishApiStatusRequest
       apiSecondResult <- HarchWeb.renderResponse pureApplication apiSecondRequest
       expectAll
         ( (apiStatusResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"status\":\"ok\",\"locale\":\"en\"}"))
-            :| [apiSecondResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}")]
+            :| [ spanishApiStatusResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"status\":\"ok\",\"locale\":\"es\"}"),
+                 apiSecondResult `shouldBe` HarchWeb.ProtocolResponseResult (expectedApiJsonProtocolResponse "{\"summary\":\"Second page content with stubbed data ready for future loaders.\",\"highlights\":[]}")
+               ]
         )
 
     it "carries database operations through the typed API response boundary" $ do
@@ -236,15 +239,37 @@ spec = do
             `shouldBe` [expectedDatabaseOperation "load-second-page-summary" "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;"]
         _ -> expectationFailure "expected a typed API protocol response"
 
-    it "maps a database failure at /api/second's typed endpoint boundary into the same explicit API error diagnostics the shared page/API selector reports" $ do
+    it "escapes hostile database content through the live /api/second endpoint" $ do
+      let hostileApplication =
+            buildAppWithDatabase
+              defaultAppConfig
+              defaultPageRepository
+                { loadSecondPage =
+                    \_ ->
+                      pure
+                        DatabaseResult
+                          { databaseResultValue =
+                              Right
+                                SecondPageData
+                                  { secondPageDataSummary = "quote\" slash\\ newline\n control\t unicode ☃",
+                                    secondPageDataHighlights = ["</script><script>alert(1)</script>", "\b"]
+                                  },
+                            databaseResultOperations = []
+                          }
+                }
+      HarchWeb.renderResponse hostileApplication apiSecondRequest
+        `shouldReturn` HarchWeb.ProtocolResponseResult
+          ( expectedApiJsonProtocolResponse
+              (TextEncoding.encodeUtf8 "{\"summary\":\"quote\\\" slash\\\\ newline\\n control\\t unicode ☃\",\"highlights\":[\"</script><script>alert(1)</script>\",\"\\u0008\"]}")
+          )
+
+    it "maps a database failure at /api/second's typed endpoint boundary into explicit API error diagnostics" $ do
       let failingApplication =
             buildAppWithDatabase
               defaultAppConfig
               ( buildSeededPageRepository
                   DatabaseSeed
-                    { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                      spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                      englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                    { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                       spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                     }
               )
@@ -374,9 +399,7 @@ spec = do
               defaultAppConfig
               ( buildSeededPageRepository
                   DatabaseSeed
-                    { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                      spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                      englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                    { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                       spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
                     }
               )
@@ -391,12 +414,8 @@ spec = do
       lookup Http.hLocation (Wai.responseHeaders homeResponse) `shouldBe` Just "/spaces"
 
     it "is structurally complete enough to render supported and not-found shells" $ do
-      homePage <- renderPage defaultAppConfig homeRequest
       secondPage <- renderPage defaultAppConfig secondRequest
       notFoundPage <- renderPage defaultAppConfig notFoundRequest
-      HarchWeb.documentTitle (HarchWeb.pageShell pureApplication homePage) `shouldBe` "web-api: Home"
-      Text.isInfixOf "Browse the second page" (HarchWeb.renderHtml (HarchWeb.documentMainContent (HarchWeb.pageShell pureApplication homePage)))
-        `shouldBe` True
       HarchWeb.documentTitle (HarchWeb.pageShell pureApplication secondPage) `shouldBe` "web-api: Second"
       HarchWeb.documentBootstrapHooks (HarchWeb.pageShell pureApplication secondPage) `shouldBe` ["second-page"]
       HarchWeb.documentTitle (HarchWeb.pageShell pureApplication notFoundPage) `shouldBe` "web-api: Not Found"

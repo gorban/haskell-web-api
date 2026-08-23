@@ -14,9 +14,7 @@ module Unit.WebApi.TestSupport
     pureApplication,
     typedAccountActionRequest,
     productionTotpEncryptionKey,
-    loadHomePageForRequest,
     loadSecondPageForRequest,
-    loadHomePageValueForRequest,
     loadSecondPageValueForRequest,
     testTrustedForwardedProxy,
     requiredTestCidrBlock,
@@ -165,7 +163,7 @@ import WebApi (buildApp)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..))
 import WebApi.AccountPages (AccountAction, accountActions)
 import WebApi.Config (AppConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
-import WebApi.Database (DatabaseError (..), DatabaseResult (..), HomePageData (..), PageRepository (..), SecondPageData (..))
+import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
 import WebApi.Login (LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..))
@@ -275,17 +273,9 @@ productionTotpEncryptionKey =
     (Secret.mkSecretEncryptionKey "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI")
 {-# NOINLINE productionTotpEncryptionKey #-}
 
-loadHomePageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult HomePageData)
-loadHomePageForRequest pageRepository requestContext =
-  loadHomePage pageRepository (requestLocale requestContext)
-
 loadSecondPageForRequest :: PageRepository -> AppRequestContext -> IO (DatabaseResult SecondPageData)
 loadSecondPageForRequest pageRepository requestContext =
   loadSecondPage pageRepository (requestLocale requestContext)
-
-loadHomePageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError HomePageData)
-loadHomePageValueForRequest pageRepository requestContext =
-  databaseResultValue <$> loadHomePageForRequest pageRepository requestContext
 
 loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
 loadSecondPageValueForRequest pageRepository requestContext =

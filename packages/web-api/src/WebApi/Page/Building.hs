@@ -34,8 +34,7 @@ import WebApi.Route
     renderRoutePath,
   )
 import WebApi.RouteData
-  ( HomeRouteData (..),
-    RouteDataResult (..),
+  ( RouteDataResult (..),
     SecondRouteData (..),
     selectRouteDataWithDatabase,
   )
@@ -52,8 +51,6 @@ buildPageModelWithDatabase pageRepository routeRequest =
 buildPageModelFromRouteData :: HarchWeb.RouteRequest AppRoute AppRequestContext -> RouteDataResult -> AppPageModel
 buildPageModelFromRouteData routeRequest routeData =
   case routeData of
-    HomeRouteDataResult homeRouteDataResult ->
-      buildHomePageModel routeRequest homeRouteDataResult
     SecondRouteDataResult secondRouteDataResult ->
       buildSecondPageModel routeRequest secondRouteDataResult
     SpacesRouteDataResult ->
@@ -140,27 +137,6 @@ buildUnavailableProfilePageModel routeRequest =
             unavailableProfileSignInAction = buildCallToAction routeRequest LoginRoute (localizedText routeRequest "Sign in" "Iniciar sesión")
           }
     )
-
-buildHomePageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError HomeRouteData -> AppPageModel
-buildHomePageModel routeRequest homeRouteDataResult =
-  let browseSecond = buildCallToAction routeRequest SecondRoute (localizedText routeRequest "Browse the second page" "Ver la segunda página")
-   in case homeRouteDataResult of
-        Right homeRouteData ->
-          HomePage
-            HomePageModel
-              { homeHeading = localizedText routeRequest "Home" "Inicio",
-                homeSummary = homeRouteSummary homeRouteData,
-                homeErrorMessage = Nothing,
-                homePrimaryAction = browseSecond
-              }
-        Left _ ->
-          HomePage
-            HomePageModel
-              { homeHeading = localizedText routeRequest "Home" "Inicio",
-                homeSummary = localizedText routeRequest "Home page content is temporarily unavailable." "El contenido de la pagina de inicio no esta disponible temporalmente.",
-                homeErrorMessage = Just (localizedText routeRequest "Could not load home page data." "No se pudieron cargar los datos de la pagina de inicio."),
-                homePrimaryAction = browseSecond
-              }
 
 buildSecondPageModel :: HarchWeb.RouteRequest AppRoute AppRequestContext -> Either databaseError SecondRouteData -> AppPageModel
 buildSecondPageModel routeRequest secondRouteDataResult =

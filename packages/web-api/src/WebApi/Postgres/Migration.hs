@@ -304,7 +304,7 @@ seedStatements :: [Text]
 seedStatements =
   [ "DELETE FROM " <> qualifiedTableName "page_highlights" <> ";",
     "DELETE FROM " <> qualifiedTableName "page_content" <> ";",
-    "INSERT INTO " <> qualifiedTableName "page_content" <> " (route_slug, locale, summary) VALUES ('home', 'en', 'Server-rendered home page with stubbed content.'), ('home', 'es', 'Inicio renderizado en el servidor con datos de desarrollo preconfigurados.'), ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'es', 'Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.');"
+    "INSERT INTO " <> qualifiedTableName "page_content" <> " (route_slug, locale, summary) VALUES ('second', 'en', 'Second page content with stubbed data ready for future loaders.'), ('second', 'es', 'Contenido de la segunda pagina con datos de ejemplo listos para futuros cargadores.');"
   ]
 
 qualifiedTableName :: Text -> Text

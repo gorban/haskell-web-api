@@ -23,13 +23,9 @@ import System.IO.Temp (withSystemTempDirectory, withSystemTempFile)
 import System.Process (ProcessHandle, StdStream (UseHandle), createProcess, cwd, env, getProcessExitCode, proc, readCreateProcessWithExitCode, readProcessWithExitCode, std_out, terminateProcess, waitForProcess)
 import TestSupport.RealPostgres (databaseSetupEnvironment, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, supportedPostgresMajorVersions, withContainerizedPsqlOnPath)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Database (DatabaseError (..), DatabaseResult (..), HomePageData (..), PageRepository (..), SecondPageData (..))
+import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
 import WebApi.Postgres (buildPostgresPageRepository, buildRuntimePostgresPageRepository, newPostgresPool)
 import WebApi.Route (AppLocale (Spanish), AppRequestContext (..), defaultRequestContext)
-
-loadHomePageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError HomePageData)
-loadHomePageValueForRequest pageRepository requestContext =
-  databaseResultValue <$> loadHomePage pageRepository (requestLocale requestContext)
 
 loadSecondPageValueForRequest :: PageRepository -> AppRequestContext -> IO (Either DatabaseError SecondPageData)
 loadSecondPageValueForRequest pageRepository requestContext =
@@ -223,21 +219,11 @@ spec = do
 
           let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
               spanishRequestContext = defaultRequestContext {requestLocale = Spanish}
-          loadHomePageValueForRequest postgresEffect defaultRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Server-rendered home page with stubbed content."
-                }
           loadSecondPageValueForRequest postgresEffect defaultRequestContext
             `shouldReturn` Right
               SecondPageData
                 { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                   secondPageDataHighlights = []
-                }
-          loadHomePageValueForRequest postgresEffect spanishRequestContext
-            `shouldReturn` Right
-              HomePageData
-                { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
                 }
           loadSecondPageValueForRequest postgresEffect spanishRequestContext
             `shouldReturn` Right
@@ -249,11 +235,6 @@ spec = do
           withTemporaryEnvironment "PATH" (Just "") $ do
             runtimePool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
             let runtimePostgresEffect = buildRuntimePostgresPageRepository runtimePool
-            loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
-              `shouldReturn` Right
-                HomePageData
-                  { homePageDataSummary = "Server-rendered home page with stubbed content."
-                  }
             loadSecondPageValueForRequest runtimePostgresEffect spanishRequestContext
               `shouldReturn` Right
                 SecondPageData
@@ -263,12 +244,12 @@ spec = do
 
           allowedSelect <-
             readCreateProcessWithExitCode
-              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';"])
+              ( (proc "psql" ["--host", "127.0.0.1", "--port", "5432", "--dbname", "web_api_dev", "--username", "web_api_runtime", "--no-password", "--set", "ON_ERROR_STOP=1", "--tuples-only", "--no-align", "--quiet", "--command", "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';"])
                   { env = Just (("PGPASSWORD", "web_api") : inheritedEnvironment)
                   }
               )
               ""
-          allowedSelect `shouldBe` (ExitSuccess, "Server-rendered home page with stubbed content.\n", "")
+          allowedSelect `shouldBe` (ExitSuccess, "Second page content with stubbed data ready for future loaders.\n", "")
 
           forbiddenInsert <-
             readCreateProcessWithExitCode
@@ -307,17 +288,15 @@ spec = do
           let unreachableDatabaseConfig = defaultRealPostgresConfig {databasePort = unusedPort}
           unreachablePool <- newPostgresPool (databasePoolCapacity unreachableDatabaseConfig) unreachableDatabaseConfig
           let runtimePostgresEffect = buildRuntimePostgresPageRepository unreachablePool
-          loadHomePageValueForRequest runtimePostgresEffect defaultRequestContext
+          loadSecondPageValueForRequest runtimePostgresEffect defaultRequestContext
             >>= \case
-              Left (HomePageDataError errorMessage) -> do
+              Left (SecondPageDataError errorMessage) -> do
                 expectAll
                   ( (errorMessage `shouldSatisfy` (not . Text.null))
                       :| [errorMessage `shouldSatisfy` (not . Text.isInfixOf "posix_spawnp")]
                   )
-              Left otherError ->
-                expectationFailure ("expected HomePageDataError, got " <> show otherError)
-              Right homePageData ->
-                expectationFailure ("expected runtime connection failure, got " <> show homePageData)
+              Right secondPageData ->
+                expectationFailure ("expected runtime connection failure, got " <> show secondPageData)
   where
     fst3 (firstValue, _, _) = firstValue
     thd3 (_, _, thirdValue) = thirdValue

@@ -110,16 +110,6 @@ assertProfilePageModelShow (profilePageModel, expectedPrefix) =
 spec = do
   existingSpec
   describe "renderPage" $ do
-    it "selects the expected home page model" $
-      renderPage defaultAppConfig homeRequest
-        `shouldReturn` HarchWeb.Page
-          { HarchWeb.pageTitle = "web-api: Home",
-            HarchWeb.pageRoute = HomeRoute,
-            HarchWeb.pageContext = defaultRequestContext,
-            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"),
-            HarchWeb.pageBootstrapHooks = []
-          }
-
     it "selects a distinct second page model" $
       renderPage defaultAppConfig secondRequest
         `shouldReturn` HarchWeb.Page
@@ -189,15 +179,13 @@ spec = do
                 requestPolicy = requestPolicy defaultAppConfig,
                 observability = observability defaultAppConfig
               }
-      homeShell <- renderedShell config HomeRoute
       secondShell <- renderedShell config SecondRoute
       notFoundShell <- renderedShell config NotFoundRoute
-      Text.isInfixOf "<title>test-app: Home</title>" homeShell `shouldBe` True
       Text.isInfixOf "<title>test-app: Second</title>" secondShell `shouldBe` True
       Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" secondShell `shouldBe` True
       Text.isInfixOf "<title>test-app: Not Found</title>" notFoundShell `shouldBe` True
-      Text.isInfixOf "<script nonce=\"" homeShell `shouldBe` True
-      Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
+      Text.isInfixOf "<script nonce=\"" secondShell `shouldBe` True
+      Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" secondShell `shouldBe` True
 
     it "keeps config, routes, and pages serializable and deterministic for tests" $ do
       let config =

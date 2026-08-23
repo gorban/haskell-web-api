@@ -5,7 +5,7 @@
 import Data.Text qualified as Text
 import WebApi.AccountPages (AccountActionTarget (..), LoginForm (..), MfaEnrollmentForm (..), VerificationForm (..), emptyRegistrationForm)
 import WebApi.Config (AcmeConfig (..), AppConfig (..), CertbotConfig (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), SharedTlsCertificateFiles (..), StaticAssetRoot (..), StaticAssetsConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), defaultAppConfig, defaultStaticAssetContentTypes)
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
+import WebApi.Page (AppPageModel (..), CallToAction (..), NotFoundPageModel (..), ProfilePageModel (..), SecondPageModel (..), SpacesPageModel (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (ApiRoute (..), AppLocale (..), AppRequestContext (..), AppRoute (..), RouteSelectionError (..), defaultRequestContext)
 import WebApi.Route qualified
 
@@ -133,18 +133,6 @@ spec = do
                 notFoundSummary = "The requested page could not be found.",
                 notFoundPrimaryAction = callToAction
               }
-          homePageModel =
-            HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Server-rendered home page with stubbed content.",
-                homeErrorMessage = Nothing,
-                homePrimaryAction =
-                  CallToAction
-                    { callToActionLabel = "Browse the second page",
-                      callToActionRoute = SecondRoute,
-                      callToActionHref = "/es/second"
-                    }
-              }
           secondPageModel =
             SecondPageModel
               { secondHeading = "Second",
@@ -197,14 +185,6 @@ spec = do
       callToActionLabel callToAction `shouldBe` "Return home"
       callToActionRoute callToAction `shouldBe` HomeRoute
       callToActionHref callToAction `shouldBe` "/es"
-      homeHeading homePageModel `shouldBe` "Home"
-      homeSummary homePageModel `shouldBe` "Server-rendered home page with stubbed content."
-      homePrimaryAction homePageModel
-        `shouldBe` CallToAction
-          { callToActionLabel = "Browse the second page",
-            callToActionRoute = SecondRoute,
-            callToActionHref = "/es/second"
-          }
       secondHeading secondPageModel `shouldBe` "Second"
       secondSummary secondPageModel `shouldBe` "Second page content with stubbed data ready for future loaders."
       secondHighlights secondPageModel `shouldBe` ["Fast SSR", "Progressive enhancement"]
@@ -270,18 +250,6 @@ spec = do
                       callToActionHref = "/"
                     }
               }
-          homePageModel =
-            HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Server-rendered home page with stubbed content.",
-                homeErrorMessage = Nothing,
-                homePrimaryAction =
-                  CallToAction
-                    { callToActionLabel = "Browse the second page",
-                      callToActionRoute = SecondRoute,
-                      callToActionHref = "/second"
-                    }
-              }
       Http `shouldBe` Http
       Https `shouldBe` Https
       certbotConfig `shouldBe` certbotConfig
@@ -301,7 +269,6 @@ spec = do
       NotFoundRoute `shouldBe` NotFoundRoute
       UnsupportedLocalePrefix "de" `shouldBe` UnsupportedLocalePrefix "de"
       UnsupportedPath "/missing" `shouldBe` UnsupportedPath "/missing"
-      HomePage homePageModel `shouldBe` HomePage homePageModel
       SecondPage secondPageModel `shouldBe` SecondPage secondPageModel
       NotFoundPage notFoundPageModel `shouldBe` NotFoundPage notFoundPageModel
       show certbotConfig
@@ -378,12 +345,8 @@ spec = do
       show WebApi.Route.StatusApi `shouldBe` "StatusApi"
       show (UnsupportedLocalePrefix "de") `shouldBe` "UnsupportedLocalePrefix \"de\""
       show (UnsupportedPath "/missing") `shouldBe` "UnsupportedPath \"/missing\""
-      show homePageModel
-        `shouldBe` "HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = SafeUrl \"/second\"}}"
       show secondPageModel
         `shouldBe` "SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}"
-      show (HomePage homePageModel)
-        `shouldBe` "HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Browse the second page\", callToActionRoute = SecondRoute, callToActionHref = SafeUrl \"/second\"}})"
       show (SecondPage secondPageModel)
         `shouldBe` "SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}})"
       show notFoundPageModel
@@ -504,13 +467,6 @@ spec = do
                 callToActionRoute = HomeRoute,
                 callToActionHref = "/"
               }
-          homePageModel =
-            HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Server-rendered home page with stubbed content.",
-                homeErrorMessage = Nothing,
-                homePrimaryAction = callToAction
-              }
           secondPageModel =
             SecondPageModel
               { secondHeading = "Second",
@@ -564,24 +520,21 @@ spec = do
       requestContext `shouldNotBe` defaultRequestContext
       callToAction `shouldBe` callToAction
       callToAction `shouldNotBe` callToAction {callToActionHref = "/es"}
-      homePageModel `shouldBe` homePageModel
-      homePageModel `shouldNotBe` homePageModel {homeHeading = "Inicio"}
       secondPageModel `shouldBe` secondPageModel
       secondPageModel `shouldNotBe` secondPageModel {secondHighlights = ["Different"]}
       spacesPageModel `shouldBe` spacesPageModel
       spacesPageModel `shouldNotBe` spacesPageModel {spacesSummary = "Different"}
       notFoundPageModel `shouldBe` notFoundPageModel
       notFoundPageModel `shouldNotBe` notFoundPageModel {notFoundSummary = "Missing"}
-      HomePage homePageModel `shouldNotBe` SecondPage secondPageModel
       SecondPage secondPageModel `shouldNotBe` NotFoundPage notFoundPageModel
-      SpacesPage spacesPageModel `shouldNotBe` HomePage homePageModel
-      RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` HomePage homePageModel
-      EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
-      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False) `shouldNotBe` HomePage homePageModel
-      LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` HomePage homePageModel
-      LogoutPage LogoutAccountTarget `shouldNotBe` HomePage homePageModel
-      ProfilePage (UnavailableProfilePage (UnavailableProfilePageDetails "Profile" "Unavailable" callToAction)) `shouldNotBe` HomePage homePageModel
-      NotFoundPage notFoundPageModel `shouldNotBe` HomePage homePageModel
+      SpacesPage spacesPageModel `shouldNotBe` SecondPage secondPageModel
+      RegistrationPage RegisterAccountTarget emptyRegistrationForm `shouldNotBe` SecondPage secondPageModel
+      EmailVerificationPage VerifyEmailTarget (VerificationForm Text.empty Nothing False) `shouldNotBe` SecondPage secondPageModel
+      MfaEnrollmentPage EnrollMfaTarget (MfaEnrollmentForm Nothing [] Nothing False) `shouldNotBe` SecondPage secondPageModel
+      LoginPage LoginAccountTarget (LoginForm Text.empty Nothing False) `shouldNotBe` SecondPage secondPageModel
+      LogoutPage LogoutAccountTarget `shouldNotBe` SecondPage secondPageModel
+      ProfilePage (UnavailableProfilePage (UnavailableProfilePageDetails "Profile" "Unavailable" callToAction)) `shouldNotBe` SecondPage secondPageModel
+      NotFoundPage notFoundPageModel `shouldNotBe` SecondPage secondPageModel
       UnsupportedLocalePrefix "de" `shouldNotBe` UnsupportedPath "/de"
       Page WebApi.Route.HomePage `shouldNotBe` Api WebApi.Route.StatusApi
       HomeRoute `shouldNotBe` SecondRoute
@@ -670,13 +623,6 @@ spec = do
                 callToActionRoute = HomeRoute,
                 callToActionHref = "/"
               }
-          homePageModel =
-            HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Server-rendered home page with stubbed content.",
-                homeErrorMessage = Nothing,
-                homePrimaryAction = callToAction
-              }
           secondPageModel =
             SecondPageModel
               { secondHeading = "Second",
@@ -721,11 +667,9 @@ spec = do
       shouldBeParenthesized (showsPrec 11 appConfig "")
       shouldBeParenthesized (showsPrec 11 requestContext "")
       shouldBeParenthesized (showsPrec 11 callToAction "")
-      shouldBeParenthesized (showsPrec 11 homePageModel "")
       shouldBeParenthesized (showsPrec 11 secondPageModel "")
       shouldBeParenthesized (showsPrec 11 spacesPageModel "")
       shouldBeParenthesized (showsPrec 11 notFoundPageModel "")
-      shouldBeParenthesized (showsPrec 11 (HomePage homePageModel) "")
       shouldBeParenthesized (showsPrec 11 (SecondPage secondPageModel) "")
       shouldBeParenthesized (showsPrec 11 (SpacesPage spacesPageModel) "")
       shouldBeParenthesized (showsPrec 11 (NotFoundPage notFoundPageModel) "")
@@ -808,13 +752,6 @@ spec = do
                 callToActionRoute = HomeRoute,
                 callToActionHref = "/"
               }
-          homePageModel =
-            HomePageModel
-              { homeHeading = "Home",
-                homeSummary = "Server-rendered home page with stubbed content.",
-                homeErrorMessage = Nothing,
-                homePrimaryAction = callToAction
-              }
           secondPageModel =
             SecondPageModel
               { secondHeading = "Second",
@@ -861,14 +798,12 @@ spec = do
         `shouldBe` "[AppRequestContext {requestLocale = Spanish, requestLocaleIsExplicit = False, requestCorrelationId = Just \"req-list\", requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}]"
       show [callToAction]
         `shouldBe` "[CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}]"
-      show [homePageModel]
-        `shouldBe` "[HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}]"
       show [secondPageModel]
         `shouldBe` "[SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}]"
       show [notFoundPageModel]
         `shouldBe` "[NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}]"
-      show [HomePage homePageModel, SecondPage secondPageModel, NotFoundPage notFoundPageModel]
-        `shouldBe` "[HomePage (HomePageModel {homeHeading = \"Home\", homeSummary = \"Server-rendered home page with stubbed content.\", homeErrorMessage = Nothing, homePrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}),SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}})]"
+      show [SecondPage secondPageModel, NotFoundPage notFoundPageModel]
+        `shouldBe` "[SecondPage (SecondPageModel {secondHeading = \"Second\", secondSummary = \"Second page content with stubbed data ready for future loaders.\", secondHighlights = [\"Fast SSR\"], secondErrorMessage = Nothing, secondPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}}),NotFoundPage (NotFoundPageModel {notFoundHeading = \"Not Found\", notFoundSummary = \"The requested page could not be found.\", notFoundPrimaryAction = CallToAction {callToActionLabel = \"Return home\", callToActionRoute = HomeRoute, callToActionHref = SafeUrl \"/\"}})]"
       show [UnsupportedLocalePrefix "de", UnsupportedPath "/missing"]
         `shouldBe` "[UnsupportedLocalePrefix \"de\",UnsupportedPath \"/missing\"]"
       show [HomeRoute, SecondRoute, RegistrationRoute, EmailVerificationRoute, MfaEnrollmentRoute, LoginRoute, LogoutRoute, ProfileRoute, StatusApiRoute, NotFoundRoute] `shouldBe` "[HomeRoute,SecondRoute,RegistrationRoute,EmailVerificationRoute,MfaEnrollmentRoute,LoginRoute,LogoutRoute,ProfileRoute,StatusApiRoute,NotFoundRoute]"

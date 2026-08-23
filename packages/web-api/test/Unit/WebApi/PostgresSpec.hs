@@ -21,7 +21,7 @@ import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..))
 import WebApi.App (buildAppWithDatabase)
 import WebApi.Config (DatabaseConfig (..), defaultAppConfig)
-import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), HomePageData (..), SecondPageData (..))
+import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Postgres (buildPostgresPageRepository)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresMigrationExecutor (..), PostgresMigrationResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithExecutor, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
@@ -213,11 +213,6 @@ spec = do
             pure $
               case commandSql command of
                 sql
-                  | Text.isInfixOf "route_slug = 'home'" sql ->
-                      successfulPostgresResult $
-                        if Text.isInfixOf "locale = 'es'" sql
-                          then "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
-                          else "Server-rendered home page with stubbed content."
                   | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" sql ->
                       successfulPostgresResult $
                         if Text.isInfixOf "locale = 'es'" sql
@@ -231,46 +226,11 @@ spec = do
                   | otherwise ->
                       failingPostgresResult "unexpected query"
           postgresEffect = buildPostgresPageRepositoryWithRunner runner postgresTestConfig
-      timedHomeResult <- loadHomePageForRequest postgresEffect defaultRequestContext
-      timedHomeResult
-        `shouldBe` DatabaseResult
-          { databaseResultValue =
-              Right
-                HomePageData
-                  { homePageDataSummary = "Server-rendered home page with stubbed content."
-                  },
-            databaseResultOperations =
-              [ DatabaseOperation
-                  { databaseOperationName = "load-home-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
-                    databaseOperationStartedAtNanoseconds = Nothing,
-                    databaseOperationEndedAtNanoseconds = Nothing
-                  }
-              ]
-          }
-      case databaseResultOperations timedHomeResult of
-        [timedOperation] ->
-          case ( databaseOperationStartedAtNanoseconds timedOperation,
-                 databaseOperationEndedAtNanoseconds timedOperation
-               ) of
-            (Just startedAt, Just endedAt) -> endedAt `shouldSatisfy` (>= startedAt)
-            _ -> expectationFailure "expected completed PostgreSQL operation timestamps"
-        _ -> expectationFailure "expected one PostgreSQL home-page operation"
-      loadHomePageValueForRequest postgresEffect defaultRequestContext
-        `shouldReturn` Right
-          HomePageData
-            { homePageDataSummary = "Server-rendered home page with stubbed content."
-            }
       loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
-            }
-      loadHomePageValueForRequest postgresEffect spanishRequestContext
-        `shouldReturn` Right
-          HomePageData
-            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
       loadSecondPageValueForRequest postgresEffect spanishRequestContext
         `shouldReturn` Right
@@ -278,8 +238,9 @@ spec = do
             { secondPageDataSummary = "Charge depuis PostgreSQL.",
               secondPageDataHighlights = ["SSR rápido", "Datos compartidos"]
             }
-      loadSecondPageForRequest postgresEffect spanishRequestContext
-        `shouldReturn` DatabaseResult
+      timedSecondResult <- loadSecondPageForRequest postgresEffect spanishRequestContext
+      timedSecondResult
+        `shouldBe` DatabaseResult
           { databaseResultValue =
               Right
                 SecondPageData
@@ -301,6 +262,16 @@ spec = do
                   }
               ]
           }
+      case databaseResultOperations timedSecondResult of
+        [summaryOperation, highlightOperation] ->
+          mapM_
+            ( \operation ->
+                case (databaseOperationStartedAtNanoseconds operation, databaseOperationEndedAtNanoseconds operation) of
+                  (Just startedAt, Just endedAt) -> endedAt `shouldSatisfy` (>= startedAt)
+                  _ -> expectationFailure "expected completed PostgreSQL operation timestamps"
+            )
+            [summaryOperation, highlightOperation]
+        _ -> expectationFailure "expected two PostgreSQL operations"
       recordedCommands <- readIORef recordedCommandsReference
       let expectedQueryCommand sql =
             PostgresCommand
@@ -328,11 +299,8 @@ spec = do
       recordedCommands
         `shouldBe` map
           expectedQueryCommand
-          [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
+          [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;",
-            "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'es';",
             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
             "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'es' ORDER BY position ASC;",
             "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';",
@@ -340,17 +308,9 @@ spec = do
           ]
 
     it "maps missing rows and command failures into database errors" $ do
-      let missingRunner command =
-            pure $
-              case commandSql command of
-                sql
-                  | Text.isInfixOf "route_slug = 'home'" sql ->
-                      successfulPostgresResult Text.empty
-                  | otherwise ->
-                      failingPostgresResult "relation does not exist"
+      let missingRunner _command =
+            pure (failingPostgresResult "relation does not exist")
           postgresEffect = buildPostgresPageRepositoryWithRunner missingRunner postgresTestConfig
-      loadHomePageValueForRequest postgresEffect defaultRequestContext
-        `shouldReturn` Left (HomePageDataError "expected exactly one row: ")
       loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "relation does not exist")
       loadSecondPageForRequest postgresEffect defaultRequestContext
@@ -367,20 +327,15 @@ spec = do
           }
 
     it "maps scalar query failures, malformed rows, and highlight query failures into explicit errors" $ do
-      let homeFailureRunner command =
+      let blankStderrFailureRunner command =
             pure $
-              if Text.isInfixOf "route_slug = 'home'" (commandSql command)
+              if Text.isInfixOf "route_slug = 'second'" (commandSql command)
                 then
                   PostgresCommandResult
                     { postgresExitCode = ExitFailure 2,
                       postgresStdout = Text.empty,
                       postgresStderr = Text.empty
                     }
-                else successfulPostgresResult Text.empty
-          malformedScalarRunner command =
-            pure $
-              if Text.isInfixOf "route_slug = 'home'" (commandSql command)
-                then successfulPostgresResult "first\nsecond"
                 else successfulPostgresResult Text.empty
           highlightFailureRunner command =
             pure $
@@ -392,10 +347,8 @@ spec = do
                       failingPostgresResult "highlights unavailable"
                   | otherwise ->
                       successfulPostgresResult Text.empty
-      loadHomePageValueForRequest (buildPostgresPageRepositoryWithRunner homeFailureRunner postgresTestConfig) defaultRequestContext
-        `shouldReturn` Left (HomePageDataError "psql command failed")
-      loadHomePageValueForRequest (buildPostgresPageRepositoryWithRunner malformedScalarRunner postgresTestConfig) defaultRequestContext
-        `shouldReturn` Left (HomePageDataError "expected exactly one row: first, second")
+      loadSecondPageValueForRequest (buildPostgresPageRepositoryWithRunner blankStderrFailureRunner postgresTestConfig) defaultRequestContext
+        `shouldReturn` Left (SecondPageDataError "psql command failed")
       loadSecondPageValueForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "highlights unavailable")
       loadSecondPageForRequest (buildPostgresPageRepositoryWithRunner highlightFailureRunner postgresTestConfig) defaultRequestContext
@@ -426,11 +379,6 @@ spec = do
             pure $
               case sql of
                 queryText
-                  | Text.isInfixOf "route_slug = 'home'" queryText ->
-                      Right $
-                        if Text.isInfixOf "locale = 'es'" queryText
-                          then "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
-                          else "Server-rendered home page with stubbed content."
                   | Text.isInfixOf "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'" queryText ->
                       Right $
                         if Text.isInfixOf "locale = 'es'" queryText
@@ -450,32 +398,11 @@ spec = do
               scalarRunner
               rowsRunner
               postgresTestConfig
-      loadHomePageForRequest postgresEffect defaultRequestContext
-        `shouldReturn` DatabaseResult
-          { databaseResultValue =
-              Right
-                HomePageData
-                  { homePageDataSummary = "Server-rendered home page with stubbed content."
-                  },
-            databaseResultOperations =
-              [ DatabaseOperation
-                  { databaseOperationName = "load-home-page-summary",
-                    databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
-                    databaseOperationStartedAtNanoseconds = Nothing,
-                    databaseOperationEndedAtNanoseconds = Nothing
-                  }
-              ]
-          }
       loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Right
           SecondPageData
             { secondPageDataSummary = "Loaded from PostgreSQL.",
               secondPageDataHighlights = ["Fast SSR", "Shared route data"]
-            }
-      loadHomePageValueForRequest postgresEffect spanishRequestContext
-        `shouldReturn` Right
-          HomePageData
-            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
             }
       loadSecondPageForRequest postgresEffect spanishRequestContext
         `shouldReturn` DatabaseResult
@@ -501,9 +428,7 @@ spec = do
               ]
           }
       readIORef recordedScalarQueriesReference
-        `shouldReturn` [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
-                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
-                         "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'es';",
+        `shouldReturn` [ "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
                          "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'es';"
                        ]
       readIORef recordedRowsQueriesReference
@@ -514,9 +439,9 @@ spec = do
     it "maps runtime query failures into explicit database errors" $ do
       let scalarRunner _ sql =
             pure $
-              if Text.isInfixOf "route_slug = 'home'" sql
-                then Left "connection refused"
-                else Right "Loaded from PostgreSQL."
+              if Text.isInfixOf "route_slug = 'second'" sql
+                then Right "Loaded from PostgreSQL."
+                else Left "unexpected query"
           rowsRunner _ _ =
             pure (Left "highlights unavailable")
           postgresEffect =
@@ -524,8 +449,6 @@ spec = do
               scalarRunner
               rowsRunner
               postgresTestConfig
-      loadHomePageValueForRequest postgresEffect defaultRequestContext
-        `shouldReturn` Left (HomePageDataError "connection refused")
       loadSecondPageValueForRequest postgresEffect defaultRequestContext
         `shouldReturn` Left (SecondPageDataError "highlights unavailable")
       loadSecondPageForRequest postgresEffect defaultRequestContext
@@ -552,7 +475,7 @@ spec = do
             pure $
               if Text.isInfixOf "route_slug = 'second'" sql
                 then Left "summary unavailable"
-                else Right "Server-rendered home page with stubbed content."
+                else Right "unexpected query"
           rowsRunner _ _ =
             error "expected runtime highlight query to be skipped when the second-page summary fails"
           postgresEffect =
@@ -982,11 +905,17 @@ spec = do
           postgresEnvironment failedCommand `shouldBe` []
           failedCommandResult `shouldBe` failingResult
         _ -> expectationFailure "expected a structured PostgresCommandFailed error for the scalar query"
+      malformedScalarResult <-
+        runRequiredScalarCommand
+          (\_ -> pure (successfulPostgresResult "first\nsecond"))
+          postgresTestConfig
+          "SELECT summary FROM web_api.page_content WHERE route_slug = 'second'"
+      malformedScalarResult
+        `shouldBe` Left (UnexpectedQueryRows "expected exactly one row" ["first", "second"])
 
     it "uses the default psql runner for effect loading and seed setup when psql is on PATH"
       $ withFakePsqlScript
-        ( [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
-            ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
+        ( [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
             ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty)
           ]
             <> fmap (,Text.empty) seedStatements
@@ -1036,7 +965,7 @@ spec = do
 
     it "uses stderr from the default psql runner when a command fails"
       $ withFakePsqlScriptResults
-        [ ( "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';",
+        [ ( "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
             PostgresCommandResult
               { postgresExitCode = ExitFailure 4,
                 postgresStdout = Text.empty,
@@ -1045,8 +974,8 @@ spec = do
           )
         ]
       $ \_ ->
-        loadHomePageValueForRequest (buildPostgresPageRepository postgresTestConfig) defaultRequestContext
-          `shouldReturn` Left (HomePageDataError "default runner failed")
+        loadSecondPageValueForRequest (buildPostgresPageRepository postgresTestConfig) defaultRequestContext
+          `shouldReturn` Left (SecondPageDataError "default runner failed")
 
     it "prefers a runtime that is already running the named postgres container in the containerized psql wrapper" $ do
       containerizedPsqlScriptContents `shouldContain'` "database_endpoint_is_reachable()"
@@ -1074,21 +1003,11 @@ spec = do
         runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig `shouldReturn` Right ()
         runPostgresSeed defaultMigrationPostgresConfig `shouldReturn` Right ()
         let postgresEffect = buildPostgresPageRepository defaultRealPostgresConfig
-        loadHomePageValueForRequest postgresEffect defaultRequestContext
-          `shouldReturn` Right
-            HomePageData
-              { homePageDataSummary = "Server-rendered home page with stubbed content."
-              }
         loadSecondPageValueForRequest postgresEffect defaultRequestContext
           `shouldReturn` Right
             SecondPageData
               { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
                 secondPageDataHighlights = []
-              }
-        loadHomePageValueForRequest postgresEffect spanishRequestContext
-          `shouldReturn` Right
-            HomePageData
-              { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
               }
         loadSecondPageValueForRequest postgresEffect spanishRequestContext
           `shouldReturn` Right

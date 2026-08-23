@@ -2,7 +2,6 @@ module WebApi.Page.Model
   ( AppPageModel (..),
     AuthenticatedProfilePageDetails (..),
     CallToAction (..),
-    HomePageModel (..),
     NotFoundPageModel (..),
     PendingProfilePageDetails (..),
     ProfilePageModel (..),
@@ -28,14 +27,6 @@ data CallToAction = CallToAction
   { callToActionLabel :: Text,
     callToActionRoute :: AppRoute,
     callToActionHref :: SafeUrl
-  }
-  deriving (Eq, Show)
-
-data HomePageModel = HomePageModel
-  { homeHeading :: Text,
-    homeSummary :: Text,
-    homeErrorMessage :: Maybe Text,
-    homePrimaryAction :: CallToAction
   }
   deriving (Eq, Show)
 
@@ -70,7 +61,7 @@ data ProfilePageModel
 
 -- | Every 'ProfilePageModel' constructor's fields are wrapped in their own
 -- single-constructor record like this one, following this module's own
--- 'HomePageModel'\/'SecondPageModel'\/'NotFoundPageModel' convention of a
+-- 'SecondPageModel'\/'NotFoundPageModel' convention of a
 -- type-specific field prefix, so each accessor is total: a field once
 -- absent from some 'ProfilePageModel' constructors (e.g. only
 -- 'SignedOutProfilePage' and 'UnavailableProfilePage' had a sign-in action)
@@ -113,8 +104,7 @@ data UnavailableProfilePageDetails = UnavailableProfilePageDetails
   deriving (Eq, Show)
 
 data AppPageModel
-  = HomePage HomePageModel
-  | SecondPage SecondPageModel
+  = SecondPage SecondPageModel
   | SpacesPage SpacesPageModel
   | RegistrationPage AccountActionTarget RegistrationForm
   | EmailVerificationPage AccountActionTarget VerificationForm

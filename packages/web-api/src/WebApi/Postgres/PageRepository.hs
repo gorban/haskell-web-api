@@ -16,7 +16,6 @@ import WebApi.Database
   ( DatabaseError (..),
     DatabaseOperation (..),
     DatabaseResult (..),
-    HomePageData (..),
     PageRepository (..),
     SecondPageData (..),
   )
@@ -28,19 +27,8 @@ type PageLoadWorkflow = ExceptT DatabaseError (WriterT [DatabaseOperation] IO)
 pageRepository :: PageQueryRunner -> PageRepository
 pageRepository runner =
   PageRepository
-    { loadHomePage = loadHomePageDataWith runner,
-      loadSecondPage = loadSecondPageDataWith runner
+    { loadSecondPage = loadSecondPageDataWith runner
     }
-
-loadHomePageDataWith :: PageQueryRunner -> AppLocale -> IO (DatabaseResult HomePageData)
-loadHomePageDataWith runner locale =
-  runPageLoadWorkflow $ do
-    summary <-
-      observedQuery
-        homeSummaryOperation
-        HomePageDataError
-        (runRequiredTextQuery runner (homeSummaryQuery locale))
-    pure (HomePageData summary)
 
 loadSecondPageDataWith :: PageQueryRunner -> AppLocale -> IO (DatabaseResult SecondPageData)
 loadSecondPageDataWith runner locale =
@@ -95,12 +83,6 @@ timedDatabaseOperation databaseOperation action = do
         }
     )
 
-homeSummaryQuery :: AppLocale -> Text
-homeSummaryQuery locale =
-  "SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = '"
-    <> renderLocaleCode locale
-    <> "';"
-
 secondSummaryQuery :: AppLocale -> Text
 secondSummaryQuery locale =
   "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = '"
@@ -112,15 +94,6 @@ secondHighlightsQuery locale =
   "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = '"
     <> renderLocaleCode locale
     <> "' ORDER BY position ASC;"
-
-homeSummaryOperation :: DatabaseOperation
-homeSummaryOperation =
-  DatabaseOperation
-    { databaseOperationName = "load-home-page-summary",
-      databaseQueryTemplate = "SELECT summary FROM web_api.page_content WHERE route_slug = ? AND locale = ?;",
-      databaseOperationStartedAtNanoseconds = Nothing,
-      databaseOperationEndedAtNanoseconds = Nothing
-    }
 
 secondSummaryOperation :: DatabaseOperation
 secondSummaryOperation =

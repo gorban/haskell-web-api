@@ -6,7 +6,6 @@ module WebApi.Database
     DatabaseOperation (..),
     DatabaseResult (..),
     DatabaseSeed (..),
-    HomePageData (..),
     SecondPageData (..),
     buildSeededPageRepository,
     defaultPageRepository,
@@ -20,14 +19,7 @@ import WebApi.Route
   ( AppLocale (..),
   )
 
-data DatabaseError
-  = HomePageDataError Text
-  | SecondPageDataError Text
-  deriving (Eq, Show)
-
-newtype HomePageData = HomePageData
-  { homePageDataSummary :: Text
-  }
+newtype DatabaseError = SecondPageDataError Text
   deriving (Eq, Show)
 
 data SecondPageData = SecondPageData
@@ -64,32 +56,19 @@ data DatabaseResult a = DatabaseResult
   deriving (Eq, Show)
 
 data DatabaseSeed = DatabaseSeed
-  { englishHomePageData :: Either DatabaseError HomePageData,
-    spanishHomePageData :: Either DatabaseError HomePageData,
-    englishSecondPageData :: Either DatabaseError SecondPageData,
+  { englishSecondPageData :: Either DatabaseError SecondPageData,
     spanishSecondPageData :: Either DatabaseError SecondPageData
   }
   deriving (Eq, Show)
 
-data PageRepository = PageRepository
-  { loadHomePage :: AppLocale -> IO (DatabaseResult HomePageData),
-    loadSecondPage :: AppLocale -> IO (DatabaseResult SecondPageData)
+newtype PageRepository = PageRepository
+  { loadSecondPage :: AppLocale -> IO (DatabaseResult SecondPageData)
   }
 
 defaultDatabaseSeed :: DatabaseSeed
 defaultDatabaseSeed =
   DatabaseSeed
-    { englishHomePageData =
-        Right
-          HomePageData
-            { homePageDataSummary = "Server-rendered home page with stubbed content."
-            },
-      spanishHomePageData =
-        Right
-          HomePageData
-            { homePageDataSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados."
-            },
-      englishSecondPageData =
+    { englishSecondPageData =
         Right
           SecondPageData
             { secondPageDataSummary = "Second page content with stubbed data ready for future loaders.",
@@ -109,19 +88,9 @@ defaultPageRepository = buildSeededPageRepository defaultDatabaseSeed
 buildSeededPageRepository :: DatabaseSeed -> PageRepository
 buildSeededPageRepository seed =
   PageRepository
-    { loadHomePage = loadSeededHomePage,
-      loadSecondPage = loadSeededSecondPage
+    { loadSecondPage = loadSeededSecondPage
     }
   where
-    loadSeededHomePage locale =
-      pure $
-        DatabaseResult
-          { databaseResultValue =
-              case locale of
-                English -> englishHomePageData seed
-                Spanish -> spanishHomePageData seed,
-            databaseResultOperations = []
-          }
     loadSeededSecondPage locale =
       pure $
         DatabaseResult

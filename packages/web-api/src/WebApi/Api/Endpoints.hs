@@ -73,7 +73,7 @@ import WebApi.Response
     toHarchDatabaseOperation,
   )
 import WebApi.Route (AppRequestContext, AppRoute, requestLocale)
-import WebApi.RouteData (SecondRouteData (..), StatusApiData (..))
+import WebApi.RouteData (SecondRouteData (..))
 
 -- | Neither @\/api\/status@ nor @\/api\/second@ decodes any query, header, or
 -- cookie field, so both endpoints below share this one declaration rather
@@ -96,7 +96,7 @@ statusApiRouteDefinition =
     noApiRequestFields
     ApiNoRequestBody
     (bytesResponseEncoder (apiContentType jsonMediaType) :| [])
-    (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (StatusApiData (requestLocale requestContext))))))
+    (\requestContext _endpointRequest -> pure (apiResponse (jsonBytes (statusApiBody (requestLocale requestContext)))))
 
 secondApiRouteDefinition :: PageRepository -> RouteDefinition AppRoute AppRequestContext
 secondApiRouteDefinition pageRepository =

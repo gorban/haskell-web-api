@@ -4,7 +4,6 @@ module WebApi.Page
   ( AppPageModel (..),
     AuthenticatedProfilePageDetails (..),
     CallToAction (..),
-    HomePageModel (..),
     NotFoundPageModel (..),
     PendingProfilePageDetails (..),
     ProfilePageModel (..),

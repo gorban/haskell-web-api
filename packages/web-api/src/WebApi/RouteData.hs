@@ -1,9 +1,7 @@
 module WebApi.RouteData
-  ( HomeRouteData (..),
-    RouteDataResult (..),
+  ( RouteDataResult (..),
     RouteDataSelection (..),
     SecondRouteData (..),
-    StatusApiData (..),
     selectRouteData,
     selectRouteDataSelectionWithDatabase,
     selectRouteDataWithDatabase,
@@ -20,25 +18,16 @@ import WebApi.Database
     databaseResultOperations,
     databaseResultValue,
     defaultPageRepository,
-    homePageDataSummary,
-    loadHomePage,
     loadSecondPage,
     secondPageDataHighlights,
     secondPageDataSummary,
   )
 import WebApi.Route
-  ( ApiRoute (..),
-    AppLocale,
-    AppRequestContext,
+  ( AppRequestContext,
     AppRoute (..),
     PageRoute (..),
     requestLocale,
   )
-
-newtype HomeRouteData = HomeRouteData
-  { homeRouteSummary :: Text
-  }
-  deriving (Eq, Show)
 
 data SecondRouteData = SecondRouteData
   { secondRouteSummary :: Text,
@@ -46,14 +35,8 @@ data SecondRouteData = SecondRouteData
   }
   deriving (Eq, Show)
 
-newtype StatusApiData = StatusApiData
-  { statusApiLocale :: AppLocale
-  }
-  deriving (Eq, Show)
-
 data RouteDataResult
-  = HomeRouteDataResult (Either DatabaseError HomeRouteData)
-  | SecondRouteDataResult (Either DatabaseError SecondRouteData)
+  = SecondRouteDataResult (Either DatabaseError SecondRouteData)
   | SpacesRouteDataResult
   | RegistrationRouteDataResult
   | EmailVerificationRouteDataResult
@@ -61,7 +44,6 @@ data RouteDataResult
   | LoginRouteDataResult
   | LogoutRouteDataResult
   | ProfileRouteDataResult
-  | StatusApiDataResult StatusApiData
   | NotFoundRouteDataResult
   deriving (Eq, Show)
 
@@ -78,27 +60,14 @@ selectRouteData =
 selectRouteDataSelectionWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataSelection
 selectRouteDataSelectionWithDatabase pageRepository routeRequest =
   case routeDataPlan (HarchWeb.requestRoute routeRequest) of
-    LoadHomeRouteData -> selectHomeRouteData pageRepository requestContext
     LoadSecondRouteData -> selectSecondRouteData pageRepository requestContext
-    BuildStatusRouteData -> pure (emptyRouteDataSelection (StatusApiDataResult (StatusApiData (requestLocale requestContext))))
     UseStaticRouteData result -> pure (emptyRouteDataSelection result)
   where
     requestContext = HarchWeb.requestContext routeRequest
 
 data RouteDataPlan
-  = LoadHomeRouteData
-  | LoadSecondRouteData
-  | BuildStatusRouteData
+  = LoadSecondRouteData
   | UseStaticRouteData RouteDataResult
-
-selectHomeRouteData :: PageRepository -> AppRequestContext -> IO RouteDataSelection
-selectHomeRouteData pageRepository requestContext = do
-  homePageDataResult <- loadHomePage pageRepository (requestLocale requestContext)
-  pure
-    RouteDataSelection
-      { routeDataResult = HomeRouteDataResult (HomeRouteData . homePageDataSummary <$> databaseResultValue homePageDataResult),
-        routeDataDatabaseOperations = databaseResultOperations homePageDataResult
-      }
 
 selectSecondRouteData :: PageRepository -> AppRequestContext -> IO RouteDataSelection
 selectSecondRouteData pageRepository requestContext = do
@@ -120,7 +89,7 @@ routeDataPlan route =
   case route of
     Page pageRoute ->
       case pageRoute of
-        HomePage -> LoadHomeRouteData
+        HomePage -> UseStaticRouteData NotFoundRouteDataResult
         SecondPage -> LoadSecondRouteData
         SpacesPage -> UseStaticRouteData SpacesRouteDataResult
         RegistrationPage -> UseStaticRouteData RegistrationRouteDataResult
@@ -130,11 +99,7 @@ routeDataPlan route =
         LogoutPage -> UseStaticRouteData LogoutRouteDataResult
         ProfilePage -> UseStaticRouteData ProfileRouteDataResult
         PageNotFound -> UseStaticRouteData NotFoundRouteDataResult
-    Api apiRoute ->
-      case apiRoute of
-        StatusApi -> BuildStatusRouteData
-        SecondApi -> LoadSecondRouteData
-        ApiNotFound -> UseStaticRouteData NotFoundRouteDataResult
+    Api _ -> UseStaticRouteData NotFoundRouteDataResult
 
 selectRouteDataWithDatabase :: PageRepository -> HarchWeb.RouteRequest AppRoute AppRequestContext -> IO RouteDataResult
 selectRouteDataWithDatabase pageRepository routeRequest =

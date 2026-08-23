@@ -5,12 +5,9 @@
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Data.List (isInfixOf)
-import HarchWeb qualified
-import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Database (DatabaseError (..), DatabaseSeed (..), SecondPageData (..), buildSeededPageRepository, defaultDatabaseSeed)
-import WebApi.Page (AppPageModel (..), CallToAction (..), HomePageModel (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
-import WebApi.Response (renderApiResponseFromRouteData)
+import WebApi.Page (AppPageModel (..), CallToAction (..), SecondPageModel (..), SpacesPageModel (..), buildCallToActionHref, buildPageModel, buildPageModelFromRouteData, buildPageModelWithDatabase)
 import WebApi.Route (AppRoute (..))
 import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
@@ -22,36 +19,6 @@ spec = do
           ErrorCall message -> "buildCallToAction: rendered an unsafe URL: javascript:alert(1)" `isInfixOf` message
 
   describe "buildPageModel" $ do
-    it "builds stubbed home page data with a navigation affordance" $
-      buildPageModel homeRequest
-        `shouldReturn` HomePage
-          HomePageModel
-            { homeHeading = "Home",
-              homeSummary = "Server-rendered home page with stubbed content.",
-              homeErrorMessage = Nothing,
-              homePrimaryAction =
-                CallToAction
-                  { callToActionLabel = "Browse the second page",
-                    callToActionRoute = SecondRoute,
-                    callToActionHref = "/second"
-                  }
-            }
-
-    it "keeps locale-aware action paths in stubbed page data" $
-      buildPageModel spanishHomeRequest
-        `shouldReturn` HomePage
-          HomePageModel
-            { homeHeading = "Inicio",
-              homeSummary = "Inicio renderizado en el servidor con datos de desarrollo preconfigurados.",
-              homeErrorMessage = Nothing,
-              homePrimaryAction =
-                CallToAction
-                  { callToActionLabel = "Ver la segunda página",
-                    callToActionRoute = SecondRoute,
-                    callToActionHref = "/es/second"
-                  }
-            }
-
     it "localizes Spanish second-page return actions" $
       buildPageModel spanishSecondRequest
         `shouldReturn` SecondPage
@@ -82,43 +49,7 @@ spec = do
               spacesSummary = "Sigan este espacio."
             }
 
-    it "builds explicit home-page error state when the database effect fails" $ do
-      let failingHomeRepository =
-            buildSeededPageRepository
-              DatabaseSeed
-                { englishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                  spanishHomePageData = Left (HomePageDataError "home seed unavailable"),
-                  englishSecondPageData = englishSecondPageData defaultDatabaseSeed,
-                  spanishSecondPageData = spanishSecondPageData defaultDatabaseSeed
-                }
-      buildPageModelWithDatabase failingHomeRepository homeRequest
-        `shouldReturn` HomePage
-          HomePageModel
-            { homeHeading = "Home",
-              homeSummary = "Home page content is temporarily unavailable.",
-              homeErrorMessage = Just "Could not load home page data.",
-              homePrimaryAction =
-                CallToAction
-                  { callToActionLabel = "Browse the second page",
-                    callToActionRoute = SecondRoute,
-                    callToActionHref = "/second"
-                  }
-            }
-      buildPageModelWithDatabase failingHomeRepository spanishHomeRequest
-        `shouldReturn` HomePage
-          HomePageModel
-            { homeHeading = "Inicio",
-              homeSummary = "El contenido de la pagina de inicio no esta disponible temporalmente.",
-              homeErrorMessage = Just "No se pudieron cargar los datos de la pagina de inicio.",
-              homePrimaryAction =
-                CallToAction
-                  { callToActionLabel = "Ver la segunda página",
-                    callToActionRoute = SecondRoute,
-                    callToActionHref = "/es/second"
-                  }
-            }
-
-    it "renders selected route data into both page models and API responses" $ do
+    it "renders selected route data into a page model" $ do
       let selectedRouteData =
             SecondRouteDataResult
               ( Right
@@ -141,35 +72,11 @@ spec = do
                     callToActionHref = "/"
                   }
             }
-      renderApiResponseFromRouteData selectedRouteData
-        `shouldBe` HarchWeb.ResponseBody
-          { HarchWeb.responseStatus = Http.status200,
-            HarchWeb.responseContentType = "application/json",
-            HarchWeb.responseBody = "{\"summary\":\"Shared domain summary.\",\"highlights\":[\"Shared loader\",\"Shared renderer\"]}",
-            HarchWeb.responseObservabilityAttributes = [],
-            HarchWeb.responseLogEntries = [],
-            HarchWeb.responseDatabaseOperations = []
-          }
-
-    it "escapes hostile database content in API JSON" $ do
-      let hostileRouteData =
-            SecondRouteDataResult
-              ( Right
-                  SecondRouteData
-                    { secondRouteSummary = "quote\" slash\\ newline\n control\t unicode ☃",
-                      secondRouteHighlights = ["</script><script>alert(1)</script>", "\b"]
-                    }
-              )
-      HarchWeb.responseBody (renderApiResponseFromRouteData hostileRouteData)
-        `shouldBe` "{\"summary\":\"quote\\\" slash\\\\ newline\\n control\\t unicode ☃\",\"highlights\":[\"</script><script>alert(1)</script>\",\"\\u0008\"]}"
-
     it "loads second-page content from the database effect when provided" $
       buildPageModelWithDatabase
         ( buildSeededPageRepository
             DatabaseSeed
-              { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                englishSecondPageData =
+              { englishSecondPageData =
                   Right
                     SecondPageData
                       { secondPageDataSummary = "Loaded from the seeded database effect.",
@@ -197,9 +104,7 @@ spec = do
       let failingSecondRepository =
             buildSeededPageRepository
               DatabaseSeed
-                { englishHomePageData = englishHomePageData defaultDatabaseSeed,
-                  spanishHomePageData = spanishHomePageData defaultDatabaseSeed,
-                  englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
+                { englishSecondPageData = Left (SecondPageDataError "seed unavailable"),
                   spanishSecondPageData = Left (SecondPageDataError "seed unavailable")
                 }
       buildPageModelWithDatabase failingSecondRepository secondRequest
