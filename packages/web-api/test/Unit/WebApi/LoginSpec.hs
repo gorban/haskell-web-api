@@ -246,7 +246,7 @@ spec = do
             -- methods still error out — proving the throttle short-circuits before
             -- the KDF-heavy recovery-code hash comparison this test is guarding.
             (secondFactorContextFor confirmedMfaStore (RecoveryCodeLoginProof (required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123"))))
-              { secondFactorThrottle = throttledStoreFor ("recovery:" <> accountIdText accountId)
+              { secondFactorThrottle = throttledStoreFor ("mfa:" <> accountIdText accountId)
               }
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
@@ -321,7 +321,7 @@ spec = do
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
 
-    it "keys the throttle by \"username:\" for a username identifier, distinct from the \"email:\" key an email identifier uses" $ do
+    it "keys case variants of a username identifier with the same canonical throttle identity, distinct from email" $ do
       keyReference <- newIORef []
       let capturingThrottle =
             LoginThrottleContext
@@ -333,11 +333,14 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-          username = required "username" (mkUsername "person_01")
+          username = required "username" (mkUsername "Person_01")
+          lowercaseUsername = required "lowercase username" (mkUsername "person_01")
       beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername username) (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
+      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername lowercaseUsername) (mkPassword "whatever")
+        `shouldReturnEqual` PasswordLoginRejected
       capturedKeys <- readIORef keyReference
-      capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
+      capturedKeys `shouldBe` ["username:person_01", "username:person_01", "username:person_01", "username:person_01"]
 
     it "clamps the throttle window's lower bound to zero instead of underflowing when the current time is earlier than the policy window" $ do
       sinceReference <- newIORef Nothing
@@ -360,7 +363,7 @@ spec = do
       readIORef sinceReference `shouldReturn` Just 500
 
     it "propagates a login-attempt store failure from the recovery-code step's own throttle check, distinct from an already-throttled recovery attempt" $ do
-      let recoveryKey = "recovery:" <> accountIdText accountId
+      let recoveryKey = "mfa:" <> accountIdText accountId
           recoveryFailingThrottle =
             LoginThrottleContext
               { loginThrottleStore =
@@ -385,6 +388,181 @@ spec = do
               }
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) recoveryContext emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "recovery throttle store down")
+
+    it "gates exhausted TOTP attempts before decrypting or marking the proof" $ do
+      let recentFailures = [LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
+          expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
+          mfaKey = "mfa:" <> accountIdText accountId
+          exhaustedTotpThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt -> key `seq` attempt `seq` pure (Right ()),
+                      loadRecentLoginAttempts = \key _ -> pure (if key == mfaKey then Right recentFailures else Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          totpContext =
+            (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
+              { secondFactorThrottle = exhaustedTotpThrottle
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) totpContext emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
+
+    it "propagates an attempt-store failure from the TOTP throttle check before validating the proof" $ do
+      let mfaKey = "mfa:" <> accountIdText accountId
+          failingTotpThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key _ -> key `seq` pure (Right ()),
+                      loadRecentLoginAttempts = \key _ ->
+                        pure
+                          ( if key == mfaKey
+                              then Left (LoginAttemptStoreUnavailable "TOTP throttle store down")
+                              else Right []
+                          )
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          totpContext =
+            (secondFactorContextFor confirmedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456"))))
+              { secondFactorThrottle = failingTotpThrottle
+              }
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) totpContext emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "TOTP throttle store down")
+
+    it "settles rejected and accepted TOTP proofs in the shared MFA history" $ do
+      recordedAttemptsReference <- newIORef []
+      let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 5))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
+          recordingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedAttemptsReference ((key, attempt) :) >> pure (Right ()),
+                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          totpStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) Nothing))))
+              { markTotpCodeUsed = \_ _ -> pure (Right True)
+              }
+          matchedCounter = 123456 `div` 30
+          replayedTotpStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) (Just matchedCounter)))))
+              { markTotpCodeUsed = \_ _ -> error "replayed TOTP proof must not reach the counter update"
+              }
+          racedTotpStore =
+            totpStore
+              { markTotpCodeUsed = \_ _ -> pure (Right False)
+              }
+          complete store proof =
+            completePasswordLogin
+              (credentialStore (Right (Just verifiedCredential)))
+              ((secondFactorContextFor store proof) {secondFactorThrottle = recordingThrottle})
+              emailAddress
+              (mkPassword "correct horse battery staple")
+      complete totpStore (TotpLoginProof (required "invalid TOTP code" (mkTotpCode "000000")))
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      complete totpStore (TotpLoginProof (totpCode 123456 secret))
+        `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      complete replayedTotpStore (TotpLoginProof (totpCode 123456 secret))
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      complete racedTotpStore (TotpLoginProof (totpCode 123456 secret))
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      recordedAttempts <- readIORef recordedAttemptsReference
+      filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
+        `shouldBe` [ ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
+                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
+                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 True),
+                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 False)
+                   ]
+
+    it "settles rejected and accepted recovery proofs in the shared MFA history" $ do
+      recordedAttemptsReference <- newIORef []
+      let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
+          recoveryCodeHash = required "recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
+          recordingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedAttemptsReference ((key, attempt) :) >> pure (Right ()),
+                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          recoveryStore hashes =
+            (mfaStore (Right (Just (StoredTotpEnrollment "recovery-code-login" (Just 100) Nothing))))
+              { loadUnusedRecoveryCodeHashes = \_ -> pure (Right hashes),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (Right True)
+              }
+          complete store =
+            completePasswordLogin
+              (credentialStore (Right (Just verifiedCredential)))
+              ((secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) {secondFactorThrottle = recordingThrottle})
+              emailAddress
+              (mkPassword "correct horse battery staple")
+      complete (recoveryStore [recoveryCodeHashText recoveryCodeHash])
+        `shouldReturnEqual` PasswordMfaLoginAccepted accountId
+      complete (recoveryStore [])
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      recordedAttempts <- readIORef recordedAttemptsReference
+      filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
+        `shouldBe` [ ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
+                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 True)
+                   ]
+
+    it "fails closed when a required password, TOTP, or recovery settlement write fails" $ do
+      let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
+          encryptedSecret = requiredCrypto (encryptSecretWithNonce encryptionKey (required "encryption nonce" (mkEncryptionNonce (ByteString.replicate 12 6))) (mkSecretPlaintext (TextEncoding.encodeUtf8 (renderTotpSecret secret))))
+          recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
+          recoveryCodeHash = required "recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
+          settlementFailure = LoginAttemptStoreUnavailable "attempt settlement failed"
+          failingThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt ->
+                        if key == "email:person@example.test"
+                          then key `seq` attempt `seq` pure (Left settlementFailure)
+                          else pure (Right ()),
+                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          secondFactorSettlementFailure =
+            failingThrottle
+              { loginThrottleStore =
+                  (loginThrottleStore failingThrottle)
+                    { recordLoginAttempt = \key attempt ->
+                        if key == "mfa:" <> accountIdText accountId
+                          then key `seq` attempt `seq` pure (Left settlementFailure)
+                          else pure (Right ())
+                    }
+              }
+          totpStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment encryptedSecret (Just 100) Nothing))))
+              { markTotpCodeUsed = \_ _ -> pure (Right True)
+              }
+          recoveryStore =
+            (mfaStore (Right (Just (StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100) Nothing))))
+              { loadUnusedRecoveryCodeHashes = \_ -> pure (Right [recoveryCodeHashText recoveryCodeHash]),
+                consumeRecoveryCodeHash = \_ _ _ -> pure (Right True)
+              }
+          password = mkPassword "correct horse battery staple"
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore failingThrottle emailAddress password
+        `shouldReturnEqual` PasswordLoginAttemptStoreError settlementFailure
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) ((secondFactorContextFor totpStore (TotpLoginProof (totpCode 123456 secret))) {secondFactorThrottle = secondFactorSettlementFailure}) emailAddress password
+        `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
+      completePasswordLogin (credentialStore (Right (Just verifiedCredential))) ((secondFactorContextFor recoveryStore (RecoveryCodeLoginProof recoveryCode)) {secondFactorThrottle = secondFactorSettlementFailure}) emailAddress password
+        `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
 
 credentialStore :: Either AccountCredentialStoreError (Maybe AccountCredential) -> AccountCredentialStore
 credentialStore result = AccountCredentialStore (\requestedEmail -> requestedEmail `seq` pure result) (\requestedUsername -> requestedUsername `seq` pure result)

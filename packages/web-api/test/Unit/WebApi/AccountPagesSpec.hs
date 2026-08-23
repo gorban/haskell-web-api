@@ -1036,6 +1036,7 @@ spec = do
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
           validFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           usernameFields = [("email", ""), ("username", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
+          uppercaseUsernameFields = [("email", ""), ("username", "Person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           emailUsernameFields = [("email", "person_01"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", validCode)]
           validWorkflow = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Right True) (Right True)
           recoveryCode = fromMaybe (error "expected a valid recovery code") (RecoveryCode.mkRecoveryCode "0123456789ABCDEF0123")
@@ -1054,6 +1055,50 @@ spec = do
           recoveryWorkflow = validWorkflow {accountWorkflowMfaStore = recoveryMfaStore}
           recoveryFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "recovery"), ("code", RecoveryCode.recoveryCodeText recoveryCode)]
           unavailableSession = workflowFor (Right (Just confirmedCredential)) (Right (Just confirmedEnrollment)) (Left AccountSessionStoreUnavailable) (Right True)
+          mfaAttemptKey = "mfa:" <> Account.accountIdText accountId
+          exhaustedMfaThrottleStore =
+            LoginAttemptStore
+              { recordLoginAttempt = \key attempt -> key `seq` attempt `seq` pure (Right ()),
+                loadRecentLoginAttempts = \key _ ->
+                  pure
+                    ( if key == mfaAttemptKey
+                        then Right [LoginProtection.LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
+                        else Right []
+                    )
+              }
+          postCheckWriteFailure = LoginAttemptStoreUnavailable "post-check attempt write failed"
+          postCheckWriteFailureStore =
+            LoginAttemptStore
+              { recordLoginAttempt = \key attempt ->
+                  if key == mfaAttemptKey
+                    then key `seq` attempt `seq` pure (Left postCheckWriteFailure)
+                    else pure (Right ()),
+                loadRecentLoginAttempts = \_ _ -> pure (Right [])
+              }
+      canonicalUsernameKeysReference <- newIORef []
+      let canonicalUsernameWorkflow =
+            validWorkflow
+              { accountWorkflowLoginAttemptStore =
+                  LoginAttemptStore
+                    { recordLoginAttempt = \key attempt -> modifyIORef' canonicalUsernameKeysReference (key :) >> (attempt `seq` pure (Right ())),
+                      loadRecentLoginAttempts = \key _ -> modifyIORef' canonicalUsernameKeysReference (key :) >> pure (Right [])
+                    }
+              }
+          exhaustedTotpWorkflow =
+            validWorkflow
+              { accountWorkflowLoginAttemptStore = exhaustedMfaThrottleStore,
+                accountWorkflowMfaStore =
+                  (accountWorkflowMfaStore validWorkflow)
+                    { markTotpCodeUsed = \_ _ -> error "exhausted TOTP proof must not reach the counter update"
+                    }
+              }
+          postCheckWriteFailureWorkflow =
+            (validWorkflow {accountWorkflowLoginAttemptStore = postCheckWriteFailureStore})
+              { accountWorkflowSessionStore =
+                  (accountWorkflowSessionStore validWorkflow)
+                    { saveAccountSession = \_ -> error "a failed second-factor settlement must not issue a session"
+                    }
+              }
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not an identifier!")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
       handleAccountAction validWorkflow (spanishLoginRequest [("email", "not an identifier!")])
@@ -1105,10 +1150,18 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-code") "Sign-in was rejected")
       handleAccountAction recoveryWorkflow (loginRequest defaultRequestContext recoveryFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
-      handleAccountAction validWorkflow (loginRequest defaultRequestContext usernameFields)
+      handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext usernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext uppercaseUsernameFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      canonicalUsernameKeys <- readIORef canonicalUsernameKeysReference
+      filter (Text.isPrefixOf "username:") canonicalUsernameKeys `shouldBe` ["username:person_01", "username:person_01", "username:person_01", "username:person_01"]
       handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      handleAccountAction exhaustedTotpWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 429 (Just "login-email") "Too many sign-in attempts")
+      handleAccountAction postCheckWriteFailureWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
       usernameLoginResult <-
         beginPasswordLoginWithIdentifier
           (accountWorkflowCredentialStore validWorkflow)

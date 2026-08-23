@@ -21,7 +21,6 @@ module WebApi.Login
 where
 
 import Control.Exception (evaluate)
-import Control.Monad (void)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
@@ -200,11 +199,23 @@ dummyPasswordHash =
 requiredPasswordHashOrDie :: Text -> Maybe PasswordHash -> PasswordHash
 requiredPasswordHashOrDie context = fromMaybe (error ("WebApi.Login: " <> Text.unpack context))
 
+-- | Decision (PR-S3, 2026-08-23): extend the existing attempt-store key
+-- derivation and settlement path rather than adding a second-factor-only
+-- throttle. Account lookup compares usernames with PostgreSQL @lower@,
+-- while 'Username' admits ASCII only, so 'Text.toLower' gives the same
+-- canonical identity before untrusted spelling reaches throttle storage.
+-- TOTP and recovery attempts share 'secondFactorAttemptKey' because they
+-- are alternate proofs of one account's MFA boundary; a failed required
+-- settlement is surfaced through the existing typed store-error result
+-- instead of allowing authentication to fail open.
 loginIdentifierKey :: LoginIdentifier -> Text
 loginIdentifierKey identifier =
   case identifier of
     LoginEmailAddress emailAddress -> "email:" <> emailAddressText emailAddress
-    LoginUsername username -> "username:" <> usernameText username
+    LoginUsername username -> "username:" <> Text.toLower (usernameText username)
+
+secondFactorAttemptKey :: AccountId -> Text
+secondFactorAttemptKey accountId = "mfa:" <> accountIdText accountId
 
 checkLoginThrottle :: LoginThrottleContext -> Text -> IO (Either LoginAttemptStoreError LoginProtectionResult)
 checkLoginThrottle throttle key =
@@ -237,8 +248,11 @@ beginPasswordLoginWithIdentifier credentialStore mfaStore throttle identifier pa
     Right LoginPermitted -> do
       credentialResult <- lookupCredential credentialStore identifier
       outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential mfaStore password) credentialResult
-      recordCredentialCheckOutcome throttle key outcome
-      pure (credentialCheckToPasswordLoginResult outcome)
+      case credentialCheckThrottleOutcome outcome of
+        Nothing -> pure (credentialCheckToPasswordLoginResult outcome)
+        Just succeeded -> do
+          recordResult <- recordThrottleAttempt throttle key succeeded
+          pure (either PasswordLoginAttemptStoreError (const (credentialCheckToPasswordLoginResult outcome)) recordResult)
   where
     key = loginIdentifierKey identifier
 
@@ -269,20 +283,6 @@ credentialCheckToPasswordLoginResult outcome =
     CredentialCheckMfaRequired accountId -> PasswordLoginMfaRequired accountId
     CredentialCheckCredentialStoreError storeError -> PasswordLoginCredentialStoreError storeError
     CredentialCheckMfaStoreError storeError -> PasswordLoginMfaStoreError storeError
-
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on the already-WHNF @()@ is a last resort, confirmed directly rather
--- than assumed. Naming this shared literal once as its own top-level
--- binding (tried first) does not close the gap: 'pure ()' is trivial enough
--- that GHC's @-O2@ optimizer inlines a named binding for it back to a bare
--- @pure ()@ at each call site anyway, reproducing the same CSE-sharing gap
--- the naming was meant to remove — confirmed by reverting to this call-site
--- form and observing the same-shaped gap simply move to which of the two
--- call sites (this one, or 'completeRecoveryCode''s) is left unticked.
-{-# ANN recordCredentialCheckOutcome ("HLint: ignore Redundant $!" :: String) #-}
-recordCredentialCheckOutcome :: LoginThrottleContext -> Text -> CredentialCheckOutcome -> IO ()
-recordCredentialCheckOutcome throttle key outcome =
-  maybe (pure $! ()) (void . recordThrottleAttempt throttle key) (credentialCheckThrottleOutcome outcome)
 
 -- | Whether a completed credential check should count toward the throttle,
 -- and if so, as a success or a failure. A credential-store failure does not
@@ -392,44 +392,39 @@ verifyProof context accountId enrollment =
 -- (mirroring 'consumeRecoveryCodeHash'), so a concurrent request racing to
 -- accept the same or an older counter for this account also loses.
 verifyTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO PasswordMfaLoginResult
-verifyTotpProof context accountId enrollment suppliedCode =
+verifyTotpProof context accountId enrollment suppliedCode = do
+  throttleStatus <- checkLoginThrottle (secondFactorThrottle context) (secondFactorAttemptKey accountId)
+  case throttleStatus of
+    Left storeError -> pure (PasswordMfaLoginAttemptStoreError storeError)
+    Right (LoginThrottledUntil lockoutEndsAt) -> pure (PasswordMfaLoginThrottled lockoutEndsAt)
+    Right LoginPermitted -> verifyPermittedTotpProof context accountId enrollment suppliedCode
+
+verifyPermittedTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO PasswordMfaLoginResult
+verifyPermittedTotpProof context accountId enrollment suppliedCode =
   case decodeTotpSecret (secondFactorEncryptionKey context) (storedTotpEncryptedSecret enrollment) of
     Nothing -> pure PasswordMfaLoginCorruptEnrollment
     Just secret ->
       case validateTotpCodeCounter (secondFactorNowSeconds context) 1 secret suppliedCode of
-        Nothing -> pure PasswordMfaLoginRejected
-        Just matchedCounter
-          | maybe False (matchedCounter <=) (storedTotpLastUsedCounter enrollment) -> pure PasswordMfaLoginRejected
-          | otherwise ->
-              acceptOrReject
-                <$> markTotpCodeUsed (secondFactorMfaStore context) accountId matchedCounter
-  where
-    acceptOrReject markResult =
-      case markResult of
-        Left storeError -> PasswordMfaLoginMfaStoreError storeError
-        Right True -> PasswordMfaLoginAccepted accountId
-        Right False -> PasswordMfaLoginRejected
+        Nothing -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
+        Just matchedCounter ->
+          case storedTotpLastUsedCounter enrollment of
+            Just lastUsedCounter
+              | matchedCounter <= lastUsedCounter -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
+            _ -> do
+              markResult <- markTotpCodeUsed (secondFactorMfaStore context) accountId matchedCounter
+              case markResult of
+                Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
+                Right True -> settleSecondFactorAttempt context accountId True (PasswordMfaLoginAccepted accountId)
+                Right False -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
 
--- | Throttled the same way as the password step, since a submitted code is
--- checked against up to eight stored Argon2id hashes
--- ('find' over 'verifyRecoveryCode') — an unauthenticated request that has
--- already cleared the password step could otherwise force up to eight KDF
--- evaluations per guess with nothing gating it.
---
--- Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- applications below are a last resort, confirmed directly rather than
--- assumed. 'key' is already a single, correctly-factored local binding
--- ('where'-bound), used once each by 'checkLoginThrottle' and
--- 'recordThrottleAttempt' — the correct shape for this code, not
--- duplication to remove; GHC shares the two references to this one thunk,
--- and only the first earns its own HPC tick when forced. The bare @()@ on
--- the 'Left' branch is likewise already-WHNF and unique to this call site,
--- with no duplicate to deduplicate. 'accepted' below is forced for the same
--- thunk-sharing reason: 'recoveryResult' is scrutinized twice (once here,
--- once again by the trailing 'either' call), binding an 'accepted' each
--- time from the same underlying 'Right' payload — the second binding does
--- not earn its own tick unforced.
-{-# ANN completeRecoveryCode ("HLint: ignore Redundant $!" :: String) #-}
+settleSecondFactorAttempt :: SecondFactorContext -> AccountId -> Bool -> PasswordMfaLoginResult -> IO PasswordMfaLoginResult
+settleSecondFactorAttempt context accountId succeeded result = do
+  recordResult <- recordThrottleAttempt (secondFactorThrottle context) (secondFactorAttemptKey accountId) succeeded
+  pure (either PasswordMfaLoginAttemptStoreError (const result) recordResult)
+
+-- | A recovery proof shares the per-account MFA budget with TOTP. Its
+-- accepted or rejected result is settled before it becomes caller-visible;
+-- a required attempt-store write failure is therefore fail-closed.
 completeRecoveryCode :: SecondFactorContext -> AccountId -> RecoveryCode -> IO PasswordMfaLoginResult
 completeRecoveryCode context accountId suppliedCode = do
   throttleStatus <- checkLoginThrottle throttle key
@@ -443,16 +438,14 @@ completeRecoveryCode context accountId suppliedCode = do
           fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
         maybe (pure False) consumeMatchingHash (find (verifyRecoveryCode suppliedCode) recoveryHashes)
       case recoveryResult of
-        Right accepted -> void ((recordThrottleAttempt throttle $! key) $! accepted)
-        Left _ -> pure $! ()
-      pure $
-        either
-          infrastructureFailureResult
-          (\accepted -> if accepted then PasswordMfaLoginAccepted accountId else PasswordMfaLoginRejected)
-          recoveryResult
+        Left infrastructureError -> pure (infrastructureFailureResult infrastructureError)
+        Right accepted ->
+          case accepted of
+            False -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
+            True -> settleSecondFactorAttempt context accountId True (PasswordMfaLoginAccepted accountId)
   where
     throttle = secondFactorThrottle context
-    key = "recovery:" <> accountIdText accountId
+    key = secondFactorAttemptKey accountId
     consumeMatchingHash matchingHash =
       liftMfaStore
         (consumeRecoveryCodeHash (secondFactorMfaStore context) accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
