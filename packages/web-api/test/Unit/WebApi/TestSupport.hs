@@ -4,6 +4,7 @@
 module Unit.WebApi.TestSupport
   ( shouldReturnEqual,
     required,
+    requiredDatabasePoolCapacity,
     databaseConfig,
     accountId,
     emailAddress,
@@ -163,7 +164,7 @@ import Text.Read (readMaybe)
 import WebApi (buildApp)
 import WebApi.Account (AccountStore (..), AccountStoreError (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..))
 import WebApi.AccountPages (AccountAction, accountActions)
-import WebApi.Config (AppConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
 import WebApi.Login (LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
@@ -185,6 +186,9 @@ shouldReturnEqual action expected = do
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
 
+requiredDatabasePoolCapacity :: Int -> DatabasePoolCapacity
+requiredDatabasePoolCapacity capacity = required "positive database pool capacity" (mkDatabasePoolCapacity capacity)
+
 databaseConfig :: DatabaseConfig
 databaseConfig =
   DatabaseConfig
@@ -194,7 +198,7 @@ databaseConfig =
       databaseUser = "web_api_runtime",
       databasePassword = "password",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10
     }
 
 accountId :: AccountId
@@ -466,7 +470,7 @@ postgresTestConfig =
       databaseUser = "web_api_app",
       databasePassword = "super-secret",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10
     }
 
 -- | An independently written decoder for libpq's single-quoted conninfo
@@ -685,7 +689,7 @@ setupMigrationPostgresTestConfig =
       databaseUser = "web_api_owner",
       databasePassword = "owner-secret",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10
     }
 
 runtimeSetupPostgresTestConfig :: DatabaseConfig
@@ -697,7 +701,7 @@ runtimeSetupPostgresTestConfig =
       databaseUser = "web_api_runtime",
       databasePassword = "runtime-secret",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10
     }
 
 successfulPostgresResult :: Text -> PostgresCommandResult

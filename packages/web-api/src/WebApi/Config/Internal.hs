@@ -14,6 +14,7 @@ module WebApi.Config.Internal
     ConfigParseError (..),
     CorsPolicyConfig (..),
     DatabaseConfig (..),
+    DatabasePoolCapacity,
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -46,6 +47,9 @@ module WebApi.Config.Internal
     parseAppEnvironmentConfig,
     parseAppStartupConfig,
     parseRuntimeAppConfig,
+    databasePoolCapacityValue,
+    mkDatabasePoolCapacity,
+    singletonDatabasePoolCapacity,
   )
 where
 
@@ -130,6 +134,25 @@ data AppMode
   | Production
   deriving (Eq, Show)
 
+-- | A database pool must be able to lease at least one connection. Keeping
+-- this distinct from a raw 'Int' prevents an internally assembled runtime
+-- configuration from creating a pool whose every borrower blocks forever.
+newtype DatabasePoolCapacity = DatabasePoolCapacity Int
+
+mkDatabasePoolCapacity :: Int -> Maybe DatabasePoolCapacity
+mkDatabasePoolCapacity capacity
+  | capacity > 0 = Just (DatabasePoolCapacity capacity)
+  | otherwise = Nothing
+
+databasePoolCapacityValue :: DatabasePoolCapacity -> Int
+databasePoolCapacityValue (DatabasePoolCapacity capacity) = capacity
+
+-- | The one-connection capacity used by short-lived, single-owner database
+-- workflows such as migrations. It avoids exposing the newtype constructor
+-- merely to assemble a statically valid configuration.
+singletonDatabasePoolCapacity :: DatabasePoolCapacity
+singletonDatabasePoolCapacity = DatabasePoolCapacity 1
+
 data DatabaseConfig = DatabaseConfig
   { databaseHost :: Text,
     databasePort :: Int,
@@ -137,9 +160,18 @@ data DatabaseConfig = DatabaseConfig
     databaseUser :: Text,
     databasePassword :: Text,
     databaseConnectTimeoutSeconds :: Int,
-    databasePoolCapacity :: Int
+    databasePoolCapacity :: DatabasePoolCapacity
   }
-  deriving (Eq)
+
+instance Eq DatabaseConfig where
+  left == right =
+    databaseHost left == databaseHost right
+      && databasePort left == databasePort right
+      && databaseName left == databaseName right
+      && databaseUser left == databaseUser right
+      && databasePassword left == databasePassword right
+      && databaseConnectTimeoutSeconds left == databaseConnectTimeoutSeconds right
+      && databasePoolCapacityValue (databasePoolCapacity left) == databasePoolCapacityValue (databasePoolCapacity right)
 
 -- | Redacted: a derived 'Show' would print 'databasePassword' in the clear,
 -- and this value is reachable from ordinary diagnostics ('AppEnvironmentConfig'\'s
@@ -157,7 +189,7 @@ instance Show DatabaseConfig where
       <> ", databasePassword = <redacted>, databaseConnectTimeoutSeconds = "
       <> show (databaseConnectTimeoutSeconds config)
       <> ", databasePoolCapacity = "
-      <> show (databasePoolCapacity config)
+      <> show (databasePoolCapacityValue (databasePoolCapacity config))
       <> "}"
 
 data AppEnvironmentConfig = AppEnvironmentConfig
@@ -311,8 +343,8 @@ defaultDatabaseConnectTimeoutSeconds = 10
 -- against this database at once. Ten matches Warp's own comfortable
 -- concurrency range for a single small deployment; a busier deployment
 -- raises this via 'databasePoolCapacityKey' rather than by editing code.
-defaultDatabasePoolCapacity :: Int
-defaultDatabasePoolCapacity = 10
+defaultDatabasePoolCapacity :: DatabasePoolCapacity
+defaultDatabasePoolCapacity = DatabasePoolCapacity 10
 
 defaultAppEnvironmentConfig :: AppEnvironmentConfig
 defaultAppEnvironmentConfig =
@@ -544,8 +576,8 @@ databasePoolCapacityKey = "DATABASE_POOL_CAPACITY"
 -- Confirmed directly (not assumed by analogy to this module's other
 -- @$!@-forced key lookups) that HLint's @--language=ImportQualifiedPost@
 -- invocation does not flag this line, so no ignore pragma is added.
-parsePoolCapacity :: Text -> Either ConfigParseError Int
-parsePoolCapacity = parsePositiveInt $! databasePoolCapacityKey
+parsePoolCapacity :: Text -> Either ConfigParseError DatabasePoolCapacity
+parsePoolCapacity = fmap DatabasePoolCapacity . (parsePositiveInt $! databasePoolCapacityKey)
 
 parseSmtpPort :: Text -> Either ConfigParseError Int
 parseSmtpPort value = do

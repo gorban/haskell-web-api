@@ -22,7 +22,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import System.Environment (getEnvironment)
 import System.IO (Handle, hPutStrLn)
-import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig)
+import WebApi.Config (AppEnvironmentConfig (..), DatabaseConfig (..), committedEnvDefaults, parseAppEnvironmentConfig, singletonDatabasePoolCapacity)
 import WebApi.Postgres.Migration
   ( runPostgresMigrationsForRuntime,
     runPostgresSeed,
@@ -78,7 +78,7 @@ parseDatabaseSetupConfig environmentEntries =
     <*> pure migrationDatabaseConnectTimeoutSeconds
     -- Migrations own one short-lived connection rather than the application's
     -- runtime pool, so this required record field is inert on this path.
-    <*> pure migrationDatabasePoolCapacity
+    <*> pure singletonDatabasePoolCapacity
   where
     requiredConfigValue key =
       case lookup key environmentEntries of
@@ -87,9 +87,6 @@ parseDatabaseSetupConfig environmentEntries =
 
 migrationDatabaseConnectTimeoutSeconds :: Int
 migrationDatabaseConnectTimeoutSeconds = 10
-
-migrationDatabasePoolCapacity :: Int
-migrationDatabasePoolCapacity = 1
 
 parseDatabaseSetupCommand :: [String] -> Either DatabaseSetupError DatabaseSetupCommand
 parseDatabaseSetupCommand arguments =

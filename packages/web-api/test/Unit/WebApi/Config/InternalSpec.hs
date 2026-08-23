@@ -18,11 +18,17 @@ import System.IO.Temp (withSystemTempDirectory)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountWorkflow (..))
 import WebApi.App (buildRuntimeAccountWorkflow, buildRuntimeApp, runtimeRequestObservabilityReporter)
-import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
+import WebApi.Config (AcmeConfig (..), AppConfig (..), AppEnvironmentConfig (..), AppEnvironmentConfigLoadError (..), AppMode (..), AppStartupConfig (..), AppStartupConfigLoadError (..), CertbotConfig (..), CorsPolicyConfig (..), DatabaseConfig (..), ForwardedHeaderTrust (..), ListenerConfig (..), ListenerScheme (..), ManualTlsCertificateFiles (..), ObservabilityConfig (..), OtlpExporter (..), RequestPolicyConfig (..), ResponseSecurityHeadersConfig (..), SharedTlsCertificateFiles (..), SmtpDeliveryConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), StrictTransportSecurityConfig (..), TlsCertificateSource (..), TlsConfig (..), TlsStartupMode (..), committedEnvDefaults, committedRuntimeDefaults, databasePoolCapacityValue, defaultAppConfig, defaultAppEnvironmentConfig, defaultAppStartupConfig, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, loadAppEnvironmentConfig, loadAppEnvironmentConfigWithFiles, loadAppStartupConfig, loadAppStartupConfigWithFiles, mkDatabasePoolCapacity, parseAppEnvironmentConfig, parseAppStartupConfig, parseRuntimeAppConfig)
 import WebApi.Postgres.Testing (newPostgresPool)
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), defaultRequestContext)
 
 spec = do
+  describe "DatabasePoolCapacity" $ do
+    it "accepts only positive capacities" $ do
+      fmap databasePoolCapacityValue (mkDatabasePoolCapacity 1) `shouldBe` Just 1
+      fmap databasePoolCapacityValue (mkDatabasePoolCapacity 0) `shouldBe` Nothing
+      fmap databasePoolCapacityValue (mkDatabasePoolCapacity (-1)) `shouldBe` Nothing
+
   describe "defaultAppConfig" $ do
     it "reserves structured listener, static asset, and observability settings" $ do
       defaultAppConfig
@@ -1551,7 +1557,7 @@ spec = do
                 databaseUser = "web_api_app",
                 databasePassword = "super-secret",
                 databaseConnectTimeoutSeconds = 10,
-                databasePoolCapacity = 10
+                databasePoolCapacity = requiredDatabasePoolCapacity 10
               }
           productionEnvironmentConfig =
             defaultAppEnvironmentConfig
@@ -1624,7 +1630,7 @@ spec = do
                     databaseUser = "local_user",
                     databasePassword = "local_password",
                     databaseConnectTimeoutSeconds = 10,
-                    databasePoolCapacity = 10
+                    databasePoolCapacity = requiredDatabasePoolCapacity 10
                   }
             }
 
@@ -1654,7 +1660,7 @@ spec = do
                     databaseUser = "local_user",
                     databasePassword = "runtime_password",
                     databaseConnectTimeoutSeconds = 10,
-                    databasePoolCapacity = 10
+                    databasePoolCapacity = requiredDatabasePoolCapacity 10
                   }
             }
 
@@ -1711,7 +1717,7 @@ spec = do
                         databaseUser = "shared_user",
                         databasePassword = "local_password",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = 10
+                        databasePoolCapacity = requiredDatabasePoolCapacity 10
                       }
                 }
 
@@ -1738,7 +1744,7 @@ spec = do
                               databaseUser = "shared_user",
                               databasePassword = "runtime_password",
                               databaseConnectTimeoutSeconds = 10,
-                              databasePoolCapacity = 10
+                              databasePoolCapacity = requiredDatabasePoolCapacity 10
                             }
                       }
 
@@ -1796,7 +1802,7 @@ spec = do
                           databaseUser = "shared_user",
                           databasePassword = "local_password",
                           databaseConnectTimeoutSeconds = 10,
-                          databasePoolCapacity = 10
+                          databasePoolCapacity = requiredDatabasePoolCapacity 10
                         }
                   }
 
@@ -1847,7 +1853,7 @@ spec = do
                                 databaseUser = "web_api_runtime",
                                 databasePassword = "local_password",
                                 databaseConnectTimeoutSeconds = 10,
-                                databasePoolCapacity = 10
+                                databasePoolCapacity = requiredDatabasePoolCapacity 10
                               }
                         },
                     startupAppConfig =
@@ -1891,7 +1897,7 @@ spec = do
                                       databaseUser = "web_api_runtime",
                                       databasePassword = "local_password",
                                       databaseConnectTimeoutSeconds = 10,
-                                      databasePoolCapacity = 10
+                                      databasePoolCapacity = requiredDatabasePoolCapacity 10
                                     }
                               },
                           startupAppConfig =

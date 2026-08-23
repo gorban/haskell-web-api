@@ -3,6 +3,7 @@
 module WebApi.Postgres.Pool
   ( PostgresPool,
     newPostgresPool,
+    newPostgresPoolWithConnector,
     closePostgresPool,
     withPooledConnection,
     libpqConnectionValue,
@@ -10,16 +11,17 @@ module WebApi.Postgres.Pool
   )
 where
 
-import Control.Concurrent.STM (STM, atomically, modifyTVar', newTVarIO, readTVar, retry, swapTVar, writeTVar)
+import Control.Concurrent.STM (STM, atomically, check, modifyTVar', newTVarIO, readTVar, retry, swapTVar, throwSTM, writeTVar)
 import Control.Concurrent.STM.TVar (TVar)
-import Control.Exception (bracket)
+import Control.Exception (SomeException, bracket, mask, onException, try)
+import Control.Monad (unless)
 import Data.ByteString qualified as ByteString
 import Data.Foldable (traverse_)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Database.PostgreSQL.LibPQ qualified as LibPQ
-import WebApi.Config (DatabaseConfig (..))
+import WebApi.Config (DatabaseConfig (..), DatabasePoolCapacity, databasePoolCapacityValue)
 
 -- | A bounded set of live libpq connections against one 'DatabaseConfig',
 -- shared across every runtime query the process makes instead of the
@@ -31,38 +33,56 @@ import WebApi.Config (DatabaseConfig (..))
 -- 'Integration.WebApiSpec'\'s connection-failure case, which asserts on
 -- exactly that lazily-discovered failure shape).
 data PostgresPool = PostgresPool
-  { poolDatabaseConfig :: DatabaseConfig,
-    -- | Live connections not currently checked out.
+  { -- | Live connections not currently checked out.
     poolIdleConnections :: TVar [LibPQ.Connection],
     -- | Total connections that exist right now: checked out, idle, or
     -- reserved mid-connect. Bounded by 'poolCapacity'; acquiring past that
     -- bound blocks (via STM 'retry') until a slot frees up.
     poolLiveConnectionCount :: TVar Int,
-    poolCapacity :: Int
+    poolCapacity :: DatabasePoolCapacity,
+    -- | Once terminal closure begins, no new lease may be created. Existing
+    -- leases finish their connection on release, allowing the owner to wait
+    -- for a complete shutdown without racing a new borrower.
+    poolLifecycle :: TVar PoolLifecycle,
+    poolConnector :: IO LibPQ.Connection
   }
 
-newPostgresPool :: Int -> DatabaseConfig -> IO PostgresPool
-newPostgresPool capacity config = do
+data PoolLifecycle
+  = PoolOpen
+  | PoolClosing
+
+newPostgresPool :: DatabasePoolCapacity -> DatabaseConfig -> IO PostgresPool
+newPostgresPool capacity config =
+  newPostgresPoolWithConnector capacity (LibPQ.connectdb (runtimeConnectionString config))
+
+-- | The connector seam makes the reservation/connect handoff testable under
+-- deterministic synchronous exceptions. Production uses 'LibPQ.connectdb';
+-- tests can throw before a connection exists and prove that the reserved slot
+-- is returned to STM before another borrower attempts to lease it.
+newPostgresPoolWithConnector :: DatabasePoolCapacity -> IO LibPQ.Connection -> IO PostgresPool
+newPostgresPoolWithConnector capacity connector = do
   idleConnections <- newTVarIO []
   liveConnectionCount <- newTVarIO 0
+  lifecycle <- newTVarIO PoolOpen
   pure
     PostgresPool
-      { poolDatabaseConfig = config,
-        poolIdleConnections = idleConnections,
+      { poolIdleConnections = idleConnections,
         poolLiveConnectionCount = liveConnectionCount,
-        poolCapacity = capacity
+        poolCapacity = capacity,
+        poolLifecycle = lifecycle,
+        poolConnector = connector
       }
 
--- | Finishes every currently idle connection and frees its slot. Connections
--- checked out via 'withPooledConnection' at the time this runs are left
--- alone (their own release still runs when their caller finishes); calling
--- this while other callers still hold connections is a caller error, the
--- same as closing any other shared resource still in use.
+-- | Terminally closes a pool. It first excludes new borrowers, then finishes
+-- idle connections and waits for outstanding leases to return. A returned
+-- connection is finished rather than retained once closure has begun. It is
+-- therefore safe for the composition root to bracket this operation around
+-- the server lifetime; the pool cannot be reused after it returns.
 closePostgresPool :: PostgresPool -> IO ()
-closePostgresPool pool = do
-  idleConnections <- atomically (swapTVar (poolIdleConnections pool) [])
-  traverse_ LibPQ.finish idleConnections
-  atomically (modifyTVar' (poolLiveConnectionCount pool) (subtract (length idleConnections)))
+closePostgresPool pool = mask $ \_ -> do
+  idleConnections <- atomically (beginPoolClosure pool)
+  traverse_ (finishAndReleaseSlot pool) idleConnections
+  atomically (waitForPoolClosure pool)
 
 -- | Acquires a pooled connection for the duration of the given action and
 -- always returns it afterward, even if the action throws.
@@ -74,14 +94,23 @@ data AcquiredSlot
   | ReservedNewConnectionSlot
 
 acquirePooledConnection :: PostgresPool -> IO LibPQ.Connection
-acquirePooledConnection pool = do
+acquirePooledConnection pool = mask $ \restore -> do
   acquiredSlot <- atomically (acquirePooledSlotSTM pool)
   case acquiredSlot of
     ReusedIdleConnection connection -> pure connection
-    ReservedNewConnectionSlot -> LibPQ.connectdb (runtimeConnectionString (poolDatabaseConfig pool))
+    ReservedNewConnectionSlot ->
+      restore (poolConnector pool)
+        `onException` atomically (releaseReservedSlotSTM pool)
 
 acquirePooledSlotSTM :: PostgresPool -> STM AcquiredSlot
 acquirePooledSlotSTM pool = do
+  lifecycle <- readTVar (poolLifecycle pool)
+  case lifecycle of
+    PoolClosing -> throwSTM (userError "PostgreSQL pool is closed")
+    PoolOpen -> acquireOpenPoolSlotSTM pool
+
+acquireOpenPoolSlotSTM :: PostgresPool -> STM AcquiredSlot
+acquireOpenPoolSlotSTM pool = do
   idleConnections <- readTVar (poolIdleConnections pool)
   case idleConnections of
     -- The @$!@ forces this pattern-bound tail directly: GHC's HPC
@@ -96,26 +125,60 @@ acquirePooledSlotSTM pool = do
       pure (ReusedIdleConnection connection)
     [] -> do
       liveConnectionCount <- readTVar (poolLiveConnectionCount pool)
-      if liveConnectionCount < poolCapacity pool
+      if liveConnectionCount < databasePoolCapacityValue (poolCapacity pool)
         then do
           writeTVar (poolLiveConnectionCount pool) (liveConnectionCount + 1)
           pure ReservedNewConnectionSlot
         else retry
 
+releaseReservedSlotSTM :: PostgresPool -> STM ()
+releaseReservedSlotSTM pool =
+  modifyTVar' (poolLiveConnectionCount pool) (subtract 1)
+
+beginPoolClosure :: PostgresPool -> STM [LibPQ.Connection]
+beginPoolClosure pool = do
+  lifecycle <- readTVar (poolLifecycle pool)
+  case lifecycle of
+    PoolClosing -> readTVar (poolIdleConnections pool)
+    PoolOpen -> do
+      writeTVar (poolLifecycle pool) PoolClosing
+      swapTVar (poolIdleConnections pool) []
+
+waitForPoolClosure :: PostgresPool -> STM ()
+waitForPoolClosure pool = do
+  liveConnectionCount <- readTVar (poolLiveConnectionCount pool)
+  check (liveConnectionCount == 0)
+
 -- | A connection that failed mid-use (or failed to connect at all) reports
 -- 'LibPQ.ConnectionBad' from 'LibPQ.status'; discarding it here and freeing
 -- its slot lets the next acquirer open a fresh replacement instead of
--- reusing a connection known to be broken. This never throws: releasing a
--- connection back to the pool is bookkeeping, and a best-effort 'LibPQ.finish'
--- on an already-broken connection is not a caller-visible failure.
+-- reusing a connection known to be broken. The surrounding 'mask' protects
+-- the status/check-in handoff from cancellation, while a terminal lifecycle
+-- instead finishes and releases the checked-out slot.
 releasePooledConnection :: PostgresPool -> LibPQ.Connection -> IO ()
-releasePooledConnection pool connection = do
+releasePooledConnection pool connection = mask $ \_ -> do
   connectionStatus <- LibPQ.status connection
-  case connectionStatus of
-    LibPQ.ConnectionOk -> atomically (modifyTVar' (poolIdleConnections pool) (connection :))
-    _ -> do
-      LibPQ.finish connection
-      atomically (modifyTVar' (poolLiveConnectionCount pool) (subtract 1))
+  releaseAfterStatus connectionStatus
+  where
+    releaseAfterStatus LibPQ.ConnectionOk = do
+      returnedToOpenPool <- atomically (returnToOpenPoolSTM pool connection)
+      unless returnedToOpenPool releaseClosedConnection
+    releaseAfterStatus _ = releaseClosedConnection
+    releaseClosedConnection = finishAndReleaseSlot pool connection
+
+returnToOpenPoolSTM :: PostgresPool -> LibPQ.Connection -> STM Bool
+returnToOpenPoolSTM pool connection = do
+  lifecycle <- readTVar (poolLifecycle pool)
+  case lifecycle of
+    PoolOpen -> do
+      modifyTVar' (poolIdleConnections pool) (connection :)
+      pure True
+    PoolClosing -> pure False
+
+finishAndReleaseSlot :: PostgresPool -> LibPQ.Connection -> IO ()
+finishAndReleaseSlot pool connection = do
+  _ <- try (LibPQ.finish connection) :: IO (Either SomeException ())
+  atomically (releaseReservedSlotSTM pool)
 
 runtimeConnectionString :: DatabaseConfig -> ByteString.ByteString
 runtimeConnectionString databaseConfig =

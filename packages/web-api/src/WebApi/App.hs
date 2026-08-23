@@ -16,6 +16,7 @@ module WebApi.App
 where
 
 import Control.Applicative ((<|>))
+import Control.Exception (bracket)
 import Data.ByteString qualified as ByteString
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
@@ -67,7 +68,7 @@ import WebApi.Postgres.AccountRepository
 import WebApi.Postgres.LoginAttemptRepository (buildRuntimePostgresLoginAttemptStore)
 import WebApi.Postgres.MfaEnrollmentSessionRepository (buildRuntimePostgresMfaEnrollmentSessionStore)
 import WebApi.Postgres.MfaRepository (buildRuntimePostgresMfaStore)
-import WebApi.Postgres.Pool (PostgresPool, newPostgresPool)
+import WebApi.Postgres.Pool (PostgresPool, closePostgresPool, newPostgresPool)
 import WebApi.Postgres.Runtime (buildRuntimePostgresPageRepository)
 import WebApi.Postgres.SessionRepository (buildRuntimePostgresAccountSessionStore)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
@@ -291,9 +292,13 @@ authorityFromPublicBaseUrl baseUrl =
 runWithConfig :: Handle -> AppConfig -> AppEnvironmentConfig -> IO ()
 runWithConfig outputHandle appConfig !environmentConfig = do
   let runtimeDatabaseConfig = databaseConfig environmentConfig
-  pool <- newPostgresPool (databasePoolCapacity runtimeDatabaseConfig) runtimeDatabaseConfig
-  announceParsedListenerConfigs outputHandle appConfig
-  HarchWeb.runServer outputHandle appConfig (buildRuntimeApp pool appConfig environmentConfig)
+  bracket
+    (newPostgresPool (databasePoolCapacity runtimeDatabaseConfig) runtimeDatabaseConfig)
+    closePostgresPool
+    ( \pool -> do
+        announceParsedListenerConfigs outputHandle appConfig
+        HarchWeb.runServer outputHandle appConfig (buildRuntimeApp pool appConfig environmentConfig)
+    )
 
 run :: Handle -> IO ()
 run outputHandle = do

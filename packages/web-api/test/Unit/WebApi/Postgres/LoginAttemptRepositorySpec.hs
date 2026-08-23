@@ -9,6 +9,7 @@ import Data.Text qualified as Text
 import HarchWeb.Account (accountIdText, generateAccountId)
 import HarchWeb.LoginProtection (LoginAttempt (..))
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
+import Unit.WebApi.TestSupport (requiredDatabasePoolCapacity)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login (LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
@@ -86,5 +87,5 @@ databaseConfig =
       databaseUser = "web_api_runtime",
       databasePassword = "password",
       databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = 10
+      databasePoolCapacity = requiredDatabasePoolCapacity 10
     }

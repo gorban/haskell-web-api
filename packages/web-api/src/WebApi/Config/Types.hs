@@ -11,6 +11,7 @@ module WebApi.Config.Types
     ConfigParseError (..),
     CorsPolicyConfig (..),
     DatabaseConfig (..),
+    DatabasePoolCapacity,
     ForwardedHeaderTrust (..),
     ListenerConfig (..),
     ListenerScheme (..),
@@ -27,6 +28,9 @@ module WebApi.Config.Types
     TlsCertificateSource (..),
     TlsConfig (..),
     TlsStartupMode (..),
+    databasePoolCapacityValue,
+    mkDatabasePoolCapacity,
+    singletonDatabasePoolCapacity,
   )
 where
 

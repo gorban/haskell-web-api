@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Core.Setup.PrerequisiteConfig qualified as PrerequisiteConfig
+import Unit.WebApi.TestSupport (requiredDatabasePoolCapacity)
 import WebApi.Config (AppConfig (..), AppEnvironmentConfig (..), DatabaseConfig (..), ObservabilityConfig (..), OtlpExporter (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.SetupConfig (AppSetupConfig (..), SetupAutostartConfig (..), defaultAppSetupConfig, defaultSetupAutostartConfig)
 import WebApi.SetupPlan (AppPrerequisitePlan (..), ContainerAutostartPlan (..), ContainerRuntime (..), DatabasePrerequisitePlan (..), TcpEndpoint (..), TracingPrerequisitePlan (..), defaultContainerAutostartPlan, planAppPrerequisites, toSetupPrerequisiteConfig)
@@ -22,7 +23,7 @@ spec = do
                             databaseUser = "web_api_runtime",
                             databasePassword = "secret",
                             databaseConnectTimeoutSeconds = 10,
-                            databasePoolCapacity = 10
+                            databasePoolCapacity = requiredDatabasePoolCapacity 10
                           }
                     }
               }
@@ -49,7 +50,7 @@ spec = do
                             databaseUser = "web_api_runtime",
                             databasePassword = "secret",
                             databaseConnectTimeoutSeconds = 10,
-                            databasePoolCapacity = 10
+                            databasePoolCapacity = requiredDatabasePoolCapacity 10
                           }
                     },
                 setupAutostartConfig =

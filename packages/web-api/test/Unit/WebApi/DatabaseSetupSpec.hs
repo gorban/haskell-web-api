@@ -108,7 +108,7 @@ spec = do
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
               databaseConnectTimeoutSeconds = 10,
-              databasePoolCapacity = 1
+              databasePoolCapacity = requiredDatabasePoolCapacity 1
             }
 
     it "fails missing or invalid migration environment values explicitly" $ do
@@ -144,7 +144,7 @@ spec = do
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = 1
+                        databasePoolCapacity = requiredDatabasePoolCapacity 1
                       }
 
   describe "runDatabaseSetupCommand" $ do

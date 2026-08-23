@@ -106,7 +106,7 @@ spec = do
                           databaseUser = "web_api_runtime",
                           databasePassword = "web_api",
                           databaseConnectTimeoutSeconds = 10,
-                          databasePoolCapacity = 10
+                          databasePoolCapacity = requiredDatabasePoolCapacity 10
                         }
                   },
               setupAppConfig = defaultAppConfig,
@@ -119,7 +119,7 @@ spec = do
                       databaseUser = "web_api_owner",
                       databasePassword = "owner-secret",
                       databaseConnectTimeoutSeconds = 10,
-                      databasePoolCapacity = 1
+                      databasePoolCapacity = requiredDatabasePoolCapacity 1
                     },
               setupAutostartConfig = defaultSetupAutostartConfig
             }
@@ -236,7 +236,7 @@ spec = do
                                   databaseUser = "web_api_runtime",
                                   databasePassword = "web_api",
                                   databaseConnectTimeoutSeconds = 10,
-                                  databasePoolCapacity = 10
+                                  databasePoolCapacity = requiredDatabasePoolCapacity 10
                                 }
                           },
                       setupAppConfig = defaultAppConfig,
@@ -249,7 +249,7 @@ spec = do
                               databaseUser = "web_api_owner",
                               databasePassword = "owner-secret",
                               databaseConnectTimeoutSeconds = 10,
-                              databasePoolCapacity = 1
+                              databasePoolCapacity = requiredDatabasePoolCapacity 1
                             },
                       setupAutostartConfig = defaultSetupAutostartConfig
                     }
@@ -328,7 +328,7 @@ spec = do
                         databaseUser = "web_api_owner",
                         databasePassword = "owner-secret",
                         databaseConnectTimeoutSeconds = 10,
-                        databasePoolCapacity = 10
+                        databasePoolCapacity = requiredDatabasePoolCapacity 10
                       },
                 setupAutostartConfig =
                   SetupAutostartConfig
@@ -349,7 +349,7 @@ spec = do
               databaseUser = "web_api_owner",
               databasePassword = "owner-secret",
               databaseConnectTimeoutSeconds = 10,
-              databasePoolCapacity = 10
+              databasePoolCapacity = requiredDatabasePoolCapacity 10
             }
       setupAutostartConfig setupConfig
         `shouldBe` SetupAutostartConfig
