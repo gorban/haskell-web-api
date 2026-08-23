@@ -11,9 +11,10 @@ where
 
 import Data.Text (Text)
 import Data.Word (Word64)
+import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds, unixTimeNanosecondsValue)
 
 data LoginAttempt = LoginAttempt
-  { loginAttemptAtNanoseconds :: Word64,
+  { loginAttemptAtNanoseconds :: UnixTimeNanoseconds,
     loginAttemptSucceeded :: Bool
   }
   deriving (Eq, Show)
@@ -30,13 +31,13 @@ defaultLoginProtectionPolicy = LoginProtectionPolicy 5 900000000000 900000000000
 
 data LoginProtectionResult
   = LoginPermitted
-  | LoginThrottledUntil Word64
+  | LoginThrottledUntil UnixTimeNanoseconds
   deriving (Eq, Show)
 
 data AuthenticationAuditEvent
   = AuthenticationSucceeded Text
   | AuthenticationFailed Text
-  | AuthenticationThrottled Text Word64
+  | AuthenticationThrottled Text UnixTimeNanoseconds
   deriving (Eq, Show)
 
 newtype AuthenticationAuditSink = AuthenticationAuditSink
@@ -51,23 +52,24 @@ newtype AuthenticationAuditSink = AuthenticationAuditSink
 -- a lockout expiry from the oldest failure instead of the newest, expiring
 -- the lockout too early. Computing the newest timestamp with 'maximum'
 -- instead makes the result correct for any input order.
-evaluateLoginAttempt :: LoginProtectionPolicy -> Word64 -> [LoginAttempt] -> LoginProtectionResult
+evaluateLoginAttempt :: LoginProtectionPolicy -> UnixTimeNanoseconds -> [LoginAttempt] -> LoginProtectionResult
 evaluateLoginAttempt policy now attempts =
   case recentFailureTimestamps of
     [] -> LoginPermitted
     _ ->
       if fromIntegral (length recentFailureTimestamps) < loginProtectionMaximumFailures policy
         then LoginPermitted
-        else
-          let lockoutEndsAt = maximum recentFailureTimestamps + loginProtectionLockoutNanoseconds policy
-           in if now < lockoutEndsAt
-                then LoginThrottledUntil lockoutEndsAt
-                else LoginPermitted
+        else case addUnixTimeNanoseconds (maximum recentFailureTimestamps) (loginProtectionLockoutNanoseconds policy) of
+          Nothing -> LoginThrottledUntil (maximum recentFailureTimestamps)
+          Just lockoutEndsAt ->
+            if now < lockoutEndsAt
+              then LoginThrottledUntil lockoutEndsAt
+              else LoginPermitted
   where
     recentFailureTimestamps =
       [ loginAttemptAtNanoseconds attempt
       | attempt <- attempts,
         not (loginAttemptSucceeded attempt),
         now >= loginAttemptAtNanoseconds attempt,
-        now - loginAttemptAtNanoseconds attempt < loginProtectionWindowNanoseconds policy
+        unixTimeNanosecondsValue now - unixTimeNanosecondsValue (loginAttemptAtNanoseconds attempt) < loginProtectionWindowNanoseconds policy
       ]

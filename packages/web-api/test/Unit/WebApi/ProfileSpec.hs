@@ -5,14 +5,18 @@
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Word (Word64)
+import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb qualified
 import HarchWeb.Account (AccountId, mkAccountId)
 import HarchWeb.Email (EmailAddress, mkEmailAddress)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds)
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
+import Network.Wai qualified as Wai
+import TestCore.Wai (waiRequest)
+import Unit.WebApi.TestSupport (pureApplication)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStoreError (..))
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
@@ -38,6 +42,20 @@ spec =
       assertProfileResult (loadProfile (sessionStore (Left AccountSessionStoreUnavailable)) (profileStore (Right (Just verifiedProfile))) 150 (Just testSessionId)) isUnavailableSessionFailure
       assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Left (AccountStoreUnavailable "database unavailable"))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreUnavailable "database unavailable"))
       assertProfileResult (loadProfile (sessionStore (Right (Just activeSession))) (profileStore (Right (Just mismatchedProfile))) 150 (Just testSessionId)) (isAccountFailure (AccountStoreCorruptData "account profile lookup returned a different account id"))
+
+    it "rejects a replayed raw legacy session cookie after a clock-origin reset" $ do
+      let replayedCookieValue = Text.replicate 43 "a"
+          rawReplayRequest =
+            (waiRequest ["profile"])
+              { Wai.requestHeaders =
+                  [("Cookie", TextEncoding.encodeUtf8 ("__Host-harch-session=" <> replayedCookieValue))]
+              }
+          rebootedUnixEpoch = unixTimeNanoseconds 1
+      let replayContext = HarchWeb.requestContextFromRequest pureApplication rawReplayRequest defaultRequestContext
+      replayContext `shouldBe` defaultRequestContext {WebApi.Route.requestSessionId = mkSessionId replayedCookieValue}
+      assertProfileResult
+        (loadProfile (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile))) rebootedUnixEpoch (WebApi.Route.requestSessionId replayContext))
+        isUnauthenticated
 
     it "renders signed-out, pending, authenticated, and unavailable profiles as SSR pages" $ do
       signedOutResponse <- profileResponse (workflowFor (sessionStore (Right Nothing)) (profileStore (Right (Just verifiedProfile)))) defaultRequestContext
@@ -202,7 +220,7 @@ activeSession = opaqueSession 200
 expiredSession :: OpaqueSession AccountId
 expiredSession = opaqueSession 150
 
-opaqueSession :: Word64 -> OpaqueSession AccountId
+opaqueSession :: UnixTimeNanoseconds -> OpaqueSession AccountId
 opaqueSession expiresAtNanoseconds =
   case mkCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_" of
     Just csrfToken ->

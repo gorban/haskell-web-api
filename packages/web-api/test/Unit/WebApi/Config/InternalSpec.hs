@@ -1490,7 +1490,7 @@ spec = do
         accountWorkflowProfileStore workflow `seq` pure ()
         accountWorkflowTotpEncryptionKey workflow `seq` pure ()
         accountWorkflowClock workflow >>= (`shouldSatisfy` (> 0))
-        accountWorkflowTotpClock workflow >>= (`shouldSatisfy` (> 0))
+        accountWorkflowTotpClock workflow 100000000000 `shouldSatisfy` (> 0)
         case Email.mkEmailMessage (Email.EmailMessageInput recipient "Verification test" "Hello") of
           Nothing -> expectationFailure "expected a valid SMTP test message"
           Just message -> Email.deliverEmail (accountWorkflowEmailDelivery workflow) message

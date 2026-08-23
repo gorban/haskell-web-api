@@ -9,6 +9,7 @@ import Data.List.NonEmpty (NonEmpty)
 import Data.Text (Text)
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
+import HarchWeb.Time (UnixTimeNanoseconds)
 
 data MfaStoreError
   = MfaStoreUnavailable Text
@@ -17,7 +18,7 @@ data MfaStoreError
 
 data StoredTotpEnrollment = StoredTotpEnrollment
   { storedTotpEncryptedSecret :: Text,
-    storedTotpConfirmedAtNanoseconds :: Maybe Word64,
+    storedTotpConfirmedAtNanoseconds :: Maybe UnixTimeNanoseconds,
     -- | The highest TOTP counter ('HarchWeb.Totp.validateTotpCodeCounter')
     -- already accepted for this account, or 'Nothing' if none has been.
     -- Login must reject a counter at or below this value: without it, an
@@ -27,11 +28,11 @@ data StoredTotpEnrollment = StoredTotpEnrollment
   deriving (Eq)
 
 data MfaStore = MfaStore
-  { saveUnconfirmedTotpEnrollment :: AccountId -> Text -> Word64 -> IO (Either MfaStoreError Bool),
+  { saveUnconfirmedTotpEnrollment :: AccountId -> Text -> UnixTimeNanoseconds -> IO (Either MfaStoreError Bool),
     loadTotpEnrollment :: AccountId -> IO (Either MfaStoreError (Maybe StoredTotpEnrollment)),
-    confirmTotpEnrollment :: AccountId -> NonEmpty Text -> Word64 -> IO (Either MfaStoreError Bool),
+    confirmTotpEnrollment :: AccountId -> NonEmpty Text -> UnixTimeNanoseconds -> IO (Either MfaStoreError Bool),
     loadUnusedRecoveryCodeHashes :: AccountId -> IO (Either MfaStoreError [Text]),
-    consumeRecoveryCodeHash :: AccountId -> Text -> Word64 -> IO (Either MfaStoreError Bool),
+    consumeRecoveryCodeHash :: AccountId -> Text -> UnixTimeNanoseconds -> IO (Either MfaStoreError Bool),
     -- | Atomically records that this TOTP counter has now been used,
     -- succeeding only if the stored counter is still lower (or unset) —
     -- the same conditional-update shape as 'consumeRecoveryCodeHash', so a

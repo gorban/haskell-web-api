@@ -4,8 +4,8 @@
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Word (Word64)
 import HarchWeb.Session (OpaqueSession (..), sessionCookieName, sessionCookieNameText)
+import HarchWeb.Time (UnixTimeNanoseconds)
 import Unit.WebApi.TestSupport (accountId, shouldReturnEqual)
 import WebApi.Session (MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..), issueMfaEnrollmentSession, mfaEnrollmentSessionCookiePolicy)
 
@@ -45,4 +45,4 @@ spec = do
               }
       issueMfaEnrollmentSession (store (Left MfaEnrollmentSessionStoreUnavailable)) accountId 100 `shouldReturnEqual` Left MfaEnrollmentSessionStoreUnavailable
       issueMfaEnrollmentSession (store (Right False)) accountId 100 `shouldReturnEqual` Left MfaEnrollmentSessionStoreCorruptData
-      issueMfaEnrollmentSession (store (Right True)) accountId (maxBound :: Word64) `shouldReturnEqual` Left MfaEnrollmentSessionStoreCorruptData
+      issueMfaEnrollmentSession (store (Right True)) accountId (maxBound :: UnixTimeNanoseconds) `shouldReturnEqual` Left MfaEnrollmentSessionStoreCorruptData

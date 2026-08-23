@@ -28,6 +28,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word16, Word32, Word64, Word8)
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
+import HarchWeb.Time (UnixTimeSeconds, unixTimeSecondsValue)
 
 newtype TotpSecret = TotpSecret ByteString.ByteString
   deriving (Eq)
@@ -57,8 +58,8 @@ renderTotpSecret (TotpSecret secret) = encodeBase32 secret
 totpCodeText :: TotpCode -> Text
 totpCodeText (TotpCode code) = code
 
-totpCode :: Word64 -> TotpSecret -> TotpCode
-totpCode nowSeconds (TotpSecret secret) = totpCodeForCounter secret (nowSeconds `div` 30)
+totpCode :: UnixTimeSeconds -> TotpSecret -> TotpCode
+totpCode nowSeconds (TotpSecret secret) = totpCodeForCounter secret (unixTimeSecondsValue nowSeconds `div` 30)
 
 -- | Accepts a code from the current TOTP period and up to the requested
 -- number of adjacent periods on either side. The caller chooses the bounded
@@ -67,7 +68,7 @@ totpCode nowSeconds (TotpSecret secret) = totpCodeForCounter secret (nowSeconds 
 -- window; a caller authenticating a login should use
 -- 'validateTotpCodeCounter' instead and reject a counter it has already
 -- accepted.
-validateTotpCode :: Word64 -> Word8 -> TotpSecret -> TotpCode -> Bool
+validateTotpCode :: UnixTimeSeconds -> Word8 -> TotpSecret -> TotpCode -> Bool
 validateTotpCode nowSeconds maxSkewPeriods secret suppliedCode =
   isJust (validateTotpCodeCounter nowSeconds maxSkewPeriods secret suppliedCode)
 
@@ -77,9 +78,9 @@ validateTotpCode nowSeconds maxSkewPeriods secret suppliedCode =
 -- counter at or below that value closes the replay window a bare boolean
 -- result cannot: without it, an observed code stays valid for the rest of
 -- its skew window against every future request.
-validateTotpCodeCounter :: Word64 -> Word8 -> TotpSecret -> TotpCode -> Maybe Word64
+validateTotpCodeCounter :: UnixTimeSeconds -> Word8 -> TotpSecret -> TotpCode -> Maybe Word64
 validateTotpCodeCounter nowSeconds maxSkewPeriods secret suppliedCode =
-  find (matchesCounter secret suppliedCode) (windowCounters (nowSeconds `div` 30) maxSkewPeriods)
+  find (matchesCounter secret suppliedCode) (windowCounters (unixTimeSecondsValue nowSeconds `div` 30) maxSkewPeriods)
 
 matchesCounter :: TotpSecret -> TotpCode -> Word64 -> Bool
 matchesCounter (TotpSecret secret) suppliedCode counter =

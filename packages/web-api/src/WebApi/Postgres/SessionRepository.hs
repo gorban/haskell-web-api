@@ -18,6 +18,7 @@ import HarchWeb.Session
     mkCsrfToken,
     sessionIdText,
   )
+import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
 import WebApi.Postgres.Pool (PostgresPool)
 import WebApi.Postgres.Runtime (runPooledParameterizedRowsQuery)
@@ -49,8 +50,8 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery source =
             [ sessionIdText (sessionId session),
               accountIdText (sessionPrincipal session),
               csrfTokenText (sessionCsrfToken session),
-              Text.pack (show (sessionIssuedAtNanoseconds session)),
-              Text.pack (show (sessionExpiresAtNanoseconds session))
+              Text.pack (show (unixTimeNanosecondsValue (sessionIssuedAtNanoseconds session))),
+              Text.pack (show (unixTimeNanosecondsValue (sessionExpiresAtNanoseconds session)))
             ]
         )
         (decodeMatchingSessionId (sessionIdText (sessionId session)))
@@ -62,7 +63,7 @@ buildRuntimePostgresAccountSessionStoreWithRunner runQuery source =
 
     invalidateSession sessionToken invalidatedAtNanoseconds =
       runSessionStoreQuery
-        (runQuery source invalidateAccountSessionQuery [sessionIdText sessionToken, Text.pack (show invalidatedAtNanoseconds)])
+        (runQuery source invalidateAccountSessionQuery [sessionIdText sessionToken, Text.pack (show (unixTimeNanosecondsValue invalidatedAtNanoseconds))])
         (decodeMatchingSessionId (sessionIdText sessionToken))
 
 runSessionStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either AccountSessionStoreError value) -> IO (Either AccountSessionStoreError value)
@@ -92,8 +93,8 @@ decodeStoredSession sessionToken rows =
                   { sessionId = sessionToken,
                     sessionPrincipal = accountId,
                     sessionCsrfToken = csrfToken,
-                    sessionIssuedAtNanoseconds = issuedAt,
-                    sessionExpiresAtNanoseconds = expiresAt
+                    sessionIssuedAtNanoseconds = unixTimeNanoseconds issuedAt,
+                    sessionExpiresAtNanoseconds = unixTimeNanoseconds expiresAt
                   }
             )
         _ -> Left AccountSessionStoreCorruptData

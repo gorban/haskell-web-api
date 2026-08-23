@@ -9,6 +9,7 @@ where
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.LoginProtection (LoginAttempt (..))
+import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
 import WebApi.Login
   ( LoginAttemptStore (..),
@@ -36,13 +37,13 @@ buildRuntimePostgresLoginAttemptStoreWithRunner runQuery source =
         ( runQuery
             source
             recordLoginAttemptQuery
-            [key, Text.pack (show (loginAttemptAtNanoseconds attempt)), succeededText (loginAttemptSucceeded attempt)]
+            [key, Text.pack (show (unixTimeNanosecondsValue (loginAttemptAtNanoseconds attempt))), succeededText (loginAttemptSucceeded attempt)]
         )
         (const (Right ()))
 
     loadRecent key sinceNanoseconds =
       runLoginAttemptStoreQuery
-        (runQuery source loadRecentLoginAttemptsQuery [key, Text.pack (show sinceNanoseconds)])
+        (runQuery source loadRecentLoginAttemptsQuery [key, Text.pack (show (unixTimeNanosecondsValue sinceNanoseconds))])
         decodeLoginAttempts
 
 runLoginAttemptStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either LoginAttemptStoreError value) -> IO (Either LoginAttemptStoreError value)
@@ -60,7 +61,7 @@ decodeLoginAttempt :: [Text] -> Maybe LoginAttempt
 decodeLoginAttempt row =
   case row of
     [attemptedAtValue, succeededValue] ->
-      LoginAttempt
+      LoginAttempt . unixTimeNanoseconds
         <$> readMaybe (Text.unpack attemptedAtValue)
         <*> decodeSucceeded succeededValue
     _ -> Nothing

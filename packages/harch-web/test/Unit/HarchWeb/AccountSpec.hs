@@ -61,11 +61,11 @@ spec = do
                  accepted /= EmailVerificationRejected `shouldBe` True,
                  show accountId `shouldBe` "AccountId \"account_01\"",
                  show digest `shouldBe` "EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\"",
-                 show stored `shouldBe` "StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}",
+                 show stored `shouldBe` "StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = UnixTimeNanoseconds 500}",
                  show accepted `shouldBe` "EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")",
                  show [accountId] `shouldBe` "[AccountId \"account_01\"]",
                  show [digest] `shouldBe` "[EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\"]",
-                 show [stored] `shouldBe` "[StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = 500}]",
+                 show [stored] `shouldBe` "[StoredEmailVerification {storedVerificationAccountId = AccountId \"account_01\", storedVerificationEmail = EmailAddress \"person@example.test\", storedVerificationTokenDigest = EmailVerificationTokenDigest \"ZtNPunH49FD35FWYhT5Tv8I7vRKQJ8uxMaL0_9eHjNA\", storedVerificationExpiresAtNanoseconds = UnixTimeNanoseconds 500}]",
                  show [accepted] `shouldBe` "[EmailVerificationAccepted (AccountId \"account_01\") (EmailAddress \"person@example.test\")]"
                ]
         )

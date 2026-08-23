@@ -20,8 +20,6 @@ import Data.ByteString qualified as ByteString
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.IO qualified as TextIO
-import Data.Time.Clock.POSIX (getPOSIXTime)
-import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
 import HarchWeb.Account qualified as HarchAccount
 import HarchWeb.Action (decodeAction)
@@ -29,6 +27,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.Site qualified as Site
+import HarchWeb.Time qualified as HarchWebTime
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
@@ -213,7 +212,7 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
     { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
       accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
       accountWorkflowPasswordHasher = Password.hashPassword,
-      accountWorkflowClock = getMonotonicTimeNSec,
+      accountWorkflowClock = HarchWebTime.currentUnixTimeNanoseconds,
       accountWorkflowMfaStore = buildRuntimePostgresMfaStore pool,
       accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore pool,
       accountWorkflowLoginAttemptStore = buildRuntimePostgresLoginAttemptStore pool,
@@ -221,7 +220,7 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
       accountWorkflowMfaEnrollmentSessionStore = buildRuntimePostgresMfaEnrollmentSessionStore pool,
       accountWorkflowProfileStore = buildRuntimePostgresAccountProfileStore pool,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey environmentConfig,
-      accountWorkflowTotpClock = floor <$> getPOSIXTime,
+      accountWorkflowTotpClock = HarchWebTime.unixTimeSecondsFromNanoseconds,
       accountWorkflowVerificationUrl = runtimeVerificationUrl (publicBaseUrl environmentConfig)
     }
 
@@ -356,7 +355,7 @@ unavailableAccountWorkflow =
     { accountWorkflowStore = unavailableAccountStore,
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
       accountWorkflowPasswordHasher = Password.hashPassword,
-      accountWorkflowClock = pure 0,
+      accountWorkflowClock = pure (HarchWebTime.unixTimeNanoseconds 0),
       accountWorkflowMfaStore = unavailableMfaStore,
       accountWorkflowCredentialStore = unavailableAccountCredentialStore,
       accountWorkflowLoginAttemptStore = unavailableLoginAttemptStore,
@@ -364,7 +363,7 @@ unavailableAccountWorkflow =
       accountWorkflowMfaEnrollmentSessionStore = unavailableMfaEnrollmentSessionStore,
       accountWorkflowProfileStore = unavailableAccountProfileStore,
       accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
-      accountWorkflowTotpClock = pure 0,
+      accountWorkflowTotpClock = const 0,
       accountWorkflowVerificationUrl = \_ _ -> "https://invalid.example.test/verify"
     }
 

@@ -87,6 +87,7 @@ library
     HarchWeb.Session
     HarchWeb.Site
     HarchWeb.StaticAssets
+    HarchWeb.Time
     HarchWeb.Totp
     HarchWeb.Username
 

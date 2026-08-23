@@ -16,6 +16,7 @@ import HarchWeb.LoginProtection (LoginAttempt (..), defaultLoginProtectionPolicy
 import HarchWeb.Password (PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
+import HarchWeb.Time (unixTimeNanoseconds)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import HarchWeb.Username (mkUsername)
 import Unit.WebApi.TestSupport (accountId, emailAddress, required, shouldReturnEqual)
@@ -218,7 +219,7 @@ spec = do
 
     it "throttles a password step and an already-verified recovery-code step alike, without touching the credential, MFA, or attempt-recording stores" $ do
       let recentFailures = [LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
-          expectedLockoutEnd = 450 + loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy
+          expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
           throttledStoreFor matchingKey =
             LoginThrottleContext
               { loginThrottleStore =
@@ -353,7 +354,7 @@ spec = do
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       readIORef sinceReference `shouldReturn` Just 0
-      let largeNow = loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500
+      let largeNow = unixTimeNanoseconds (loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500)
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt largeNow) emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       readIORef sinceReference `shouldReturn` Just 500

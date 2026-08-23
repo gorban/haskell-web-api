@@ -28,7 +28,7 @@ spec = do
                  evaluateLoginAttempt policy 100 [LoginAttempt 99 True, LoginAttempt 0 False] `shouldBe` LoginPermitted,
                  evaluateLoginAttempt policy 100 [LoginAttempt 101 False] `shouldBe` LoginPermitted,
                  LoginAttempt 1 False /= LoginAttempt 1 True `shouldBe` True,
-                 show (LoginAttempt 1 False) `shouldBe` "LoginAttempt {loginAttemptAtNanoseconds = 1, loginAttemptSucceeded = False}",
+                 show (LoginAttempt 1 False) `shouldBe` "LoginAttempt {loginAttemptAtNanoseconds = UnixTimeNanoseconds 1, loginAttemptSucceeded = False}",
                  show [LoginAttempt 1 False] `shouldContain` "LoginAttempt"
                ]
         )
@@ -38,9 +38,10 @@ spec = do
         ( (evaluateLoginAttempt policy 100 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginThrottledUntil 140)
             :| [ evaluateLoginAttempt policy 141 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted,
                  evaluateLoginAttempt policy 161 [LoginAttempt 60 False, LoginAttempt 90 False] `shouldBe` LoginPermitted,
+                 evaluateLoginAttempt policy maxBound [LoginAttempt maxBound False, LoginAttempt maxBound False] `shouldBe` LoginThrottledUntil maxBound,
                  LoginPermitted /= LoginThrottledUntil 140 `shouldBe` True,
-                 show (LoginThrottledUntil 140) `shouldBe` "LoginThrottledUntil 140",
-                 show [LoginPermitted, LoginThrottledUntil 140] `shouldBe` "[LoginPermitted,LoginThrottledUntil 140]"
+                 show (LoginThrottledUntil 140) `shouldBe` "LoginThrottledUntil (UnixTimeNanoseconds 140)",
+                 show [LoginPermitted, LoginThrottledUntil 140] `shouldBe` "[LoginPermitted,LoginThrottledUntil (UnixTimeNanoseconds 140)]"
                ]
         )
 
@@ -68,5 +69,5 @@ spec = do
       recordedEvents
         `shouldBe` [AuthenticationSucceeded "account@example.test", AuthenticationThrottled "account@example.test" 140, AuthenticationFailed "account@example.test"]
       AuthenticationSucceeded "account@example.test" /= AuthenticationFailed "account@example.test" `shouldBe` True
-      show (AuthenticationThrottled "account@example.test" 140) `shouldBe` "AuthenticationThrottled \"account@example.test\" 140"
+      show (AuthenticationThrottled "account@example.test" 140) `shouldBe` "AuthenticationThrottled \"account@example.test\" (UnixTimeNanoseconds 140)"
       show [AuthenticationSucceeded "account@example.test"] `shouldBe` "[AuthenticationSucceeded \"account@example.test\"]"

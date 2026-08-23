@@ -13,6 +13,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb.Account (AccountId, accountIdText)
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
 import WebApi.Mfa
   ( MfaStore (..),
@@ -42,7 +43,7 @@ buildRuntimePostgresMfaStoreWithRunner runQuery source =
   where
     saveEnrollment accountId encryptedSecret now =
       runMfaStoreQuery
-        (runQuery source saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show now)])
+        (runQuery source saveUnconfirmedTotpEnrollmentQuery [accountIdText accountId, encryptedSecret, Text.pack (show (unixTimeNanosecondsValue now))])
         (decodeMatchingAccount "unexpected TOTP enrollment result: " accountId)
 
     loadEnrollment accountId =
@@ -52,7 +53,7 @@ buildRuntimePostgresMfaStoreWithRunner runQuery source =
 
     confirmEnrollment accountId recoveryCodeHashes now =
       runMfaStoreQuery
-        (runQuery source (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show now) : NonEmpty.toList recoveryCodeHashes))
+        (runQuery source (confirmTotpEnrollmentQuery recoveryCodeHashes) (accountIdText accountId : Text.pack (show (unixTimeNanosecondsValue now)) : NonEmpty.toList recoveryCodeHashes))
         (decodeMatchingAccount "unexpected TOTP confirmation result: " accountId)
 
     loadRecoveryCodeHashes accountId =
@@ -62,7 +63,7 @@ buildRuntimePostgresMfaStoreWithRunner runQuery source =
 
     consumeRecoveryCode accountId recoveryCodeHash now =
       runMfaStoreQuery
-        (runQuery source consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show now)])
+        (runQuery source consumeRecoveryCodeHashQuery [accountIdText accountId, recoveryCodeHash, Text.pack (show (unixTimeNanosecondsValue now))])
         (decodeMatchingAccount "unexpected recovery-code consumption result: " accountId)
 
     markCodeUsed accountId counter =
@@ -97,7 +98,7 @@ decodeTotpEnrollment rows =
     [[encryptedSecret, confirmedAtValue, lastUsedCounterValue]] ->
       Just
         <$> ( StoredTotpEnrollment encryptedSecret
-                <$> decodeOptionalWord64 "confirmation timestamp" confirmedAtValue
+                <$> decodeOptionalUnixTimeNanoseconds "confirmation timestamp" confirmedAtValue
                 <*> (decodeOptionalWord64 $! "last-used counter") lastUsedCounterValue
             )
     _ -> Left (MfaStoreCorruptData ("unexpected TOTP enrollment lookup result: " <> Text.pack (show rows)))
@@ -109,6 +110,10 @@ decodeOptionalWord64 label value =
     (Left (MfaStoreCorruptData ("TOTP enrollment has an invalid " <> label)))
     (Right . Just)
     (readMaybe (Text.unpack value))
+
+decodeOptionalUnixTimeNanoseconds :: Text -> Text -> Either MfaStoreError (Maybe UnixTimeNanoseconds)
+decodeOptionalUnixTimeNanoseconds label value =
+  fmap unixTimeNanoseconds <$> decodeOptionalWord64 label value
 
 decodeRecoveryCodeHashes :: [[Text]] -> Either MfaStoreError [Text]
 decodeRecoveryCodeHashes rows =

@@ -48,6 +48,7 @@ import HarchWeb.Password
     PasswordHash,
     PasswordHashingPolicy,
   )
+import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds)
 import HarchWeb.Username (Username)
 
 data AccountStoreError
@@ -76,14 +77,14 @@ data PendingAccount = PendingAccount
     pendingAccountDisplayName :: Maybe Text,
     pendingAccountPasswordHash :: PasswordHash,
     pendingAccountVerification :: StoredEmailVerification,
-    pendingAccountCreatedAtNanoseconds :: Word64
+    pendingAccountCreatedAtNanoseconds :: UnixTimeNanoseconds
   }
 
 data AccountStore = AccountStore
   { createPendingAccount :: PendingAccount -> IO (Either AccountStoreError CreatePendingAccountOutcome),
     replaceEmailVerification :: StoredEmailVerification -> IO (Either AccountStoreError Bool),
     findEmailVerification :: EmailVerificationTokenDigest -> IO (Either AccountStoreError (Maybe StoredEmailVerification)),
-    consumeEmailVerification :: EmailVerificationTokenDigest -> Word64 -> IO (Either AccountStoreError (Maybe AccountId))
+    consumeEmailVerification :: EmailVerificationTokenDigest -> UnixTimeNanoseconds -> IO (Either AccountStoreError (Maybe AccountId))
   }
 
 -- | Which of the two independent unique constraints a pending-account
@@ -136,7 +137,7 @@ data RegistrationEnvironment = RegistrationEnvironment
     registrationDelivery :: EmailDelivery,
     registrationLocale :: EmailLocale,
     registrationVerificationUrl :: EmailVerificationToken -> Text,
-    registrationNow :: Word64,
+    registrationNow :: UnixTimeNanoseconds,
     registrationLifetime :: Word64
   }
 
@@ -177,7 +178,7 @@ registerAccount environment request =
     emailAddress = registrationEmail request
     password = registrationPassword request
 
-confirmEmailVerificationAt :: AccountStore -> Word64 -> EmailVerificationToken -> IO (Either AccountStoreError EmailVerificationValidation)
+confirmEmailVerificationAt :: AccountStore -> UnixTimeNanoseconds -> EmailVerificationToken -> IO (Either AccountStoreError EmailVerificationValidation)
 confirmEmailVerificationAt accountStore now token =
   runExceptT $ do
     maybeStoredVerification <- liftAccountStore id (findEmailVerification accountStore (emailVerificationTokenDigest token))
@@ -199,7 +200,7 @@ resendEmailVerificationAt ::
   EmailDelivery ->
   EmailLocale ->
   (EmailVerificationToken -> Text) ->
-  Word64 ->
+  UnixTimeNanoseconds ->
   Word64 ->
   AccountProfile ->
   IO (Either ResendVerificationError ())
@@ -242,7 +243,5 @@ deliverVerificationEmail toError emailDelivery locale emailAddress renderVerific
   either (throwError . toError . Text.pack . displayException) pure
     =<< liftIO (try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ()))
 
-addNanoseconds :: Word64 -> Word64 -> Maybe Word64
-addNanoseconds now duration =
-  let result = now + duration
-   in if result < now then Nothing else Just result
+addNanoseconds :: UnixTimeNanoseconds -> Word64 -> Maybe UnixTimeNanoseconds
+addNanoseconds = addUnixTimeNanoseconds

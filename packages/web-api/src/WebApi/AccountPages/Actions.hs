@@ -18,9 +18,9 @@ module WebApi.AccountPages.Actions
   )
 where
 
-import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Session qualified as Session
+import HarchWeb.Time (UnixTimeNanoseconds)
 import WebApi.AccountPages.Actions.Common
   ( attachClientActionFailure,
   )
@@ -85,7 +85,7 @@ authorizeAccountActionCsrf workflow actionRequest suppliedToken =
       now <- accountWorkflowClock workflow
       matchesCsrfToken suppliedToken <$> mfaEnrollmentSessionCsrfToken workflow now (requestMfaEnrollmentSessionId requestContext)
 
-accountSessionCsrfToken :: AccountWorkflow -> Word64 -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
+accountSessionCsrfToken :: AccountWorkflow -> UnixTimeNanoseconds -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
 accountSessionCsrfToken workflow now maybeSessionId =
   case maybeSessionId of
     Nothing -> pure Nothing
@@ -93,7 +93,7 @@ accountSessionCsrfToken workflow now maybeSessionId =
       loaded <- loadAccountSession (accountWorkflowSessionStore workflow) sessionId
       pure (storedSessionCsrfToken now loaded)
 
-mfaEnrollmentSessionCsrfToken :: AccountWorkflow -> Word64 -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
+mfaEnrollmentSessionCsrfToken :: AccountWorkflow -> UnixTimeNanoseconds -> Maybe Session.SessionId -> IO (Maybe Session.CsrfToken)
 mfaEnrollmentSessionCsrfToken workflow now maybeSessionId =
   case maybeSessionId of
     Nothing -> pure Nothing
@@ -101,7 +101,7 @@ mfaEnrollmentSessionCsrfToken workflow now maybeSessionId =
       loaded <- loadMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) sessionId
       pure (storedSessionCsrfToken now loaded)
 
-storedSessionCsrfToken :: Word64 -> Either storeError (Maybe (Session.OpaqueSession principal)) -> Maybe Session.CsrfToken
+storedSessionCsrfToken :: UnixTimeNanoseconds -> Either storeError (Maybe (Session.OpaqueSession principal)) -> Maybe Session.CsrfToken
 storedSessionCsrfToken now loaded =
   case loaded of
     Right sessionValue ->

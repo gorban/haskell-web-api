@@ -184,6 +184,10 @@ migrations =
   [ PostgresMigration
       { postgresMigrationVersion = "initial-schema",
         postgresMigrationStatements = migrationStatementsFor
+      },
+    PostgresMigration
+      { postgresMigrationVersion = "epoch-security-time-v1",
+        postgresMigrationStatements = epochSecurityTimeMigrationStatements
       }
   ]
 
@@ -248,6 +252,28 @@ migrationStatementsFor =
         "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "login_attempts" <> " (attempt_key TEXT NOT NULL, attempted_at_nanoseconds BIGINT NOT NULL, succeeded TEXT NOT NULL);",
         "CREATE INDEX IF NOT EXISTS login_attempts_key_time ON " <> qualifiedTableName "login_attempts" <> " (attempt_key, attempted_at_nanoseconds);"
       ]
+
+-- | Old releases persisted a reboot-relative monotonic reading in every one
+-- of these columns.  Its origin cannot be recovered as a Unix epoch, so this
+-- migration deliberately revokes bearer credentials and verification tokens,
+-- drops stale throttle history, and assigns the one transaction's epoch time
+-- to non-authorizing historical markers whose state must remain meaningful
+-- (verified, confirmed, or used).  It never pretends that the old numbers
+-- themselves were epoch timestamps; see the PR-S1 decision in
+-- @docs/design-guidance.md@.
+epochSecurityTimeMigrationStatements :: [Text]
+epochSecurityTimeMigrationStatements =
+  [ "DELETE FROM web_api.account_sessions;",
+    "DELETE FROM web_api.mfa_enrollment_sessions;",
+    "DELETE FROM web_api.email_verifications;",
+    "DELETE FROM web_api.login_attempts;",
+    "UPDATE web_api.accounts SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", email_verified_at_nanoseconds = CASE WHEN email_verified_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;",
+    "UPDATE web_api.account_totp SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", confirmed_at_nanoseconds = CASE WHEN confirmed_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;",
+    "UPDATE web_api.account_recovery_codes SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", used_at_nanoseconds = CASE WHEN used_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;"
+  ]
+
+migrationEpochNanoseconds :: Text
+migrationEpochNanoseconds = "floor(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000000000)::BIGINT"
 
 -- | Ownership and runtime-role grants depend on the currently configured
 -- identities, unlike the durable schema history above.  Reconcile them on

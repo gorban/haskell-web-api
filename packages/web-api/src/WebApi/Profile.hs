@@ -9,9 +9,9 @@ where
 
 import Control.Monad.Except (ExceptT, runExceptT, throwError)
 import Core.Control.Error (liftEitherWith)
-import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.Session (OpaqueSession (..), SessionId)
+import HarchWeb.Time (UnixTimeNanoseconds)
 import WebApi.Account
   ( AccountProfile (..),
     AccountProfileStore (..),
@@ -35,7 +35,7 @@ data ProfileLoadError
   = ProfileSessionStoreError AccountSessionStoreError
   | ProfileAccountStoreError AccountStoreError
 
-loadProfile :: AccountSessionStore -> AccountProfileStore -> Word64 -> Maybe SessionId -> IO (Either ProfileLoadError ProfileState)
+loadProfile :: AccountSessionStore -> AccountProfileStore -> UnixTimeNanoseconds -> Maybe SessionId -> IO (Either ProfileLoadError ProfileState)
 loadProfile sessionStore profileStore nowNanoseconds maybeSessionId =
   runExceptT (maybe (pure ProfileUnauthenticated) loadProfileForSessionId maybeSessionId)
   where

@@ -25,9 +25,9 @@ import Data.Char (isAscii, isAsciiLower, isAsciiUpper, isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Word (Word64)
 import HarchWeb.Email (EmailAddress)
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
+import HarchWeb.Time (UnixTimeNanoseconds)
 
 newtype AccountId = AccountId Text
   deriving (Eq, Show)
@@ -41,7 +41,7 @@ data StoredEmailVerification = StoredEmailVerification
   { storedVerificationAccountId :: AccountId,
     storedVerificationEmail :: EmailAddress,
     storedVerificationTokenDigest :: EmailVerificationTokenDigest,
-    storedVerificationExpiresAtNanoseconds :: Word64
+    storedVerificationExpiresAtNanoseconds :: UnixTimeNanoseconds
   }
   deriving (Eq, Show)
 
@@ -89,7 +89,7 @@ emailVerificationTokenDigest token =
 emailVerificationTokenDigestText :: EmailVerificationTokenDigest -> Text
 emailVerificationTokenDigestText (EmailVerificationTokenDigest value) = value
 
-mkStoredEmailVerification :: AccountId -> EmailAddress -> Word64 -> EmailVerificationToken -> StoredEmailVerification
+mkStoredEmailVerification :: AccountId -> EmailAddress -> UnixTimeNanoseconds -> EmailVerificationToken -> StoredEmailVerification
 mkStoredEmailVerification accountId emailAddress expiresAt token =
   StoredEmailVerification
     { storedVerificationAccountId = accountId,
@@ -98,7 +98,7 @@ mkStoredEmailVerification accountId emailAddress expiresAt token =
       storedVerificationExpiresAtNanoseconds = expiresAt
     }
 
-validateEmailVerificationToken :: Word64 -> EmailVerificationToken -> StoredEmailVerification -> EmailVerificationValidation
+validateEmailVerificationToken :: UnixTimeNanoseconds -> EmailVerificationToken -> StoredEmailVerification -> EmailVerificationValidation
 validateEmailVerificationToken now token storedVerification =
   case now >= storedVerificationExpiresAtNanoseconds storedVerification of
     True -> EmailVerificationExpired

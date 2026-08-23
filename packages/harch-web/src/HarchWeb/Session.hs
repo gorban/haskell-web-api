@@ -34,6 +34,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word64)
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
+import HarchWeb.Time (UnixTimeNanoseconds)
 
 newtype SessionId = SessionId Text
   deriving (Eq)
@@ -64,8 +65,8 @@ data OpaqueSession principal = OpaqueSession
   { sessionId :: SessionId,
     sessionPrincipal :: principal,
     sessionCsrfToken :: CsrfToken,
-    sessionIssuedAtNanoseconds :: Word64,
-    sessionExpiresAtNanoseconds :: Word64
+    sessionIssuedAtNanoseconds :: UnixTimeNanoseconds,
+    sessionExpiresAtNanoseconds :: UnixTimeNanoseconds
   }
   deriving (Eq, Show)
 
@@ -143,7 +144,7 @@ renderSessionCookie policy sessionToken =
     <> Text.pack (show (sessionCookieMaxAgeSeconds policy))
     <> "; HttpOnly; Secure; SameSite=Strict"
 
-validateSession :: Word64 -> Maybe (OpaqueSession principal) -> SessionValidation principal
+validateSession :: UnixTimeNanoseconds -> Maybe (OpaqueSession principal) -> SessionValidation principal
 validateSession _ Nothing = MissingSession
 validateSession now (Just session) =
   case now >= sessionExpiresAtNanoseconds session of

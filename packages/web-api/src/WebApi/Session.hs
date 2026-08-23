@@ -28,6 +28,7 @@ import HarchWeb.Session
     sessionCookieMaxAgeSeconds,
     sessionCookieName,
   )
+import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds)
 
 data AccountSessionStoreError
   = AccountSessionStoreUnavailable
@@ -40,12 +41,12 @@ data AccountSessionStoreError
 data AccountSessionStore = AccountSessionStore
   { saveAccountSession :: OpaqueSession AccountId -> IO (Either AccountSessionStoreError Bool),
     loadAccountSession :: SessionId -> IO (Either AccountSessionStoreError (Maybe (OpaqueSession AccountId))),
-    invalidateAccountSession :: SessionId -> Word64 -> IO (Either AccountSessionStoreError Bool)
+    invalidateAccountSession :: SessionId -> UnixTimeNanoseconds -> IO (Either AccountSessionStoreError Bool)
   }
 
 -- | Creates and persists a new opaque session. Its bearer and synchronizer
 -- tokens are generated only after the caller has completed authentication.
-issueAccountSession :: AccountSessionStore -> AccountId -> Word64 -> IO (Either AccountSessionStoreError (OpaqueSession AccountId))
+issueAccountSession :: AccountSessionStore -> AccountId -> UnixTimeNanoseconds -> IO (Either AccountSessionStoreError (OpaqueSession AccountId))
 issueAccountSession sessionStore accountId issuedAtNanoseconds =
   runExceptT $ do
     expiresAtNanoseconds <- fromMaybeError AccountSessionStoreCorruptData (boundedExpiration (sessionCookieMaxAgeSeconds defaultSessionCookiePolicy) issuedAtNanoseconds)
@@ -71,7 +72,7 @@ data MfaEnrollmentSessionStoreError
 data MfaEnrollmentSessionStore = MfaEnrollmentSessionStore
   { saveMfaEnrollmentSession :: OpaqueSession AccountId -> IO (Either MfaEnrollmentSessionStoreError Bool),
     loadMfaEnrollmentSession :: SessionId -> IO (Either MfaEnrollmentSessionStoreError (Maybe (OpaqueSession AccountId))),
-    invalidateMfaEnrollmentSession :: SessionId -> Word64 -> IO (Either MfaEnrollmentSessionStoreError Bool)
+    invalidateMfaEnrollmentSession :: SessionId -> UnixTimeNanoseconds -> IO (Either MfaEnrollmentSessionStoreError Bool)
   }
 
 -- | A short-lived, single-purpose cookie policy distinct from
@@ -88,7 +89,7 @@ mfaEnrollmentSessionCookiePolicy =
 -- | Creates and persists a new opaque MFA-enrollment session. Callers must
 -- have already verified the account's email or password before calling this;
 -- issuing this session is itself the authorization grant for enrollment.
-issueMfaEnrollmentSession :: MfaEnrollmentSessionStore -> AccountId -> Word64 -> IO (Either MfaEnrollmentSessionStoreError (OpaqueSession AccountId))
+issueMfaEnrollmentSession :: MfaEnrollmentSessionStore -> AccountId -> UnixTimeNanoseconds -> IO (Either MfaEnrollmentSessionStoreError (OpaqueSession AccountId))
 issueMfaEnrollmentSession sessionStore accountId issuedAtNanoseconds =
   runExceptT $ do
     expiresAtNanoseconds <- fromMaybeError MfaEnrollmentSessionStoreCorruptData (boundedExpiration (sessionCookieMaxAgeSeconds mfaEnrollmentSessionCookiePolicy) issuedAtNanoseconds)
@@ -100,7 +101,7 @@ issueMfaEnrollmentSession sessionStore accountId issuedAtNanoseconds =
 liftSessionStore :: IO (Either AccountSessionStoreError value) -> ExceptT AccountSessionStoreError IO value
 liftSessionStore = liftEitherWith id
 
-generateOpaqueSession :: AccountId -> Word64 -> Word64 -> IO (OpaqueSession AccountId)
+generateOpaqueSession :: AccountId -> UnixTimeNanoseconds -> UnixTimeNanoseconds -> IO (OpaqueSession AccountId)
 generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds = do
   newSessionId <- generateSessionId
   newCsrfToken <- generateCsrfToken
@@ -113,10 +114,7 @@ generateOpaqueSession accountId issuedAtNanoseconds expiresAtNanoseconds = do
         sessionExpiresAtNanoseconds = expiresAtNanoseconds
       }
 
-boundedExpiration :: Word64 -> Word64 -> Maybe Word64
+boundedExpiration :: Word64 -> UnixTimeNanoseconds -> Maybe UnixTimeNanoseconds
 boundedExpiration sessionLifetimeSeconds issuedAtNanoseconds =
   let sessionLifetimeNanoseconds = sessionLifetimeSeconds * 1000000000
-      expiresAtNanoseconds = issuedAtNanoseconds + sessionLifetimeNanoseconds
-   in if expiresAtNanoseconds < issuedAtNanoseconds
-        then Nothing
-        else Just expiresAtNanoseconds
+   in addUnixTimeNanoseconds issuedAtNanoseconds sessionLifetimeNanoseconds

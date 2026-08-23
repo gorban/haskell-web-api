@@ -18,7 +18,6 @@ import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Word (Word64)
 import HarchWeb.Account (AccountId)
 import HarchWeb.Password (PasswordHashingPolicy)
 import HarchWeb.RecoveryCode
@@ -29,6 +28,7 @@ import HarchWeb.RecoveryCode
     recoveryCodeHashText,
   )
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText, encryptSecret)
+import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import HarchWeb.Totp
   ( TotpCode,
     TotpSecret,
@@ -64,7 +64,7 @@ newtype MfaEnrollmentConfirmation = MfaEnrollmentConfirmation
   }
   deriving (Eq)
 
-startMfaEnrollment :: MfaStore -> SecretEncryptionKey -> AccountId -> Word64 -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
+startMfaEnrollment :: MfaStore -> SecretEncryptionKey -> AccountId -> UnixTimeNanoseconds -> IO (Either MfaEnrollmentError MfaEnrollmentStart)
 startMfaEnrollment =
   startMfaEnrollmentWith generateTotpSecret (\encryptionKey plaintext -> maybeCryptoError <$> encryptSecret encryptionKey plaintext)
 
@@ -74,7 +74,7 @@ startMfaEnrollmentWith ::
   MfaStore ->
   SecretEncryptionKey ->
   AccountId ->
-  Word64 ->
+  UnixTimeNanoseconds ->
   IO (Either MfaEnrollmentError MfaEnrollmentStart)
 startMfaEnrollmentWith generateSecret encrypt mfaStore encryptionKey accountId now =
   runExceptT $ do
@@ -110,16 +110,16 @@ data MfaConfirmationEnvironment = MfaConfirmationEnvironment
     mfaConfirmationHashCode :: RecoveryCode -> IO (Maybe RecoveryCodeHash),
     mfaConfirmationStore :: MfaStore,
     mfaConfirmationEncryptionKey :: SecretEncryptionKey,
-    mfaConfirmationNowNanoseconds :: Word64,
-    mfaConfirmationNowSeconds :: Word64
+    mfaConfirmationNowNanoseconds :: UnixTimeNanoseconds,
+    mfaConfirmationNowSeconds :: UnixTimeSeconds
   }
 
 confirmMfaEnrollment ::
   PasswordHashingPolicy ->
   MfaStore ->
   SecretEncryptionKey ->
-  Word64 ->
-  Word64 ->
+  UnixTimeNanoseconds ->
+  UnixTimeSeconds ->
   AccountId ->
   TotpCode ->
   IO (Either MfaEnrollmentError MfaEnrollmentConfirmation)

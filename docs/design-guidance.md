@@ -1608,6 +1608,38 @@ the actual security property BY cared about (malformed key material must fail cl
 silently or crash unexpectedly) more completely than reusing `crypton-x509` alone would have, since
 that library's own decoder shares the same underlying `asn1-encoding` crash risk.
 
+### Follow-up decision — PR-S1: durable security time is Unix epoch time, not process uptime (2026-08-23)
+
+**Decision: extend the existing `AccountWorkflow` clock seam with
+`HarchWeb.Time.UnixTimeNanoseconds`, and derive RFC TOTP Unix seconds from
+that one operation instant; do not introduce a second ambient clock or persist
+a monotonic reading.** The existing workflow clock already owns the values
+that registration, verification, login throttling, ordinary sessions, MFA
+enrollment sessions, and profile authorization share. Its old
+`getMonotonicTimeNSec :: IO Word64` implementation was appropriate only for
+elapsed request/operation duration, but its values were stored in PostgreSQL
+and compared after a restart or on another host, where their boot-relative
+origin has no common meaning. Replacing the clock's value type—not merely its
+runtime implementation—makes passing a monotonic `Word64` to durable state a
+type error. `UnixTimeSeconds` similarly makes the RFC 6238 boundary explicit;
+the workflow derives it purely from the same `UnixTimeNanoseconds` read, so an
+independent read cannot cross a time-step boundary between persistence and
+TOTP validation.
+
+The type is deliberately not used for server/request telemetry: those remain
+monotonic durations, where wall-clock adjustment would be wrong. This extends
+an existing ownership boundary rather than adding a general time service or a
+parallel account-workflow abstraction. The new versioned
+`epoch-security-time-v1` migration cannot translate prior stored values—old
+numbers have no recoverable epoch—so it deletes verification tokens,
+login-attempt history, and both bearer-session tables, including sessions a
+client might replay after its browser's `Max-Age` has elapsed. It assigns the
+migration transaction's Unix epoch only to non-authorizing historical markers
+whose state must be retained (created/verified, TOTP-confirmed, and
+recovery-code-used). Focused coverage proves both a raw copied cookie is still
+rejected after a simulated clock-origin reset and the RFC 6238 SHA-1 vectors at
+known Unix instants.
+
 ### Follow-up decision — BZ: two explicit-props fixes, and a mid-task correction to how coverage gaps get closed (2026-08-21)
 
 **Decision: `HarchWeb.Acme.Challenge`'s certbot webroot list becomes a `CertbotWebrootStore` prop

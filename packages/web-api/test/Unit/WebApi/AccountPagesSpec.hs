@@ -13,7 +13,6 @@ import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import Data.Word (Word64)
 import HarchWeb qualified
 import HarchWeb.Account (AccountId, emailVerificationTokenText, mkAccountId, storedVerificationTokenDigest)
 import HarchWeb.Account qualified as Account
@@ -27,6 +26,7 @@ import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Secret qualified as Secret
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Session qualified as Session
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeSecondsFromNanoseconds)
 import HarchWeb.Totp qualified as Totp
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
@@ -266,7 +266,7 @@ spanishSessionRequestContext = sessionRequestContext {WebApi.Route.requestLocale
 activeSession :: OpaqueSession AccountId
 activeSession = opaqueSession 200
 
-opaqueSession :: Word64 -> OpaqueSession AccountId
+opaqueSession :: UnixTimeNanoseconds -> OpaqueSession AccountId
 opaqueSession expiresAtNanoseconds =
   case mkCsrfToken "abcdefghijklmnopqrstuvwxyz0123456789-_" of
     Just csrfToken ->
@@ -579,7 +579,7 @@ spec = do
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
-                accountWorkflowTotpClock = pure 0,
+                accountWorkflowTotpClock = const 0,
                 accountWorkflowVerificationUrl = \requestContext verificationToken ->
                   "https://account.example.test"
                     <> renderRoutePath
@@ -753,7 +753,7 @@ spec = do
           _ -> expectationFailure "expected unavailable account profiles"
       accountWorkflowPasswordHasher unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpEncryptionKey unavailableAccountWorkflow `seq` pure ()
-      accountWorkflowTotpClock unavailableAccountWorkflow `shouldReturn` 0
+      accountWorkflowTotpClock unavailableAccountWorkflow 0 `shouldBe` 0
       unavailableDelivery <-
         try (Email.deliverEmail (accountWorkflowEmailDelivery unavailableAccountWorkflow) (error "the unavailable delivery must ignore messages")) :: IO (Either IOException ())
       unavailableDelivery `shouldSatisfy` \case Left errorMessage -> "email delivery is not configured" `isInfixOf` displayException errorMessage; Right _ -> False
@@ -804,7 +804,7 @@ spec = do
                 accountWorkflowMfaEnrollmentSessionStore = accountWorkflowMfaEnrollmentSessionStore unavailableAccountWorkflow,
                 accountWorkflowProfileStore = accountWorkflowProfileStore unavailableAccountWorkflow,
                 accountWorkflowTotpEncryptionKey = accountWorkflowTotpEncryptionKey unavailableAccountWorkflow,
-                accountWorkflowTotpClock = pure 0,
+                accountWorkflowTotpClock = const 0,
                 accountWorkflowVerificationUrl = \_ verificationToken -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText verificationToken
               }
           store createResult lookupResult consumeResult =
@@ -922,7 +922,7 @@ spec = do
       -- Advances on every read, so logout's invalidation timestamp is
       -- provably a fresh clock reading rather than one copied from the
       -- session's own issued-at time.
-      clockReference <- newIORef (500 :: Word64)
+      clockReference <- newIORef (123456000000000 :: UnixTimeNanoseconds)
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
           password = Password.mkPassword "correct horse battery staple"
@@ -953,7 +953,7 @@ spec = do
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = atomicModifyIORef' clockReference (\value -> (value + 1, value)),
-                accountWorkflowTotpClock = pure 123456
+                accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
               }
           loginRequest fields = typedAccountActionRequest "POST" "/login" fields defaultRequestContext
           loginFields = [("email", "person@example.test"), ("password", "correct horse battery staple"), ("proof", "totp"), ("code", Totp.totpCodeText (Totp.totpCode 123456 totpSecret))]
@@ -974,7 +974,7 @@ spec = do
           [session] -> pure session
           _ -> expectationFailure "expected exactly one saved session" >> pure (error "unreachable")
       Session.sessionPrincipal loggedInSession `shouldBe` accountId
-      Session.sessionIssuedAtNanoseconds loggedInSession `shouldBe` 500
+      Session.sessionIssuedAtNanoseconds loggedInSession `shouldBe` 123456000000000
       let logoutRequest = typedAccountActionRequest "POST" "/logout" [] (defaultRequestContext {requestSessionId = Just (Session.sessionId loggedInSession)})
       logoutResult <- handleAccountAction workflow logoutRequest
       case logoutResult of
@@ -1030,7 +1030,7 @@ spec = do
                 accountWorkflowLoginAttemptStore = permissiveLoginAttemptStore,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
-                accountWorkflowTotpClock = pure 123456
+                accountWorkflowTotpClock = const 123456
               }
           validCode = Totp.totpCodeText (Totp.totpCode 123456 totpSecret)
           invalidCode = Text.take 5 validCode <> if Text.drop 5 validCode == "0" then "1" else "0"
@@ -1191,7 +1191,7 @@ spec = do
             MfaStore
               { saveUnconfirmedTotpEnrollment = \receivedAccountId encryptedSecret receivedNow -> do
                   receivedAccountId `shouldBe` accountId
-                  receivedNow `shouldBe` 500
+                  receivedNow `shouldBe` 123456000000000
                   writeIORef encryptedSecretReference (Just encryptedSecret)
                   pure (Right True),
                 loadTotpEnrollment = \receivedAccountId -> do
@@ -1199,7 +1199,7 @@ spec = do
                   fmap (Right . fmap (\secretValue -> StoredTotpEnrollment secretValue Nothing Nothing)) (readIORef encryptedSecretReference),
                 confirmTotpEnrollment = \receivedAccountId hashes receivedNow -> do
                   receivedAccountId `shouldBe` accountId
-                  receivedNow `shouldBe` 500
+                  receivedNow `shouldBe` 123456000000000
                   writeIORef confirmationHashesReference (toList hashes)
                   pure (Right True),
                 loadUnusedRecoveryCodeHashes = \_ -> pure (error "unexpected recovery-code lookup"),
@@ -1211,8 +1211,8 @@ spec = do
               { accountWorkflowMfaStore = mfaStore,
                 accountWorkflowMfaEnrollmentSessionStore = enrollmentSessionStoreFor accountId,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
-                accountWorkflowClock = pure 500,
-                accountWorkflowTotpClock = pure 123456
+                accountWorkflowClock = pure 123456000000000,
+                accountWorkflowTotpClock = unixTimeSecondsFromNanoseconds
               }
           request path actionContext fields = typedAccountActionRequest "POST" path fields (actionContext {requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
       started <- handleAccountAction workflow (request "/mfa" defaultRequestContext [("intent", "start")])
@@ -1274,7 +1274,7 @@ spec = do
                 accountWorkflowMfaEnrollmentSessionStore = enrollmentSessionStoreFor accountId,
                 accountWorkflowTotpEncryptionKey = totpEncryptionKey defaultAppEnvironmentConfig,
                 accountWorkflowClock = pure 500,
-                accountWorkflowTotpClock = pure 123456
+                accountWorkflowTotpClock = const 123456
               }
           mfaStoreFor saveResult loadResult confirmationResult =
             MfaStore

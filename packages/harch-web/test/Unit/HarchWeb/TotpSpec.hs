@@ -5,6 +5,7 @@
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
+import HarchWeb.Time (unixTimeSeconds)
 import HarchWeb.Totp
 
 spec = do
@@ -41,10 +42,10 @@ spec = do
         )
 
   describe "TotpCode" $ do
-    it "uses RFC 6238 SHA-1 vectors with six-digit codes" $ do
+    it "uses RFC 6238 SHA-1 vectors at known Unix instants with six-digit codes" $ do
       map (fmap totpCodeText . mkTotpCode) ["287082", "081804", "050471", "005924", "279037", "353130"]
         `shouldBe` map Just ["287082", "081804", "050471", "005924", "279037", "353130"]
-      map (totpCodeText . (`totpCode` rfcSecret)) [59, 1111111109, 1111111111, 1234567890, 2000000000, 20000000000]
+      map (totpCodeText . (`totpCode` rfcSecret) . unixTimeSeconds) [59, 1111111109, 1111111111, 1234567890, 2000000000, 20000000000]
         `shouldBe` ["287082", "081804", "050471", "005924", "279037", "353130"]
 
     it "accepts exactly six ASCII digits and validates the current time step" $ do

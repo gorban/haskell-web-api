@@ -30,7 +30,6 @@ import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Data.Word (Word64)
 import HarchWeb.Account (AccountId, accountIdText)
 import HarchWeb.Email (EmailAddress, emailAddressText)
 import HarchWeb.LoginProtection
@@ -42,6 +41,7 @@ import HarchWeb.LoginProtection
 import HarchWeb.Password (Password, PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, verifyPassword)
 import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
+import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCodeCounter)
 import HarchWeb.Username (Username, usernameText)
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
@@ -87,7 +87,7 @@ data LoginAttemptStore = LoginAttemptStore
     -- | Only attempts at or after the supplied cutoff; the caller passes
     -- @now - windowNanoseconds@ so a store backed by a real table can bound
     -- its query instead of ever scanning full history.
-    loadRecentLoginAttempts :: Text -> Word64 -> IO (Either LoginAttemptStoreError [LoginAttempt])
+    loadRecentLoginAttempts :: Text -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError [LoginAttempt])
   }
 
 -- | The throttle dependencies threaded through both the password step
@@ -97,12 +97,12 @@ data LoginAttemptStore = LoginAttemptStore
 data LoginThrottleContext = LoginThrottleContext
   { loginThrottleStore :: LoginAttemptStore,
     loginThrottlePolicy :: LoginProtectionPolicy,
-    loginThrottleNow :: Word64
+    loginThrottleNow :: UnixTimeNanoseconds
   }
 
 data PasswordLoginResult
   = PasswordLoginRejected
-  | PasswordLoginThrottled Word64
+  | PasswordLoginThrottled UnixTimeNanoseconds
   | PasswordLoginEmailVerificationRequired AccountId
   | PasswordLoginMfaEnrollmentRequired AccountId
   | PasswordLoginMfaRequired AccountId
@@ -118,7 +118,7 @@ data MfaLoginProof
 
 data PasswordMfaLoginResult
   = PasswordMfaLoginRejected
-  | PasswordMfaLoginThrottled Word64
+  | PasswordMfaLoginThrottled UnixTimeNanoseconds
   | PasswordMfaLoginEmailVerificationRequired AccountId
   | PasswordMfaLoginEnrollmentRequired AccountId
   | PasswordMfaLoginAccepted AccountId
@@ -151,8 +151,8 @@ data LoginInfrastructureError
 data SecondFactorContext = SecondFactorContext
   { secondFactorMfaStore :: MfaStore,
     secondFactorEncryptionKey :: SecretEncryptionKey,
-    secondFactorNowNanoseconds :: Word64,
-    secondFactorNowSeconds :: Word64,
+    secondFactorNowNanoseconds :: UnixTimeNanoseconds,
+    secondFactorNowSeconds :: UnixTimeSeconds,
     secondFactorProof :: MfaLoginProof,
     -- | Added for AZ, 2026-08-19: the second factor's own KDF-amplification
     -- surface ('completeRecoveryCode' hashes against up to eight stored
@@ -213,9 +213,9 @@ checkLoginThrottle throttle key =
     policy = loginThrottlePolicy throttle
     now = loginThrottleNow throttle
     sinceNanoseconds =
-      if now >= loginProtectionWindowNanoseconds policy
-        then now - loginProtectionWindowNanoseconds policy
-        else 0
+      if unixTimeNanosecondsValue now >= loginProtectionWindowNanoseconds policy
+        then unixTimeNanoseconds (unixTimeNanosecondsValue now - loginProtectionWindowNanoseconds policy)
+        else unixTimeNanoseconds 0
 
 recordThrottleAttempt :: LoginThrottleContext -> Text -> Bool -> IO (Either LoginAttemptStoreError ())
 recordThrottleAttempt throttle key succeeded =

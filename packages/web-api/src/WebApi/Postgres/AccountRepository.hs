@@ -29,6 +29,7 @@ import HarchWeb.Account
   )
 import HarchWeb.Email (emailAddressText, mkEmailAddress)
 import HarchWeb.Password (passwordHashText, readPasswordHash)
+import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
 import HarchWeb.Username (mkUsername, usernameText)
 import Text.Read (readMaybe)
 import WebApi.Account
@@ -121,8 +122,8 @@ buildRuntimePostgresAccountStoreWithRunner runQuery source =
                     emailAddressText (pendingAccountEmail pendingAccount),
                     passwordHashText (pendingAccountPasswordHash pendingAccount),
                     emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
-                    Text.pack (show (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount))),
-                    Text.pack (show (pendingAccountCreatedAtNanoseconds pendingAccount)),
+                    Text.pack (show (unixTimeNanosecondsValue (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount)))),
+                    Text.pack (show (unixTimeNanosecondsValue (pendingAccountCreatedAtNanoseconds pendingAccount))),
                     maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
                     fromMaybe Text.empty (pendingAccountDisplayName pendingAccount)
                   ]
@@ -138,7 +139,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery source =
               [ accountIdText (storedVerificationAccountId verification),
                 emailVerificationTokenDigestText (storedVerificationTokenDigest verification),
                 emailAddressText (storedVerificationEmail verification),
-                Text.pack (show (storedVerificationExpiresAtNanoseconds verification))
+                Text.pack (show (unixTimeNanosecondsValue (storedVerificationExpiresAtNanoseconds verification)))
               ]
         liftEither (decodeReplacedVerification verification rows)
 
@@ -156,7 +157,7 @@ buildRuntimePostgresAccountStoreWithRunner runQuery source =
             runQuery
               source
               consumeEmailVerificationQuery
-              [emailVerificationTokenDigestText tokenDigest, Text.pack (show now)]
+              [emailVerificationTokenDigestText tokenDigest, Text.pack (show (unixTimeNanosecondsValue now))]
         liftEither (decodeConsumedVerification rows)
 
 buildRuntimePostgresAccountProfileStoreWithRunner ::
@@ -235,7 +236,7 @@ decodeStoredVerification tokenDigest rows =
     [[accountIdValue, emailAddressValue, expiresAtValue]] -> do
       accountId <- maybe (Left (AccountStoreCorruptData "email verification has an invalid account id")) Right (mkAccountId accountIdValue)
       emailAddress <- maybe (Left (AccountStoreCorruptData "email verification has an invalid email address")) Right (mkEmailAddress emailAddressValue)
-      expiresAt <- maybe (Left (AccountStoreCorruptData "email verification has an invalid expiry")) Right (readMaybe (Text.unpack expiresAtValue))
+      expiresAt <- unixTimeNanoseconds <$> maybe (Left (AccountStoreCorruptData "email verification has an invalid expiry")) Right (readMaybe (Text.unpack expiresAtValue))
       Right
         ( Just
             StoredEmailVerification

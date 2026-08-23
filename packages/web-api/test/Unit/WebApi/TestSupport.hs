@@ -146,6 +146,7 @@ import HarchWeb.Password qualified as Password
 import HarchWeb.Secret qualified as Secret
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Session qualified as Session
+import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import Network.Socket qualified as NetworkSocket
@@ -508,7 +509,7 @@ permissiveLoginAttemptStore =
       loadRecentLoginAttempts = \_ _ -> pure (Right [])
     }
 
-permissiveLoginThrottleContext :: Word64 -> LoginThrottleContext
+permissiveLoginThrottleContext :: UnixTimeNanoseconds -> LoginThrottleContext
 permissiveLoginThrottleContext now =
   LoginThrottleContext
     { loginThrottleStore = permissiveLoginAttemptStore,
@@ -520,7 +521,7 @@ registrationEnvironmentAt ::
   (Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash)) ->
   AccountStore ->
   Email.EmailDelivery ->
-  Word64 ->
+  UnixTimeNanoseconds ->
   Word64 ->
   RegistrationEnvironment
 registrationEnvironmentAt passwordHasher accountStore emailDelivery now verificationLifetime =

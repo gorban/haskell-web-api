@@ -4,8 +4,8 @@
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Word (Word64)
 import HarchWeb.Session (OpaqueSession (..))
+import HarchWeb.Time (UnixTimeNanoseconds)
 import Unit.WebApi.TestSupport (accountId, shouldReturnEqual)
 import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), issueAccountSession)
 
@@ -41,4 +41,4 @@ spec = do
               }
       issueAccountSession (store (Left AccountSessionStoreUnavailable)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreUnavailable
       issueAccountSession (store (Right False)) accountId 100 `shouldReturnEqual` Left AccountSessionStoreCorruptData
-      issueAccountSession (store (Right True)) accountId (maxBound :: Word64) `shouldReturnEqual` Left AccountSessionStoreCorruptData
+      issueAccountSession (store (Right True)) accountId (maxBound :: UnixTimeNanoseconds) `shouldReturnEqual` Left AccountSessionStoreCorruptData

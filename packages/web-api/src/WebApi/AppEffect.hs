@@ -17,11 +17,11 @@ where
 import Control.Monad.Except (ExceptT, MonadError (throwError), runExceptT)
 import Control.Monad.Reader (MonadReader (ask), ReaderT, runReaderT)
 import Data.Text (Text)
-import Data.Word (Word64)
 import HarchWeb.Account (EmailVerificationToken)
 import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret (SecretEncryptionKey)
+import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import WebApi.Account (AccountProfileStore, AccountStore)
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
@@ -32,7 +32,7 @@ data AccountWorkflow = AccountWorkflow
   { accountWorkflowStore :: AccountStore,
     accountWorkflowEmailDelivery :: Email.EmailDelivery,
     accountWorkflowPasswordHasher :: Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash),
-    accountWorkflowClock :: IO Word64,
+    accountWorkflowClock :: IO UnixTimeNanoseconds,
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
     accountWorkflowLoginAttemptStore :: LoginAttemptStore,
@@ -40,7 +40,10 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowMfaEnrollmentSessionStore :: MfaEnrollmentSessionStore,
     accountWorkflowProfileStore :: AccountProfileStore,
     accountWorkflowTotpEncryptionKey :: SecretEncryptionKey,
-    accountWorkflowTotpClock :: IO Word64,
+    -- | Derives the RFC TOTP Unix-second counter from the same durable
+    -- instant read for this account operation.  This is pure deliberately:
+    -- a second clock read could cross an epoch boundary independently.
+    accountWorkflowTotpClock :: UnixTimeNanoseconds -> UnixTimeSeconds,
     accountWorkflowVerificationUrl :: AppRequestContext -> EmailVerificationToken -> Text
   }
 
