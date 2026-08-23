@@ -1,88 +1,128 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 {-# SPEC #-}
 
+import Control.Concurrent ()
+import Control.Exception ()
+import Control.Monad ()
+import Data.ByteString qualified as ByteString ()
+import Data.ByteString.Builder qualified as Builder ()
+import Data.ByteString.Char8 qualified as ByteStringChar8 ()
+import Data.ByteString.Lazy qualified as LazyByteString ()
+import Data.Char ()
+import Data.Either ()
+import Data.Functor.Compose ()
+import Data.IORef ()
+import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Set qualified as Set
-import HarchWeb.Routing
+import Data.Maybe ()
+import Data.Set qualified as Set (empty, fromList)
+import Data.Text ()
+import Data.Text qualified as Text ()
+import Data.Text.Encoding qualified as TextEncoding ()
+import HarchWeb
+import HarchWeb.Action qualified as Action ()
+import HarchWeb.Database qualified as Database ()
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
+import HarchWeb.Observability qualified as Observability ()
+import HarchWeb.Security qualified as Security ()
+import Network.HTTP.Client qualified as HttpClient ()
+import Network.HTTP.Types qualified as Http ()
+import Network.Socket qualified as Socket ()
+import Network.Socket.ByteString qualified as SocketByteString ()
+import Network.Wai qualified as Wai ()
+import Network.Wai.Handler.Warp qualified as Warp ()
+import System.Directory ()
+import System.Environment ()
+import System.Exit ()
+import System.FilePath ()
+import System.IO ()
+import System.IO.Error ()
+import System.IO.Temp ()
+import System.Posix.Signals ()
+import System.Process ()
+import TestCore.CustomAssertions ()
+import TestCore.Wai ()
+import Text.Read ()
+import Unit.HarchWeb.TestSupport (TestContext (testContextPathPrefix), TestRoute (KnownRoute, MissingRoute), defaultContext, sampleCodec, spanishContext)
 
-data TestRoute
-  = ReadRoute
-  | WriteRoute
-  | EmptyRoute
-  | SharedRoute
-  | MissingRoute
+data RoutingTestRoute
+  = RoutingReadRoute
+  | RoutingWriteRoute
+  | RoutingEmptyRoute
+  | RoutingSharedRoute
+  | RoutingMissingRoute
   deriving (Eq, Show)
 
 data SecondFamilyRoute
-  = SecondOnlyRoute
-  | SharedRouteB
+  = RoutingSecondOnlyRoute
+  | RoutingSharedRouteB
   deriving (Eq, Show)
 
-data TestContext = TestContext
+data RoutingTestContext = RoutingTestContext
   deriving (Eq, Show)
 
-spec = do
+existingSpec :: Spec
+existingSpec = do
   describe "combineRouteCodecs" $ do
     it "parses a path only the first family recognizes into that family" $
-      parseRoute combinedCodec TestContext "/read"
-        `shouldBe` Just (RouteRequest (RouteFamilyA ReadRoute) TestContext)
+      parseRoute combinedCodec RoutingTestContext "/read"
+        `shouldBe` Just (RouteRequest (RouteFamilyA RoutingReadRoute) RoutingTestContext)
 
     it "falls through to the second family for a path the first does not recognize" $
-      parseRoute combinedCodec TestContext "/second-only"
-        `shouldBe` Just (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext)
+      parseRoute combinedCodec RoutingTestContext "/second-only"
+        `shouldBe` Just (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext)
 
     it "resolves a path both families recognize to the first family, not the second" $
-      parseRoute combinedCodec TestContext "/shared"
-        `shouldBe` Just (RouteRequest (RouteFamilyA SharedRoute) TestContext)
+      parseRoute combinedCodec RoutingTestContext "/shared"
+        `shouldBe` Just (RouteRequest (RouteFamilyA RoutingSharedRoute) RoutingTestContext)
 
     it "reports no match for a path neither family recognizes" $
-      parseRoute combinedCodec TestContext "/missing" `shouldBe` Nothing
+      parseRoute combinedCodec RoutingTestContext "/missing" `shouldBe` Nothing
 
     it "renders through whichever family a route belongs to" $
       expectAll
-        ( (renderRoute combinedCodec (RouteRequest (RouteFamilyA ReadRoute) TestContext) `shouldBe` "/read")
-            :| [renderRoute combinedCodec (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext) `shouldBe` "/second-only"]
+        ( (renderRoute combinedCodec (RouteRequest (RouteFamilyA RoutingReadRoute) RoutingTestContext) `shouldBe` "/read")
+            :| [renderRoute combinedCodec (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext) `shouldBe` "/second-only"]
         )
 
     it "uses the second, catch-all family's not-found route as the combined codec's not-found route" $
-      notFoundRequest combinedCodec TestContext `shouldBe` RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext
+      notFoundRequest combinedCodec RoutingTestContext `shouldBe` RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext
 
     it "delegates routeMethods to whichever family a route belongs to" $
       expectAll
-        ( (routeMethods combinedCodec (RouteFamilyA WriteRoute) `shouldBe` routeMethodPolicy [RoutePost, RoutePut])
-            :| [routeMethods combinedCodec (RouteFamilyB SecondOnlyRoute) `shouldBe` routeMethodPolicy [RouteGet]]
+        ( (routeMethods combinedCodec (RouteFamilyA RoutingWriteRoute) `shouldBe` routeMethodPolicy [RoutePost, RoutePut])
+            :| [routeMethods combinedCodec (RouteFamilyB RoutingSecondOnlyRoute) `shouldBe` routeMethodPolicy [RouteGet]]
         )
 
     it "derives one shared 404/405/HEAD/OPTIONS authority across both combined families" $
       expectAll
-        ( (matchRouteMethod combinedCodec TestContext (requestMethod "GET") (requestPath "/missing") `shouldBe` RouteNotFound (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext))
-            :| [ matchRouteMethod combinedCodec TestContext (requestMethod "DELETE") (requestPath "/read")
-                   `shouldBe` RouteMethodNotAllowed (RouteRequest (RouteFamilyA ReadRoute) TestContext) (RouteGet :| []),
-                 matchRouteMethod combinedCodec TestContext (requestMethod "HEAD") (requestPath "/second-only")
-                   `shouldBe` RouteMatchedHead (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext),
-                 matchRouteMethod combinedCodec TestContext (requestMethod "GET") (requestPath "/second-only")
-                   `shouldBe` RouteMatched (RouteRequest (RouteFamilyB SecondOnlyRoute) TestContext)
+        ( (matchRouteMethod combinedCodec RoutingTestContext (requestMethod "GET") (requestPath "/missing") `shouldBe` RouteNotFound (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext))
+            :| [ matchRouteMethod combinedCodec RoutingTestContext (requestMethod "DELETE") (requestPath "/read")
+                   `shouldBe` RouteMethodNotAllowed (RouteRequest (RouteFamilyA RoutingReadRoute) RoutingTestContext) (RouteGet :| []),
+                 matchRouteMethod combinedCodec RoutingTestContext (requestMethod "HEAD") (requestPath "/second-only")
+                   `shouldBe` RouteMatchedHead (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext),
+                 matchRouteMethod combinedCodec RoutingTestContext (requestMethod "GET") (requestPath "/second-only")
+                   `shouldBe` RouteMatched (RouteRequest (RouteFamilyB RoutingSecondOnlyRoute) RoutingTestContext)
                ]
         )
 
     it "keeps every combined route value comparable and printable" $ do
-      let routes :: [RouteFamily TestRoute SecondFamilyRoute]
-          routes = [RouteFamilyA ReadRoute, RouteFamilyA WriteRoute, RouteFamilyB SecondOnlyRoute]
-      eqViaDictionary (RouteFamilyA ReadRoute :: RouteFamily TestRoute SecondFamilyRoute) (RouteFamilyA ReadRoute) `shouldBe` True
-      neqViaDictionary (RouteFamilyA ReadRoute :: RouteFamily TestRoute SecondFamilyRoute) (RouteFamilyB SecondOnlyRoute) `shouldBe` True
+      let routes :: [RouteFamily RoutingTestRoute SecondFamilyRoute]
+          routes = [RouteFamilyA RoutingReadRoute, RouteFamilyA RoutingWriteRoute, RouteFamilyB RoutingSecondOnlyRoute]
+      eqViaDictionary (RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) (RouteFamilyA RoutingReadRoute) `shouldBe` True
+      neqViaDictionary (RouteFamilyA RoutingReadRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) (RouteFamilyB RoutingSecondOnlyRoute) `shouldBe` True
       map showViaDictionary routes `shouldSatisfy` not . any null
-      showsPrecViaDictionary 11 (RouteFamilyB SecondOnlyRoute :: RouteFamily TestRoute SecondFamilyRoute) "" `shouldSatisfy` not . null
+      showsPrecViaDictionary 11 (RouteFamilyB RoutingSecondOnlyRoute :: RouteFamily RoutingTestRoute SecondFamilyRoute) "" `shouldSatisfy` not . null
       showListViaDictionary routes "" `shouldSatisfy` not . null
 
   describe "matchRouteMethod" $ do
     it "keeps an unknown path as not found rather than manufacturing a 405" $
-      matchRouteMethod testCodec TestContext (requestMethod "DELETE") (requestPath "/missing")
+      matchRouteMethod testCodec RoutingTestContext (requestMethod "DELETE") (requestPath "/missing")
         `shouldBe` RouteNotFound missingRequest
 
     it "derives a 405 and Allow value only after a path matches" $
-      case matchRouteMethod testCodec TestContext (requestMethod "POST") (requestPath "/read") of
+      case matchRouteMethod testCodec RoutingTestContext (requestMethod "POST") (requestPath "/read") of
         RouteMethodNotAllowed routeRequest declaredMethods -> do
           routeRequest `shouldBe` readRequest
           declaredMethods `shouldBe` RouteGet :| []
@@ -90,11 +130,11 @@ spec = do
         routeDispatch -> expectationFailure ("expected a method mismatch, got " <> show routeDispatch)
 
     it "derives HEAD from GET without declaring another route" $
-      matchRouteMethod testCodec TestContext (requestMethod "HEAD") (requestPath "/read")
+      matchRouteMethod testCodec RoutingTestContext (requestMethod "HEAD") (requestPath "/read")
         `shouldBe` RouteMatchedHead readRequest
 
     it "synthesizes OPTIONS from every declared method in declaration order" $
-      case matchRouteMethod testCodec TestContext (requestMethod "OPTIONS") (requestPath "/write") of
+      case matchRouteMethod testCodec RoutingTestContext (requestMethod "OPTIONS") (requestPath "/write") of
         RouteOptions routeRequest declaredMethods -> do
           routeRequest `shouldBe` writeRequest
           declaredMethods `shouldBe` RoutePost :| [RoutePut]
@@ -102,17 +142,17 @@ spec = do
         routeDispatch -> expectationFailure ("expected options, got " <> show routeDispatch)
 
     it "matches a declared non-GET method directly" $
-      matchRouteMethod testCodec TestContext (requestMethod "PUT") (requestPath "/write")
+      matchRouteMethod testCodec RoutingTestContext (requestMethod "PUT") (requestPath "/write")
         `shouldBe` RouteMatched writeRequest
 
     it "keeps a parsed zero-method route so its route family can render its own 404" $
-      matchRouteMethod testCodec TestContext (requestMethod "GET") (requestPath "/empty")
+      matchRouteMethod testCodec RoutingTestContext (requestMethod "GET") (requestPath "/empty")
         `shouldBe` RouteNotFound emptyRequest
 
     it "also treats a route allowing an empty method set as not found" $
       matchRouteMethod
         (testCodec {routeMethods = const (RouteAllows Set.empty)})
-        TestContext
+        RoutingTestContext
         (requestMethod "GET")
         (requestPath "/read")
         `shouldBe` RouteNotFound readRequest
@@ -180,7 +220,7 @@ spec = do
       showListViaDictionary dispatches "" `shouldSatisfy` not . null
       map show dispatches `shouldSatisfy` not . any null
 
-testCodec :: RouteCodec TestRoute TestContext
+testCodec :: RouteCodec RoutingTestRoute RoutingTestContext
 testCodec =
   RouteCodec
     { parseRoute = \requestContextValue path ->
@@ -188,62 +228,62 @@ testCodec =
           "/read" -> Just (readRequest {requestContext = requestContextValue})
           "/write" -> Just (writeRequest {requestContext = requestContextValue})
           "/empty" -> Just (emptyRequest {requestContext = requestContextValue})
-          "/shared" -> Just (RouteRequest SharedRoute requestContextValue)
+          "/shared" -> Just (RouteRequest RoutingSharedRoute requestContextValue)
           _ -> Nothing,
       renderRoute = \routeRequest ->
         case requestRoute routeRequest of
-          ReadRoute -> "/read"
-          WriteRoute -> "/write"
-          EmptyRoute -> "/empty"
-          SharedRoute -> "/shared"
-          MissingRoute -> "/404",
+          RoutingReadRoute -> "/read"
+          RoutingWriteRoute -> "/write"
+          RoutingEmptyRoute -> "/empty"
+          RoutingSharedRoute -> "/shared"
+          RoutingMissingRoute -> "/404",
       notFoundRequest = \requestContextValue -> missingRequest {requestContext = requestContextValue},
       routeMethods =
         routeMethodPolicy . \case
-          ReadRoute -> [RouteGet]
-          WriteRoute -> [RoutePost, RoutePut]
-          EmptyRoute -> []
-          SharedRoute -> [RouteGet]
-          MissingRoute -> []
+          RoutingReadRoute -> [RouteGet]
+          RoutingWriteRoute -> [RoutePost, RoutePut]
+          RoutingEmptyRoute -> []
+          RoutingSharedRoute -> [RouteGet]
+          RoutingMissingRoute -> []
     }
 
 -- | A second, independent route family used only to exercise
 -- 'combineRouteCodecs': it also recognizes @\/shared@, so the combined-codec
 -- tests can confirm first-family precedence rather than an incidental
 -- absence of overlap.
-secondCodec :: RouteCodec SecondFamilyRoute TestContext
+secondCodec :: RouteCodec SecondFamilyRoute RoutingTestContext
 secondCodec =
   RouteCodec
     { parseRoute = \requestContextValue path ->
         case path of
-          "/second-only" -> Just (RouteRequest SecondOnlyRoute requestContextValue)
-          "/shared" -> Just (RouteRequest SharedRouteB requestContextValue)
+          "/second-only" -> Just (RouteRequest RoutingSecondOnlyRoute requestContextValue)
+          "/shared" -> Just (RouteRequest RoutingSharedRouteB requestContextValue)
           _ -> Nothing,
       renderRoute = \routeRequest ->
         case requestRoute routeRequest of
-          SecondOnlyRoute -> "/second-only"
-          SharedRouteB -> "/shared",
-      notFoundRequest = RouteRequest SecondOnlyRoute,
+          RoutingSecondOnlyRoute -> "/second-only"
+          RoutingSharedRouteB -> "/shared",
+      notFoundRequest = RouteRequest RoutingSecondOnlyRoute,
       routeMethods =
         routeMethodPolicy . \case
-          SecondOnlyRoute -> [RouteGet]
-          SharedRouteB -> [RouteGet]
+          RoutingSecondOnlyRoute -> [RouteGet]
+          RoutingSharedRouteB -> [RouteGet]
     }
 
-combinedCodec :: RouteCodec (RouteFamily TestRoute SecondFamilyRoute) TestContext
+combinedCodec :: RouteCodec (RouteFamily RoutingTestRoute SecondFamilyRoute) RoutingTestContext
 combinedCodec = combineRouteCodecs testCodec secondCodec
 
-readRequest :: RouteRequest TestRoute TestContext
-readRequest = RouteRequest ReadRoute TestContext
+readRequest :: RouteRequest RoutingTestRoute RoutingTestContext
+readRequest = RouteRequest RoutingReadRoute RoutingTestContext
 
-writeRequest :: RouteRequest TestRoute TestContext
-writeRequest = RouteRequest WriteRoute TestContext
+writeRequest :: RouteRequest RoutingTestRoute RoutingTestContext
+writeRequest = RouteRequest RoutingWriteRoute RoutingTestContext
 
-emptyRequest :: RouteRequest TestRoute TestContext
-emptyRequest = RouteRequest EmptyRoute TestContext
+emptyRequest :: RouteRequest RoutingTestRoute RoutingTestContext
+emptyRequest = RouteRequest RoutingEmptyRoute RoutingTestContext
 
-missingRequest :: RouteRequest TestRoute TestContext
-missingRequest = RouteRequest MissingRoute TestContext
+missingRequest :: RouteRequest RoutingTestRoute RoutingTestContext
+missingRequest = RouteRequest RoutingMissingRoute RoutingTestContext
 
 eqViaDictionary :: (Eq value) => value -> value -> Bool
 eqViaDictionary = (==)
@@ -264,3 +304,35 @@ showsPrecViaDictionary = showsPrec
 showListViaDictionary :: (Show value) => [value] -> ShowS
 showListViaDictionary = showList
 {-# NOINLINE showListViaDictionary #-}
+
+movedSpec :: Spec
+movedSpec = do
+  describe "matchRoute" $ do
+    it "returns parsed routes for supported paths" $
+      matchRoute sampleCodec defaultContext "/known"
+        `shouldBe` RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext}
+
+    it "can derive route context from the matched path" $
+      matchRoute sampleCodec defaultContext "/es/known"
+        `shouldBe` RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext}
+
+    it "falls back to the stable not-found route for unsupported paths" $
+      matchRoute sampleCodec defaultContext "/missing"
+        `shouldBe` RouteRequest {requestRoute = MissingRoute, requestContext = defaultContext}
+
+  describe "renderRoute" $
+    it "can include route context in generated paths" $ do
+      renderRoute sampleCodec (RouteRequest {requestRoute = KnownRoute, requestContext = defaultContext})
+        `shouldBe` "/known"
+      renderRoute sampleCodec (RouteRequest {requestRoute = KnownRoute, requestContext = spanishContext})
+        `shouldBe` "/es/known"
+
+  describe "routeHref" $
+    it "reuses route rendering for app-provided navigation targets" $ do
+      routeHref sampleCodec defaultContext KnownRoute `shouldBe` "/known"
+      routeHref sampleCodec spanishContext KnownRoute `shouldBe` "/es/known"
+      routeHref sampleCodec (defaultContext {testContextPathPrefix = "/app"}) KnownRoute `shouldBe` "/app/known"
+
+spec = do
+  existingSpec
+  movedSpec

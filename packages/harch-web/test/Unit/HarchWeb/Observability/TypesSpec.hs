@@ -2,11 +2,51 @@
 
 {-# SPEC #-}
 
+import Control.Concurrent ()
+import Control.Exception ()
+import Control.Monad ()
+import Data.ByteString qualified as ByteString ()
+import Data.ByteString.Builder qualified as Builder ()
+import Data.ByteString.Char8 qualified as ByteStringChar8 ()
+import Data.ByteString.Lazy qualified as LazyByteString ()
+import Data.Char ()
+import Data.Either ()
+import Data.Functor.Compose ()
+import Data.IORef ()
+import Data.List ()
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb.Database qualified as Database
-import HarchWeb.Observability qualified as Observability
+import Data.Maybe ()
+import Data.Text ()
+import Data.Text qualified as Text ()
+import Data.Text.Encoding qualified as TextEncoding ()
+import HarchWeb (ObservabilityConfig (ObservabilityConfig, metricsExporter, tracingExporter), ObservabilityStartupPlan (ObservabilityStartupPlan, startupExporters), OtlpExporter (OtlpExporter, otlpEndpoint, otlpHeaders), OtlpExporterStartup (OtlpExporterStartup, startupEndpoint, startupHeaders, startupSignal), TelemetrySignal (MetricsSignal, TracingSignal), planObservabilityStartup)
+import HarchWeb.Action qualified as Action ()
+import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation, databaseOperationEndedAtNanoseconds, databaseOperationName, databaseOperationStartedAtNanoseconds, databaseOperationSystem, databaseQueryTemplate))
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
+import HarchWeb.Observability qualified as Observability (ConnectionObservability (ConnectionObservability, observabilityConnectionSpan), HttpServerMetrics (HttpServerMetrics, activeRequestsMetricName, httpServerMetricAttributes, requestDurationMetricName), ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (IntAttribute, TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestObservability (RequestObservability, observabilityDatabaseOperations, observabilityHttpServerMetrics, observabilityRequestSpan, observabilityTraceContext), RequestSpan (RequestSpan, requestSpanAttributes, requestSpanDisplayName), RequestTraceContext (RequestTraceContext, traceContextParentSpanId, traceContextState, traceContextTraceId), ResponseKind (BodyResponseKind, PageResponseKind), buildConnectionObservability, buildRequestObservability, forceRequestObservability, mkSpanMethodLabel, mkSpanRoutePath, requestObservabilityAttributes, requestSpanName, withDatabaseOperations, withRequestTraceContext)
+import HarchWeb.Security qualified as Security ()
+import Network.HTTP.Client qualified as HttpClient ()
+import Network.HTTP.Types qualified as Http ()
+import Network.Socket qualified as Socket ()
+import Network.Socket.ByteString qualified as SocketByteString ()
+import Network.Wai qualified as Wai ()
+import Network.Wai.Handler.Warp qualified as Warp ()
+import System.Directory ()
+import System.Environment ()
+import System.Exit ()
+import System.FilePath ()
+import System.IO ()
+import System.IO.Error ()
+import System.IO.Temp ()
+import System.Posix.Signals ()
+import System.Process ()
+import TestCore.CustomAssertions ()
+import TestCore.Wai ()
+import Text.Read ()
+import Unit.HarchWeb.TestSupport ()
 
-spec = do
+existingSpec :: Spec
+existingSpec = do
   describe "public record coverage" $ do
     it "reads exported selectors from the observability helper records" $ do
       let pageKindAttribute =
@@ -430,3 +470,45 @@ spec = do
             Observability.observabilityTraceContext = Nothing,
             Observability.observabilityDatabaseOperations = []
           }
+
+movedSpec :: Spec
+movedSpec = do
+  describe "planObservabilityStartup" $ do
+    it "produces no exporter startup actions when tracing and metrics are disabled" $
+      planObservabilityStartup ObservabilityConfig {tracingExporter = Nothing, metricsExporter = Nothing}
+        `shouldBe` ObservabilityStartupPlan {startupExporters = []}
+
+    it "translates OTLP tracing and metrics exporters into deterministic startup parameters" $
+      planObservabilityStartup
+        ObservabilityConfig
+          { tracingExporter =
+              Just
+                OtlpExporter
+                  { otlpEndpoint = "http://collector:4318/v1/traces",
+                    otlpHeaders = [("authorization", "Bearer tracing")]
+                  },
+            metricsExporter =
+              Just
+                OtlpExporter
+                  { otlpEndpoint = "http://collector:4318/v1/metrics",
+                    otlpHeaders = [("x-scope", "metrics")]
+                  }
+          }
+        `shouldBe` ObservabilityStartupPlan
+          { startupExporters =
+              [ OtlpExporterStartup
+                  { startupSignal = TracingSignal,
+                    startupEndpoint = "http://collector:4318/v1/traces",
+                    startupHeaders = [("authorization", "Bearer tracing")]
+                  },
+                OtlpExporterStartup
+                  { startupSignal = MetricsSignal,
+                    startupEndpoint = "http://collector:4318/v1/metrics",
+                    startupHeaders = [("x-scope", "metrics")]
+                  }
+              ]
+          }
+
+spec = do
+  existingSpec
+  movedSpec
