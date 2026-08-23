@@ -104,6 +104,7 @@ library
     WebApi.SetupPlan
 
   other-modules:
+    WebApi.App.Observability
     WebApi.Config.Defaults
     WebApi.Config.Internal
     WebApi.Config.Loading
