@@ -71,16 +71,13 @@ parseDatabaseSetupConfig environmentEntries =
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_NAME"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_USER"
     <*> requiredConfigValue "WEB_API_MIGRATION_DATABASE_PASSWORD"
-    -- Not sourced from the environment: this one-shot batch command has no
-    -- concurrent-request thread to starve, and its psql subprocess
-    -- invocations don't currently read this field (see AY's note on why
-    -- threading a timeout into the psql environment as well was judged out
-    -- of scope). It exists here only because 'DatabaseConfig' is a single
-    -- shared record; the value is otherwise inert on this path.
+    -- Not sourced from the environment: one migration transaction has no
+    -- concurrent request thread to starve, but it does use the shared libpq
+    -- conninfo encoder.  Keep the bounded, committed default rather than
+    -- introducing a second migration-only timeout knob.
     <*> pure migrationDatabaseConnectTimeoutSeconds
-    -- Same reasoning as the timeout above: migrations run their statements
-    -- one psql subprocess at a time (see AX), so there is no pool to size on
-    -- this path either. The value is otherwise inert here.
+    -- Migrations own one short-lived connection rather than the application's
+    -- runtime pool, so this required record field is inert on this path.
     <*> pure migrationDatabasePoolCapacity
   where
     requiredConfigValue key =

@@ -77,6 +77,7 @@ data PostgresCommandResult = PostgresCommandResult
 
 data PostgresRunnerError
   = PostgresCommandFailed PostgresCommand PostgresCommandResult
+  | PostgresMigrationFailed Text
   | UnexpectedQueryRows Text [Text]
   deriving (Eq, Show)
 
@@ -377,6 +378,7 @@ renderRunnerError runnerError =
        in if Text.null stderrText
             then "psql command failed"
             else stderrText
+    PostgresMigrationFailed message -> message
     UnexpectedQueryRows message rows ->
       Text.concat
         [ message,

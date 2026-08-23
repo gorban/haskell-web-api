@@ -1174,6 +1174,32 @@ internally, leaving the call sites themselves untouched. A handful of call sites
 the existing suite's extensive `toWaiApplication` coverage and AF's own dedicated gate tests already
 exercise every changed branch, confirmed by a genuine 100% coverage re-run rather than assumed.
 
+### Follow-up decision — AX: transactional, versioned migrations own one short-lived libpq connection (2026-08-23)
+
+**Decision: extend `WebApi.Postgres.Migration` with a private, owner-credential libpq
+interpreter held for one migration batch; do not run migrations through the runtime query pool or
+add a second general database abstraction.** The existing migration module already owns schema
+evolution, its distinct owner credentials, and the `haskell-web-api-db` lifecycle. AX's original
+`psql` command-by-command runner cannot hold a transaction or advisory lock across statements, so
+the smallest complete extension is one connection for that module's whole batch. AY's
+`PostgresPool` is deliberately a lazy, long-lived, shared runtime-query resource using the
+low-privilege runtime identity; using it for a one-shot owner migration would conflate those
+lifecycles and keep an otherwise-unneeded idle privileged connection. The migration interpreter
+shares only the already-established `runtimeConnectionString` encoding, while owning its own
+bracketed connection and transaction cleanup.
+
+The migration representation will be an ordered, versioned collection rather than an inferred
+set of `CREATE ... IF NOT EXISTS` statements. Under one transaction it acquires a transaction
+advisory lock, creates the schema-version table, reads applied versions, executes each unapplied
+migration, records its version, reconciles the configured owner/runtime-role privileges, and
+commits; any command failure rolls the entire transaction back. The reconciliation is deliberately
+not versioned: role names and passwords are deployment configuration, so recording the initial
+schema must not prevent a later password rotation or changed runtime identity from taking effect.
+A dedicated test-only migration executor records the same connection-scoped operations so Unit
+tests can prove ordering, version skipping, reconciliation, rollback, and error handling without
+preserving the obsolete one-`psql`-process-per-statement fixture contract. This is a precise
+extension of the existing migration boundary, not a parallel runtime query API.
+
 ### Follow-up decision — AY: add `connect_timeout` now, defer `sslmode=require` to a deployment decision this codebase can't make alone (2026-08-21)
 
 **Decision: implement `DATABASE_CONNECT_TIMEOUT_SECONDS`/`connect_timeout` unconditionally, but do
@@ -1197,15 +1223,16 @@ pins a request thread indefinitely, and the AF concurrency gate then 503s everyo
 now: a new `databaseConnectTimeoutSeconds :: Int` field on `DatabaseConfig`, sourced from
 `DATABASE_CONNECT_TIMEOUT_SECONDS` (default `10`, following the existing committed-default pattern
 every other `DATABASE_*` field uses) and applied to every libpq conninfo string
-`runtimeConnectionString` builds. The migration-side `WEB_API_MIGRATION_DATABASE_*` parser needed
-the same field populated (one shared `DatabaseConfig` record), but supplied it as a hardcoded
-constant rather than a second required environment variable: that parser's psql-subprocess path
-doesn't read the field at all, and a one-shot batch migration command has no concurrent-request
-thread for a wedged connection to starve. Threading the timeout into the psql subprocess environment
-too (`PGCONNECT_TIMEOUT`) was considered and rejected — `passwordEnvironment` is shared by every
-psql invocation, and widening it would have broken several `Integration/WebApiSpec.hs` tests that
-assert its exact environment against real subprocess runs, for a code path with no starvation risk
-to close in the first place.
+`runtimeConnectionString` builds. The migration-side `WEB_API_MIGRATION_DATABASE_*` parser also
+needs the field populated (one shared `DatabaseConfig` record), and AX's later one-shot libpq
+migration connection reads it through that same conninfo encoder. It remains a hardcoded committed
+default rather than a second migration-only environment variable: a one-shot batch has no
+concurrent request thread to starve, and a second knob would add configuration surface without a
+separate operational policy behind it. Threading an equivalent timeout into the retained `psql`
+seed subprocess environment (`PGCONNECT_TIMEOUT`) was considered and rejected —
+`passwordEnvironment` is shared by every psql invocation, and widening it would have broken several
+`Integration/WebApiSpec.hs` tests that assert its exact environment against real subprocess runs,
+for a code path with no starvation risk to close in the first place.
 
 A genuine coverage-gate CSE-literal gap surfaced while closing this out:
 `parseConnectTimeout = parseNonNegativeInt "DATABASE_CONNECT_TIMEOUT_SECONDS"` left the string

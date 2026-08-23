@@ -10,10 +10,11 @@ import Data.Text qualified as Text
 import System.Exit (ExitCode (..))
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
+import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.DatabaseSetup (DatabaseSetupCommand (..), DatabaseSetupError (..), loadDatabaseSetupConfig, parseDatabaseSetupCommand, parseDatabaseSetupConfig, renderDatabaseSetupError, runDatabaseSetupArgs, runDatabaseSetupArgsWith, runDatabaseSetupCommand, runDatabaseSetupCommandWith)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), migrationStatementsFor, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), seedStatements)
 
 spec = do
   describe "parseDatabaseSetupCommand" $ do
@@ -62,6 +63,7 @@ spec = do
       let loadError = InvalidConfigValue "WEB_API_MIGRATION_DATABASE_PORT" "0"
           runtimeLoadError = MissingConfigValue "DATABASE_PASSWORD"
           migrationRunnerError = UnexpectedQueryRows "expected exactly one row" ["first", "second"]
+          nativeMigrationRunnerError = PostgresMigrationFailed "PostgreSQL migration command failed"
           seedRunnerError = UnexpectedQueryRows "expected exactly one row" ["seed"]
       renderDatabaseSetupError (DatabaseSetupConfigLoadError loadError)
         `shouldBe` "Failed to load database setup config: InvalidConfigValue \"WEB_API_MIGRATION_DATABASE_PORT\" \"0\""
@@ -69,6 +71,8 @@ spec = do
         `shouldBe` "Failed to load runtime database config: MissingConfigValue \"DATABASE_PASSWORD\""
       renderDatabaseSetupError (DatabaseSetupMigrationError migrationRunnerError)
         `shouldBe` "Failed to apply database migrations: expected exactly one row: first, second"
+      renderDatabaseSetupError (DatabaseSetupMigrationError nativeMigrationRunnerError)
+        `shouldBe` "Failed to apply database migrations: PostgreSQL migration command failed"
       renderDatabaseSetupError (DatabaseSetupSeedError seedRunnerError)
         `shouldBe` "Failed to apply database seed data: expected exactly one row: seed"
       let failedCommandRunnerError =
@@ -143,39 +147,50 @@ spec = do
                         databasePoolCapacity = 1
                       }
 
-  describe "runDatabaseSetupCommand"
-    $ it "uses the default migration environment loader and postgres runners for single-command setup"
-    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
-    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432")
-    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
-    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
-    $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
-    $ withTemporaryEnvironment "DATABASE_HOST" (Just "127.0.0.1")
-    $ withTemporaryEnvironment "DATABASE_PORT" (Just "5432")
-    $ withTemporaryEnvironment "DATABASE_NAME" (Just "web_api_dev")
-    $ withTemporaryEnvironment "DATABASE_USER" (Just "web_api_runtime")
-    $ withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime-secret")
-    $ withFakePsqlScript
-      (fmap (,Text.empty) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig <> seedStatements))
-    $ \argsLogPath -> do
-      runDatabaseSetupCommand MigrateDatabase `shouldReturn` Right ()
-      runDatabaseSetupCommand SeedDatabase `shouldReturn` Right ()
-      let renderMutationLogEntry databaseConfig sql =
-            "--host "
-              <> Text.unpack (databaseHost databaseConfig)
-              <> " --port "
-              <> show (databasePort databaseConfig)
-              <> " --dbname "
-              <> Text.unpack (databaseName databaseConfig)
-              <> " --username "
-              <> Text.unpack (databaseUser databaseConfig)
-              <> " --no-password --set ON_ERROR_STOP=1 --command "
-              <> Text.unpack sql
-      readFile argsLogPath
-        `shouldReturn` unlines
-          ( fmap (renderMutationLogEntry setupMigrationPostgresTestConfig) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig)
-              <> fmap (renderMutationLogEntry setupMigrationPostgresTestConfig) seedStatements
-          )
+  describe "runDatabaseSetupCommand" $ do
+    it "uses the default migration environment loader and psql seed runner for single-command setup"
+      $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
+      $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432")
+      $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
+      $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_USER" (Just "web_api_owner")
+      $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PASSWORD" (Just "owner-secret")
+      $ withTemporaryEnvironment "DATABASE_HOST" (Just "127.0.0.1")
+      $ withTemporaryEnvironment "DATABASE_PORT" (Just "5432")
+      $ withTemporaryEnvironment "DATABASE_NAME" (Just "web_api_dev")
+      $ withTemporaryEnvironment "DATABASE_USER" (Just "web_api_runtime")
+      $ withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime-secret")
+      $ withFakePsqlScript
+        (fmap (,Text.empty) seedStatements)
+      $ \argsLogPath -> do
+        runDatabaseSetupCommand SeedDatabase `shouldReturn` Right ()
+        let renderMutationLogEntry databaseConfig sql =
+              "--host "
+                <> Text.unpack (databaseHost databaseConfig)
+                <> " --port "
+                <> show (databasePort databaseConfig)
+                <> " --dbname "
+                <> Text.unpack (databaseName databaseConfig)
+                <> " --username "
+                <> Text.unpack (databaseUser databaseConfig)
+                <> " --no-password --set ON_ERROR_STOP=1 --command "
+                <> Text.unpack sql
+        readFile argsLogPath
+          `shouldReturn` unlines
+            (fmap (renderMutationLogEntry setupMigrationPostgresTestConfig) seedStatements)
+
+    it "runs the default native migration and seed setup paths against PostgreSQL" $
+      withDefaultDatabaseSetupEnvironment $
+        withContainerizedPsqlOnPath $ do
+          ensureDefaultPostgresAvailable
+          runDatabaseSetupCommand MigrateDatabase `shouldReturn` Right ()
+          withSystemTempFile "database-setup-default-migrate.txt" $ \migrateOutputPath migrateOutputHandle -> do
+            runDatabaseSetupArgs migrateOutputHandle ["migrate"]
+            hClose migrateOutputHandle
+            readFile migrateOutputPath `shouldReturn` "Applied database migrations.\n"
+          withSystemTempFile "database-setup-default-migrate-and-seed.txt" $ \setupOutputPath setupOutputHandle -> do
+            runDatabaseSetupArgs setupOutputHandle ["migrate-and-seed"]
+            hClose setupOutputHandle
+            readFile setupOutputPath `shouldReturn` "Applied database migrations and seed data.\n"
 
   describe "runDatabaseSetupCommandWith" $ do
     it "returns configuration load errors before running any commands" $ do
@@ -351,7 +366,7 @@ spec = do
             expectationFailure "expected database setup failure to raise an exception"
 
   describe "runDatabaseSetupArgs"
-    $ it "uses the default migration environment loader and postgres runners for migrate and migrate-and-seed output"
+    $ it "uses the default migration environment loader and psql seed runner for seed output"
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_HOST" (Just "127.0.0.1")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_PORT" (Just "5432")
     $ withTemporaryEnvironment "WEB_API_MIGRATION_DATABASE_NAME" (Just "web_api_dev")
@@ -363,13 +378,22 @@ spec = do
     $ withTemporaryEnvironment "DATABASE_USER" (Just "web_api_runtime")
     $ withTemporaryEnvironment "DATABASE_PASSWORD" (Just "runtime-secret")
     $ withFakePsqlScript
-      (fmap (,Text.empty) (migrationStatementsFor setupMigrationPostgresTestConfig runtimeSetupPostgresTestConfig <> seedStatements))
+      (fmap (,Text.empty) seedStatements)
     $ \_ ->
-      withSystemTempFile "database-setup-args-migrate.txt" $ \migrateOutputPath migrateOutputHandle -> do
-        runDatabaseSetupArgs migrateOutputHandle ["migrate"]
-        hClose migrateOutputHandle
-        readFile migrateOutputPath `shouldReturn` "Applied database migrations.\n"
-        withSystemTempFile "database-setup-args-migrate-and-seed.txt" $ \migrateAndSeedOutputPath migrateAndSeedOutputHandle -> do
-          runDatabaseSetupArgs migrateAndSeedOutputHandle ["migrate-and-seed"]
-          hClose migrateAndSeedOutputHandle
-          readFile migrateAndSeedOutputPath `shouldReturn` "Applied database migrations and seed data.\n"
+      withSystemTempFile "database-setup-args-seed.txt" $ \seedOutputPath seedOutputHandle -> do
+        runDatabaseSetupArgs seedOutputHandle ["seed"]
+        hClose seedOutputHandle
+        readFile seedOutputPath `shouldReturn` "Applied database seed data.\n"
+
+withDefaultDatabaseSetupEnvironment :: IO a -> IO a
+withDefaultDatabaseSetupEnvironment =
+  withDatabaseConfigEnvironment "WEB_API_MIGRATION_DATABASE" defaultMigrationPostgresConfig
+    . withDatabaseConfigEnvironment "DATABASE" defaultRealPostgresConfig
+
+withDatabaseConfigEnvironment :: String -> DatabaseConfig -> IO a -> IO a
+withDatabaseConfigEnvironment prefix databaseConfig =
+  withTemporaryEnvironment (prefix <> "_HOST") (Just (Text.unpack (databaseHost databaseConfig)))
+    . withTemporaryEnvironment (prefix <> "_PORT") (Just (show (databasePort databaseConfig)))
+    . withTemporaryEnvironment (prefix <> "_NAME") (Just (Text.unpack (databaseName databaseConfig)))
+    . withTemporaryEnvironment (prefix <> "_USER") (Just (Text.unpack (databaseUser databaseConfig)))
+    . withTemporaryEnvironment (prefix <> "_PASSWORD") (Just (Text.unpack (databasePassword databaseConfig)))

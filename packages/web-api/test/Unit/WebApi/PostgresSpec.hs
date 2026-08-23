@@ -5,7 +5,7 @@
 {-# SPEC #-}
 
 import Data.ByteString qualified as ByteString
-import Data.IORef (modifyIORef', newIORef, readIORef)
+import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
@@ -24,7 +24,7 @@ import WebApi.Config (DatabaseConfig (..), defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), HomePageData (..), SecondPageData (..))
 import WebApi.Mfa (MfaStore (..), StoredTotpEnrollment (..))
 import WebApi.Postgres (buildPostgresPageRepository)
-import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithRunner, runPostgresMigrationsWithRunnerForRuntime, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
+import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..), PostgresMigrationExecutor (..), PostgresMigrationResult (..), PostgresRunnerError (..), buildPostgresPageRepositoryWithRunner, buildRuntimePostgresAccountProfileStore, buildRuntimePostgresAccountProfileStoreWithRunner, buildRuntimePostgresAccountStore, buildRuntimePostgresAccountStoreWithRunner, buildRuntimePostgresMfaStore, buildRuntimePostgresPageRepositoryWithRunner, decodeRuntimeQueryValue, libpqConnectionValue, migrationStatementsFor, newPostgresPool, renderRuntimeConnectionErrorMessage, renderRuntimeResultErrorMessage, runPostgresMigrations, runPostgresMigrationsForRuntime, runPostgresMigrationsWithExecutor, runPostgresSeed, runPostgresSeedWithRunner, runRequiredScalarCommand, runRowsCommand, runRuntimeParameterizedRowsQuery, runRuntimeRowsQuery, runRuntimeScalarQuery, seedStatements)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.SetupPlan (TcpEndpoint (..))
 
@@ -697,16 +697,166 @@ spec = do
             Left runtimeError -> not (Text.null runtimeError)
             Right rows -> error ("expected parameterized connection failure, got rows: " <> show rows)
 
-    it "runs migrations and seed statements in order through the provided runner" $ do
-      recordedCommandsReference <- newIORef []
-      let runner command = modifyIORef' recordedCommandsReference (<> [command]) >> pure (successfulPostgresResult Text.empty)
-      runPostgresMigrationsWithRunnerForRuntime runner migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
-      runPostgresSeedWithRunner runner postgresTestConfig `shouldReturn` Right ()
-      recordedCommands <- readIORef recordedCommandsReference
-      map commandSql recordedCommands `shouldBe` migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements
+    it "records same-identity schema versions and safely handles libpq migration failures" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
+      runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+        `shouldReturn` Right ["initial-schema"]
+      withUnusedTcpEndpoint $ \unusedEndpoint -> do
+        runPostgresMigrations
+          defaultMigrationPostgresConfig
+            { databasePort = tcpEndpointPort unusedEndpoint
+            }
+          `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      runPostgresMigrationsForRuntime
+        defaultMigrationPostgresConfig
+        defaultRealPostgresConfig {databaseName = "missing_ax_reconciliation_database"}
+        `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+
+    it "runs every pending migration and its version record in one locked transaction" $ do
+      recordedSqlReference <- newIORef []
+      let executor =
+            PostgresMigrationExecutor $ \sql -> do
+              modifyIORef' recordedSqlReference (<> [sql])
+              pure $
+                if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
+                  then Just (PostgresMigrationRows [])
+                  else Just PostgresMigrationCommandSucceeded
+      runPostgresMigrationsWithExecutor executor migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
+      recordedSql <- readIORef recordedSqlReference
+      let versionedTransactionSql =
+            [ "BEGIN;",
+              "SELECT pg_advisory_xact_lock(782476311);",
+              "CREATE SCHEMA IF NOT EXISTS web_api;",
+              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+            ]
+              <> migrationStatementsFor
+              <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');"]
+      take (length versionedTransactionSql) recordedSql `shouldBe` versionedTransactionSql
+      all
+        (`elem` recordedSql)
+        [ "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";",
+          "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.accounts TO \"web_api_app\";"
+        ]
+        `shouldBe` True
+      last recordedSql `shouldBe` "COMMIT;"
+
+    it "skips recorded migrations, rejects an unknown recorded version, and rolls back failed transactions" $ do
+      recordedSqlReference <- newIORef []
+      let executor appliedVersions failingSql =
+            PostgresMigrationExecutor $ \sql -> do
+              modifyIORef' recordedSqlReference (<> [sql])
+              pure $
+                if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);"
+                  then Just (PostgresMigrationRows appliedVersions)
+                  else
+                    if sql == failingSql
+                      then Nothing
+                      else Just PostgresMigrationCommandSucceeded
+          setupSql =
+            [ "BEGIN;",
+              "SELECT pg_advisory_xact_lock(782476311);",
+              "CREATE SCHEMA IF NOT EXISTS web_api;",
+              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+            ]
+      runPostgresMigrationsWithExecutor (executor ["initial-schema"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
+      skippedRecordedSql <- readIORef recordedSqlReference
+      take (length setupSql) skippedRecordedSql `shouldBe` setupSql
+      skippedRecordedSql `shouldContain` ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";"]
+      skippedRecordedSql `shouldNotContain` ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');"]
+      last skippedRecordedSql `shouldBe` "COMMIT;"
+      writeIORef recordedSqlReference []
+      runPostgresMigrationsWithExecutor (executor ["removed-version"] "never") migrationPostgresTestConfig postgresTestConfig
+        `shouldReturn` Left (PostgresMigrationFailed "Unknown PostgreSQL schema migration version: removed-version")
+      readIORef recordedSqlReference `shouldReturn` (setupSql <> ["ROLLBACK;"])
+      writeIORef recordedSqlReference []
+      case filter (/= "CREATE SCHEMA IF NOT EXISTS web_api;") migrationStatementsFor of
+        failingSql : _ -> do
+          runPostgresMigrationsWithExecutor (executor [] failingSql) migrationPostgresTestConfig postgresTestConfig
+            `shouldReturn` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+          readIORef recordedSqlReference
+            `shouldReturn` (setupSql <> takeWhile (/= failingSql) migrationStatementsFor <> [failingSql, "ROLLBACK;"])
+        [] -> expectationFailure "expected initial schema migration statements"
+
+    it "rejects malformed migration protocol results and rolls back every post-BEGIN failure" $ do
+      let setupSql =
+            [ "BEGIN;",
+              "SELECT pg_advisory_xact_lock(782476311);",
+              "CREATE SCHEMA IF NOT EXISTS web_api;",
+              "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
+              "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
+            ]
+          runWith migrationConfig runtimeConfig resultFor = do
+            recordedSqlReference <- newIORef []
+            let executor =
+                  PostgresMigrationExecutor $ \sql -> do
+                    modifyIORef' recordedSqlReference (<> [sql])
+                    pure (resultFor sql)
+            result <- runPostgresMigrationsWithExecutor executor migrationConfig runtimeConfig
+            recordedSql <- readIORef recordedSqlReference
+            pure (result, recordedSql)
+          migrationFailure = Nothing
+          commandSuccess sql
+            | sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows [])
+            | otherwise = Just PostgresMigrationCommandSucceeded
+          versionRows versions sql
+            | sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" || sql == "SELECT pg_advisory_xact_lock(782476311);" = Just (PostgresMigrationRows versions)
+            | otherwise = commandSuccess sql
+      (beginResult, beginSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (const migrationFailure)
+      beginResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      beginSql `shouldBe` ["BEGIN;"]
+
+      (lockResult, lockSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "SELECT pg_advisory_xact_lock(782476311);" then migrationFailure else commandSuccess sql)
+      lockResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      lockSql `shouldBe` ["BEGIN;", "SELECT pg_advisory_xact_lock(782476311);", "ROLLBACK;"]
+
+      (bootstrapResult, bootstrapSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);" then migrationFailure else commandSuccess sql)
+      bootstrapResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      bootstrapSql `shouldBe` take 4 setupSql <> ["ROLLBACK;"]
+
+      (versionResult, versionSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;" then migrationFailure else commandSuccess sql)
+      versionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      versionSql `shouldBe` setupSql <> ["ROLLBACK;"]
+
+      (rowlessVersionResult, rowlessVersionSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig commandSuccess
+      rowlessVersionResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration version query returned no rows")
+      rowlessVersionSql `shouldBe` setupSql <> ["ROLLBACK;"]
+
+      (rowCommandResult, rowCommandSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "BEGIN;" then Just (PostgresMigrationRows []) else versionRows [] sql)
+      rowCommandResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command returned rows")
+      rowCommandSql `shouldBe` ["BEGIN;"]
+
+      (recordResult, recordSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');" then migrationFailure else versionRows [] sql)
+      recordResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      recordSql `shouldBe` setupSql <> migrationStatementsFor <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');", "ROLLBACK;"]
+
+      (reconciliationResult, reconciliationSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema"] sql)
+      reconciliationResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      reconciliationSql `shouldBe` setupSql <> ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";", "ROLLBACK;"]
+
+      (commitResult, commitSql) <-
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema"] sql)
+      commitResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
+      take (length setupSql) commitSql `shouldBe` setupSql
+      drop (length commitSql - 2) commitSql `shouldBe` ["COMMIT;", "ROLLBACK;"]
+
+      (sameIdentityResult, sameIdentitySql) <-
+        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema"])
+      sameIdentityResult `shouldBe` Right ()
+      sameIdentitySql `shouldNotContain` ["DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'web_api_owner') THEN EXECUTE 'ALTER ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; ELSE EXECUTE 'CREATE ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; END IF; END $$;"]
 
     it "creates account verification, MFA, and opaque-session storage without persisting raw bearer secrets" $ do
-      migrationStatementsFor migrationPostgresTestConfig postgresTestConfig
+      migrationStatementsFor
         `shouldSatisfy` \statements ->
           all
             (`elem` statements)
@@ -718,39 +868,8 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.account_totp (account_id TEXT PRIMARY KEY REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, encrypted_secret BYTEA NOT NULL, confirmed_at_nanoseconds BIGINT, created_at_nanoseconds BIGINT NOT NULL, last_used_totp_counter BIGINT);",
               "ALTER TABLE web_api.account_totp ADD COLUMN IF NOT EXISTS last_used_totp_counter BIGINT;",
               "CREATE TABLE IF NOT EXISTS web_api.account_recovery_codes (account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, code_hash TEXT NOT NULL UNIQUE, created_at_nanoseconds BIGINT NOT NULL, used_at_nanoseconds BIGINT, PRIMARY KEY (account_id, code_hash));",
-              "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.accounts TO \"" <> databaseUser postgresTestConfig <> "\";",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.email_verifications TO \"" <> databaseUser postgresTestConfig <> "\";",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_totp TO \"" <> databaseUser postgresTestConfig <> "\";",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_recovery_codes TO \"" <> databaseUser postgresTestConfig <> "\";",
-              "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE web_api.account_sessions TO \"" <> databaseUser postgresTestConfig <> "\";"
+              "CREATE TABLE IF NOT EXISTS web_api.account_sessions (session_id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES web_api.accounts (account_id) ON DELETE CASCADE, csrf_token TEXT NOT NULL, issued_at_nanoseconds BIGINT NOT NULL, expires_at_nanoseconds BIGINT NOT NULL, invalidated_at_nanoseconds BIGINT);"
             ]
-
-    it "keeps the legacy same-config migration wrappers on the runtime-config path"
-      $ withFakePsqlScript
-        (fmap (,Text.empty) (migrationStatementsFor postgresTestConfig postgresTestConfig))
-      $ \argsLogPath -> do
-        recordedCommandsReference <- newIORef []
-        let runner command = modifyIORef' recordedCommandsReference (<> [command]) >> pure (successfulPostgresResult Text.empty)
-        runPostgresMigrationsWithRunner runner postgresTestConfig `shouldReturn` Right ()
-        map commandSql
-          <$> readIORef recordedCommandsReference
-            `shouldReturn` migrationStatementsFor postgresTestConfig postgresTestConfig
-        runPostgresMigrations postgresTestConfig `shouldReturn` Right ()
-        let renderMutationLogEntry databaseConfig sql =
-              "--host "
-                <> Text.unpack (databaseHost databaseConfig)
-                <> " --port "
-                <> show (databasePort databaseConfig)
-                <> " --dbname "
-                <> Text.unpack (databaseName databaseConfig)
-                <> " --username "
-                <> Text.unpack (databaseUser databaseConfig)
-                <> " --no-password --set ON_ERROR_STOP=1 --command "
-                <> Text.unpack sql
-        readFile argsLogPath
-          `shouldReturn` unlines
-            (fmap (renderMutationLogEntry postgresTestConfig) (migrationStatementsFor postgresTestConfig postgresTestConfig))
 
     it "stops database setup when a migration or seed command fails" $ do
       case seedStatements of
@@ -864,13 +983,13 @@ spec = do
           failedCommandResult `shouldBe` failingResult
         _ -> expectationFailure "expected a structured PostgresCommandFailed error for the scalar query"
 
-    it "uses the default psql runner for effect loading and database setup when psql is on PATH"
+    it "uses the default psql runner for effect loading and seed setup when psql is on PATH"
       $ withFakePsqlScript
         ( [ ("SELECT summary FROM web_api.page_content WHERE route_slug = 'home' AND locale = 'en';", "Server-rendered home page with stubbed content."),
             ("SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';", "Second page content with stubbed data ready for future loaders."),
             ("SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;", Text.empty)
           ]
-            <> fmap (,Text.empty) (migrationStatementsFor migrationPostgresTestConfig postgresTestConfig <> seedStatements)
+            <> fmap (,Text.empty) seedStatements
         )
       $ \argsLogPath -> do
         let application = buildAppWithDatabase defaultAppConfig (buildPostgresPageRepository postgresTestConfig)
@@ -892,7 +1011,6 @@ spec = do
                   HarchWeb.pageBootstrapHooks = ["second-page"]
                 }
             )
-        runPostgresMigrationsForRuntime migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
         runPostgresSeed postgresTestConfig `shouldReturn` Right ()
         let renderQueryLogEntry sql =
               "--host db.internal --port 6543 --dbname web_api_prod --username web_api_app --no-password --set ON_ERROR_STOP=1 --tuples-only --no-align --quiet --command "
@@ -913,7 +1031,6 @@ spec = do
             ( [ renderQueryLogEntry "SELECT summary FROM web_api.page_content WHERE route_slug = 'second' AND locale = 'en';",
                 renderQueryLogEntry "SELECT highlight FROM web_api.page_highlights WHERE route_slug = 'second' AND locale = 'en' ORDER BY position ASC;"
               ]
-                <> fmap (renderMutationLogEntry migrationPostgresTestConfig) (migrationStatementsFor migrationPostgresTestConfig postgresTestConfig)
                 <> fmap (renderMutationLogEntry postgresTestConfig) seedStatements
             )
 
