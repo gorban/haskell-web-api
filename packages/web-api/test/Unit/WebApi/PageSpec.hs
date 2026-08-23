@@ -5,11 +5,17 @@
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
+import HarchWeb qualified
+import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
+import Unit.WebApi.TestSupport hiding (databaseConfig)
 import WebApi.AccountPages (AccountActionTarget (..))
-import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..))
-import WebApi.Route (AppRoute (..))
+import WebApi.Config (AppConfig (..), defaultAppConfig, defaultStaticAssetContentTypes)
+import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..), renderPage, renderPageFromRouteData)
+import WebApi.Route (AppRoute (..), defaultRequestContext)
+import WebApi.RouteData (RouteDataResult (..), SecondRouteData (..))
 
-spec =
+existingSpec :: SpecWith ()
+existingSpec =
   describe "ProfilePageModel and its detail records" $
     it "compares every rendered profile identity field and keeps models printable" $ do
       let signInAction = CallToAction "Sign in" LoginRoute "/login"
@@ -100,3 +106,111 @@ spec =
 assertProfilePageModelShow :: (ProfilePageModel, Text) -> Expectation
 assertProfilePageModelShow (profilePageModel, expectedPrefix) =
   Text.pack (show (ProfilePage profilePageModel)) `shouldSatisfy` Text.isPrefixOf ("ProfilePage (" <> expectedPrefix)
+
+spec = do
+  existingSpec
+  describe "renderPage" $ do
+    it "selects the expected home page model" $
+      renderPage defaultAppConfig homeRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Home",
+            HarchWeb.pageRoute = HomeRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"home\"><h1 data-page-title=\"true\">Home</h1><p>Server-rendered home page with stubbed content.</p><p><a href=\"/second\" data-page-link=\"true\">Browse the second page</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = []
+          }
+
+    it "selects a distinct second page model" $
+      renderPage defaultAppConfig secondRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Second",
+            HarchWeb.pageRoute = SecondRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\"true\">No highlights yet.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = ["second-page"]
+          }
+
+    it "renders the app-home spaces page entirely on the server" $
+      renderPage defaultAppConfig spacesRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Spaces",
+            HarchWeb.pageRoute = SpacesRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"spaces\"><h1 data-page-title=\"true\">Site under construction</h1><p>Follow this space.</p></section>"),
+            HarchWeb.pageBootstrapHooks = []
+          }
+
+    it "selects a stable not-found page model" $
+      renderPage defaultAppConfig notFoundRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Not Found",
+            HarchWeb.pageRoute = NotFoundRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">Not Found</h1><p>The requested page could not be found.</p><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = []
+          }
+
+    it "selects a Spanish not-found page model" $
+      renderPage defaultAppConfig spanishNotFoundRequest
+        `shouldReturn` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Not Found",
+            HarchWeb.pageRoute = NotFoundRoute,
+            HarchWeb.pageContext = spanishRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"not-found\"><h1 data-page-title=\"true\">No encontrado</h1><p>No se pudo encontrar la pagina solicitada.</p><p><a href=\"/es\" data-page-link=\"true\">Volver al inicio</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = []
+          }
+
+    it "renders selected route data without reloading it" $
+      renderPageFromRouteData
+        defaultAppConfig
+        secondRequest
+        ( SecondRouteDataResult
+            ( Right
+                SecondRouteData
+                  { secondRouteSummary = "Shared domain summary.",
+                    secondRouteHighlights = ["Shared loader"]
+                  }
+            )
+        )
+        `shouldBe` HarchWeb.Page
+          { HarchWeb.pageTitle = "web-api: Second",
+            HarchWeb.pageRoute = SecondRoute,
+            HarchWeb.pageContext = defaultRequestContext,
+            HarchWeb.pageBody = HarchWeb.trustedHtml (MarkupUnsafe.unsafeTrustHtml "<section data-page=\"second\"><h1 data-page-title=\"true\">Second</h1><p>Shared domain summary.</p><ul><li>Shared loader</li></ul><p><a href=\"/\" data-page-link=\"true\">Return home</a></p></section>"),
+            HarchWeb.pageBootstrapHooks = ["second-page"]
+          }
+
+    it "keeps shared layout data consistent across all routes" $ do
+      let config =
+            AppConfig
+              { appTitlePrefix = "test-app",
+                listenerConfigs = listenerConfigs defaultAppConfig,
+                staticAssets = staticAssets defaultAppConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
+                observability = observability defaultAppConfig
+              }
+      homeShell <- renderedShell config HomeRoute
+      secondShell <- renderedShell config SecondRoute
+      notFoundShell <- renderedShell config NotFoundRoute
+      Text.isInfixOf "<title>test-app: Home</title>" homeShell `shouldBe` True
+      Text.isInfixOf "<title>test-app: Second</title>" secondShell `shouldBe` True
+      Text.isInfixOf "data-bootstrap-hooks=\"second-page\"" secondShell `shouldBe` True
+      Text.isInfixOf "<title>test-app: Not Found</title>" notFoundShell `shouldBe` True
+      Text.isInfixOf "<script nonce=\"" homeShell `shouldBe` True
+      Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" homeShell `shouldBe` True
+
+    it "keeps config, routes, and pages serializable and deterministic for tests" $ do
+      let config =
+            AppConfig
+              { appTitlePrefix = "test-app",
+                listenerConfigs = listenerConfigs defaultAppConfig,
+                staticAssets = staticAssets defaultAppConfig,
+                requestPolicy = requestPolicy defaultAppConfig,
+                observability = observability defaultAppConfig
+              }
+      show config
+        `shouldContain` ("staticAssetContentTypes = " <> show defaultStaticAssetContentTypes)
+      show defaultRequestContext `shouldBe` "AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}"
+      show (renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []}))))
+        `shouldBe` "Page {pageTitle = \"test-app: Second\", pageRoute = SecondRoute, pageContext = AppRequestContext {requestLocale = English, requestLocaleIsExplicit = False, requestCorrelationId = Nothing, requestPathPrefix = \"\", requestQueryParameters = [], requestSessionId = Nothing, requestMfaEnrollmentSessionId = Nothing}, pageBody = \"<section data-page=\\\"second\\\"><h1 data-page-title=\\\"true\\\">Second</h1><p>Second page content with stubbed data ready for future loaders.</p><p data-empty-state=\\\"true\\\">No highlights yet.</p><p><a href=\\\"/\\\" data-page-link=\\\"true\\\">Return home</a></p></section>\", pageBootstrapHooks = [\"second-page\"]}"
+      renderPage config secondRequest `shouldReturn` renderPageFromRouteData config secondRequest (SecondRouteDataResult (Right (SecondRouteData {secondRouteSummary = "Second page content with stubbed data ready for future loaders.", secondRouteHighlights = []})))
