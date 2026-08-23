@@ -25,6 +25,7 @@ import HarchWeb.Database qualified as Database ()
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe (unsafeTrustHtml)
 import HarchWeb.Observability qualified as Observability (ConnectionObservability (observabilityConnectionSpan), HttpServerMetrics (httpServerMetricAttributes), ObservabilityAttribute (attributeName, attributeValue), ObservabilityAttributeValue (IntAttribute, TextAttribute), RequestObservability (observabilityHttpServerMetrics, observabilityRequestSpan), RequestSpan (requestSpanAttributes), buildConnectionObservability)
 import HarchWeb.Security qualified as Security ()
+import HarchWeb.Session (generateCsrfToken)
 import Network.HTTP.Client qualified as HttpClient (Manager, defaultManagerSettings, newManager)
 import Network.HTTP.Types qualified as Http (Header, RequestHeaders, Status, status200, status202, status501)
 import Network.Socket qualified as Socket (Family (AF_INET), SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, connect, defaultProtocol, getSocketName, listen, maxListenQueue, socket, tupleToHostAddress, withSocketsDo)
@@ -297,6 +298,8 @@ sampleApplicationWithConfig staticAssetsConfig requestPolicyConfig =
       routeCodec = sampleCodec,
       renderRequestResponse = \_ -> pure . renderSampleResponse,
       decodeClientAction = DecodedClientAction . clientActionPath,
+      pageCsrfToken = const generateCsrfToken,
+      authorizeClientActionCsrf = \_ _ -> pure True,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell sampleCodec sampleShell,
       reportRequestObservability = const (pure ()),
@@ -515,6 +518,8 @@ rootPathApplication =
       routeCodec = rootPathCodec,
       renderRequestResponse = \_ -> pure . PageResponse . samplePage,
       decodeClientAction = DecodedClientAction . clientActionPath,
+      pageCsrfToken = const generateCsrfToken,
+      authorizeClientActionCsrf = \_ _ -> pure True,
       handleClientAction = const (pure Nothing),
       pageShell = buildPageShell rootPathCodec sampleShell,
       reportRequestObservability = const (pure ()),

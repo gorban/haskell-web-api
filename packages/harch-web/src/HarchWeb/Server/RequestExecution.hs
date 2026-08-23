@@ -61,6 +61,7 @@ import HarchWeb.Server.RequestBody (RequestBodyReadFailure (..), readRequestBody
 import HarchWeb.Server.Response
 import HarchWeb.Server.ResponseRendering
 import HarchWeb.Server.StaticAssets (serveStaticAssetResponse)
+import HarchWeb.Session (CsrfToken)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -224,7 +225,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
   renderStartedAt <- getMonotonicTimeNSec
   response <- dispatchRoutedRequest routedRequestExecution routeDispatch middlewareResult
   responseRenderedAt <- response `seq` getMonotonicTimeNSec
-  runtimeNonce <- responseRuntimeNonce response
+  pageSecurity <- responsePageSecurity webApplication response
   let executionTimings =
         RequestExecutionTimings
           { requestExecutionStartedAt = requestStartedAt,
@@ -235,7 +236,7 @@ handleRoutedRequest routedRequestExecution requestStartedAt policyEvaluatedAt = 
             requestRenderingStartedAt = renderStartedAt,
             requestResponseRenderedAt = responseRenderedAt
           }
-  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest (isHeadDispatch routeDispatch) runtimeNonce response
+  finalizeRoutedResponse routedRequestExecution executionTimings routeRequest (isHeadDispatch routeDispatch) pageSecurity response
 
 routeDispatchRequest :: RouteDispatch route context -> RouteRequest route context
 routeDispatchRequest routeDispatch =
@@ -287,7 +288,7 @@ dispatchRoutedRequest
                   Right actionFields -> do
                     case validateClientActionCsrf request actionFields of
                       Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                      Right () -> do
+                      Right csrfToken -> do
                         let actionPayload =
                               ClientActionPayload
                                 { clientActionMethod = requestMethodText request,
@@ -311,20 +312,23 @@ dispatchRoutedRequest
                             pure
                               (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
                           DecodedClientAction action -> do
-                            maybeActionResponse <-
-                              handleClientAction
-                                webApplication
-                                ClientActionRequest
-                                  { clientAction = action,
-                                    clientActionRequestIdempotencyKey = requestIdempotencyKey request,
-                                    clientActionContext = routedRequestContext
-                                  }
-                            pure
-                              ( maybe
-                                  (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                                  ClientActionBodyResponse
-                                  maybeActionResponse
-                              )
+                            let actionRequest =
+                                  ClientActionRequest
+                                    { clientAction = action,
+                                      clientActionRequestIdempotencyKey = requestIdempotencyKey request,
+                                      clientActionContext = routedRequestContext
+                                    }
+                            authorized <- authorizeClientActionCsrf webApplication actionRequest csrfToken
+                            case authorized of
+                              False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
+                              True -> do
+                                maybeActionResponse <- handleClientAction webApplication actionRequest
+                                pure
+                                  ( maybe
+                                      (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+                                      ClientActionBodyResponse
+                                      maybeActionResponse
+                                  )
           else renderRouteDispatch webApplication request routeDispatch
 
 renderRouteDispatch :: Application route action context -> Wai.Request -> RouteDispatch route context -> IO (Response route context)
@@ -395,10 +399,10 @@ finalizeRoutedResponse ::
   RequestExecutionTimings ->
   RouteRequest route context ->
   Bool ->
-  Maybe Document.RuntimeNonce ->
+  Maybe (Document.RuntimeNonce, CsrfToken) ->
   Response route context ->
   IO Wai.ResponseReceived
-finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omitResponseBody runtimeNonce response = do
+finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omitResponseBody pageSecurity response = do
   let webApplication = routedRequestApplication routedRequestExecution
       request = routedRequestWaiRequest routedRequestExecution
       respond = routedRequestRespond routedRequestExecution
@@ -411,7 +415,7 @@ finalizeRoutedResponse routedRequestExecution executionTimings routeRequest omit
     respond
       ( omitResponseBodyWhen
           omitResponseBody
-          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request runtimeNonce) (toWaiResponse [] runtimeNonce webApplication response))
+          (applyResponseHeaders (responsePolicyHeaders requestPolicyConfig request (fst <$> pageSecurity)) (toWaiResponse [] pageSecurity webApplication response))
       )
   Observability.forceRequestObservability observabilityValue `seq`
     reportRequestObservability webApplication observabilityValue

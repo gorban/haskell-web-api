@@ -45,6 +45,7 @@ import HarchWeb
 import HarchWeb qualified
 import HarchWeb.Document qualified as Document
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Session (CsrfToken, generateCsrfToken)
 import Network.Wai qualified as Wai
 
 data RouteDefinition route context = RouteDefinition
@@ -69,6 +70,8 @@ data Site route action context = Site
     siteNavigationRoutes :: [route],
     siteRouteDefinition :: route -> RouteDefinition route context,
     siteDecodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
+    sitePageCsrfToken :: Page route context -> IO CsrfToken,
+    siteAuthorizeClientActionCsrf :: ClientActionRequest action context -> CsrfToken -> IO Bool,
     siteHandleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     sitePageShell :: Page route context -> PageShell route context,
     siteReportRequestObservability :: Observability.RequestObservability -> IO (),
@@ -83,7 +86,7 @@ simpleSite ::
   (Page route context -> PageShell route context) ->
   [route] ->
   (route -> RouteDefinition route context) ->
-  Site route () context
+  Site route action context
 simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefinition =
   Site
     { siteName = name,
@@ -98,6 +101,8 @@ simpleSite name defaultContext codec shellBuilder navigationRoutes routeDefiniti
       siteNavigationRoutes = navigationRoutes,
       siteRouteDefinition = routeDefinition,
       siteDecodeClientAction = const HarchWeb.UnrecognizedClientAction,
+      sitePageCsrfToken = const generateCsrfToken,
+      siteAuthorizeClientActionCsrf = \_ _ -> pure True,
       siteHandleClientAction = const (pure Nothing),
       sitePageShell = shellBuilder,
       siteReportRequestObservability = \requestObservability ->
@@ -119,7 +124,7 @@ apiOnlySite ::
   context ->
   RouteCodec route context ->
   (route -> RouteDefinition route context) ->
-  Site route () context
+  Site route action context
 apiOnlySite name defaultContext codec routeDefinition =
   (simpleSite name defaultContext codec (const apiOnlyFallbackPageShell) [] routeDefinition)
     { siteNavigationRuntime = Nothing
@@ -162,6 +167,8 @@ buildSiteApplication site =
         routeCodec = (siteRouteCodec site) {HarchWeb.routeMethods = HarchWeb.routeMethodPolicy . routeMethods . siteRouteDefinition site},
         renderRequestResponse = renderSiteResponse site,
         decodeClientAction = siteDecodeClientAction site,
+        pageCsrfToken = sitePageCsrfToken site,
+        authorizeClientActionCsrf = siteAuthorizeClientActionCsrf site,
         handleClientAction = siteHandleClientAction site,
         pageShell = renderSitePageShell site,
         reportRequestObservability = siteReportRequestObservability site,

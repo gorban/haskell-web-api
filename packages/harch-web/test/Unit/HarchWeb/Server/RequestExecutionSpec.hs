@@ -5,7 +5,7 @@
 import Control.Concurrent ()
 import Control.Exception ()
 import Control.Monad (forM_)
-import Data.ByteString qualified as ByteString (intercalate, isPrefixOf, replicate)
+import Data.ByteString qualified as ByteString (drop, intercalate, isInfixOf, isPrefixOf, replicate, takeWhile)
 import Data.ByteString.Builder qualified as Builder (byteString)
 import Data.ByteString.Char8 qualified as ByteStringChar8 ()
 import Data.ByteString.Lazy qualified as LazyByteString (fromStrict)
@@ -19,12 +19,13 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text (isInfixOf, pack)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8, encodeUtf8)
-import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, decodeClientAction, handleClientAction, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
+import HarchWeb (Application (applicationNavigationRuntime, applicationRequestMiddleware, applicationRequestPolicy, authorizeClientActionCsrf, decodeClientAction, handleClientAction, pageCsrfToken, pageShell, renderRequestResponse, reportApplicationLog, reportRequestObservability, requestContextFromRequest), ClientActionDecodeResult (DecodedClientAction, UnrecognizedClientAction), ClientActionPayload (clientActionCsrfToken, clientActionFields, clientActionIdempotencyKey, clientActionMethod), ClientActionRequest (ClientActionRequest, clientAction, clientActionContext, clientActionRequestIdempotencyKey), ClientActionResponse (ClientActionResponse, clientActionFocusId, clientActionHeaders, clientActionLogEntries, clientActionObservabilityAttributes, clientActionPatches, clientActionStatus), CorsPolicyConfig (CorsPolicyConfig, corsAllowedHeaders, corsAllowedMethods, corsAllowedOrigins, corsMaxAgeSeconds), Document (documentRuntimeDescriptors), ForwardedHeaderTrust (NeverTrustForwarded), MiddlewareResult (ContinueMiddleware, HaltMiddleware), Page (pageRoute), ProtocolResponse (ProtocolResponse, protocolResponseBody, protocolResponseDatabaseOperations, protocolResponseHeaders, protocolResponseLogEntries, protocolResponseObservabilityAttributes, protocolResponseStatus), ProtocolResponseBody (ProtocolResponseBytes, ProtocolResponseStream), RequestMiddleware (RequestMiddleware), RequestPolicyConfig (RequestPolicyConfig, corsPolicy, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, redirectHttpToHttps, requestConcurrencyLimit, requestHeadLimits, requestTransportLimits, responseSecurityHeaders, strictTransportSecurity), Response (BodyResponse, ClientActionBodyResponse, EventStreamResponse, PageResponse, PageResponseWithMetadata, ProtocolResponseResult), ResponseBody (ResponseBody, responseBody, responseContentType, responseDatabaseOperations, responseLogEntries, responseObservabilityAttributes, responseStatus), ResponseDiagnostics (diagnosticLogEntries, diagnosticObservabilityAttributes), ResponseSecurityHeadersConfig (ResponseSecurityHeadersConfig, contentSecurityPolicy, contentTypeOptionsNoSniff, frameOptions, permissionsPolicy, referrerPolicy, xssProtection), RouteRequest (RouteRequest, requestContext, requestRoute), RuntimeDescriptor (InlineBootstrap), ServerSentEvent (ServerSentEvent), StaticAssetRoot (StaticAssetRoot, staticDirectory, staticUrlPrefix), StaticAssetsConfig (StaticAssetsConfig, staticAssetContentTypes, staticAssetRoots, staticCacheControlSeconds), StrictTransportSecurityConfig (StrictTransportSecurityConfig, strictTransportSecurityIncludeSubDomains, strictTransportSecurityMaxAgeSeconds, strictTransportSecurityPreload), clientActionResponseBody, defaultContentSecurityPolicy, defaultCorsPolicyConfig, defaultNavigationRuntime, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, eventStreamResponse, isClientActionRequest, parseClientActionFields, redirectResponse, responseDiagnostics, responseKind, responseStatusCode, serverSentEventSourceFromList, toWaiApplication, toWaiResponse, unboundedRequestHeadLimits, warpDefaultRequestTransportLimits)
 import HarchWeb.Action qualified as Action (ActionDecoder, action, actionCodec, decodeAction, post)
 import HarchWeb.Database qualified as Database (DatabaseOperation (DatabaseOperation, databaseOperationEndedAtNanoseconds, databaseOperationName, databaseOperationStartedAtNanoseconds, databaseOperationSystem, databaseQueryTemplate))
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe ()
 import HarchWeb.Observability qualified as Observability (ObservabilityAttribute (ObservabilityAttribute, attributeName, attributeValue), ObservabilityAttributeValue (TextAttribute), RequestIdentity (RequestIdentity, requestIdentityMethod, requestIdentityPath, requestIdentityRoutePath, requestIdentityScheme), RequestObservability (observabilityRequestSpan), RequestSpan (requestSpanAttributes, requestSpanDisplayName), RequestTraceContext (RequestTraceContext, traceContextParentSpanId, traceContextState, traceContextTraceId), ResponseKind (BodyResponseKind, PageResponseKind), buildRequestObservability, mkSpanMethodLabel, mkSpanRoutePath, withDatabaseOperations, withRequestTraceContext)
 import HarchWeb.Security qualified as Security ()
+import HarchWeb.Session (csrfTokenText, generateCsrfToken)
 import Network.HTTP.Client qualified as HttpClient ()
 import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAllow, hCacheControl, hContentType, hLocation, status200, status201, status202, status204, status302, status308, status400, status401, status403, status404, status405, status413, status415, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
@@ -144,10 +145,33 @@ spec = do
       response <- performWaiRequest (toWaiApplication sampleApplication) (waiRequest ["es", "known"])
       Wai.responseStatus response `shouldBe` Http.status200
       lookup Http.hContentType (Wai.responseHeaders response) `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
-      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldSatisfy` maybe False (ByteString.isPrefixOf "harch-csrf=")
+      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldSatisfy` maybe False (ByteString.isPrefixOf "__Host-harch-csrf=")
       responseBody <- readResponseBody response
       Text.isInfixOf "<a href=\"/es/known\" data-page-link=\"true\" aria-current=\"page\">Known</a>" responseBody `shouldBe` True
       Text.isInfixOf "<script type=\"module\" src=\"/assets/navigation.js\" defer></script>" responseBody `shouldBe` True
+
+    it "keeps the host-scoped CSRF token independent from the page CSP nonce" $ do
+      let csrfApplication =
+            sampleApplication
+              { pageCsrfToken = \page -> do
+                  pageRoute page `shouldBe` KnownRoute
+                  generateCsrfToken
+              }
+      response <- performWaiRequest (toWaiApplication csrfApplication) (waiRequest ["known"])
+      nextResponse <- performWaiRequest (toWaiApplication csrfApplication) (waiRequest ["known"])
+      responseBody <- readResponseBody response
+      let responseHeaders = Wai.responseHeaders response
+          csrfCookie = fromMaybe (error "page response did not issue CSRF cookie") (lookup "Set-Cookie" responseHeaders)
+          nextCsrfCookie = fromMaybe (error "second page response did not issue CSRF cookie") (lookup "Set-Cookie" (Wai.responseHeaders nextResponse))
+          csrfToken = ByteString.takeWhile (/= 59) (ByteString.drop 18 csrfCookie)
+          contentSecurityPolicy = fromMaybe "" (lookup "Content-Security-Policy" responseHeaders)
+      csrfCookie `shouldSatisfy` ByteString.isPrefixOf "__Host-harch-csrf="
+      csrfCookie `shouldSatisfy` ByteString.isInfixOf "; Path=/; Secure; SameSite=Strict"
+      csrfCookie `shouldSatisfy` (not . ByteString.isInfixOf "Domain=")
+      csrfCookie `shouldSatisfy` (not . ByteString.isInfixOf "HttpOnly")
+      csrfCookie /= nextCsrfCookie `shouldBe` True
+      contentSecurityPolicy `shouldSatisfy` (not . ByteString.isInfixOf csrfToken)
+      TextEncoding.encodeUtf8 responseBody `shouldSatisfy` (not . ByteString.isInfixOf csrfToken)
 
     it "uses the route-resolved context for captured actions and returns typed region patches" $ do
       actionRequestReference <- newIORef Nothing
@@ -172,13 +196,13 @@ spec = do
                 reportRequestObservability = writeIORef requestObservabilityReference . Just,
                 reportApplicationLog = \entry -> modifyIORef' logEntriesReference (<> [entry])
               }
-      actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&_harch_csrf=csrf-token&intent=subscribe&blank"]
+      actionBodyChunks <- newIORef ["email=ada%40example.com&_csrf=csrf-token&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&intent=subscribe&blank"]
       let capturedActionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["es", "known"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "retry-1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "retry-1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
                   }
               )
       response <- performWaiRequest (toWaiApplication actionApplication) capturedActionRequest
@@ -190,12 +214,12 @@ spec = do
               clientActionRequestIdempotencyKey = Just "retry-1",
               clientActionContext = spanishContext
             }
-      invalidIdempotencyBodyChunks <- newIORef ["email=ada%40example.com&_harch_csrf=csrf-token"]
+      invalidIdempotencyBodyChunks <- newIORef ["email=ada%40example.com&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let invalidIdempotencyRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk invalidIdempotencyBodyChunks)
               ( capturedActionRequest
-                  { Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "\255"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                  { Wai.requestHeaders = [("X-Harch-Action", "1"), ("Idempotency-Key", "\255"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
                   }
               )
       writeIORef actionRequestReference Nothing
@@ -274,7 +298,7 @@ spec = do
       invalidOriginChunks <- newIORef ["email=ada%40example.test"]
       invalidCookieChunks <- newIORef ["email=ada%40example.test"]
       missingCookieChunks <- newIORef ["email=ada%40example.test"]
-      parameterizedContentTypeChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token"]
+      parameterizedContentTypeChunks <- newIORef ["email=ada%40example.test&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       missingOriginAndHostChunks <- newIORef ["email=ada%40example.test"]
       let requestWith bodyChunks headers =
             Wai.setRequestBodyChunks
@@ -290,13 +314,13 @@ spec = do
       crossOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith crossOriginChunks (init validHeaders <> [("Origin", "https://evil.example")]))
       invalidContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded-malformed"), ("Host", "example.test"), ("Origin", "http://example.test")])
       missingContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingContentTypeChunks [("X-Harch-Action", "1"), ("Host", "example.test"), ("Origin", "http://example.test")])
-      missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
-      mismatchedCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith mismatchedCsrfChunks (validHeaders <> [("Cookie", "harch-csrf=csrf-token")]))
+      missingCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCsrfChunks (validHeaders <> [("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]))
+      mismatchedCsrfResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith mismatchedCsrfChunks (validHeaders <> [("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]))
       invalidHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "\255"), ("Origin", "http://example.test")])
       invalidOriginResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidOriginChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "\255")])
-      invalidCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidCookieChunks (validHeaders <> [("Cookie", "harch-csrf=\255")]))
+      invalidCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith invalidCookieChunks (validHeaders <> [("Cookie", "__Host-harch-csrf=\255")]))
       missingCookieResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingCookieChunks validHeaders)
-      parameterizedContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith parameterizedContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded; charset=utf-8"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")])
+      parameterizedContentTypeResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith parameterizedContentTypeChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded; charset=utf-8"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")])
       missingOriginAndHostResponse <- performWaiRequest (toWaiApplication sampleApplication) (requestWith missingOriginAndHostChunks [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded")])
       rejectedBodies <-
         traverse
@@ -328,9 +352,90 @@ spec = do
       Wai.responseStatus missingOriginAndHostResponse `shouldBe` Http.status403
       rejectedBodies `shouldBe` replicate 11 "{\"patches\":[],\"focusId\":null}"
 
+    it "rejects malformed or duplicated strict CSRF transport before an action handler" $ do
+      handlerCalled <- newIORef False
+      let actionApplication =
+            sampleApplication
+              { handleClientAction = \_ -> do
+                  writeIORef handlerCalled True
+                  pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+              }
+          requestWith bodyChunks bodyHeaders =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk bodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test")
+                      ]
+                        <> bodyHeaders
+                  }
+              )
+      malformedChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      shortCookieChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      duplicateCookieChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      duplicateCookieValuesChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      malformed <- performWaiRequest (toWaiApplication actionApplication) (requestWith malformedChunks [("Cookie", "harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")])
+      shortCookie <- performWaiRequest (toWaiApplication actionApplication) (requestWith shortCookieChunks [("Cookie", "__Host-harch-csrf=short")])
+      duplicateCookie <- performWaiRequest (toWaiApplication actionApplication) (requestWith duplicateCookieChunks [("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")])
+      duplicateCookieValues <- performWaiRequest (toWaiApplication actionApplication) (requestWith duplicateCookieValuesChunks [("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA; __Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")])
+      duplicateFieldChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      let duplicateFieldRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk duplicateFieldChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                      ]
+                  }
+              )
+      duplicateField <- performWaiRequest (toWaiApplication actionApplication) duplicateFieldRequest
+      map Wai.responseStatus [malformed, shortCookie, duplicateCookie, duplicateCookieValues, duplicateField] `shouldBe` replicate 5 Http.status403
+      readIORef handlerCalled `shouldReturn` False
+
+    it "runs CSRF authorization after decoding and before an action handler" $ do
+      authorizationCalled <- newIORef False
+      handlerCalled <- newIORef False
+      actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      let actionApplication =
+            sampleApplication
+              { authorizeClientActionCsrf = \clientActionRequest csrfToken -> do
+                  clientAction clientActionRequest `shouldBe` "/known"
+                  csrfTokenText csrfToken `shouldBe` "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                  writeIORef authorizationCalled True
+                  pure False,
+                handleClientAction = \_ -> writeIORef handlerCalled True >> pure (Just (ClientActionResponse Http.status204 [] Nothing [] [] []))
+              }
+          actionRequest =
+            Wai.setRequestBodyChunks
+              (nextRequestBodyChunk actionBodyChunks)
+              ( (waiRequest ["known"])
+                  { Wai.requestMethod = "POST",
+                    Wai.requestHeaders =
+                      [ ("X-Harch-Action", "1"),
+                        (Http.hContentType, "application/x-www-form-urlencoded"),
+                        ("Host", "example.test"),
+                        ("Origin", "http://example.test"),
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+                      ]
+                  }
+              )
+      response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
+      Wai.responseStatus response `shouldBe` Http.status403
+      readIORef authorizationCalled `shouldReturn` True
+      readIORef handlerCalled `shouldReturn` False
+
     it "passes decoded client-action CSRF and idempotency metadata to the application" $ do
       receivedAction <- newIORef Nothing
-      actionBodyChunks <- newIORef ["intent=save&_harch_csrf=csrf-token"]
+      actionBodyChunks <- newIORef ["intent=save&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let metadataApplication :: Application TestRoute Text TestContext
           metadataApplication =
             sampleApplication
@@ -340,7 +445,7 @@ spec = do
                            clientActionCsrfToken payload,
                            clientActionIdempotencyKey payload
                          ) of
-                      ("POST", [("intent", "save"), ("_harch_csrf", "csrf-token")], Just "csrf-token", Just "idempotency-1") -> DecodedClientAction "save"
+                      ("POST", [("intent", "save"), ("_harch_csrf", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")], Just "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", Just "idempotency-1") -> DecodedClientAction "save"
                       _ -> UnrecognizedClientAction
                   ),
                 handleClientAction = \decodedActionRequest -> do
@@ -357,7 +462,7 @@ spec = do
                         (Http.hContentType, "application/x-www-form-urlencoded"),
                         ("Host", "example.test"),
                         ("Origin", "http://example.test"),
-                        ("Cookie", "harch-csrf=csrf-token"),
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"),
                         ("Idempotency-Key", "idempotency-1")
                       ]
                   }
@@ -423,13 +528,13 @@ spec = do
         )
 
     it "rejects marked actions without a matching handler instead of falling back to SSR" $ do
-      actionBodyChunks <- newIORef ["intent=unknown&_harch_csrf=csrf-token"]
+      actionBodyChunks <- newIORef ["intent=unknown&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let actionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["known"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
                   }
               )
       response <- performWaiRequest (toWaiApplication sampleApplication) actionRequest
@@ -474,15 +579,15 @@ spec = do
                         (Http.hContentType, "application/x-www-form-urlencoded"),
                         ("Host", "example.test"),
                         ("Origin", "http://example.test"),
-                        ("Cookie", "harch-csrf=csrf-token")
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                       ]
                   }
               )
-      unknownChunks <- newIORef ["_harch_csrf=csrf-token"]
-      wrongMethodChunks <- newIORef ["_harch_csrf=csrf-token"]
-      malformedChunks <- newIORef ["_harch_csrf=csrf-token"]
-      invalidDecoderChunks <- newIORef ["_harch_csrf=csrf-token"]
-      domainChunks <- newIORef ["email=ada%40example.test&_harch_csrf=csrf-token"]
+      unknownChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      wrongMethodChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      malformedChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      invalidDecoderChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
+      domainChunks <- newIORef ["email=ada%40example.test&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       unknownResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["missing"] unknownChunks)
       wrongMethodResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "PUT" ["known"] wrongMethodChunks)
       malformedResponse <- performWaiRequest (toWaiApplication actionApplication) (requestFor "POST" ["known"] malformedChunks)
@@ -631,13 +736,13 @@ spec = do
             sampleApplication
               { handleClientAction = const (pure (Just ClientActionResponse {clientActionStatus = Http.status204, clientActionPatches = [], clientActionFocusId = Nothing, clientActionHeaders = [], clientActionObservabilityAttributes = [], clientActionLogEntries = []}))
               }
-      actionBodyChunks <- newIORef ["_harch_csrf=csrf-token"]
+      actionBodyChunks <- newIORef ["_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let actionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
               ( (waiRequest ["actions", "empty"])
                   { Wai.requestMethod = "POST",
-                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "harch-csrf=csrf-token")]
+                    Wai.requestHeaders = [("X-Harch-Action", "1"), (Http.hContentType, "application/x-www-form-urlencoded"), ("Host", "example.test"), ("Origin", "http://example.test"), ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
                   }
               )
       response <- performWaiRequest (toWaiApplication actionApplication) actionRequest
@@ -670,6 +775,9 @@ spec = do
           metadataApplication =
             sampleApplication
               { renderRequestResponse = \_ -> pure . PageResponseWithMetadata metadata . samplePage,
+                pageCsrfToken = \page -> do
+                  pageRoute page `shouldBe` KnownRoute
+                  generateCsrfToken,
                 pageShell =
                   \page ->
                     (pageShell sampleApplication page)
@@ -680,7 +788,7 @@ spec = do
       let policy = TextEncoding.decodeUtf8 (fromMaybe "" (lookup "Content-Security-Policy" (Wai.responseHeaders response)))
       Http.statusCode (Wai.responseStatus response) `shouldBe` 422
       Text.isInfixOf "script-src 'self' 'nonce-" policy `shouldBe` True
-      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldSatisfy` maybe False (ByteString.isPrefixOf "harch-csrf=")
+      lookup "Set-Cookie" (Wai.responseHeaders response) `shouldSatisfy` maybe False (ByteString.isPrefixOf "__Host-harch-csrf=")
       responseBody <- readResponseBody response
       Text.isInfixOf "<script nonce=\"" responseBody `shouldBe` True
 

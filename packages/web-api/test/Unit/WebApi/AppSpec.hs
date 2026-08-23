@@ -7,7 +7,7 @@ import Control.Exception (IOException, SomeException, displayException, try)
 import Data.ByteString qualified as ByteString
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
-import Data.Maybe (isNothing)
+import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import GHC.Clock (getMonotonicTimeNSec)
@@ -56,8 +56,57 @@ spec = do
               _ -> False
       recognized `shouldBe` True
 
+    it "uses the account action CSRF authorization policy through the application" $ do
+      let decodedRegisterAction =
+            HarchWeb.decodeClientAction
+              pureApplication
+              HarchWeb.ClientActionPayload
+                { HarchWeb.clientActionMethod = "POST",
+                  HarchWeb.clientActionPath = "/register",
+                  HarchWeb.clientActionFields = [],
+                  HarchWeb.clientActionCsrfToken = Nothing,
+                  HarchWeb.clientActionIdempotencyKey = Nothing,
+                  HarchWeb.clientActionPayloadContext = defaultRequestContext
+                }
+          csrfToken = fromMaybe (error "expected a valid CSRF token fixture") (Session.mkCsrfToken "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
+          decodedProfileAction =
+            HarchWeb.decodeClientAction
+              pureApplication
+              HarchWeb.ClientActionPayload
+                { HarchWeb.clientActionMethod = "POST",
+                  HarchWeb.clientActionPath = "/profile",
+                  HarchWeb.clientActionFields = [("intent", "resend-verification")],
+                  HarchWeb.clientActionCsrfToken = Nothing,
+                  HarchWeb.clientActionIdempotencyKey = Nothing,
+                  HarchWeb.clientActionPayloadContext = defaultRequestContext
+                }
+      case decodedRegisterAction of
+        HarchWeb.DecodedClientAction action ->
+          HarchWeb.authorizeClientActionCsrf
+            pureApplication
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientAction = action,
+                HarchWeb.clientActionRequestIdempotencyKey = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+            csrfToken
+            `shouldReturn` True
+        _ -> expectationFailure "expected registration action to decode"
+      case decodedProfileAction of
+        HarchWeb.DecodedClientAction action ->
+          HarchWeb.authorizeClientActionCsrf
+            pureApplication
+            HarchWeb.ClientActionRequest
+              { HarchWeb.clientAction = action,
+                HarchWeb.clientActionRequestIdempotencyKey = Nothing,
+                HarchWeb.clientActionContext = defaultRequestContext
+              }
+            csrfToken
+            `shouldReturn` False
+        _ -> expectationFailure "expected profile action to decode"
+
     it "returns a safe bad-request response for duplicate fields in a recognized action" $ do
-      actionBodyChunks <- newIORef ["email=first%40example.com&email=second%40example.com&_harch_csrf=csrf-token"]
+      actionBodyChunks <- newIORef ["email=first%40example.com&email=second%40example.com&_harch_csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]
       let actionRequest =
             Wai.setRequestBodyChunks
               (nextRequestBodyChunk actionBodyChunks)
@@ -68,7 +117,7 @@ spec = do
                         (Http.hContentType, "application/x-www-form-urlencoded"),
                         ("Host", "example.test"),
                         ("Origin", "http://example.test"),
-                        ("Cookie", "harch-csrf=csrf-token")
+                        ("Cookie", "__Host-harch-csrf=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
                       ]
                   }
               )

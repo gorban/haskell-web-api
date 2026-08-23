@@ -32,7 +32,7 @@ import HarchWeb.Site qualified as Site
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
-import WebApi.AccountPages (AccountAction, accountActions, handleAccountAction)
+import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.Observability
   ( ignoreApplicationLog,
@@ -121,6 +121,8 @@ buildAppWithDatabaseAndReporters config pageRepository !accountWorkflow requestO
           Site.siteNavigationRuntimePathPrefix = requestPathPrefix,
           Site.siteRequestPolicy = requestPolicy config,
           Site.siteDecodeClientAction = decodeAction accountActions,
+          Site.sitePageCsrfToken = pageCsrfTokenForAccountPage accountWorkflow,
+          Site.siteAuthorizeClientActionCsrf = authorizeAccountActionCsrf accountWorkflow,
           Site.siteReportRequestObservability = requestObservabilityReporter,
           Site.siteReportConnectionObservability = connectionObservabilityReporter,
           Site.siteReportApplicationLog = applicationLogReporter,

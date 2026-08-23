@@ -16,6 +16,7 @@ import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), HtmlAttribu
 import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Session (generateCsrfToken)
 import HarchWeb.Site (RouteDefinition (..), Site (..), apiOnlySite, buildSiteApplication, simpleSite)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
@@ -97,6 +98,15 @@ spec = do
             clientActionContext = SampleContext ""
           }
         `shouldReturn` Nothing
+      csrfToken <- generateCsrfToken
+      let clientActionRequest =
+            ClientActionRequest
+              { clientAction = (),
+                clientActionRequestIdempotencyKey = Nothing,
+                clientActionContext = SampleContext ""
+              }
+      siteAuthorizeClientActionCsrf sampleSite clientActionRequest csrfToken `shouldReturn` True
+      HarchWeb.authorizeClientActionCsrf siteApplication clientActionRequest csrfToken `shouldReturn` True
       length (HarchWeb.applicationRequestMiddleware siteApplication) `shouldBe` 0
       siteReportRequestObservability sampleSite requestObservability `shouldReturn` ()
       siteReportConnectionObservability sampleSite connectionObservability `shouldReturn` ()

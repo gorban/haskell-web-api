@@ -6,8 +6,8 @@ module HarchWeb.Server.ResponseRendering
     redirectResponse,
     responseDiagnostics,
     responseKind,
+    responsePageSecurity,
     responsePolicyHeaders,
-    responseRuntimeNonce,
     responseStatusCode,
     toWaiResponse,
     toWaiBodyResponse,
@@ -28,6 +28,7 @@ import HarchWeb.Server.Application (Application (..))
 import HarchWeb.Server.ClientAction (clientActionResponseBody)
 import HarchWeb.Server.Response
 import HarchWeb.Server.Sse (renderServerSentEvent)
+import HarchWeb.Session (CsrfToken, csrfTokenText)
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 
@@ -38,16 +39,21 @@ applyResponseHeaders additionalHeaders =
 responsePolicyHeaders :: RequestPolicyConfig -> Wai.Request -> Maybe Document.RuntimeNonce -> Http.ResponseHeaders
 responsePolicyHeaders = requestPolicyResponseHeadersWithNonce
 
-responseRuntimeNonce :: Response route context -> IO (Maybe Document.RuntimeNonce)
-responseRuntimeNonce response =
+responsePageSecurity :: Application route action context -> Response route context -> IO (Maybe (Document.RuntimeNonce, CsrfToken))
+responsePageSecurity webApplication response =
   case response of
-    PageResponse _ -> Just <$> Document.generateRuntimeNonce
-    PageResponseWithMetadata _ _ -> Just <$> Document.generateRuntimeNonce
+    PageResponse page -> pageSecurity page
+    PageResponseWithMetadata _ page -> pageSecurity page
     BodyResponse _ -> pure Nothing
     RedirectResponse _ _ -> pure Nothing
     ClientActionBodyResponse _ -> pure Nothing
     EventStreamResponse _ _ -> pure Nothing
     ProtocolResponseResult _ -> pure Nothing
+  where
+    pageSecurity page = do
+      runtimeNonce <- Document.generateRuntimeNonce
+      csrfToken <- pageCsrfToken webApplication page
+      pure (Just (runtimeNonce, csrfToken))
 
 redirectResponse :: Http.Status -> Text -> Response route context
 redirectResponse status =
@@ -113,11 +119,11 @@ responseKind response =
 toWaiResponse ::
   (Eq route) =>
   Http.ResponseHeaders ->
-  Maybe Document.RuntimeNonce ->
+  Maybe (Document.RuntimeNonce, CsrfToken) ->
   Application route action context ->
   Response route context ->
   Wai.Response
-toWaiResponse additionalHeaders maybeRuntimeNonce webApplication response =
+toWaiResponse additionalHeaders maybePageSecurity webApplication response =
   case response of
     PageResponse page ->
       renderPageResponse
@@ -132,11 +138,11 @@ toWaiResponse additionalHeaders maybeRuntimeNonce webApplication response =
     ProtocolResponseResult protocolResponse -> toWaiProtocolResponse additionalHeaders protocolResponse
   where
     renderPageResponse status page =
-      case maybeRuntimeNonce of
-        Just runtimeNonce ->
+      case maybePageSecurity of
+        Just (runtimeNonce, csrfToken) ->
           Wai.responseLBS
             status
-            (pageResponseHeaders additionalHeaders runtimeNonce)
+            (pageResponseHeaders additionalHeaders csrfToken)
             (LazyByteString.fromStrict (TextEncoding.encodeUtf8 (Document.renderDocumentWithNonce runtimeNonce (pageShell webApplication page))))
         Nothing ->
           Wai.responseLBS
@@ -144,11 +150,11 @@ toWaiResponse additionalHeaders maybeRuntimeNonce webApplication response =
             [(Http.hContentType, TextEncoding.encodeUtf8 htmlContentType)]
             "A page response was missing its CSP nonce."
 
-pageResponseHeaders :: Http.ResponseHeaders -> Document.RuntimeNonce -> Http.ResponseHeaders
-pageResponseHeaders additionalHeaders runtimeNonce =
+pageResponseHeaders :: Http.ResponseHeaders -> CsrfToken -> Http.ResponseHeaders
+pageResponseHeaders additionalHeaders csrfToken =
   additionalHeaders
     <> [ (Http.hContentType, TextEncoding.encodeUtf8 htmlContentType),
-         ("Set-Cookie", TextEncoding.encodeUtf8 ("harch-csrf=" <> Document.runtimeNonceValue runtimeNonce <> "; Path=/; SameSite=Strict"))
+         ("Set-Cookie", TextEncoding.encodeUtf8 ("__Host-harch-csrf=" <> csrfTokenText csrfToken <> "; Path=/; Secure; SameSite=Strict"))
        ]
 
 toWaiBodyResponse :: Http.ResponseHeaders -> ResponseBody -> Wai.Response

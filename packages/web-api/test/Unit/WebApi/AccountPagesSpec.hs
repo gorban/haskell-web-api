@@ -32,7 +32,7 @@ import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
 import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..))
-import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
+import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
 import WebApi.App.Enhancements (pageEnhancementHooks)
@@ -50,6 +50,97 @@ import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), 
 existingSpec :: SpecWith ()
 existingSpec = do
   describe "WebApi.AccountPages" $ do
+    it "binds protected actions to the matching live account or MFA session token" $ do
+      let activeWorkflow =
+            unavailableAccountWorkflow
+              { accountWorkflowClock = pure 150,
+                accountWorkflowSessionStore = existingSessionStore (Right (Just activeSession)),
+                accountWorkflowMfaEnrollmentSessionStore = enrollmentSessionStoreFor existingAccountId
+              }
+          expiredWorkflow =
+            activeWorkflow
+              { accountWorkflowSessionStore = existingSessionStore (Right (Just (opaqueSession 150)))
+              }
+          revokedWorkflow =
+            activeWorkflow
+              { accountWorkflowSessionStore = existingSessionStore (Right Nothing)
+              }
+          unavailableWorkflow =
+            activeWorkflow
+              { accountWorkflowSessionStore = existingSessionStore (Left AccountSessionStoreUnavailable)
+              }
+          expiredMfaWorkflow =
+            activeWorkflow
+              { accountWorkflowMfaEnrollmentSessionStore =
+                  MfaEnrollmentSessionStore
+                    { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                      loadMfaEnrollmentSession = \_ ->
+                        pure
+                          ( Right
+                              ( Just
+                                  Session.OpaqueSession
+                                    { Session.sessionId = enrollmentSessionIdValue,
+                                      Session.sessionPrincipal = existingAccountId,
+                                      Session.sessionCsrfToken = enrollmentCsrfTokenValue,
+                                      Session.sessionIssuedAtNanoseconds = 0,
+                                      Session.sessionExpiresAtNanoseconds = 150
+                                    }
+                              )
+                          ),
+                      invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+                    }
+              }
+          unavailableMfaWorkflow =
+            activeWorkflow
+              { accountWorkflowMfaEnrollmentSessionStore =
+                  MfaEnrollmentSessionStore
+                    { saveMfaEnrollmentSession = \_ -> pure (error "unexpected MFA-enrollment session save"),
+                      loadMfaEnrollmentSession = \_ -> pure (Left MfaEnrollmentSessionStoreUnavailable),
+                      invalidateMfaEnrollmentSession = \_ _ -> pure (error "unexpected MFA-enrollment session invalidation")
+                    }
+              }
+          profileActionRequest = typedAccountActionRequest "POST" "/profile" [("intent", "resend-verification")] sessionRequestContext
+          logoutRequest = typedAccountActionRequest "POST" "/logout" [] sessionRequestContext
+          mfaRequest =
+            typedAccountActionRequest
+              "POST"
+              "/mfa"
+              [("intent", "start")]
+              (defaultRequestContext {WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})
+          anonymousRequest = typedAccountActionRequest "POST" "/register" [] defaultRequestContext
+          verificationRequest = typedAccountActionRequest "POST" "/verify" [] defaultRequestContext
+          loginRequest = typedAccountActionRequest "POST" "/login" [] defaultRequestContext
+          anonymousProfileRequest = typedAccountActionRequest "POST" "/profile" [("intent", "resend-verification")] defaultRequestContext
+          anonymousMfaRequest = typedAccountActionRequest "POST" "/mfa" [("intent", "start")] defaultRequestContext
+          sessionToken = Session.sessionCsrfToken activeSession
+          wrongToken = fromMaybe (error "expected a valid wrong CSRF token") (Session.mkCsrfToken "0123456789abcdefghijklmnopqrstuvwxyz-_ABCDE")
+          accountPage route requestContext =
+            HarchWeb.Page
+              { HarchWeb.pageTitle = "",
+                HarchWeb.pageRoute = route,
+                HarchWeb.pageContext = requestContext,
+                HarchWeb.pageBody = HarchWeb.text "",
+                HarchWeb.pageBootstrapHooks = []
+              }
+      authorizeAccountActionCsrf activeWorkflow profileActionRequest sessionToken `shouldReturn` True
+      authorizeAccountActionCsrf activeWorkflow profileActionRequest wrongToken `shouldReturn` False
+      authorizeAccountActionCsrf expiredWorkflow profileActionRequest sessionToken `shouldReturn` False
+      authorizeAccountActionCsrf revokedWorkflow profileActionRequest sessionToken `shouldReturn` False
+      authorizeAccountActionCsrf unavailableWorkflow profileActionRequest sessionToken `shouldReturn` False
+      authorizeAccountActionCsrf activeWorkflow anonymousProfileRequest sessionToken `shouldReturn` False
+      authorizeAccountActionCsrf activeWorkflow logoutRequest sessionToken `shouldReturn` True
+      authorizeAccountActionCsrf activeWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` True
+      authorizeAccountActionCsrf activeWorkflow mfaRequest wrongToken `shouldReturn` False
+      authorizeAccountActionCsrf expiredMfaWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` False
+      authorizeAccountActionCsrf unavailableMfaWorkflow mfaRequest enrollmentCsrfTokenValue `shouldReturn` False
+      authorizeAccountActionCsrf activeWorkflow anonymousMfaRequest enrollmentCsrfTokenValue `shouldReturn` False
+      authorizeAccountActionCsrf activeWorkflow anonymousRequest wrongToken `shouldReturn` True
+      authorizeAccountActionCsrf activeWorkflow verificationRequest wrongToken `shouldReturn` True
+      authorizeAccountActionCsrf activeWorkflow loginRequest wrongToken `shouldReturn` True
+      pageCsrfTokenForAccountPage activeWorkflow (accountPage ProfileRoute sessionRequestContext) `shouldReturn` sessionToken
+      pageCsrfTokenForAccountPage activeWorkflow (accountPage LogoutRoute sessionRequestContext) `shouldReturn` sessionToken
+      pageCsrfTokenForAccountPage activeWorkflow (accountPage MfaEnrollmentRoute (defaultRequestContext {WebApi.Route.requestMfaEnrollmentSessionId = Just enrollmentSessionIdValue})) `shouldReturn` enrollmentCsrfTokenValue
+
     it "resends pending-profile verification through a localized client-action patch" $ do
       let actionRequest requestContext fields =
             fromMaybe

@@ -178,8 +178,11 @@ exists. Native links remain navigable, and a modeled framework control must have
 path before it is shipped enabled; a native fallback is an explicit action capability, not a default.
 
 Every complete HTML response receives one fresh opaque CSP nonce from the framework's cryptographic
-entropy source. The server passes that same nonce to document rendering, CSP construction, and the
-CSRF cookie; non-page responses carry no nonce. `renderDocumentForTests` is intentionally deterministic
+entropy source. The server passes that nonce only to document rendering and CSP construction.  Client
+action CSRF state is a separate opaque token: the framework renders it in a `__Host-harch-csrf` secure,
+same-site cookie and validates its typed double-submit transport, while the application supplies the
+per-page token and authorizes session-bound actions through its existing session store (CZ,
+2026-08-23). Non-page responses carry neither value. `renderDocumentForTests` is intentionally deterministic
 and must only support golden markup tests—production callers use `renderDocumentWithNonce` with a
 freshly generated nonce, so no stable nonce can become a valid script capability.
 

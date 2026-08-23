@@ -1,4 +1,16 @@
 -- | Typed application configuration and request middleware execution.
+--
+-- Decision record (CZ, 2026-08-23): CSRF issuance and authorization extend
+-- this existing typed application/action boundary rather than adding a second
+-- action dispatcher.  Response rendering already owns page cookies and the
+-- capture kernel, while request execution already owns typed action decoding
+-- immediately before a handler runs.  The framework therefore owns strict
+-- host-cookie parsing, token syntax, and constant-work double-submit
+-- comparison; applications supply the page-context token and decide whether a
+-- decoded action requires that token to match a live application session.
+-- This keeps anonymous actions available without a session, binds privileged
+-- actions to their existing application-owned session store, and preserves
+-- one route/action interpreter.
 module HarchWeb.Server.Application
   ( Application (..),
     application,
@@ -22,6 +34,7 @@ import HarchWeb.Server.Response
     RequestMiddleware (..),
     Response,
   )
+import HarchWeb.Session (CsrfToken)
 import HarchWeb.StaticAssets (StaticAssetsConfig)
 import Network.Wai qualified as Wai
 
@@ -36,6 +49,16 @@ data Application route action context = Application
     routeCodec :: RouteCodec route context,
     renderRequestResponse :: Wai.Request -> RouteRequest route context -> IO (Response route context),
     decodeClientAction :: ClientActionPayload context -> ClientActionDecodeResult action,
+    -- | Supplies the token rendered in a page response's strict host cookie.
+    -- The complete page is deliberate: application policy can select the
+    -- appropriate live session when distinct page routes use distinct session
+    -- capabilities.
+    pageCsrfToken :: Page route context -> IO CsrfToken,
+    -- | Authorizes a successfully decoded action against its typed CSRF token
+    -- before the handler starts. Framework transport validation has already
+    -- established a strict host-cookie double-submit match; applications use
+    -- this hook to bind protected actions to their live session state.
+    authorizeClientActionCsrf :: ClientActionRequest action context -> CsrfToken -> IO Bool,
     handleClientAction :: ClientActionRequest action context -> IO (Maybe ClientActionResponse),
     pageShell :: Page route context -> Document route,
     reportRequestObservability :: Observability.RequestObservability -> IO (),

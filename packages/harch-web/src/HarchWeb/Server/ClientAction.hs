@@ -27,8 +27,8 @@ import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Action (ActionMethod, actionMethodText)
 import HarchWeb.Markup (regionPatchHtml, regionPatchId)
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import HarchWeb.Server.Response
+import HarchWeb.Session (CsrfToken, mkCsrfToken, validateCsrfToken)
 import Network.HTTP.Types qualified as Http
 import Network.HTTP.Types.URI qualified as HttpUri
 import Network.Wai qualified as Wai
@@ -64,12 +64,12 @@ validateClientActionRequest expectedOrigin request
       Right ()
   | otherwise = Left ClientActionOriginRejected
 
-validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError ()
+validateClientActionCsrf :: Wai.Request -> [(Text, Text)] -> Either ClientActionProtocolError CsrfToken
 validateClientActionCsrf request actionFields
   | Just cookieToken <- requestCsrfCookie request,
-    Just submittedToken <- lookup "_harch_csrf" actionFields,
-    constantWorkEquals (TextEncoding.encodeUtf8 cookieToken) (TextEncoding.encodeUtf8 submittedToken) =
-      Right ()
+    Just submittedToken <- submittedCsrfToken actionFields,
+    validateCsrfToken cookieToken submittedToken =
+      Right submittedToken
   | otherwise = Left ClientActionCsrfRejected
 
 formUrlEncodedRequest :: Wai.Request -> Bool
@@ -85,13 +85,21 @@ formUrlEncodedRequest request =
 requestOrigin :: Wai.Request -> Maybe Text
 requestOrigin request = lookup "Origin" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
 
-requestCsrfCookie :: Wai.Request -> Maybe Text
+requestCsrfCookie :: Wai.Request -> Maybe CsrfToken
 requestCsrfCookie request =
-  lookup "harch-csrf" (requestCookies request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8'
+  case [value | (name, value) <- requestCookies request, name == "__Host-harch-csrf"] of
+    [rawToken] -> either (const Nothing) mkCsrfToken (TextEncoding.decodeUtf8' rawToken)
+    _ -> Nothing
+
+submittedCsrfToken :: [(Text, Text)] -> Maybe CsrfToken
+submittedCsrfToken actionFields =
+  case [value | (name, value) <- actionFields, name == "_harch_csrf"] of
+    [rawToken] -> mkCsrfToken rawToken
+    _ -> Nothing
 
 requestCookies :: Wai.Request -> [(ByteString.ByteString, ByteString.ByteString)]
 requestCookies request =
-  maybe [] (map parseCookie . ByteString.split 59) (lookup "Cookie" (Wai.requestHeaders request))
+  concatMap (map parseCookie . ByteString.split 59 . snd) (filter ((== Http.hCookie) . fst) (Wai.requestHeaders request))
   where
     parseCookie cookie =
       let (name, valueWithSeparator) = ByteString.break (== 61) (ByteString.dropWhile (== 32) cookie)
