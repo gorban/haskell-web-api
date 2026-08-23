@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.MfaEnrollmentSpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (unless)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
@@ -16,21 +16,9 @@ import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, hashRecoveryCodeWithSalt, mkRecoveryCode)
 import HarchWeb.Secret (EncryptionNonce, SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
-import WebApi.MfaEnrollment
-  ( MfaConfirmationEnvironment (..),
-    MfaEnrollmentConfirmation (..),
-    MfaEnrollmentError (..),
-    MfaEnrollmentStart (..),
-    confirmMfaEnrollment,
-    confirmMfaEnrollmentWith,
-    startMfaEnrollment,
-    startMfaEnrollmentWith,
-  )
+import WebApi.MfaEnrollment (MfaConfirmationEnvironment (..), MfaEnrollmentConfirmation (..), MfaEnrollmentError (..), MfaEnrollmentStart (..), confirmMfaEnrollment, confirmMfaEnrollmentWith, startMfaEnrollment, startMfaEnrollmentWith)
 
-spec :: Spec
 spec = do
   describe "TOTP enrollment workflow" $ do
     it "uses secure production generators and hashers for enrollment confirmation" $ do

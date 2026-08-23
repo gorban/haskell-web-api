@@ -1,13 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.UsernameSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.Username (mkUsername, usernameText)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "Username" $ do
     it "accepts the source app's 3-20 character ASCII handle grammar" $ do

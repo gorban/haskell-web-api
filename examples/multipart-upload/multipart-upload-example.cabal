@@ -63,4 +63,4 @@ test-suite multipart-upload-example-tests
     text ^>=2.1.3,
     wai ^>=3.2.5,
   build-tool-depends:
-    test-core:spec-preprocessor ^>=0.1.2.0
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0

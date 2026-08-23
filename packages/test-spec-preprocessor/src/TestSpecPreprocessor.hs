@@ -1,9 +1,16 @@
-module TestCore.SpecPreprocessor (run, runPure) where
+-- | Generates conventional module wrappers for @{-# SPEC #-}@ test files.
+--
+-- This package is intentionally dependency-light.  In particular, it lets
+-- @hspec-expectations-match@ use the same processor without creating the
+-- package-level test cycle that results when a test tool depends on a package
+-- that itself uses that matcher.  Standard specs default to
+-- @TestCore.Prelude@; @spec-prelude=@ selects a different standard prelude.
+-- @E2E_SPEC@ always imports @TestCore.E2EPrelude@.
+module TestSpecPreprocessor (run, runPure) where
 
 import Control.Exception (IOException, displayException, try)
 import Control.Monad.Except (ExceptT, throwError)
 import Control.Monad.IO.Class (liftIO)
-import Core.System.Path (normalizePath)
 import Data.Char (isSpace)
 import Data.List (intercalate, stripPrefix)
 import System.Directory (makeAbsolute)
@@ -14,21 +21,18 @@ data SpecMode = E2ESpec | StandardSpec
 
 run :: [String] -> ExceptT String IO ()
 run args = do
-  let (hsSourceDir, fileArgs) = parseArgs "test" [] args
+  let (hsSourceDir, standardPrelude, fileArgs) = parseArgs "test" "TestCore.Prelude" [] args
   case fileArgs of
-    [input, output] ->
-      processFile hsSourceDir input output
-    -- GHC may pass the input file twice, we check to prevent an actual 3 positional argument call
+    [input, output] -> processFile hsSourceDir standardPrelude input output
     [input, input', output]
-      | input == input' ->
-          processFile hsSourceDir input output
+      | input == input' -> processFile hsSourceDir standardPrelude input output
     _ -> throwError "spec-preprocessor: expected input and output file arguments"
   where
-    processFile hsSourceDir input output = tryIO $ do
+    processFile hsSourceDir standardPrelude input output = tryIO $ do
       absolutePath <- makeAbsolute input
       withFile input ReadMode $ \handle -> do
         contents <- hGetContents handle
-        writeFile output $ runPure hsSourceDir absolutePath contents
+        writeFile output $ runPureWithPrelude standardPrelude hsSourceDir absolutePath contents
 
     tryIO :: IO a -> ExceptT String IO a
     tryIO action = do
@@ -38,7 +42,10 @@ run args = do
         Right a -> pure a
 
 runPure :: String -> String -> String -> String
-runPure hsSourceDir absolutePath contents =
+runPure = runPureWithPrelude "TestCore.Prelude"
+
+runPureWithPrelude :: String -> String -> String -> String -> String
+runPureWithPrelude standardPrelude hsSourceDir absolutePath contents =
   unlines $ process 1 (inferModuleName hsSourceDir absolutePath) $ lines contents
   where
     process :: Int -> String -> [String] -> [String]
@@ -48,12 +55,10 @@ runPure hsSourceDir absolutePath contents =
             Just (specMode, remainder)
               | all isSpace remainder ->
                   let (importCount, imports, remaining) = processTillEndOfImports rest
-                      -- LINE pragma points to the first line of remaining content in the original file:
-                      -- inputLine (current) + 1 (SPEC pragma) + importCount (imports we're copying)
                       originalLineOfRemaining = inputLine + 1 + importCount
                    in [ "module " ++ moduleName ++ " (spec) where",
                         "",
-                        "import " ++ specPreludeModule specMode
+                        "import " ++ specPreludeModule standardPrelude specMode
                       ]
                         ++ imports
                         ++ [ "spec :: Spec",
@@ -61,10 +66,8 @@ runPure hsSourceDir absolutePath contents =
                            ]
                         ++ remaining
             _ -> header : process (inputLine + 1) moduleName rest
-    -- Empty file case
     process _ _ [] = []
 
--- We are making sure that for the line with {-# SPEC #-}, at most the rest is whitespace
 stripSpecPragma :: String -> Maybe (SpecMode, String)
 stripSpecPragma ('{' : '-' : '#' : xs) =
   let afterStart = dropWhile isSpace xs
@@ -82,13 +85,10 @@ stripSpecMode ('E' : '2' : 'E' : '_' : 'S' : 'P' : 'E' : 'C' : rest) = Just (E2E
 stripSpecMode ('S' : 'P' : 'E' : 'C' : rest) = Just (StandardSpec, rest)
 stripSpecMode _ = Nothing
 
-specPreludeModule :: SpecMode -> String
-specPreludeModule E2ESpec = "TestCore.E2EPrelude"
-specPreludeModule StandardSpec = "TestCore.Prelude"
+specPreludeModule :: String -> SpecMode -> String
+specPreludeModule _ E2ESpec = "TestCore.E2EPrelude"
+specPreludeModule standardPrelude StandardSpec = standardPrelude
 
--- Process lines until we reach a line that is not an import or comment or empty
--- These are added after our added imports but before the spec definition
--- Returns (count, imports, remaining)
 processTillEndOfImports :: [String] -> (Int, [String], [String])
 processTillEndOfImports (header : rest) =
   let trimmed = dropWhile isSpace header
@@ -98,27 +98,22 @@ processTillEndOfImports (header : rest) =
            in (count + 1, header : imports, remaining)
         else (0, [], header : rest)
   where
-    -- If line is empty or whitespace,
     keep [] = True
-    -- Or if first non-whitespace characters are for comment or import, add it and continue
     keep ('-' : '-' : _) = True
     keep ('i' : 'm' : 'p' : 'o' : 'r' : 't' : ' ' : _) = True
-    -- Otherwise, stop processing imports
     keep _ = False
 processTillEndOfImports [] = (0, [], [])
 
--- Parse arguments to extract hs-source-dir option and file arguments
--- Returns (hsSourceDir, fileArgs) where hsSourceDir defaults to "test"
-parseArgs :: String -> [String] -> [String] -> (String, [String])
-parseArgs hsSourceDir files [] = (hsSourceDir, files)
-parseArgs hsSourceDir files (arg : rest) =
+parseArgs :: String -> String -> [String] -> [String] -> (String, String, [String])
+parseArgs hsSourceDir standardPrelude files [] = (hsSourceDir, standardPrelude, files)
+parseArgs hsSourceDir standardPrelude files (arg : rest) =
   case stripPrefix "hs-source-dir=" arg of
-    Just dir -> parseArgs dir files rest
-    Nothing -> parseArgs hsSourceDir (files ++ [arg]) rest
+    Just dir -> parseArgs dir standardPrelude files rest
+    Nothing ->
+      case stripPrefix "spec-prelude=" arg of
+        Just preludeModule -> parseArgs hsSourceDir preludeModule files rest
+        Nothing -> parseArgs hsSourceDir standardPrelude (files ++ [arg]) rest
 
--- Infer module name from file path hierarchy
--- Goes up directories until hitting hs-source-dir
--- Returns module name as dotted namespace
 inferModuleName :: String -> String -> String
 inferModuleName hsSourceDir absolutePath =
   case absolutePath of
@@ -132,12 +127,8 @@ inferModuleName hsSourceDir absolutePath =
             Just segments -> buildModuleName segments baseName
             Nothing -> baseName
   where
-    buildModuleName segments baseName =
-      let parts = filter (not . null) (segments ++ [baseName])
-       in intercalate "." parts
+    buildModuleName segments baseName = intercalate "." $ filter (not . null) (segments ++ [baseName])
 
--- Find module segments by going up from file until hitting source directory
--- Returns Nothing if source directory is not found (fallback to basename)
 findModuleSegments :: [String] -> String -> Maybe [String]
 findModuleSegments pathParts sourceDir =
   let dirParts = take (max 0 (length pathParts - 1)) pathParts
@@ -145,4 +136,10 @@ findModuleSegments pathParts sourceDir =
       (between, after) = break (== sourceDir) reversedDirs
    in case after of
         [] -> Nothing
-        _ : _ -> Just (reverse between)
+        _ : _ -> Just $ reverse between
+
+normalizePath :: String -> String
+normalizePath = map replaceBackslash
+  where
+    replaceBackslash '\\' = '/'
+    replaceBackslash c = c

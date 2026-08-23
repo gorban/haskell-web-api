@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.LoginSpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (ErrorCall (..), evaluate)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
@@ -18,13 +18,10 @@ import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recovery
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import HarchWeb.Username (mkUsername)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import Unit.WebApi.TestSupport (accountId, emailAddress, required, shouldReturnEqual)
 import WebApi.Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 
-spec :: Spec
 spec = do
   describe "password-first MFA login" $ do
     it "requires a confirmed authenticator only after a correct verified password" $ do

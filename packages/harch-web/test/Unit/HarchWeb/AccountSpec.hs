@@ -1,16 +1,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.AccountSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import HarchWeb.Account
 import HarchWeb.Email (mkEmailAddress)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec = do
   describe "AccountId" $ do
     it "accepts stable application-owned identifiers and rejects unsafe values" $ do

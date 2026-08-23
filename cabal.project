@@ -7,6 +7,7 @@ packages:
   packages/harch-web/
   packages/hspec-expectations-match/
   packages/test-core/
+  packages/test-spec-preprocessor/
   packages/web-api/
 
 with-compiler: ghc-9.14.1

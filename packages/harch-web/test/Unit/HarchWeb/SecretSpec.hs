@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.SecretSpec (spec) where
+{-# SPEC #-}
 
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
@@ -11,10 +11,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Secret
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec = do
   describe "SecretEncryptionKey" $ do
     it "accepts exactly one 256-bit base64url key" $ do

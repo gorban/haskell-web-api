@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.SessionSpec (spec) where
+{-# SPEC #-}
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -9,8 +9,6 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Session
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 validSessionToken :: Text
 validSessionToken = "0123456789abcdef0123456789abcdef"
@@ -37,7 +35,6 @@ sampleSession =
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
 
-spec :: Spec
 spec = do
   describe "opaque token generation" $ do
     it "uses 256-bit URL-safe values for session identifiers and CSRF tokens" $ do

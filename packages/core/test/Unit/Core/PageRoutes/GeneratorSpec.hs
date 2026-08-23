@@ -1,31 +1,15 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.Core.PageRoutes.GeneratorSpec (spec) where
+{-# SPEC #-}
 
-import Core.PageRoutes.Generator
-  ( GenerationError (..),
-    GenerationOutcome (..),
-    GeneratorConfig (..),
-    PageSpec (..),
-    defaultGeneratorConfig,
-    discoverPages,
-    generatePageModules,
-    pageSpecFromRelativePath,
-    renderDispatcherModule,
-    renderManifest,
-    renderRouteModule,
-    validatePageSpecs,
-  )
+import Core.PageRoutes.Generator (GenerationError (..), GenerationOutcome (..), GeneratorConfig (..), PageSpec (..), defaultGeneratorConfig, discoverPages, generatePageModules, pageSpecFromRelativePath, renderDispatcherModule, renderManifest, renderRouteModule, validatePageSpecs)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.IO qualified as TextIO
 import System.Directory (createDirectoryIfMissing, doesFileExist, removeFile)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Temp (withSystemTempDirectory)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "Core.PageRoutes.Generator" $ do
     it "derives nested constructors, modules, paths, and stable content hashes" $ do

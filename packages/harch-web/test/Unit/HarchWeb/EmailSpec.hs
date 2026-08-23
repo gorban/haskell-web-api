@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.EmailSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (IOException, SomeException, bracket, displayException, throwIO, try)
@@ -15,8 +15,6 @@ import Data.Word (Word16)
 import HarchWeb.Email
 import Network.Socket qualified as Socket
 import Network.Socket.ByteString qualified as SocketByteString
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 sampleRecipient :: EmailAddress
 sampleRecipient = required "sample recipient" (mkEmailAddress "ada@example.test")
@@ -40,7 +38,6 @@ smtpConfigInput host port heloName sender authentication =
       smtpInputAuthentication = authentication
     }
 
-spec :: Spec
 spec = do
   describe "EmailAddress" $ do
     it "accepts safe mailbox values and rejects ambiguous envelope addresses" $ do

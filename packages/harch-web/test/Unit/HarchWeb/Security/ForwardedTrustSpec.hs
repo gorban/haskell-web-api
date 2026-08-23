@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Security.ForwardedTrustSpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (forM_)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -8,8 +8,6 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import HarchWeb.Security
 import Network.Socket qualified as Socket
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 -- | Each row is one previously-separate 'it' case, tabled per
 -- @docs/design-guidance.md@'s CN decision record: one act
@@ -35,7 +33,6 @@ parseCidrBlockCases =
     ("rejects a non-numeric octet", "10.0.0.x/8", Nothing)
   ]
 
-spec :: Spec
 spec = do
   describe "parseCidrBlock" $ do
     parseCidrBlockCases `forM_` \(label, input, expected) ->

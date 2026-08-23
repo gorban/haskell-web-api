@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.RecoveryCodeSpec (spec) where
+{-# SPEC #-}
 
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
@@ -9,10 +9,7 @@ import Data.Maybe (isNothing)
 import Data.Text qualified as Text
 import HarchWeb.Password (defaultPasswordHashingPolicy)
 import HarchWeb.RecoveryCode
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec = do
   describe "RecoveryCode" $ do
     it "canonicalizes user-entered hexadecimal codes and generates 80-bit codes" $ do

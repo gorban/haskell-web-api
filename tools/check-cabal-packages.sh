@@ -4,8 +4,6 @@ set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
 core_test_support_files=(
-  app/SpecPreprocessor.hs
-  src/TestCore/SpecPreprocessor.hs
   src/TestCore/Prelude.hs
   src/TestCore/CustomAssertions.hs
 )
@@ -17,6 +15,7 @@ package_directories=(
   packages/core
   packages/harch-web
   packages/test-core
+  packages/test-spec-preprocessor
   packages/web-api
 )
 simple_setup_packages=(

@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.Postgres.AccountRepositorySpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (unless)
 import Data.List.NonEmpty (NonEmpty (..))
@@ -10,15 +10,12 @@ import Data.Text qualified as Text
 import HarchWeb.Email (mkEmailAddress)
 import HarchWeb.Password (defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, passwordHashText)
 import HarchWeb.Username (mkUsername)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import Unit.WebApi.TestSupport (accountId, databaseConfig, emailAddress, required)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login
 import WebApi.Postgres.Testing (buildRuntimePostgresAccountCredentialStore, buildRuntimePostgresAccountCredentialStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
-spec :: Spec
 spec = do
   describe "runtime PostgreSQL credential lookup" $ do
     it "uses an email parameter and decodes verified credentials" $ do

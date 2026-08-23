@@ -1,15 +1,13 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.PasswordSpec (spec) where
+{-# SPEC #-}
 
 import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Word (Word32)
 import HarchWeb.Password
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 testPolicy :: PasswordHashingPolicy
 testPolicy = required "test policy" (mkPasswordHashingPolicy (argon2Iterations 1) (argon2MemoryKib 8) (argon2Parallelism 1))
@@ -23,7 +21,6 @@ sampleSalt = "0123456789abcdef"
 required :: String -> Maybe value -> value
 required label = fromMaybe (error ("expected " <> label))
 
-spec :: Spec
 spec = do
   describe "PasswordHashingPolicy" $ do
     it "uses an Argon2id production policy and rejects invalid resource settings" $ do

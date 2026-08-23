@@ -1,25 +1,18 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.Postgres.MfaRepositorySpec (spec) where
+{-# SPEC #-}
 
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import HarchWeb.Account (generateAccountId)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import Unit.WebApi.TestSupport (accountId, databaseConfig, shouldReturnEqual)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Mfa
-  ( MfaStore (..),
-    MfaStoreError (..),
-    StoredTotpEnrollment (..),
-  )
+import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresMfaStore, buildRuntimePostgresMfaStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
-spec :: Spec
 spec = do
   describe "runtime PostgreSQL MFA persistence" $ do
     it "uses bound parameters to enroll, load, confirm, and consume recovery-code hashes" $ do

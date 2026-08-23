@@ -1,9 +1,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ViewPatterns #-}
+{-# OPTIONS_GHC -F -pgmF=spec-preprocessor -optF=spec-prelude=Test.Hspec #-}
 
-module Test.Hspec.Expectations.MatchSpec (spec) where
+{-# SPEC #-}
 
-import Test.Hspec
 import Test.Hspec.Expectations.Match
 
 data BrowserMetrics = BrowserMetrics
@@ -13,7 +13,6 @@ data BrowserMetrics = BrowserMetrics
   }
   deriving (Eq, Show)
 
-spec :: Spec
 spec = do
   describe "shouldMatch" $ do
     it "succeeds when a value matches a pattern" $ example $ do

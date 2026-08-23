@@ -2,13 +2,11 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.DatabaseSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import HarchWeb.Database
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 data SampleDatabaseRequest result where
   LoadDisplayName :: SampleDatabaseRequest Text
@@ -55,7 +53,6 @@ loginCountOperation =
       databaseOperationEndedAtNanoseconds = Nothing
     }
 
-spec :: Spec
 spec = do
   describe "DatabaseEffect" $ do
     it "preserves each operation's typed result while exposing performed operations" $ do

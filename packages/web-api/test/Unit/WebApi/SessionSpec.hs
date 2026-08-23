@@ -1,21 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.SessionSpec (spec) where
+{-# SPEC #-}
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Word (Word64)
 import HarchWeb.Session (OpaqueSession (..))
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import Unit.WebApi.TestSupport (accountId, shouldReturnEqual)
-import WebApi.Session
-  ( AccountSessionStore (..),
-    AccountSessionStoreError (..),
-    issueAccountSession,
-  )
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..), issueAccountSession)
 
-spec :: Spec
 spec = do
   describe "account-session issuance" $ do
     it "generates and persists an opaque session after authentication succeeds" $ do

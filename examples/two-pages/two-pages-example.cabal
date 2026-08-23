@@ -106,4 +106,4 @@ test-suite two-pages-example-tests
     wai ^>=3.2.5,
 
   build-tool-depends:
-    test-core:spec-preprocessor ^>=0.1.2.0
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0

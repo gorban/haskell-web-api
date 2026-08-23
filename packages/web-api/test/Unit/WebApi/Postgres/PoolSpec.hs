@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.Postgres.PoolSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (forkIO, newEmptyMVar, putMVar, takeMVar, threadDelay)
 import Control.Exception (SomeException, throwIO, try)
@@ -8,12 +8,10 @@ import Data.Either (isLeft)
 import Database.PostgreSQL.LibPQ qualified as LibPQ
 import Network.Socket (Family (AF_INET), SockAddr (SockAddrInet), SocketType (Stream), bind, close, defaultProtocol, getSocketName, listen, socket, tupleToHostAddress)
 import System.Timeout (timeout)
-import Test.Hspec
 import TestSupport.RealPostgres (defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Testing (closePostgresPool, newPostgresPool, runPooledRowsQuery, withPooledConnection)
 
-spec :: Spec
 spec = describe "WebApi.Postgres.Pool" $ do
   it "reuses the same connection across sequential acquire/release rather than opening a fresh one each time" $ do
     ensureDefaultPostgresAvailable

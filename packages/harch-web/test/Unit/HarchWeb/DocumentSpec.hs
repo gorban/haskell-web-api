@@ -1,11 +1,9 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.DocumentSpec (spec) where
+{-# SPEC #-}
 
 import HarchWeb (HtmlAttribute (..), LiveRegion (..), liveRegionAttributes)
-import Test.Hspec
 
-spec :: Spec
 spec =
   describe "live-region accessibility helpers" $ do
     it "keeps polite status updates atomic" $

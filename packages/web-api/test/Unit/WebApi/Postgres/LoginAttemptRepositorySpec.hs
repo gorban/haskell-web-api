@@ -1,20 +1,18 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.Postgres.LoginAttemptRepositorySpec (spec) where
+{-# SPEC #-}
 
 import Control.Monad (unless)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as Text
 import HarchWeb.Account (accountIdText, generateAccountId)
 import HarchWeb.LoginProtection (LoginAttempt (..))
-import Test.Hspec
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Login (LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
-spec :: Spec
 spec = do
   describe "runtime PostgreSQL login-attempt persistence" $ do
     it "uses bound parameters to record and load recent login attempts" $ do

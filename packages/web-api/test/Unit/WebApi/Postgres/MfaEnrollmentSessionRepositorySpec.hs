@@ -1,22 +1,17 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.Postgres.MfaEnrollmentSessionRepositorySpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (evaluate)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as Text
 import HarchWeb.Session (generateSessionId)
-import Test.Hspec
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import Unit.WebApi.TestSupport (csrfTokenValue, databaseConfig, opaqueSession, sessionIdValue, shouldReturnEqual, testSessionId)
 import WebApi.Config (DatabaseConfig (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresMfaEnrollmentSessionStore, buildRuntimePostgresMfaEnrollmentSessionStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
-import WebApi.Session
-  ( MfaEnrollmentSessionStore (..),
-    MfaEnrollmentSessionStoreError (..),
-  )
+import WebApi.Session (MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..))
 
-spec :: Spec
 spec = do
   describe "runtime PostgreSQL MFA-enrollment-session persistence" $ do
     it "uses bound parameters to save, load, and invalidate an opaque session" $ do

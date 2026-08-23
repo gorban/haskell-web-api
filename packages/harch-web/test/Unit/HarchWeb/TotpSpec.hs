@@ -1,15 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.TotpSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Text qualified as Text
 import HarchWeb.Totp
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec = do
   describe "TotpSecret" $ do
     it "round-trips canonical Base32 enrollment secrets" $ do

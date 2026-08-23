@@ -1,24 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.Server.SseSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
-import HarchWeb
-  ( ClientActionResponse (..),
-    Response (..),
-    ResponseBody (..),
-    ServerSentEvent (..),
-    eventStreamResponse,
-    nextServerSentEvent,
-    renderServerSentEvent,
-    serverSentEventContentType,
-    serverSentEventSourceFromList,
-  )
+import HarchWeb (ClientActionResponse (..), Response (..), ResponseBody (..), ServerSentEvent (..), eventStreamResponse, nextServerSentEvent, renderServerSentEvent, serverSentEventContentType, serverSentEventSourceFromList)
 import Network.HTTP.Types qualified as Http
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "server-sent events" $ do
     it "uses the canonical UTF-8 event-stream media type" $

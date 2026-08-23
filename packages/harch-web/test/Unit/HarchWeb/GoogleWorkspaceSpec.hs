@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.GoogleWorkspaceSpec (spec) where
+{-# SPEC #-}
 
 import Control.Exception (SomeException, displayException, try)
 import Crypto.Hash.Algorithms (SHA256 (..))
@@ -25,9 +25,7 @@ import Data.Time (UTCTime (..), secondsToDiffTime)
 import Data.Time.Calendar (fromGregorian)
 import HarchWeb.Gmail (GmailHttpRequest (..), GmailHttpResponse (..))
 import HarchWeb.GoogleWorkspace
-import Test.Hspec
 
-spec :: Spec
 spec = do
   describe "decodeGoogleWorkspaceServiceAccount" $ do
     it "validates encoded credentials without exposing their contents" $ do

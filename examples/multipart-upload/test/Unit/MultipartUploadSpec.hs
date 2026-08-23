@@ -1,7 +1,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.MultipartUploadSpec (spec) where
+{-# SPEC #-}
 
 import App.App (multipartUploadApplication, multipartUploadSite, newMultipartUploadApplication)
 import App.MultipartUpload (NativeUploadState, nativeUploadDiscardCount, nativeUploadPath, newNativeUploadState)
@@ -19,10 +19,7 @@ import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as HttpTypes
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "Unit.App.MultipartUpload" $ do
     it "exposes an API-only site composition root with its declared name and empty context" $ do

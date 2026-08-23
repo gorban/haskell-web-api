@@ -97,6 +97,18 @@ spec = do
         outputContents `shouldContain'` expectedHeader
         outputContents `shouldContain'` "import TestCore.Prelude"
 
+      it "uses a configured standard SPEC prelude" $ \(tempDir, tempFile) -> do
+        let hsSourceDir = takeFileName tempDir
+            outputFile = getOutputFile tempFile
+        writeFile tempFile "{-# SPEC #-}"
+        result <-
+          runExceptT $
+            run ["hs-source-dir=" ++ hsSourceDir, "spec-prelude=Test.Hspec", tempFile, outputFile]
+        result `shouldBe` Right ()
+        outputContents <- readFile outputFile
+        _ <- evaluate (length outputContents)
+        outputContents `shouldContain'` "import Test.Hspec"
+
     around (withExampleSpecTemp nestedModuleSegments exampleModuleBase) $ do
       it "processes a simple e2e spec file (2 file args)" $ \(tempDir, tempFile) -> do
         let expectedHeader = getModuleHeader $ getModuleName nestedModuleSegments exampleModuleBase

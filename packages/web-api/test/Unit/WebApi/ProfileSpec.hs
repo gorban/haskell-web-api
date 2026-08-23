@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.ProfileSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
@@ -13,13 +13,7 @@ import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
-import WebApi.Account
-  ( AccountProfile (..),
-    AccountProfileStore (..),
-    AccountStoreError (..),
-  )
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStoreError (..))
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Config (defaultAppConfig)
@@ -28,12 +22,8 @@ import WebApi.Profile (ProfileLoadError (..), ProfileState (..), loadProfile)
 import WebApi.Response (selectResponseWithDatabaseAndAccountWorkflow)
 import WebApi.Route (AppRoute (..), defaultRequestContext)
 import WebApi.Route qualified
-import WebApi.Session
-  ( AccountSessionStore (..),
-    AccountSessionStoreError (..),
-  )
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
-spec :: Spec
 spec =
   describe "profile session resolution" $ do
     it "distinguishes absent, expired, pending, and authenticated sessions" $ do

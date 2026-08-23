@@ -1,17 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.LoginProtectionSpec (spec) where
+{-# SPEC #-}
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import HarchWeb.LoginProtection
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 policy :: LoginProtectionPolicy
 policy = LoginProtectionPolicy 2 100 50
 
-spec :: Spec
 spec = do
   describe "LoginProtectionPolicy" $ do
     it "has a secure default and exposes stable diagnostics" $ do

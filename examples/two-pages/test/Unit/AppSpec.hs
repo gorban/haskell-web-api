@@ -1,16 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.AppSpec (spec) where
+{-# SPEC #-}
 
 import App.App (TwoPageAction (..), buildApplication, twoPageServerConfig, twoPageSite)
 import App.Components.Controls qualified as ExampleControls
 import App.Pages.Home (nativeSubscriptionFallbackPage)
-import App.Pages.Route.Generated
-  ( PageRoute (..),
-    allPageRoutes,
-    pageRoutePath,
-    parsePageRoute,
-  )
+import App.Pages.Route.Generated (PageRoute (..), allPageRoutes, pageRoutePath, parsePageRoute)
 import App.Routes (ApiRoute (..), CustomRoute (..), TwoPageNavigationTarget (..), TwoPageRoute (..), mkPreviewSlug, routeHref, twoPageNavigationPath)
 import App.Routes qualified as ExampleRoutes
 import Control.Exception (ErrorCall (..), evaluate)
@@ -22,59 +17,14 @@ import Data.List (isInfixOf)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb
-  ( ClientActionPayload (..),
-    ClientActionRequest (..),
-    ForwardedHeaderTrust (..),
-    ListenerConfig (..),
-    RouteMethod (..),
-    RouteRequest (..),
-    appName,
-    applicationStaticAssets,
-    corsPolicy,
-    defaultCorsPolicyConfig,
-    defaultResponseSecurityHeadersConfig,
-    defaultStaticAssetContentTypes,
-    forwardedHeaderTrust,
-    httpsRedirectAuthority,
-    httpsRedirectPort,
-    listenerConfigs,
-    metricsExporter,
-    notFoundRequest,
-    observability,
-    parseRoute,
-    redirectHttpToHttps,
-    renderRoute,
-    requestConcurrencyLimit,
-    requestPolicy,
-    requestTransportLimits,
-    responseSecurityHeaders,
-    staticAssetContentTypes,
-    staticAssetRoots,
-    staticAssets,
-    staticCacheControlSeconds,
-    strictTransportSecurity,
-    toWaiApplication,
-    tracingExporter,
-    warpDefaultRequestTransportLimits,
-  )
+import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), ForwardedHeaderTrust (..), ListenerConfig (..), RouteMethod (..), RouteRequest (..), appName, applicationStaticAssets, corsPolicy, defaultCorsPolicyConfig, defaultResponseSecurityHeadersConfig, defaultStaticAssetContentTypes, forwardedHeaderTrust, httpsRedirectAuthority, httpsRedirectPort, listenerConfigs, metricsExporter, notFoundRequest, observability, parseRoute, redirectHttpToHttps, renderRoute, requestConcurrencyLimit, requestPolicy, requestTransportLimits, responseSecurityHeaders, staticAssetContentTypes, staticAssetRoots, staticAssets, staticCacheControlSeconds, strictTransportSecurity, toWaiApplication, tracingExporter, warpDefaultRequestTransportLimits)
 import HarchWeb qualified
-import HarchWeb.Site
-  ( routeNavigationLabel,
-    siteName,
-    siteNavigationRoutes,
-    siteRequestPolicy,
-    siteRouteDefinition,
-    siteStaticAssets,
-  )
+import HarchWeb.Site (routeNavigationLabel, siteName, siteNavigationRoutes, siteRequestPolicy, siteRouteDefinition, siteStaticAssets)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
-spec :: Spec
 spec =
   describe "Unit.App" $ do
     describe "twoPageSite" $ do
@@ -182,9 +132,11 @@ spec =
                    showViaDictionary (PreviewPage previewSlug)
                      `shouldBe` "PreviewPage (PreviewSlug \"summer-release\")",
                    showsPrecViaDictionary 11 (PreviewPage previewSlug) ""
-                     `shouldSatisfy` not . null,
+                     `shouldSatisfy` not
+                     . null,
                    showListViaDictionary [PreviewPage previewSlug] ""
-                     `shouldSatisfy` not . null,
+                     `shouldSatisfy` not
+                     . null,
                    eqViaDictionary NativeSubscriptionFallback NativeSubscriptionFallback `shouldBe` True,
                    showViaDictionary NativeSubscriptionFallback `shouldBe` "NativeSubscriptionFallback",
                    showViaDictionary (Page PageNotFound) `shouldBe` "Page PageNotFound",
@@ -198,7 +150,8 @@ spec =
                    parseRoute ExampleRoutes.routeCodec () "/live-data/events" `shouldBe` Just RouteRequest {requestRoute = Api LiveDataEvents, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/native-subscribe" `shouldBe` Just RouteRequest {requestRoute = Custom NativeSubscriptionFallback, requestContext = ()},
                    parseRoute ExampleRoutes.routeCodec () "/preview/summer-release"
-                     `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()}) <$> mkPreviewSlug "summer-release",
+                     `shouldBe` (\slug -> RouteRequest {requestRoute = Custom (PreviewPage slug), requestContext = ()})
+                     <$> mkPreviewSlug "summer-release",
                    parseRoute ExampleRoutes.routeCodec () "/preview/Invalid" `shouldBe` Nothing,
                    parseRoute ExampleRoutes.routeCodec () "/missing" `shouldBe` Nothing,
                    HarchWeb.routeMethods ExampleRoutes.routeCodec (Page HomePage)
@@ -545,7 +498,7 @@ spec =
         oversizedBody <- readResponseBody oversizedResponse
         expectAll
           ( (Wai.responseStatus oversizedResponse `shouldBe` Http.status413)
-              :| [lookup Http.hContentType (Wai.responseHeaders oversizedResponse) `shouldBe` Just "text/plain; charset=utf-8",
+              :| [ lookup Http.hContentType (Wai.responseHeaders oversizedResponse) `shouldBe` Just "text/plain; charset=utf-8",
                    Text.isInfixOf "Native fallback request body is too large." oversizedBody `shouldBe` True
                  ]
           )

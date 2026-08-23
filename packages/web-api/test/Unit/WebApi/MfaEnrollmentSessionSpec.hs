@@ -1,22 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.MfaEnrollmentSessionSpec (spec) where
+{-# SPEC #-}
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Word (Word64)
 import HarchWeb.Session (OpaqueSession (..), sessionCookieName, sessionCookieNameText)
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import Unit.WebApi.TestSupport (accountId, shouldReturnEqual)
-import WebApi.Session
-  ( MfaEnrollmentSessionStore (..),
-    MfaEnrollmentSessionStoreError (..),
-    issueMfaEnrollmentSession,
-    mfaEnrollmentSessionCookiePolicy,
-  )
+import WebApi.Session (MfaEnrollmentSessionStore (..), MfaEnrollmentSessionStoreError (..), issueMfaEnrollmentSession, mfaEnrollmentSessionCookiePolicy)
 
-spec :: Spec
 spec = do
   describe "mfaEnrollmentSessionCookiePolicy" $
     it "uses a distinct, short-lived cookie separate from the ordinary login session" $ do

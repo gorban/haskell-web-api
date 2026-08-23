@@ -1,17 +1,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.PageSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Text (Text)
 import Data.Text qualified as Text
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 import WebApi.AccountPages (AccountActionTarget (..))
 import WebApi.Page (AppPageModel (..), AuthenticatedProfilePageDetails (..), CallToAction (..), PendingProfilePageDetails (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), UnavailableProfilePageDetails (..))
 import WebApi.Route (AppRoute (..))
 
-spec :: Spec
 spec =
   describe "ProfilePageModel and its detail records" $
     it "compares every rendered profile identity field and keeps models printable" $ do
@@ -66,13 +63,21 @@ spec =
         `shouldContain` "unavailableProfileHeading = \"Profile\""
       -- Derived 'Show' also writes distinct 'showsPrec'/'showList' methods.
       showsPrec 11 (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction) ""
-        `shouldBe` "(" <> show (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction) <> ")"
+        `shouldBe` "("
+        <> show (SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction)
+        <> ")"
       showsPrec 11 (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction) ""
-        `shouldBe` "(" <> show (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction) <> ")"
+        `shouldBe` "("
+        <> show (PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction)
+        <> ")"
       showsPrec 11 (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction) ""
-        `shouldBe` "(" <> show (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction) <> ")"
+        `shouldBe` "("
+        <> show (AuthenticatedProfilePageDetails "Profile" "You are signed in." "person@example.test" Nothing Nothing signOutAction)
+        <> ")"
       showsPrec 11 (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction) ""
-        `shouldBe` "(" <> show (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction) <> ")"
+        `shouldBe` "("
+        <> show (UnavailableProfilePageDetails "Profile" "Your profile is temporarily unavailable." signInAction)
+        <> ")"
       show [SignedOutProfilePageDetails "Profile" "Sign in to view and manage your profile." signInAction registrationAction]
         `shouldContain` "signedOutProfileHeading = \"Profile\""
       show [PendingProfilePageDetails "Profile" "Verify your email address before continuing." "person@example.test" Nothing Nothing UpdateProfileTarget "Resend verification email" signOutAction]

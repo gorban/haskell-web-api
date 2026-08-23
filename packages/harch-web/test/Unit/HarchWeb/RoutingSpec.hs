@@ -1,13 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.RoutingSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Set qualified as Set
 import HarchWeb.Routing
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 data TestRoute
   = ReadRoute
@@ -25,7 +23,6 @@ data SecondFamilyRoute
 data TestContext = TestContext
   deriving (Eq, Show)
 
-spec :: Spec
 spec = do
   describe "combineRouteCodecs" $ do
     it "parses a path only the first family recognizes into that family" $

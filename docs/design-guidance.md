@@ -43,6 +43,24 @@ a *new* surface) — the default was to extend the existing dispatch contract in
 one, which a follow-up task then had to require anyway. Two dispatchers now have to be kept in
 sync by hand instead of one contract owning path/method ownership outright.
 
+### Decision record — dependency-light test specification preprocessor (2026-08-22)
+
+**Decision: extract the existing `SPEC` processor into the standalone
+`test-spec-preprocessor` package, while retaining `TestCore.SpecPreprocessor` as a compatibility
+facade.** The processor was previously an executable of `test-core`, with a Core-local copy for
+Core tests.  That arrangement works only while every consuming test suite can depend on a package
+whose library imports `hspec-expectations-match`.  Converting the matcher package's own tests to
+`{-# SPEC #-}` exposed the cycle directly: its test component needed the processor, but each
+available processor package had an enabled test component that depended back on the matcher.
+
+The processor owns test-file module/prelude injection, a concern separate from application or
+framework behavior, so this is an additive package rather than a parallel framework abstraction.
+It has only filesystem and transformer dependencies, all test suites now use its executable, and
+the old `TestCore` module remains an API-compatible re-export.  `spec-prelude=Test.Hspec` is a
+per-source option for the standalone matcher spec; ordinary `SPEC` and `E2E_SPEC` behavior remains
+unchanged.  This makes the convention available across the package graph without weakening either
+the default test prelude or the matcher package's dependency boundary.
+
 ### When implementation hits a missing framework capability
 
 If finishing a task requires a capability the framework does not yet expose — for example, a

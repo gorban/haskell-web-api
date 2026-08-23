@@ -1,7 +1,7 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.DevSmtpSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (threadDelay)
 import Control.Exception (bracket)
@@ -11,9 +11,7 @@ import Data.Text qualified as Text
 import Data.Word (Word16)
 import HarchWeb.DevSmtp
 import HarchWeb.Email
-import Test.Hspec
 
-spec :: Spec
 spec =
   describe "DevSmtpServer" $ do
     it "captures loopback SMTP mail by recipient and consumes the recipient index" $

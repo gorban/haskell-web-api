@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.WebApi.AccountPagesSpec (spec) where
+{-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
@@ -14,25 +14,14 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Session (OpaqueSession (..), SessionId, mkCsrfToken, mkSessionId)
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
-import WebApi.Account
-  ( AccountProfile (..),
-    AccountProfileStore (..),
-    AccountStore (..),
-    AccountStoreError (..),
-  )
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
 import WebApi.AccountPages (AccountActionTarget (..), PendingProfileForm (..), accountActions, handleAccountAction, renderPendingProfileRegion)
 import WebApi.App (unavailableAccountWorkflow)
 import WebApi.AppEffect (AccountWorkflow (..))
 import WebApi.Route (AppRequestContext, defaultRequestContext)
 import WebApi.Route qualified
-import WebApi.Session
-  ( AccountSessionStore (..),
-    AccountSessionStoreError (..),
-  )
+import WebApi.Session (AccountSessionStore (..), AccountSessionStoreError (..))
 
-spec :: Spec
 spec =
   describe "WebApi.AccountPages" $ do
     it "resends pending-profile verification through a localized client-action patch" $ do

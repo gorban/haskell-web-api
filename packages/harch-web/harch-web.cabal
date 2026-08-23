@@ -193,7 +193,7 @@ test-suite harch-web-tests
     -- Discovers hspec *Spec.hs tests
     -- Our spec-preprocessor to fill in {-# SPEC #-} headers
     hspec-discover:hspec-discover ^>=2.11.17,
-    test-core:spec-preprocessor ^>=0.1.2.0,
+    test-spec-preprocessor:spec-preprocessor ^>=0.1.2.0,
 
   -- .hs or .lhs file containing the Main module.
   main-is: Main.hs

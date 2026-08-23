@@ -1,15 +1,13 @@
-module Unit.HarchWeb.FacadeSpec (spec) where
+{-# SPEC #-}
 
 import HarchWeb
 import Network.Wai qualified as Wai
 import System.IO (Handle)
-import Test.Hspec
 
 -- This module intentionally imports only the umbrella facade. It keeps the
 -- supported authoring, request, observability, local-server, and TLS extension
 -- entry points compile-covered without granting framework users access to the
 -- private implementation modules that own them.
-spec :: Spec
 spec =
   describe "HarchWeb facade" $
     it "exposes supported framework authoring and extension entry points" $ do

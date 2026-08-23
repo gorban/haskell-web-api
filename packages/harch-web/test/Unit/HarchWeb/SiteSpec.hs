@@ -2,7 +2,7 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.SiteSpec (spec) where
+{-# SPEC #-}
 
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -12,34 +12,15 @@ import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
-import HarchWeb
-  ( ClientActionPayload (..),
-    ClientActionRequest (..),
-    HtmlAttribute (..),
-    Page (..),
-    PageShell (..),
-    Response (..),
-    ResponseBody (..),
-    RouteCodec (..),
-    RouteRequest (..),
-    toWaiApplication,
-  )
+import HarchWeb (ClientActionPayload (..), ClientActionRequest (..), HtmlAttribute (..), Page (..), PageShell (..), Response (..), ResponseBody (..), RouteCodec (..), RouteRequest (..), toWaiApplication)
 import HarchWeb qualified
 import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe
 import HarchWeb.Observability qualified as Observability
-import HarchWeb.Site
-  ( RouteDefinition (..),
-    Site (..),
-    apiOnlySite,
-    buildSiteApplication,
-    simpleSite,
-  )
+import HarchWeb.Site (RouteDefinition (..), Site (..), apiOnlySite, buildSiteApplication, simpleSite)
 import HarchWeb.Site qualified as Site
 import Network.HTTP.Types qualified as Http
 import Network.Wai qualified as Wai
 import Network.Wai.Internal qualified as WaiInternal
-import Test.Hspec
-import TestCore.CustomAssertions (expectAll)
 
 data SampleRoute
   = HomeRoute
@@ -53,7 +34,6 @@ newtype SampleContext = SampleContext
   }
   deriving (Eq, Show)
 
-spec :: Spec
 spec = do
   describe "buildSiteApplication" $ do
     it "keeps the simpleSite defaults available when the composition root does not override them" $ do

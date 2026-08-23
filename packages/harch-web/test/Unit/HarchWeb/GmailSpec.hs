@@ -1,28 +1,20 @@
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Unit.HarchWeb.GmailSpec (spec) where
+{-# SPEC #-}
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Exception (SomeException, displayException, finally, try)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Text qualified as Text
 import HarchWeb.Email (EmailAddress, EmailMessage, EmailMessageInput (..), mkEmailAddress, mkEmailMessage)
-import HarchWeb.Gmail
-  ( GmailHttpRequest (..),
-    GmailHttpResponse (..),
-    deliverGmailApiEmailWithRunner,
-    mkGmailApiConfig,
-    runGmailHttpRequest,
-  )
+import HarchWeb.Gmail (GmailHttpRequest (..), GmailHttpResponse (..), deliverGmailApiEmailWithRunner, mkGmailApiConfig, runGmailHttpRequest)
 import Network.HTTP.Client qualified as HttpClient
 import Network.HTTP.Types qualified as Http
 import Network.Socket qualified as Socket
 import Network.Wai qualified as Wai
 import Network.Wai.Handler.Warp qualified as Warp
-import Test.Hspec
 
-spec :: Spec
 spec = do
   describe "deliverGmailApiEmailWithRunner" $ do
     it "posts a base64url RFC 2822 message with a delegated bearer token" $ do
