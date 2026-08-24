@@ -3,57 +3,66 @@
 
 {-# SPEC #-}
 
-import Control.Monad (unless)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Monad (replicateM, replicateM_, unless)
 import Data.IORef (modifyIORef', newIORef, readIORef)
 import Data.Text qualified as Text
 import HarchWeb.Account (accountIdText, generateAccountId)
-import HarchWeb.LoginProtection (LoginAttempt (..))
+import HarchWeb.LoginProtection (LoginProtectionPolicy (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
+import HarchWeb.Time (unixTimeNanoseconds)
 import TestSupport.RealPostgres (defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable)
 import Unit.WebApi.TestSupport (requiredDatabasePoolCapacity)
 import WebApi.Config (DatabaseConfig (..))
-import WebApi.Login (LoginAttemptStore (..), LoginAttemptStoreError (..))
+import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..))
 import WebApi.Postgres.Testing (buildRuntimePostgresLoginAttemptStore, buildRuntimePostgresLoginAttemptStoreWithRunner, newPostgresPool, runPostgresMigrationsForRuntime)
 
 spec = do
   describe "runtime PostgreSQL login-attempt persistence" $ do
-    it "uses bound parameters to record and load recent login attempts" $ do
+    it "uses one bound-parameter query to reserve, then settles or cancels its opaque reservation" $ do
       queriesReference <- newIORef []
       let runner _databaseConfig query parameters = do
             modifyIORef' queriesReference ((query, parameters) :)
             pure $
-              if "INSERT INTO web_api.login_attempts" `Text.isInfixOf` query
-                then Right [["ignored"]]
+              if "SELECT outcome, value FROM web_api.reserve_login_attempt" `Text.isInfixOf` query
+                then Right [["reserved", "42"]]
                 else
-                  if "SELECT attempted_at_nanoseconds, succeeded" `Text.isInfixOf` query
-                    then Right [["500", "true"], ["600", "false"]]
+                  if "UPDATE web_api.login_attempts" `Text.isInfixOf` query || "DELETE FROM web_api.login_attempts" `Text.isInfixOf` query
+                    then Right [["42"]]
                     else Left "unexpected query"
           store = buildRuntimePostgresLoginAttemptStoreWithRunner runner databaseConfig
-      recordLoginAttempt store "email:person@example.test" (LoginAttempt 500 True) `shouldReturnEqual` Right ()
-      loadRecentLoginAttempts store "email:person@example.test" 100
-        `shouldReturnEqual` Right [LoginAttempt 500 True, LoginAttempt 600 False]
+          reservation = LoginAttemptReservation "42"
+      reserveLoginAttempt store "email:person@example.test" defaultLoginProtectionPolicy 500
+        `shouldReturnEqual` Right (LoginAttemptReserved reservation)
+      reserveLoginAttempt store "email:person@example.test" defaultLoginProtectionPolicy (unixTimeNanoseconds (loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500))
+        `shouldReturnEqual` Right (LoginAttemptReserved reservation)
+      settleLoginAttempt store reservation True `shouldReturnEqual` Right ()
+      cancelLoginAttempt store reservation `shouldReturnEqual` Right ()
       recordedQueries <- reverse <$> readIORef queriesReference
-      recordedQueries
-        `shouldBe` [ ( "INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded) VALUES ($1, $2, $3) RETURNING attempt_key;",
-                       ["email:person@example.test", "500", "true"]
-                     ),
-                     ( "SELECT attempted_at_nanoseconds, succeeded FROM web_api.login_attempts WHERE attempt_key = $1 AND attempted_at_nanoseconds >= $2 ORDER BY attempted_at_nanoseconds ASC;",
-                       ["email:person@example.test", "100"]
-                     )
-                   ]
+      case recordedQueries of
+        [(firstReserveQuery, firstReserveParameters), (secondReserveQuery, secondReserveParameters), (settleQuery, [settleReservation, "true"]), (cancelQuery, [cancelReservation])] -> do
+          "SELECT outcome, value FROM web_api.reserve_login_attempt" `Text.isInfixOf` firstReserveQuery `shouldBe` True
+          firstReserveParameters `shouldBe` ["email:person@example.test", "0", "500", "5", "900000000000"]
+          "SELECT outcome, value FROM web_api.reserve_login_attempt" `Text.isInfixOf` secondReserveQuery `shouldBe` True
+          secondReserveParameters `shouldBe` ["email:person@example.test", "500", "900000000500", "5", "900000000000"]
+          "UPDATE web_api.login_attempts" `Text.isInfixOf` settleQuery `shouldBe` True
+          settleReservation `shouldBe` "42"
+          "DELETE FROM web_api.login_attempts" `Text.isInfixOf` cancelQuery `shouldBe` True
+          cancelReservation `shouldBe` "42"
+        _ -> expectationFailure "expected two reserve queries followed by settlement and cancellation"
 
     it "preserves unavailable and corrupt database outcomes" $ do
       let unavailableStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Left "database unavailable")) databaseConfig
-          malformedTimestampStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [["not-a-timestamp", "true"]])) databaseConfig
-          malformedSucceededStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [["500", "not-a-bool"]])) databaseConfig
-          shortRowStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [["500"]])) databaseConfig
-      recordLoginAttempt unavailableStore "key" (LoginAttempt 500 True) `shouldReturnEqual` Left (LoginAttemptStoreUnavailable "database unavailable")
-      loadRecentLoginAttempts unavailableStore "key" 0 `shouldReturnEqual` Left (LoginAttemptStoreUnavailable "database unavailable")
-      loadRecentLoginAttempts malformedTimestampStore "key" 0
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt lookup result: [[\"not-a-timestamp\",\"true\"]]")
-      loadRecentLoginAttempts malformedSucceededStore "key" 0
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt lookup result: [[\"500\",\"not-a-bool\"]]")
-      loadRecentLoginAttempts shortRowStore "key" 0
-        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt lookup result: [[\"500\"]]")
+          malformedAdmissionStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [["unexpected"]])) databaseConfig
+          malformedLockoutStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [["throttled", "not-a-nanosecond"]])) databaseConfig
+          malformedSettlementStore = buildRuntimePostgresLoginAttemptStoreWithRunner (\_ _ _ -> pure (Right [])) databaseConfig
+      reserveLoginAttempt unavailableStore "key" defaultLoginProtectionPolicy 500 `shouldReturnEqual` Left (LoginAttemptStoreUnavailable "database unavailable")
+      reserveLoginAttempt malformedAdmissionStore "key" defaultLoginProtectionPolicy 500
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: [[\"unexpected\"]]")
+      reserveLoginAttempt malformedLockoutStore "key" defaultLoginProtectionPolicy 500
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt admission result: [[\"throttled\",\"not-a-nanosecond\"]]")
+      settleLoginAttempt malformedSettlementStore (LoginAttemptReservation "42") False
+        `shouldReturnEqual` Left (LoginAttemptStoreCorruptData "unexpected login-attempt settlement result: []")
 
     it "keeps login-attempt errors comparable" $ do
       (LoginAttemptStoreUnavailable "same" == LoginAttemptStoreUnavailable "same") `shouldBe` True
@@ -66,12 +75,34 @@ spec = do
       attemptKey <- accountIdText <$> generateAccountId
       pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
       let store = buildRuntimePostgresLoginAttemptStore pool
-      loadRecentLoginAttempts store attemptKey 0 `shouldReturnEqual` Right []
-      recordLoginAttempt store attemptKey (LoginAttempt 500 False) `shouldReturnEqual` Right ()
-      recordLoginAttempt store attemptKey (LoginAttempt 600 True) `shouldReturnEqual` Right ()
-      loadRecentLoginAttempts store attemptKey 500
-        `shouldReturnEqual` Right [LoginAttempt 500 False, LoginAttempt 600 True]
-      loadRecentLoginAttempts store attemptKey 550 `shouldReturnEqual` Right [LoginAttempt 600 True]
+      reserved <- reserveLoginAttempt store attemptKey defaultLoginProtectionPolicy 500
+      case reserved of
+        Right (LoginAttemptReserved reservation) -> settleLoginAttempt store reservation False `shouldReturnEqual` Right ()
+        _ -> expectationFailure "expected a real PostgreSQL attempt reservation"
+      cancelled <- reserveLoginAttempt store attemptKey defaultLoginProtectionPolicy 600
+      case cancelled of
+        Right (LoginAttemptReserved reservation) -> cancelLoginAttempt store reservation `shouldReturnEqual` Right ()
+        _ -> expectationFailure "expected a second real PostgreSQL attempt reservation"
+
+    it "serializes concurrent admission for one key before credential work" $ do
+      ensureDefaultPostgresAvailable
+      runPostgresMigrationsForRuntime defaultMigrationPostgresConfig defaultRealPostgresConfig
+        `shouldReturn` Right ()
+      attemptKey <- accountIdText <$> generateAccountId
+      pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
+      let store = buildRuntimePostgresLoginAttemptStore pool
+          policy = LoginProtectionPolicy 1 (loginProtectionWindowNanoseconds defaultLoginProtectionPolicy) (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
+          reserveResult = reserveLoginAttempt store attemptKey policy 500
+      resultsReference <- newEmptyMVar
+      replicateM_ 2 (forkIO (reserveResult >>= putMVar resultsReference))
+      results <- replicateM 2 (takeMVar resultsReference)
+      let reservations = [reservation | Right (LoginAttemptReserved reservation) <- results]
+          throttleEnds = [lockoutEndsAt | Right (LoginAttemptThrottled lockoutEndsAt) <- results]
+      length reservations `shouldBe` 1
+      throttleEnds `shouldBe` [500 + fromIntegral (loginProtectionLockoutNanoseconds policy)]
+      case reservations of
+        [reservation] -> settleLoginAttempt store reservation False `shouldReturnEqual` Right ()
+        _ -> expectationFailure "expected exactly one reservation"
 
 shouldReturnEqual :: (Eq value) => IO value -> value -> Expectation
 shouldReturnEqual action expected = do

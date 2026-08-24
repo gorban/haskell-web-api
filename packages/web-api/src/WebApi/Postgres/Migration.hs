@@ -188,6 +188,14 @@ migrations =
     PostgresMigration
       { postgresMigrationVersion = "epoch-security-time-v1",
         postgresMigrationStatements = epochSecurityTimeMigrationStatements
+      },
+    PostgresMigration
+      { postgresMigrationVersion = "login-attempt-reservations-v1",
+        postgresMigrationStatements = loginAttemptReservationMigrationStatements
+      },
+    PostgresMigration
+      { postgresMigrationVersion = "login-attempt-reservation-function-v1",
+        postgresMigrationStatements = loginAttemptReservationFunctionMigrationStatements
       }
   ]
 
@@ -249,7 +257,7 @@ migrationStatementsFor =
         -- identifier (the existence-oracle and brute-force surface this
         -- table exists to throttle), so it must be recordable whether or
         -- not any matching account exists.
-        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "login_attempts" <> " (attempt_key TEXT NOT NULL, attempted_at_nanoseconds BIGINT NOT NULL, succeeded TEXT NOT NULL);",
+        "CREATE TABLE IF NOT EXISTS " <> qualifiedTableName "login_attempts" <> " (attempt_id BIGSERIAL PRIMARY KEY, attempt_key TEXT NOT NULL, attempted_at_nanoseconds BIGINT NOT NULL, succeeded TEXT NOT NULL, settled BOOLEAN NOT NULL DEFAULT true);",
         "CREATE INDEX IF NOT EXISTS login_attempts_key_time ON " <> qualifiedTableName "login_attempts" <> " (attempt_key, attempted_at_nanoseconds);"
       ]
 
@@ -270,6 +278,18 @@ epochSecurityTimeMigrationStatements =
     "UPDATE web_api.accounts SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", email_verified_at_nanoseconds = CASE WHEN email_verified_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;",
     "UPDATE web_api.account_totp SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", confirmed_at_nanoseconds = CASE WHEN confirmed_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;",
     "UPDATE web_api.account_recovery_codes SET created_at_nanoseconds = " <> migrationEpochNanoseconds <> ", used_at_nanoseconds = CASE WHEN used_at_nanoseconds IS NULL THEN NULL ELSE " <> migrationEpochNanoseconds <> " END;"
+  ]
+
+loginAttemptReservationMigrationStatements :: [Text]
+loginAttemptReservationMigrationStatements =
+  [ "ALTER TABLE web_api.login_attempts ADD COLUMN IF NOT EXISTS attempt_id BIGSERIAL;",
+    "ALTER TABLE web_api.login_attempts ADD COLUMN IF NOT EXISTS settled BOOLEAN NOT NULL DEFAULT true;",
+    "CREATE UNIQUE INDEX IF NOT EXISTS login_attempts_attempt_id_unique ON web_api.login_attempts (attempt_id);"
+  ]
+
+loginAttemptReservationFunctionMigrationStatements :: [Text]
+loginAttemptReservationFunctionMigrationStatements =
+  [ "CREATE OR REPLACE FUNCTION web_api.reserve_login_attempt(p_key TEXT, p_since BIGINT, p_now BIGINT, p_max BIGINT, p_lockout BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE latest_failure BIGINT; failure_count BIGINT; BEGIN PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0)); SELECT max(attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts WHERE attempt_key = p_key AND succeeded = 'false' AND attempted_at_nanoseconds >= p_since AND attempted_at_nanoseconds <= p_now; IF failure_count >= p_max AND latest_failure + p_lockout > p_now THEN RETURN QUERY SELECT 'throttled'::TEXT, (latest_failure + p_lockout)::TEXT; ELSE RETURN QUERY INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled) VALUES (p_key, p_now, 'false', false) RETURNING 'reserved'::TEXT, attempt_id::TEXT; END IF; END $$;"
   ]
 
 migrationEpochNanoseconds :: Text
@@ -324,7 +344,7 @@ tablePrivileges runtimeOwner =
   let revoke tableName = "REVOKE ALL ON TABLE " <> qualifiedTableName tableName <> " FROM PUBLIC;"
       readOnly tableName = "GRANT SELECT ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
       readWrite tableName = "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
-   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts"]
+   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";"]
 
 seedStatements :: [Text]
 seedStatements =

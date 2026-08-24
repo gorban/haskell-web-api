@@ -402,8 +402,9 @@ unavailableAccountCredentialStore =
 unavailableLoginAttemptStore :: LoginAttemptStore
 unavailableLoginAttemptStore =
   LoginAttemptStore
-    { recordLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
-      loadRecentLoginAttempts = \_ _ -> unavailableResult loginAttemptsUnavailable
+    { reserveLoginAttempt = \_ _ _ -> unavailableResult loginAttemptsUnavailable,
+      settleLoginAttempt = \_ _ -> unavailableResult loginAttemptsUnavailable,
+      cancelLoginAttempt = \_ -> unavailableResult loginAttemptsUnavailable
     }
 
 unavailableAccountSessionStore :: AccountSessionStore

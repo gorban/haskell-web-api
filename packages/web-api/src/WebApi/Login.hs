@@ -4,6 +4,8 @@ module WebApi.Login
   ( AccountCredential (..),
     AccountCredentialStore (..),
     AccountCredentialStoreError (..),
+    LoginAttemptAdmission (..),
+    LoginAttemptReservation (..),
     LoginAttemptStore (..),
     LoginAttemptStoreError (..),
     LoginIdentifier (..),
@@ -20,7 +22,8 @@ module WebApi.Login
   )
 where
 
-import Control.Exception (evaluate)
+import Control.Exception (evaluate, onException)
+import Control.Monad (void)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
@@ -31,16 +34,11 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Account (AccountId, accountIdText)
 import HarchWeb.Email (EmailAddress, emailAddressText)
-import HarchWeb.LoginProtection
-  ( LoginAttempt (..),
-    LoginProtectionPolicy (..),
-    LoginProtectionResult (..),
-    evaluateLoginAttempt,
-  )
+import HarchWeb.LoginProtection (LoginProtectionPolicy)
 import HarchWeb.Password (Password, PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, verifyPassword)
 import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
-import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
+import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCodeCounter)
 import HarchWeb.Username (Username, usernameText)
 import WebApi.Mfa (MfaStore (..), MfaStoreError, StoredTotpEnrollment (..))
@@ -81,12 +79,31 @@ data LoginAttemptStoreError
   | LoginAttemptStoreCorruptData Text
   deriving (Eq)
 
+-- | An opaque, store-issued handle for one admitted authentication attempt.
+-- It is never a client credential; it only lets the server settle or cancel
+-- the provisional failure that made admission atomic.
+newtype LoginAttemptReservation = LoginAttemptReservation Text
+  deriving (Eq)
+
+data LoginAttemptAdmission
+  = LoginAttemptReserved LoginAttemptReservation
+  | LoginAttemptThrottled UnixTimeNanoseconds
+  deriving (Eq)
+
+-- | Decision (PR-S4, 2026-08-23): extend the existing attempt-store boundary
+-- rather than adding a parallel throttle. A PostgreSQL implementation admits
+-- one key through a database reservation function: it takes the per-key lock,
+-- then evaluates and inserts the unsettled row in a post-lock query snapshot.
+-- That row already counts as a failure. The workflow then settles the
+-- reservation to its real result, or cancels it on typed infrastructure
+-- failure, settlement failure, and asynchronous exception. A process crash
+-- can still leave an unsettled row until its window expires; PR-S5 owns
+-- durable retention and stale-reservation cleanup rather than introducing a
+-- second lifecycle here.
 data LoginAttemptStore = LoginAttemptStore
-  { recordLoginAttempt :: Text -> LoginAttempt -> IO (Either LoginAttemptStoreError ()),
-    -- | Only attempts at or after the supplied cutoff; the caller passes
-    -- @now - windowNanoseconds@ so a store backed by a real table can bound
-    -- its query instead of ever scanning full history.
-    loadRecentLoginAttempts :: Text -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError [LoginAttempt])
+  { reserveLoginAttempt :: Text -> LoginProtectionPolicy -> UnixTimeNanoseconds -> IO (Either LoginAttemptStoreError LoginAttemptAdmission),
+    settleLoginAttempt :: LoginAttemptReservation -> Bool -> IO (Either LoginAttemptStoreError ()),
+    cancelLoginAttempt :: LoginAttemptReservation -> IO (Either LoginAttemptStoreError ())
   }
 
 -- | The throttle dependencies threaded through both the password step
@@ -217,20 +234,40 @@ loginIdentifierKey identifier =
 secondFactorAttemptKey :: AccountId -> Text
 secondFactorAttemptKey accountId = "mfa:" <> accountIdText accountId
 
-checkLoginThrottle :: LoginThrottleContext -> Text -> IO (Either LoginAttemptStoreError LoginProtectionResult)
-checkLoginThrottle throttle key =
-  fmap (evaluateLoginAttempt policy now) <$> loadRecentLoginAttempts (loginThrottleStore throttle) key sinceNanoseconds
+runAdmittedLoginAttempt ::
+  LoginThrottleContext ->
+  Text ->
+  (UnixTimeNanoseconds -> result) ->
+  (LoginAttemptStoreError -> result) ->
+  IO (result, Maybe Bool) ->
+  IO result
+runAdmittedLoginAttempt throttle key throttled storeFailure work = do
+  admissionResult <- reserveLoginAttempt store key policy now
+  case admissionResult of
+    Left storeError -> pure (storeFailure storeError)
+    Right (LoginAttemptThrottled lockoutEndsAt) -> pure (throttled lockoutEndsAt)
+    Right (LoginAttemptReserved reservation) -> do
+      (result, settlement) <- work `onException` void (cancelLoginAttempt store reservation)
+      case settlement of
+        Nothing -> cancelOrFail reservation result
+        Just succeeded -> settleOrFail reservation succeeded result
   where
+    store = loginThrottleStore throttle
     policy = loginThrottlePolicy throttle
     now = loginThrottleNow throttle
-    sinceNanoseconds =
-      if unixTimeNanosecondsValue now >= loginProtectionWindowNanoseconds policy
-        then unixTimeNanoseconds (unixTimeNanosecondsValue now - loginProtectionWindowNanoseconds policy)
-        else unixTimeNanoseconds 0
-
-recordThrottleAttempt :: LoginThrottleContext -> Text -> Bool -> IO (Either LoginAttemptStoreError ())
-recordThrottleAttempt throttle key succeeded =
-  recordLoginAttempt (loginThrottleStore throttle) key (LoginAttempt (loginThrottleNow throttle) succeeded)
+    cancelOrFail reservation result = do
+      cancelResult <- cancelLoginAttempt store reservation
+      pure (either storeFailure (const result) cancelResult)
+    settleOrFail reservation succeeded result = do
+      settleResult <- settleLoginAttempt store reservation succeeded
+      case settleResult of
+        Right () -> pure result
+        Left storeError -> do
+          -- A settlement outcome can be ambiguous to the caller. Cancellation
+          -- only removes still-unsettled rows, so it recovers the ordinary
+          -- failed-write case without undoing a settlement that reached the DB.
+          void (cancelLoginAttempt store reservation)
+          pure (storeFailure storeError)
 
 -- | Validates the password first, then requires a confirmed authenticator.
 -- This function intentionally never creates a session: completing the second
@@ -240,20 +277,13 @@ beginPasswordLogin credentialStore mfaStore throttle emailAddress =
   beginPasswordLoginWithIdentifier credentialStore mfaStore throttle (LoginEmailAddress emailAddress)
 
 beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> LoginIdentifier -> Password -> IO PasswordLoginResult
-beginPasswordLoginWithIdentifier credentialStore mfaStore throttle identifier password = do
-  throttleStatus <- checkLoginThrottle throttle key
-  case throttleStatus of
-    Left storeError -> pure (PasswordLoginAttemptStoreError storeError)
-    Right (LoginThrottledUntil lockoutEndsAt) -> pure (PasswordLoginThrottled lockoutEndsAt)
-    Right LoginPermitted -> do
+beginPasswordLoginWithIdentifier credentialStore mfaStore throttle identifier password =
+  runAdmittedLoginAttempt throttle key PasswordLoginThrottled PasswordLoginAttemptStoreError work
+  where
+    work = do
       credentialResult <- lookupCredential credentialStore identifier
       outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential mfaStore password) credentialResult
-      case credentialCheckThrottleOutcome outcome of
-        Nothing -> pure (credentialCheckToPasswordLoginResult outcome)
-        Just succeeded -> do
-          recordResult <- recordThrottleAttempt throttle key succeeded
-          pure (either PasswordLoginAttemptStoreError (const (credentialCheckToPasswordLoginResult outcome)) recordResult)
-  where
+      pure (credentialCheckToPasswordLoginAdmission outcome)
     key = loginIdentifierKey identifier
 
 -- | A credential check's own outcome, distinct from 'PasswordLoginResult':
@@ -263,7 +293,7 @@ beginPasswordLoginWithIdentifier credentialStore mfaStore throttle identifier pa
 -- 'continueWithCredential' after the throttle check itself has already
 -- succeeded and permitted the attempt. Keeping those two states out of this
 -- type (rather than reusing 'PasswordLoginResult' and pattern-matching
--- defensively) makes 'credentialCheckThrottleOutcome' total over every
+-- defensively) makes its admission result total over every
 -- constructor a genuine credential check can produce, instead of carrying
 -- two alternatives no test can ever legitimately reach.
 data CredentialCheckOutcome
@@ -274,38 +304,15 @@ data CredentialCheckOutcome
   | CredentialCheckCredentialStoreError AccountCredentialStoreError
   | CredentialCheckMfaStoreError MfaStoreError
 
-credentialCheckToPasswordLoginResult :: CredentialCheckOutcome -> PasswordLoginResult
-credentialCheckToPasswordLoginResult outcome =
+credentialCheckToPasswordLoginAdmission :: CredentialCheckOutcome -> (PasswordLoginResult, Maybe Bool)
+credentialCheckToPasswordLoginAdmission outcome =
   case outcome of
-    CredentialCheckRejected -> PasswordLoginRejected
-    CredentialCheckEmailVerificationRequired accountId -> PasswordLoginEmailVerificationRequired accountId
-    CredentialCheckMfaEnrollmentRequired accountId -> PasswordLoginMfaEnrollmentRequired accountId
-    CredentialCheckMfaRequired accountId -> PasswordLoginMfaRequired accountId
-    CredentialCheckCredentialStoreError storeError -> PasswordLoginCredentialStoreError storeError
-    CredentialCheckMfaStoreError storeError -> PasswordLoginMfaStoreError storeError
-
--- | Whether a completed credential check should count toward the throttle,
--- and if so, as a success or a failure. A credential-store failure does not
--- record: it reflects our own persistence being unavailable, not attacker
--- behavior.
---
--- | The throttle-counts-as-success outcome, named once instead of written as
--- a bare @Just True@ at each matching case alternative below: identical
--- literal expressions written separately at multiple case alternatives get
--- merged by GHC into one shared CAF, crediting only the first alternative's
--- own HPC tick even though every one genuinely runs in tests.
-throttleCountsAsSuccess :: Maybe Bool
-throttleCountsAsSuccess = Just True
-
-credentialCheckThrottleOutcome :: CredentialCheckOutcome -> Maybe Bool
-credentialCheckThrottleOutcome outcome =
-  case outcome of
-    CredentialCheckRejected -> Just False
-    CredentialCheckEmailVerificationRequired _ -> throttleCountsAsSuccess
-    CredentialCheckMfaEnrollmentRequired _ -> throttleCountsAsSuccess
-    CredentialCheckMfaRequired _ -> throttleCountsAsSuccess
-    CredentialCheckCredentialStoreError _ -> Nothing
-    CredentialCheckMfaStoreError _ -> throttleCountsAsSuccess
+    CredentialCheckRejected -> (PasswordLoginRejected, Just False)
+    CredentialCheckEmailVerificationRequired accountId -> (PasswordLoginEmailVerificationRequired accountId, Just True)
+    CredentialCheckMfaEnrollmentRequired accountId -> (PasswordLoginMfaEnrollmentRequired accountId, Just True)
+    CredentialCheckMfaRequired accountId -> (PasswordLoginMfaRequired accountId, Just True)
+    CredentialCheckCredentialStoreError storeError -> (PasswordLoginCredentialStoreError storeError, Nothing)
+    CredentialCheckMfaStoreError storeError -> (PasswordLoginMfaStoreError storeError, Just True)
 
 lookupCredential :: AccountCredentialStore -> LoginIdentifier -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
 lookupCredential credentialStore identifier =
@@ -392,58 +399,51 @@ verifyProof context accountId enrollment =
 -- (mirroring 'consumeRecoveryCodeHash'), so a concurrent request racing to
 -- accept the same or an older counter for this account also loses.
 verifyTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO PasswordMfaLoginResult
-verifyTotpProof context accountId enrollment suppliedCode = do
-  throttleStatus <- checkLoginThrottle (secondFactorThrottle context) (secondFactorAttemptKey accountId)
-  case throttleStatus of
-    Left storeError -> pure (PasswordMfaLoginAttemptStoreError storeError)
-    Right (LoginThrottledUntil lockoutEndsAt) -> pure (PasswordMfaLoginThrottled lockoutEndsAt)
-    Right LoginPermitted -> verifyPermittedTotpProof context accountId enrollment suppliedCode
+verifyTotpProof context accountId enrollment suppliedCode =
+  runAdmittedLoginAttempt
+    (secondFactorThrottle context)
+    (secondFactorAttemptKey accountId)
+    PasswordMfaLoginThrottled
+    PasswordMfaLoginAttemptStoreError
+    (verifyPermittedTotpProof context accountId enrollment suppliedCode)
 
-verifyPermittedTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO PasswordMfaLoginResult
+verifyPermittedTotpProof :: SecondFactorContext -> AccountId -> StoredTotpEnrollment -> TotpCode -> IO (PasswordMfaLoginResult, Maybe Bool)
 verifyPermittedTotpProof context accountId enrollment suppliedCode =
   case decodeTotpSecret (secondFactorEncryptionKey context) (storedTotpEncryptedSecret enrollment) of
-    Nothing -> pure PasswordMfaLoginCorruptEnrollment
+    Nothing -> pure (PasswordMfaLoginCorruptEnrollment, Nothing)
     Just secret ->
       case validateTotpCodeCounter (secondFactorNowSeconds context) 1 secret suppliedCode of
-        Nothing -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
+        Nothing -> pure (PasswordMfaLoginRejected, Just False)
         Just matchedCounter ->
           case storedTotpLastUsedCounter enrollment of
             Just lastUsedCounter
-              | matchedCounter <= lastUsedCounter -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
+              | matchedCounter <= lastUsedCounter -> pure (PasswordMfaLoginRejected, Just False)
             _ -> do
               markResult <- markTotpCodeUsed (secondFactorMfaStore context) accountId matchedCounter
               case markResult of
-                Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
-                Right True -> settleSecondFactorAttempt context accountId True (PasswordMfaLoginAccepted accountId)
-                Right False -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
-
-settleSecondFactorAttempt :: SecondFactorContext -> AccountId -> Bool -> PasswordMfaLoginResult -> IO PasswordMfaLoginResult
-settleSecondFactorAttempt context accountId succeeded result = do
-  recordResult <- recordThrottleAttempt (secondFactorThrottle context) (secondFactorAttemptKey accountId) succeeded
-  pure (either PasswordMfaLoginAttemptStoreError (const result) recordResult)
+                Left storeError -> pure (PasswordMfaLoginMfaStoreError storeError, Nothing)
+                Right True -> pure (PasswordMfaLoginAccepted accountId, Just True)
+                Right False -> pure (PasswordMfaLoginRejected, Just False)
 
 -- | A recovery proof shares the per-account MFA budget with TOTP. Its
 -- accepted or rejected result is settled before it becomes caller-visible;
 -- a required attempt-store write failure is therefore fail-closed.
 completeRecoveryCode :: SecondFactorContext -> AccountId -> RecoveryCode -> IO PasswordMfaLoginResult
-completeRecoveryCode context accountId suppliedCode = do
-  throttleStatus <- checkLoginThrottle throttle key
-  case throttleStatus of
-    Left storeError -> pure (PasswordMfaLoginAttemptStoreError storeError)
-    Right (LoginThrottledUntil lockoutEndsAt) -> pure (PasswordMfaLoginThrottled lockoutEndsAt)
-    Right LoginPermitted -> do
+completeRecoveryCode context accountId suppliedCode =
+  runAdmittedLoginAttempt throttle key PasswordMfaLoginThrottled PasswordMfaLoginAttemptStoreError work
+  where
+    work = do
       recoveryResult <- runExceptT $ do
         recoveryHashValues <- liftMfaStore (loadUnusedRecoveryCodeHashes (secondFactorMfaStore context) accountId)
         recoveryHashes <-
           fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
         maybe (pure False) consumeMatchingHash (find (verifyRecoveryCode suppliedCode) recoveryHashes)
       case recoveryResult of
-        Left infrastructureError -> pure (infrastructureFailureResult infrastructureError)
+        Left infrastructureError -> pure (infrastructureFailureResult infrastructureError, Nothing)
         Right accepted ->
           case accepted of
-            False -> settleSecondFactorAttempt context accountId False PasswordMfaLoginRejected
-            True -> settleSecondFactorAttempt context accountId True (PasswordMfaLoginAccepted accountId)
-  where
+            False -> pure (PasswordMfaLoginRejected, Just False)
+            True -> pure (PasswordMfaLoginAccepted accountId, Just True)
     throttle = secondFactorThrottle context
     key = secondFactorAttemptKey accountId
     consumeMatchingHash matchingHash =

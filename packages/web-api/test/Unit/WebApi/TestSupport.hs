@@ -166,7 +166,7 @@ import WebApi.Account (AccountStore (..), AccountStoreError (..), RegistrationEn
 import WebApi.AccountPages (AccountAction, accountActions)
 import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
-import WebApi.Login (LoginAttemptStore (..), LoginThrottleContext (..))
+import WebApi.Login (LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginThrottleContext (..))
 import WebApi.Page (AppPageModel (..), ProfilePageModel (..), renderPage)
 import WebApi.Postgres.Testing (PostgresCommand (..), PostgresCommandResult (..))
 import WebApi.Route (AppLocale (..), AppRequestContext (..), AppRoute (..), RouteMetadata (..), defaultRequestContext)
@@ -502,15 +502,14 @@ testPasswordHashingPolicy =
     (error "Expected valid test password hashing policy")
     (Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1))
 
--- | A 'LoginAttemptStore' that never denies a login attempt: it records
--- nothing and always reports no prior attempts, so 'evaluateLoginAttempt'
--- always returns 'LoginPermitted'. For tests exercising login/logout
--- behavior unrelated to throttling itself.
+-- | A 'LoginAttemptStore' that always admits and successfully settles an
+-- attempt. For tests exercising login/logout behavior unrelated to throttling.
 permissiveLoginAttemptStore :: LoginAttemptStore
 permissiveLoginAttemptStore =
   LoginAttemptStore
-    { recordLoginAttempt = \_ _ -> pure (Right ()),
-      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "test-reservation"))),
+      settleLoginAttempt = \_ _ -> pure (Right ()),
+      cancelLoginAttempt = \_ -> pure (Right ())
     }
 
 permissiveLoginThrottleContext :: UnixTimeNanoseconds -> LoginThrottleContext

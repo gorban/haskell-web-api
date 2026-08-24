@@ -39,7 +39,7 @@ import WebApi.App.Enhancements (pageEnhancementHooks)
 import WebApi.AppEffect qualified as AppEffect
 import WebApi.Config (AppEnvironmentConfig (..), defaultAppConfig, defaultAppEnvironmentConfig)
 import WebApi.Database (defaultPageRepository)
-import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
+import WebApi.Login (AccountCredential (..), AccountCredentialStore (..), AccountCredentialStoreError (..), LoginAttemptAdmission (..), LoginAttemptReservation (..), LoginAttemptStore (..), LoginAttemptStoreError (..), LoginIdentifier (..), PasswordLoginResult (..), beginPasswordLoginWithIdentifier)
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Page (AppPageModel (..), CallToAction (..), ProfilePageModel (..), SignedOutProfilePageDetails (..), buildPageModelFromRouteData, renderPageFromRouteData)
@@ -727,8 +727,9 @@ spec = do
             action >>= \case
               Left (LoginAttemptStoreUnavailable "login-attempt persistence is not configured") -> pure ()
               _ -> expectationFailure "expected unavailable login-attempt persistence"
-      assertLoginAttemptsUnavailable (recordLoginAttempt unconfiguredLoginAttemptStore "key" (LoginProtection.LoginAttempt 0 True))
-      assertLoginAttemptsUnavailable (loadRecentLoginAttempts unconfiguredLoginAttemptStore "key" 0)
+      assertLoginAttemptsUnavailable (reserveLoginAttempt unconfiguredLoginAttemptStore "key" LoginProtection.defaultLoginProtectionPolicy 0)
+      assertLoginAttemptsUnavailable (settleLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation") True)
+      assertLoginAttemptsUnavailable (cancelLoginAttempt unconfiguredLoginAttemptStore (LoginAttemptReservation "reservation"))
       let unconfiguredSessionStore = accountWorkflowSessionStore unavailableAccountWorkflow
           assertSessionUnavailable :: IO (Either AccountSessionStoreError value) -> Expectation
           assertSessionUnavailable action =
@@ -1058,30 +1059,25 @@ spec = do
           mfaAttemptKey = "mfa:" <> Account.accountIdText accountId
           exhaustedMfaThrottleStore =
             LoginAttemptStore
-              { recordLoginAttempt = \key attempt -> key `seq` attempt `seq` pure (Right ()),
-                loadRecentLoginAttempts = \key _ ->
-                  pure
-                    ( if key == mfaAttemptKey
-                        then Right [LoginProtection.LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
-                        else Right []
-                    )
+              { reserveLoginAttempt = \key _ _ -> pure (Right (if key == mfaAttemptKey then LoginAttemptThrottled 1000 else LoginAttemptReserved (LoginAttemptReservation key))),
+                settleLoginAttempt = \_ _ -> pure (Right ()),
+                cancelLoginAttempt = \_ -> pure (Right ())
               }
           postCheckWriteFailure = LoginAttemptStoreUnavailable "post-check attempt write failed"
           postCheckWriteFailureStore =
             LoginAttemptStore
-              { recordLoginAttempt = \key attempt ->
-                  if key == mfaAttemptKey
-                    then key `seq` attempt `seq` pure (Left postCheckWriteFailure)
-                    else pure (Right ()),
-                loadRecentLoginAttempts = \_ _ -> pure (Right [])
+              { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                settleLoginAttempt = \(LoginAttemptReservation key) _ -> if key == mfaAttemptKey then pure (Left postCheckWriteFailure) else pure (Right ()),
+                cancelLoginAttempt = \_ -> pure (Right ())
               }
       canonicalUsernameKeysReference <- newIORef []
       let canonicalUsernameWorkflow =
             validWorkflow
               { accountWorkflowLoginAttemptStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt -> modifyIORef' canonicalUsernameKeysReference (key :) >> (attempt `seq` pure (Right ())),
-                      loadRecentLoginAttempts = \key _ -> modifyIORef' canonicalUsernameKeysReference (key :) >> pure (Right [])
+                    { reserveLoginAttempt = \key _ _ -> modifyIORef' canonicalUsernameKeysReference (key :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     }
               }
           exhaustedTotpWorkflow =
@@ -1099,6 +1095,19 @@ spec = do
                     { saveAccountSession = \_ -> error "a failed second-factor settlement must not issue a session"
                     }
               }
+      admissionContextReference <- newIORef Nothing
+      let policyCapturingWorkflow =
+            validWorkflow
+              { accountWorkflowLoginAttemptStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ policy now -> writeIORef admissionContextReference (Just (policy, now)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
+                    }
+              }
+      handleAccountAction policyCapturingWorkflow (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
+      readIORef admissionContextReference `shouldReturn` Just (LoginProtection.defaultLoginProtectionPolicy, 500)
       handleAccountAction validWorkflow (loginRequest defaultRequestContext [("email", "not an identifier!")])
         >>= (`shouldSatisfy` actionHasStatusAndFocus 422 (Just "login-email") "valid email address")
       handleAccountAction validWorkflow (spanishLoginRequest [("email", "not an identifier!")])
@@ -1155,7 +1164,7 @@ spec = do
       handleAccountAction canonicalUsernameWorkflow (loginRequest defaultRequestContext uppercaseUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       canonicalUsernameKeys <- readIORef canonicalUsernameKeysReference
-      filter (Text.isPrefixOf "username:") canonicalUsernameKeys `shouldBe` ["username:person_01", "username:person_01", "username:person_01", "username:person_01"]
+      filter (Text.isPrefixOf "username:") canonicalUsernameKeys `shouldBe` ["username:person_01", "username:person_01"]
       handleAccountAction validWorkflow (loginRequest defaultRequestContext emailUsernameFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed in")
       handleAccountAction exhaustedTotpWorkflow (loginRequest defaultRequestContext validFields)
@@ -1184,18 +1193,21 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-code") "temporarily unavailable")
       let failingLoginAttemptStore =
             LoginAttemptStore
-              { recordLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
-                loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down"))
+              { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
+                settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down")),
+                cancelLoginAttempt = \_ -> pure (Left (LoginAttemptStoreUnavailable "attempt store down"))
               }
           corruptLoginAttemptStore =
             LoginAttemptStore
-              { recordLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
-                loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt"))
+              { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
+                settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt")),
+                cancelLoginAttempt = \_ -> pure (Left (LoginAttemptStoreCorruptData "attempt store corrupt"))
               }
           throttledLoginAttemptStore =
             LoginAttemptStore
-              { recordLoginAttempt = \_ _ -> error "unexpected throttle record while already throttled",
-                loadRecentLoginAttempts = \_ _ -> pure (Right [LoginProtection.LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]])
+              { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptThrottled 1000)),
+                settleLoginAttempt = \_ _ -> error "unexpected throttle settlement while already throttled",
+                cancelLoginAttempt = \_ -> error "unexpected throttle cancellation while already throttled"
               }
       handleAccountAction validWorkflow {accountWorkflowLoginAttemptStore = failingLoginAttemptStore} (loginRequest defaultRequestContext validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")

@@ -8,11 +8,14 @@ where
 
 import Data.Text (Text)
 import Data.Text qualified as Text
-import HarchWeb.LoginProtection (LoginAttempt (..))
-import HarchWeb.Time (unixTimeNanoseconds, unixTimeNanosecondsValue)
+import Data.Word (Word64)
+import HarchWeb.LoginProtection (LoginProtectionPolicy (..))
+import HarchWeb.Time (UnixTimeNanoseconds, unixTimeNanoseconds, unixTimeNanosecondsValue)
 import Text.Read (readMaybe)
 import WebApi.Login
-  ( LoginAttemptStore (..),
+  ( LoginAttemptAdmission (..),
+    LoginAttemptReservation (..),
+    LoginAttemptStore (..),
     LoginAttemptStoreError (..),
   )
 import WebApi.Postgres.Pool (PostgresPool)
@@ -28,50 +31,60 @@ buildRuntimePostgresLoginAttemptStoreWithRunner ::
   LoginAttemptStore
 buildRuntimePostgresLoginAttemptStoreWithRunner runQuery source =
   LoginAttemptStore
-    { recordLoginAttempt = recordAttempt,
-      loadRecentLoginAttempts = loadRecent
+    { reserveLoginAttempt = reserveAttempt,
+      settleLoginAttempt = settleAttempt,
+      cancelLoginAttempt = cancelAttempt
     }
   where
-    recordAttempt key attempt =
+    reserveAttempt key policy now =
       runLoginAttemptStoreQuery
         ( runQuery
             source
-            recordLoginAttemptQuery
-            [key, Text.pack (show (unixTimeNanosecondsValue (loginAttemptAtNanoseconds attempt))), succeededText (loginAttemptSucceeded attempt)]
+            reserveLoginAttemptQuery
+            [ key,
+              Text.pack (show (windowStartNanoseconds policy now)),
+              Text.pack (show (unixTimeNanosecondsValue now)),
+              Text.pack (show (loginProtectionMaximumFailures policy)),
+              Text.pack (show (loginProtectionLockoutNanoseconds policy))
+            ]
         )
+        decodeAdmission
+
+    settleAttempt (LoginAttemptReservation reservationId) succeeded =
+      runLoginAttemptStoreQuery
+        (runQuery source settleLoginAttemptQuery [reservationId, succeededText succeeded])
+        requireOneRow
+
+    cancelAttempt (LoginAttemptReservation reservationId) =
+      runLoginAttemptStoreQuery
+        (runQuery source cancelLoginAttemptQuery [reservationId])
         (const (Right ()))
 
-    loadRecent key sinceNanoseconds =
-      runLoginAttemptStoreQuery
-        (runQuery source loadRecentLoginAttemptsQuery [key, Text.pack (show (unixTimeNanosecondsValue sinceNanoseconds))])
-        decodeLoginAttempts
+windowStartNanoseconds :: LoginProtectionPolicy -> UnixTimeNanoseconds -> Word64
+windowStartNanoseconds policy now =
+  if unixTimeNanosecondsValue now >= loginProtectionWindowNanoseconds policy
+    then unixTimeNanosecondsValue now - loginProtectionWindowNanoseconds policy
+    else 0
 
 runLoginAttemptStoreQuery :: IO (Either Text [[Text]]) -> ([[Text]] -> Either LoginAttemptStoreError value) -> IO (Either LoginAttemptStoreError value)
 runLoginAttemptStoreQuery query decodeRows =
   either (Left . LoginAttemptStoreUnavailable) decodeRows <$> query
 
-decodeLoginAttempts :: [[Text]] -> Either LoginAttemptStoreError [LoginAttempt]
-decodeLoginAttempts rows =
-  maybe
-    (Left (LoginAttemptStoreCorruptData ("unexpected login-attempt lookup result: " <> Text.pack (show rows))))
-    Right
-    (traverse decodeLoginAttempt rows)
+decodeAdmission :: [[Text]] -> Either LoginAttemptStoreError LoginAttemptAdmission
+decodeAdmission rows =
+  case rows of
+    [["reserved", reservationId]] -> Right (LoginAttemptReserved (LoginAttemptReservation reservationId))
+    [["throttled", lockoutEndsAtValue]] ->
+      maybe malformed (Right . LoginAttemptThrottled . unixTimeNanoseconds) (readMaybe (Text.unpack lockoutEndsAtValue))
+    _ -> malformed
+  where
+    malformed = Left (LoginAttemptStoreCorruptData ("unexpected login-attempt admission result: " <> Text.pack (show rows)))
 
-decodeLoginAttempt :: [Text] -> Maybe LoginAttempt
-decodeLoginAttempt row =
-  case row of
-    [attemptedAtValue, succeededValue] ->
-      LoginAttempt . unixTimeNanoseconds
-        <$> readMaybe (Text.unpack attemptedAtValue)
-        <*> decodeSucceeded succeededValue
-    _ -> Nothing
-
-decodeSucceeded :: Text -> Maybe Bool
-decodeSucceeded value =
-  case value of
-    "true" -> Just True
-    "false" -> Just False
-    _ -> Nothing
+requireOneRow :: [[Text]] -> Either LoginAttemptStoreError ()
+requireOneRow rows =
+  case rows of
+    [[_]] -> Right ()
+    _ -> Left (LoginAttemptStoreCorruptData ("unexpected login-attempt settlement result: " <> Text.pack (show rows)))
 
 succeededText :: Bool -> Text
 succeededText succeeded = if succeeded then "true" else "false"
@@ -82,8 +95,11 @@ succeededText succeeded = if succeeded then "true" else "false"
 -- its pooled counterpart treat as a query failure (they only read rows out
 -- of a tuples-returning result). Every other INSERT in this package follows
 -- the same convention.
-recordLoginAttemptQuery :: Text
-recordLoginAttemptQuery = "INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded) VALUES ($1, $2, $3) RETURNING attempt_key;"
+reserveLoginAttemptQuery :: Text
+reserveLoginAttemptQuery = "SELECT outcome, value FROM web_api.reserve_login_attempt($1::TEXT, $2::BIGINT, $3::BIGINT, $4::BIGINT, $5::BIGINT);"
 
-loadRecentLoginAttemptsQuery :: Text
-loadRecentLoginAttemptsQuery = "SELECT attempted_at_nanoseconds, succeeded FROM web_api.login_attempts WHERE attempt_key = $1 AND attempted_at_nanoseconds >= $2 ORDER BY attempted_at_nanoseconds ASC;"
+settleLoginAttemptQuery :: Text
+settleLoginAttemptQuery = "UPDATE web_api.login_attempts SET succeeded = $2, settled = true WHERE attempt_id = $1::BIGINT AND settled = false RETURNING attempt_id::TEXT;"
+
+cancelLoginAttemptQuery :: Text
+cancelLoginAttemptQuery = "DELETE FROM web_api.login_attempts WHERE attempt_id = $1::BIGINT AND settled = false RETURNING attempt_id::TEXT;"

@@ -624,7 +624,7 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema"]
+        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1"]
       withUnusedTcpEndpoint $ \unusedEndpoint -> do
         runPostgresMigrations
           defaultMigrationPostgresConfig
@@ -705,7 +705,7 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
               "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
             ]
-      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
+      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
       skippedRecordedSql <- readIORef recordedSqlReference
       take (length setupSql) skippedRecordedSql `shouldBe` setupSql
       skippedRecordedSql `shouldContain` ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";"]
@@ -784,18 +784,18 @@ spec = do
       recordSql `shouldBe` setupSql <> migrationStatementsFor <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');", "ROLLBACK;"]
 
       (reconciliationResult, reconciliationSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1"] sql)
       reconciliationResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       reconciliationSql `shouldBe` setupSql <> ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";", "ROLLBACK;"]
 
       (commitResult, commitSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1"] sql)
       commitResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       take (length setupSql) commitSql `shouldBe` setupSql
       drop (length commitSql - 2) commitSql `shouldBe` ["COMMIT;", "ROLLBACK;"]
 
       (sameIdentityResult, sameIdentitySql) <-
-        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1"])
+        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1"])
       sameIdentityResult `shouldBe` Right ()
       sameIdentitySql `shouldNotContain` ["DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'web_api_owner') THEN EXECUTE 'ALTER ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; ELSE EXECUTE 'CREATE ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; END IF; END $$;"]
 

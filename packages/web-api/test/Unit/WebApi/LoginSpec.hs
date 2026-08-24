@@ -3,7 +3,9 @@
 
 {-# SPEC #-}
 
-import Control.Exception (ErrorCall (..), evaluate)
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
+import Control.Exception (AsyncException (ThreadKilled), ErrorCall (..), SomeException, evaluate, throwTo, try)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
@@ -12,7 +14,7 @@ import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (accountIdText)
-import HarchWeb.LoginProtection (LoginAttempt (..), defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
+import HarchWeb.LoginProtection (defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
 import HarchWeb.Password (PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
@@ -198,6 +200,11 @@ spec = do
                  PasswordLoginRejected /= PasswordLoginMfaRequired accountId `shouldBe` True,
                  PasswordLoginEmailVerificationRequired accountId /= PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
                  PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "unavailable") /= PasswordLoginMfaStoreError (MfaStoreUnavailable "unavailable") `shouldBe` True,
+                 LoginAttemptReservation "reservation" == LoginAttemptReservation "reservation" `shouldBe` True,
+                 LoginAttemptReservation "reservation" /= LoginAttemptReservation "other" `shouldBe` True,
+                 LoginAttemptReserved (LoginAttemptReservation "reservation") == LoginAttemptReserved (LoginAttemptReservation "reservation") `shouldBe` True,
+                 LoginAttemptReserved (LoginAttemptReservation "reservation") /= LoginAttemptThrottled 500 `shouldBe` True,
+                 LoginAttemptThrottled 500 == LoginAttemptThrottled 500 `shouldBe` True,
                  totpProof /= recoveryProof `shouldBe` True,
                  PasswordMfaLoginRejected /= PasswordMfaLoginEmailVerificationRequired accountId `shouldBe` True,
                  PasswordMfaLoginEnrollmentRequired accountId /= PasswordMfaLoginAccepted accountId `shouldBe` True,
@@ -218,18 +225,15 @@ spec = do
           ErrorCall message -> "test failure" `Text.isInfixOf` Text.pack message
 
     it "throttles a password step and an already-verified recovery-code step alike, without touching the credential, MFA, or attempt-recording stores" $ do
-      let recentFailures = [LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
-          expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
+      let expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
           throttledStoreFor matchingKey =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt ->
-                        if key == matchingKey
-                          then error "unexpected throttle record for an already-throttled key"
-                          else key `seq` attempt `seq` pure (Right ()),
-                      loadRecentLoginAttempts = \requestedKey _ ->
-                        pure (if requestedKey == matchingKey then Right recentFailures else Right [])
+                    { reserveLoginAttempt = \requestedKey _ _ ->
+                        pure (Right (if requestedKey == matchingKey then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation "permitted"))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -256,8 +260,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedReference ((key, attempt) :) >> pure (Right ()),
-                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -271,8 +276,8 @@ spec = do
         `shouldReturnEqual` PasswordLoginRejected
       knownRecorded <- readIORef knownReference
       expectAll
-        ( (unknownRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 False)])
-            :| [knownRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 False)]]
+        ( (unknownRecorded `shouldBe` [("email:person@example.test", False)])
+            :| [knownRecorded `shouldBe` [("email:person@example.test", False)]]
         )
 
     it "records a successful attempt whenever the password check itself succeeds, even though a further step is still required" $ do
@@ -282,8 +287,9 @@ spec = do
                   LoginThrottleContext
                     { loginThrottleStore =
                         LoginAttemptStore
-                          { recordLoginAttempt = \key attempt -> modifyIORef' recordedReference ((key, attempt) :) >> pure (Right ()),
-                            loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                          { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                            settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
+                            cancelLoginAttempt = \_ -> pure (Right ())
                           },
                       loginThrottlePolicy = defaultLoginProtectionPolicy,
                       loginThrottleNow = 500
@@ -296,11 +302,17 @@ spec = do
       -- before any MFA lookup, so 'unexpectedMfaStore' proves that lookup never runs.
       (mfaRequiredResult, mfaRequiredRecorded) <- recordFor confirmedMfaStore verifiedCredential
       (unverifiedResult, unverifiedRecorded) <- recordFor unexpectedMfaStore unverifiedCredential
+      (mfaEnrollmentResult, mfaEnrollmentRecorded) <- recordFor (mfaStore (Right Nothing)) verifiedCredential
+      (mfaStoreErrorResult, mfaStoreErrorRecorded) <- recordFor (mfaStore (Left (MfaStoreUnavailable "MFA store down"))) verifiedCredential
       expectAll
         ( (mfaRequiredResult == PasswordLoginMfaRequired accountId `shouldBe` True)
-            :| [ mfaRequiredRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 True)],
+            :| [ mfaRequiredRecorded `shouldBe` [("email:person@example.test", True)],
                  unverifiedResult == PasswordLoginEmailVerificationRequired accountId `shouldBe` True,
-                 unverifiedRecorded `shouldBe` [("email:person@example.test", LoginAttempt 500 True)]
+                 unverifiedRecorded `shouldBe` [("email:person@example.test", True)],
+                 mfaEnrollmentResult == PasswordLoginMfaEnrollmentRequired accountId `shouldBe` True,
+                 mfaEnrollmentRecorded `shouldBe` [("email:person@example.test", True)],
+                 mfaStoreErrorResult == PasswordLoginMfaStoreError (MfaStoreUnavailable "MFA store down") `shouldBe` True,
+                 mfaStoreErrorRecorded `shouldBe` [("email:person@example.test", True)]
                ]
         )
 
@@ -309,8 +321,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \_ _ -> error "unexpected throttle record after a failed throttle check",
-                      loadRecentLoginAttempts = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "database unavailable"))
+                    { reserveLoginAttempt = \_ _ _ -> pure (Left (LoginAttemptStoreUnavailable "database unavailable")),
+                      settleLoginAttempt = \_ _ -> error "unexpected throttle settlement after a failed admission",
+                      cancelLoginAttempt = \_ -> error "unexpected throttle cancellation after a failed admission"
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -321,14 +334,82 @@ spec = do
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
 
+    it "cancels an unsettled reservation on typed credential failure and returns cleanup or settlement errors" $ do
+      cancelledReservationsReference <- newIORef []
+      let reservation = LoginAttemptReservation "password-reservation"
+          cancellationThrottle cancellationResult =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                      settleLoginAttempt = \_ _ -> error "unexpected settlement for a typed credential-store failure",
+                      cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure cancellationResult
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          typedCredentialFailure = credentialStore (Left (AccountCredentialStoreUnavailable "credential store down"))
+      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Right ())) emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "credential store down")
+      (map showReservation <$> readIORef cancelledReservationsReference) `shouldReturn` ["password-reservation"]
+      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Left (LoginAttemptStoreUnavailable "cleanup failed"))) emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
+      let settlementFailureThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved reservation)),
+                      settleLoginAttempt = \_ _ -> pure (Left (LoginAttemptStoreUnavailable "settlement failed")),
+                      cancelLoginAttempt = \receivedReservation -> modifyIORef' cancelledReservationsReference (receivedReservation :) >> pure (Right ())
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore settlementFailureThrottle emailAddress (mkPassword "irrelevant")
+        `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "settlement failed")
+      (map showReservation <$> readIORef cancelledReservationsReference)
+        `shouldReturn` ["password-reservation", "password-reservation", "password-reservation"]
+
+    it "cancels a reserved password attempt when asynchronous cancellation interrupts credential work" $ do
+      cancelledReservationsReference <- newIORef []
+      credentialLookupStarted <- newEmptyMVar
+      blockedCredentialResult <- newEmptyMVar
+      workerResult <- newEmptyMVar
+      let cancellationThrottle =
+            LoginThrottleContext
+              { loginThrottleStore =
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \_ _ -> error "unexpected settlement after asynchronous cancellation",
+                      cancelLoginAttempt = \reservation -> modifyIORef' cancelledReservationsReference (showReservation reservation :) >> pure (Right ())
+                    },
+                loginThrottlePolicy = defaultLoginProtectionPolicy,
+                loginThrottleNow = 500
+              }
+          blockedCredentialStore =
+            AccountCredentialStore
+              (\_ -> putMVar credentialLookupStarted () >> takeMVar blockedCredentialResult)
+              (\_ -> error "unexpected username lookup")
+      worker <- forkIO $ do
+        result <- (try (beginPasswordLogin blockedCredentialStore unexpectedMfaStore cancellationThrottle emailAddress (mkPassword "irrelevant")) :: IO (Either SomeException PasswordLoginResult))
+        putMVar workerResult result
+      takeMVar credentialLookupStarted
+      throwTo worker ThreadKilled
+      cancellationResult <- takeMVar workerResult
+      case cancellationResult of
+        Left _ -> pure ()
+        Right _ -> expectationFailure "expected asynchronous cancellation"
+      readIORef cancelledReservationsReference `shouldReturn` ["email:person@example.test"]
+
     it "keys case variants of a username identifier with the same canonical throttle identity, distinct from email" $ do
       keyReference <- newIORef []
       let capturingThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key _ -> modifyIORef' keyReference (key :) >> pure (Right ()),
-                      loadRecentLoginAttempts = \key _ -> modifyIORef' keyReference (key :) >> pure (Right [])
+                    { reserveLoginAttempt = \key _ _ -> modifyIORef' keyReference (key :) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -340,27 +421,28 @@ spec = do
       beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername lowercaseUsername) (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       capturedKeys <- readIORef keyReference
-      capturedKeys `shouldBe` ["username:person_01", "username:person_01", "username:person_01", "username:person_01"]
+      capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
 
-    it "clamps the throttle window's lower bound to zero instead of underflowing when the current time is earlier than the policy window" $ do
-      sinceReference <- newIORef Nothing
+    it "passes the current time and policy to admission before credential work" $ do
+      admissionReference <- newIORef Nothing
       let capturingThrottleAt now =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \_ _ -> pure (Right ()),
-                      loadRecentLoginAttempts = \_ since -> writeIORef sinceReference (Just since) >> pure (Right [])
+                    { reserveLoginAttempt = \_ policy admittedNow -> writeIORef admissionReference (Just (policy, admittedNow)) >> pure (Right (LoginAttemptReserved (LoginAttemptReservation "captured"))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = now
               }
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
-      readIORef sinceReference `shouldReturn` Just 0
+      readIORef admissionReference `shouldReturn` Just (defaultLoginProtectionPolicy, 500)
       let largeNow = unixTimeNanoseconds (loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500)
       beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt largeNow) emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
-      readIORef sinceReference `shouldReturn` Just 500
+      readIORef admissionReference `shouldReturn` Just (defaultLoginProtectionPolicy, largeNow)
 
     it "propagates a login-attempt store failure from the recovery-code step's own throttle check, distinct from an already-throttled recovery attempt" $ do
       let recoveryKey = "mfa:" <> accountIdText accountId
@@ -368,12 +450,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt ->
-                        if key == recoveryKey
-                          then error "unexpected throttle record after a failed recovery throttle check"
-                          else key `seq` attempt `seq` pure (Right ()),
-                      loadRecentLoginAttempts = \requestedKey _ ->
-                        pure (if requestedKey == recoveryKey then Left (LoginAttemptStoreUnavailable "recovery throttle store down") else Right [])
+                    { reserveLoginAttempt = \requestedKey _ _ -> pure (if requestedKey == recoveryKey then Left (LoginAttemptStoreUnavailable "recovery throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation requestedKey))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -390,15 +469,15 @@ spec = do
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "recovery throttle store down")
 
     it "gates exhausted TOTP attempts before decrypting or marking the proof" $ do
-      let recentFailures = [LoginAttempt failureTime False | failureTime <- [100, 200, 300, 400, 450]]
-          expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
+      let expectedLockoutEnd = 450 + fromIntegral (loginProtectionLockoutNanoseconds defaultLoginProtectionPolicy)
           mfaKey = "mfa:" <> accountIdText accountId
           exhaustedTotpThrottle =
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt -> key `seq` attempt `seq` pure (Right ()),
-                      loadRecentLoginAttempts = \key _ -> pure (if key == mfaKey then Right recentFailures else Right [])
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (if key == mfaKey then LoginAttemptThrottled expectedLockoutEnd else LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -416,13 +495,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key _ -> key `seq` pure (Right ()),
-                      loadRecentLoginAttempts = \key _ ->
-                        pure
-                          ( if key == mfaKey
-                              then Left (LoginAttemptStoreUnavailable "TOTP throttle store down")
-                              else Right []
-                          )
+                    { reserveLoginAttempt = \key _ _ -> pure (if key == mfaKey then Left (LoginAttemptStoreUnavailable "TOTP throttle store down") else Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \_ _ -> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -442,8 +517,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedAttemptsReference ((key, attempt) :) >> pure (Right ()),
-                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedAttemptsReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -477,10 +553,10 @@ spec = do
         `shouldReturnEqual` PasswordMfaLoginRejected
       recordedAttempts <- readIORef recordedAttemptsReference
       filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
-        `shouldBe` [ ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
-                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
-                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 True),
-                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 False)
+        `shouldBe` [ ("mfa:" <> accountIdText accountId, False),
+                     ("mfa:" <> accountIdText accountId, False),
+                     ("mfa:" <> accountIdText accountId, True),
+                     ("mfa:" <> accountIdText accountId, False)
                    ]
 
     it "settles rejected and accepted recovery proofs in the shared MFA history" $ do
@@ -491,8 +567,9 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt -> modifyIORef' recordedAttemptsReference ((key, attempt) :) >> pure (Right ()),
-                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \reservation succeeded -> modifyIORef' recordedAttemptsReference ((showReservation reservation, succeeded) :) >> pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -514,8 +591,8 @@ spec = do
         `shouldReturnEqual` PasswordMfaLoginRejected
       recordedAttempts <- readIORef recordedAttemptsReference
       filter ((== "mfa:" <> accountIdText accountId) . fst) recordedAttempts
-        `shouldBe` [ ("mfa:" <> accountIdText accountId, LoginAttempt 500 False),
-                     ("mfa:" <> accountIdText accountId, LoginAttempt 500 True)
+        `shouldBe` [ ("mfa:" <> accountIdText accountId, False),
+                     ("mfa:" <> accountIdText accountId, True)
                    ]
 
     it "fails closed when a required password, TOTP, or recovery settlement write fails" $ do
@@ -528,11 +605,12 @@ spec = do
             LoginThrottleContext
               { loginThrottleStore =
                   LoginAttemptStore
-                    { recordLoginAttempt = \key attempt ->
-                        if key == "email:person@example.test"
-                          then key `seq` attempt `seq` pure (Left settlementFailure)
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \reservation _ ->
+                        if showReservation reservation == "email:person@example.test"
+                          then pure (Left settlementFailure)
                           else pure (Right ()),
-                      loadRecentLoginAttempts = \_ _ -> pure (Right [])
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     },
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
@@ -540,11 +618,13 @@ spec = do
           secondFactorSettlementFailure =
             failingThrottle
               { loginThrottleStore =
-                  (loginThrottleStore failingThrottle)
-                    { recordLoginAttempt = \key attempt ->
-                        if key == "mfa:" <> accountIdText accountId
-                          then key `seq` attempt `seq` pure (Left settlementFailure)
-                          else pure (Right ())
+                  LoginAttemptStore
+                    { reserveLoginAttempt = \key _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation key))),
+                      settleLoginAttempt = \reservation _ ->
+                        if showReservation reservation == "mfa:" <> accountIdText accountId
+                          then pure (Left settlementFailure)
+                          else pure (Right ()),
+                      cancelLoginAttempt = \_ -> pure (Right ())
                     }
               }
           totpStore =
@@ -624,16 +704,16 @@ secondFactorContextFor mfaStoreValue proof =
       secondFactorThrottle = permissiveThrottle
     }
 
--- | Never denies an attempt: records nothing, always reports no prior
--- attempts, so 'evaluateLoginAttempt' always returns 'LoginPermitted'. Used
+-- | Never denies an attempt and always settles or cancels successfully. Used
 -- by every test in this module that is not itself about throttling.
 permissiveThrottle :: LoginThrottleContext
 permissiveThrottle =
   LoginThrottleContext
     { loginThrottleStore =
         LoginAttemptStore
-          { recordLoginAttempt = \_ _ -> pure (Right ()),
-            loadRecentLoginAttempts = \_ _ -> pure (Right [])
+          { reserveLoginAttempt = \_ _ _ -> pure (Right (LoginAttemptReserved (LoginAttemptReservation "permissive"))),
+            settleLoginAttempt = \_ _ -> pure (Right ()),
+            cancelLoginAttempt = \_ -> pure (Right ())
           },
       loginThrottlePolicy = defaultLoginProtectionPolicy,
       loginThrottleNow = 500
@@ -641,3 +721,6 @@ permissiveThrottle =
 
 requiredCrypto :: CryptoFailable value -> value
 requiredCrypto = fromMaybe (error "expected cryptographic operation to succeed") . maybeCryptoError
+
+showReservation :: LoginAttemptReservation -> Text.Text
+showReservation (LoginAttemptReservation value) = value
