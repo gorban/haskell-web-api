@@ -158,7 +158,7 @@ jobs:
         if: steps.cabal_check.outcome == 'success'
         id: seed_postgres
         run: |
-          cabal run haskell-web-api-db -- migrate-and-seed
+          tools/seed-test-database.sh
 
       - name: Run optimized build diagnostic gate
         if: steps.seed_postgres.outcome == 'success'

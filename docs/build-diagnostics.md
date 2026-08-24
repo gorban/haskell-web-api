@@ -12,6 +12,16 @@ removes the GNU `ld.bfd` dynamic-closure-symbol warning rather than suppressing 
 `lld`; local developers must install an `ld.lld` executable before either wrapper starts Cabal. See
 the [setup guide](../SETUP.md#ghcup-prerequisites) for the Ubuntu and Fedora/Distrobox package lists.
 
+## Bounded long-running CI operations
+
+`tools/run-observed-command.sh` is the common local/CI boundary for operations that may otherwise
+be silent for minutes. It emits a label, UTC start time, configured deadline, elapsed completion
+time, and a clear timeout or exit-status error while streaming the operation's complete combined
+stdout/stderr to the caller. It deliberately never prints command arguments or environment values:
+callers provide a stable, non-sensitive label instead. CI uses it for database seeding, and the
+pinned formatter installer uses it for each download/build phase; the same scripts are available to
+local developers. Its hermetic fixture covers successful output, ordinary failures, and a timeout.
+
 ## Runtime coverage scope
 
 The coverage gate requires 100% expressions, alternatives, and top-level declarations from every
