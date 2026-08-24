@@ -142,8 +142,9 @@ spec = do
           nonRsaOid = pemText "PRIVATE KEY" (pkcs8PrivateKeyWithOid [1, 2, 3] "")
           invalidRsaData = pemText "PRIVATE KEY" (pkcs8PrivateKey "not DER")
           malformedRsa = pemText "PRIVATE KEY" (pkcs8PrivateKey (encodeASN1' DER [Null]))
+          barePkcs1 = pemText "PRIVATE KEY" (rsaPrivateKeyDer 1 1 1 1 1 1 1 1)
           unsignableRsa = pemText "PRIVATE KEY" (pkcs8PrivateKey (rsaPrivateKeyDer 1 1 1 1 1 1 1 1))
-      failures <- mapM tryInvalidPrivateKey [malformedPem, emptyPem, wrongPemLabel, emptyPkcs8, crashingBitStringPkcs8, incompleteTag, incompleteContent, nonRsaPkcs8, nonRsaOid, invalidRsaData, malformedRsa, unsignableRsa]
+      failures <- mapM tryInvalidPrivateKey [malformedPem, emptyPem, wrongPemLabel, emptyPkcs8, crashingBitStringPkcs8, incompleteTag, incompleteContent, nonRsaPkcs8, nonRsaOid, invalidRsaData, malformedRsa, barePkcs1, unsignableRsa]
       map displayException failures
         `shouldBe` [ "user error (Google Workspace private key is not valid PEM)",
                      "user error (Google Workspace private key must contain one PKCS#8 PRIVATE KEY block)",
@@ -156,6 +157,7 @@ spec = do
                      "user error (Google Workspace private key must be an RSA PKCS#8 key)",
                      "user error (Google Workspace private key is not valid RSA data)",
                      "user error (Google Workspace private key must contain an RSA private key)",
+                     "user error (Google Workspace private key must be an RSA PKCS#8 key)",
                      "user error (Google Workspace private key could not sign the JWT)"
                    ]
 

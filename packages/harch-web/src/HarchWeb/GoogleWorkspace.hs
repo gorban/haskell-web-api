@@ -15,12 +15,11 @@ import Control.Concurrent.MVar (MVar, modifyMVar, newMVar)
 import Control.Exception (SomeException, displayException, evaluate, try)
 import Control.Monad (unless)
 import Crypto.Hash.Algorithms (SHA256 (..))
-import Crypto.Number.Serialize (i2osp)
 import Crypto.PubKey.RSA.PKCS15 qualified as RSA
 import Crypto.PubKey.RSA.Types qualified as RSA
 import Data.ASN1.BinaryEncoding (DER (..))
 import Data.ASN1.Encoding (decodeASN1')
-import Data.ASN1.Types (ASN1 (..), ASN1ConstructionType (..))
+import Data.ASN1.Types (ASN1 (..), ASN1ConstructionType (..), ASN1Object (fromASN1))
 import Data.Aeson qualified as Aeson
 import Data.Aeson.Types qualified as AesonTypes
 import Data.ByteString (ByteString)
@@ -33,6 +32,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
+import Data.X509 qualified as X509
 import HarchWeb.Gmail
   ( GmailAccessTokenProvider,
     GmailHttpRequest (..),
@@ -181,22 +181,16 @@ signRs256 pem signingInput = do
     Left _ -> Left "Google Workspace private key could not sign the JWT"
     Right signature -> Right signature
 
--- | Decision (BY, 2026-08-21, per @docs/design-guidance.md@'s
--- missing-framework-capability protocol): see @docs/design-guidance.md@'s
--- \"Follow-up decision — BY\" for why this hand-adapts the structural match
--- instead of reusing @crypton-x509@'s ready-made decoder wholesale.
+-- | Decision (PR-T4, 2026-08-24, per @docs/design-guidance.md@'s
+-- extend-existing-boundary rule): use @crypton-x509@'s maintained 'X509.PrivKey'
+-- decoder now that this package and @crypton-x509@ share @crypton@'s
+-- 'RSA.PrivateKey' type. The small outer PKCS#8-envelope check remains here
+-- because this credential boundary accepts exactly one PKCS#8 @PRIVATE KEY@
+-- block, while the library's general decoder also accepts bare PKCS#1.
 --
--- Decodes DER bytes with @asn1-encoding@ (a real ASN.1 decoder with proper
--- indefinite-length rejection, length-overflow checking, and two's-complement
--- 'IntVal' decoding) instead of the previous hand-rolled byte-level DER walk,
--- then pattern-matches the decoded token stream against the fixed PKCS#8/
--- PKCS#1 RSA shape directly — mirroring @crypton-x509@'s own
--- @Data.X509.PrivateKey.rsaFromASN1@ pattern, but built from this project's
--- own @cryptonite@ 'RSA.PrivateKey' rather than @crypton-x509@'s, since that
--- package is built against the incompatible @crypton@ fork of this project's
--- cryptography library. See @docs/design-guidance.md@'s
--- \"Follow-up decision — BY\" for the full record.
-{-# ANN rsaPrivateKeyFromPem ("HLint: ignore Redundant $!" :: String) #-}
+-- @asn1-encoding@ still owns strict DER tokenization (including malformed and
+-- indefinite-length rejection). Its successful PKCS#1 token stream is then
+-- passed to @crypton-x509@ rather than reconstructed field by field here.
 rsaPrivateKeyFromPem :: Text -> Either Text RSA.PrivateKey
 rsaPrivateKeyFromPem pem = do
   parsedPem <- mapFailure "Google Workspace private key is not valid PEM" (PEM.pemParseBS (TextEncoding.encodeUtf8 pem))
@@ -208,7 +202,9 @@ rsaPrivateKeyFromPem pem = do
           _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
       _ -> Left "Google Workspace private key must contain one PKCS#8 PRIVATE KEY block"
   asn1 <- mapFailure "Google Workspace private key is not valid PKCS#8" ((decodeASN1' $! derEncoding) der)
-  rsaPrivateKeyFromPkcs8Asn1 asn1
+  encodedKey <- pkcs8RsaPrivateKeyBytes asn1
+  pkcs1 <- mapFailure "Google Workspace private key is not valid RSA data" ((decodeASN1' $! derEncoding) encodedKey)
+  rsaPrivateKeyFromPkcs1Asn1 pkcs1
 
 -- | The bare 'DER' constructor, named once instead of written at both this
 -- module's decode call sites. Per @docs/design-guidance.md@'s
@@ -224,9 +220,8 @@ rsaPrivateKeyFromPem pem = do
 derEncoding :: DER
 derEncoding = DER
 
-{-# ANN rsaPrivateKeyFromPkcs8Asn1 ("HLint: ignore Redundant $!" :: String) #-}
-rsaPrivateKeyFromPkcs8Asn1 :: [ASN1] -> Either Text RSA.PrivateKey
-rsaPrivateKeyFromPkcs8Asn1 asn1 =
+pkcs8RsaPrivateKeyBytes :: [ASN1] -> Either Text ByteString
+pkcs8RsaPrivateKeyBytes asn1 =
   case asn1 of
     [ Start Sequence,
       IntVal 0,
@@ -237,56 +232,13 @@ rsaPrivateKeyFromPkcs8Asn1 asn1 =
       OctetString encodedKey,
       End Sequence
       ]
-        | rsaEncryptionOid == rsaEncryptionObjectIdentifier -> do
-            pkcs1 <- mapFailure "Google Workspace private key is not valid RSA data" ((decodeASN1' $! derEncoding) encodedKey)
-            rsaPrivateKeyFromPkcs1Asn1 pkcs1
+        | rsaEncryptionOid == rsaEncryptionObjectIdentifier -> Right encodedKey
     _ -> Left "Google Workspace private key must be an RSA PKCS#8 key"
 
 rsaPrivateKeyFromPkcs1Asn1 :: [ASN1] -> Either Text RSA.PrivateKey
 rsaPrivateKeyFromPkcs1Asn1 asn1 =
-  case asn1 of
-    [ Start Sequence,
-      IntVal 0,
-      IntVal modulus,
-      IntVal publicExponent,
-      IntVal privateExponent,
-      IntVal primeOne,
-      IntVal primeTwo,
-      IntVal exponentOne,
-      IntVal exponentTwo,
-      IntVal coefficient,
-      End Sequence
-      ] ->
-        -- Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the
-        -- @$!@ applications below on 'modulus', 'publicExponent', and
-        -- 'privateExponent' are a last resort, confirmed directly rather
-        -- than assumed. This module's now-deleted 'forceRsaPrivateKey'
-        -- forced these same values via 'RSA.PrivateKey' field accessors
-        -- inside 'signRs256', on the (untested) assumption that forcing a
-        -- thunk anywhere makes every source expression that also evaluates
-        -- it count as covered — false: HPC ticks are per source expression,
-        -- not per underlying thunk, so forcing via an accessor call in a
-        -- different function does not tick this constructor application,
-        -- and forcing via a guard on this same case alternative (tried
-        -- first) does not tick it either, for the same reason. Only forcing
-        -- each field at its own reference here closes the gap. Removing all
-        -- forcing reproduced a genuine, reproducible gap on exactly these
-        -- three fields (the PKCS#1 CRT fields below — 'primeOne' through
-        -- 'coefficient' — stay ticked without forcing, since
-        -- 'RSA.PKCS15.sign' genuinely forces them itself via the CRT
-        -- signing path; it does not use the plain 'privateExponent' or the
-        -- embedded public key at all).
-        Right
-          ( ( RSA.PrivateKey
-                ((RSA.PublicKey (ByteString.length (i2osp modulus)) $! modulus) $! publicExponent)
-                $! privateExponent
-            )
-              primeOne
-              primeTwo
-              exponentOne
-              exponentTwo
-              coefficient
-          )
+  case (fromASN1 asn1 :: Either String (X509.PrivKey, [ASN1])) of
+    Right (X509.PrivKeyRSA privateKey, []) -> Right privateKey
     _ -> Left "Google Workspace private key must contain an RSA private key"
 
 rsaEncryptionObjectIdentifier :: [Integer]

@@ -1565,27 +1565,25 @@ as requested rather than unilaterally deleting a subsystem with real tests and n
 meant to go away — but the "no live caller" fact is recorded here so a future task touching this
 area doesn't have to rediscover it.
 
-### Follow-up decision — BY: real ASN.1 decoding, hand-adapted structural matching (2026-08-21)
+### Follow-up decision — BY/PR-T4: maintained RSA decoding after the crypto migration (2026-08-24)
 
-**Decision: replace the hand-rolled byte-level DER walk with `asn1-encoding`'s real decoder, but
-hand-write the RSA/PKCS#8 structural pattern-match against its `[ASN1]` output rather than reusing
-`crypton-x509`'s ready-made `PrivKey`/`fromASN1` decoder.** BY's own text named `crypton-x509` as
-available and already used by the test suite, which reads as an implicit recommendation to reuse
-its private-key decoder wholesale — the natural extend-vs-new-abstraction choice would have been to
-do exactly that. Trying it first (rather than assuming the hand-adapted route was necessary) surfaced
-a real blocker: `crypton-x509`'s `PrivKey` wraps the `crypton` package's `RSA.PrivateKey`, and this
-project's own RSA usage throughout `GoogleWorkspace.hs` (`RSA.sign`, `RSA.PublicKey`, `signRs256`) is
-built on `cryptonite`'s `RSA.PrivateKey` — a same-named, structurally-identical, but *nominally
-distinct* type from a different package, confirmed by a genuine `Couldn't match expected type`
-compile error, not assumed from documentation. This is the missing-framework-capability protocol's
-"the workaround silently substitutes a materially different property" case: reusing `crypton-x509`
-verbatim would have meant migrating this module (or the whole package) from `cryptonite` to
-`crypton`, a materially larger, differently-scoped change than "replace a DER parser." Given that,
-the fix keeps `asn1-encoding`'s real decoder (the part that was actually buggy — indefinite-length
-acceptance, `Int` overflow, unsigned-integer folding) but writes the RSA/PKCS#8 structural match by
-hand against its `[ASN1]` token output, mirroring `crypton-x509`'s own `rsaFromASN1` pattern shape
-(read directly from its source as a reference) adapted to construct this project's own `cryptonite`
-`RSA.PrivateKey` instead.
+**Decision: retain `asn1-encoding` for strict DER tokenization and the small PKCS#8-envelope
+contract check, then use `crypton-x509`'s maintained `X509.PrivKey` `fromASN1` instance to build the
+RSA key rather than reconstructing PKCS#1 fields locally.** BY originally tried that maintained
+decoder and correctly stopped when its `crypton` `RSA.PrivateKey` could not satisfy this module's
+then-`cryptonite` signing API. ED subsequently replaced the project's direct `cryptonite`
+dependencies with `crypton`, making that recorded nominal-type mismatch false. PR-T4 re-ran the
+integration against the current build plan and confirmed `X509.PrivKeyRSA` now contains the exact
+`crypton` `RSA.PrivateKey` accepted by `RSA.sign`.
+
+The generic decoder deliberately accepts both bare PKCS#1 and PKCS#8, whereas this service-account
+boundary promises exactly one PEM `PRIVATE KEY` block containing a DER PKCS#8 RSA key. The module
+therefore retains only the outer PKCS#8/RSA OID envelope check and strict DER decoding of its embedded
+PKCS#1 bytes before calling `fromASN1`; it no longer hand-matches or constructs the RSA CRT fields.
+The outer check is contract preservation, not a parallel parser: a regression proves a bare PKCS#1
+payload under a `PRIVATE KEY` label remains rejected. This keeps BY's malformed-input boundary and
+its rejection of indefinite/invalid DER while replacing the stale custom key-construction logic with
+the maintained implementation.
 
 A second, unplanned finding surfaced while verifying the fix against every one of the original
 task's malformed-input test cases rather than assuming the replacement was correct by construction:
