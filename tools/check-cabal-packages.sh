@@ -52,10 +52,18 @@ fi
 
 for package_directory in "${package_directories[@]}"; do
   printf 'Checking package manifest: %s\n' "$package_directory"
-  (
+  if ! check_output="$(
     cd "$repo_root/$package_directory"
-    cabal check
-  )
+    cabal check 2>&1
+  )"; then
+    printf '%s\n' "$check_output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$check_output"
+  if grep -q '^Warning:' <<<"$check_output"; then
+    printf 'Package manifest emitted an unapproved cabal check warning: %s\n' "$package_directory" >&2
+    exit 1
+  fi
 done
 
-printf '%s\n' 'All project-owned package manifests passed cabal check.'
+printf '%s\n' 'All project-owned package manifests passed cabal check with no warnings.'

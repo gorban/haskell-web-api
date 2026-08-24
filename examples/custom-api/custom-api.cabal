@@ -1,8 +1,15 @@
 cabal-version: 3.14
 name: custom-api
 version: 0.1.0.0
-synopsis: A declarative HarchWeb.Api endpoint table composed via the closed route-family registry
+synopsis: Declarative API endpoint table using HarchWeb route families
+description:
+  Buildable example of a typed API endpoint table composed through a closed HarchWeb route family.
+homepage: https://github.com/gorban/haskell-web-api
 license: BSD-2-Clause-Patent
+author: David Bruck
+maintainer: 1393236+gorban@users.noreply.github.com
+copyright: (c) David Bruck
+category: Web
 build-type: Simple
 extra-doc-files: README.md
 

@@ -2,7 +2,14 @@ cabal-version: 3.14
 name: custom-db-adapter
 version: 0.1.0.0
 synopsis: Alternative adapter example for HarchWeb.Database
+description:
+  Buildable example of adapting an application database interface to HarchWeb.Database.
+homepage: https://github.com/gorban/haskell-web-api
 license: BSD-2-Clause-Patent
+author: David Bruck
+maintainer: 1393236+gorban@users.noreply.github.com
+copyright: (c) David Bruck
+category: Web
 build-type: Simple
 extra-doc-files: README.md
 
