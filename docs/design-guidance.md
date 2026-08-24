@@ -1525,14 +1525,14 @@ Genuinely adding TH-quote support means either waiting on an upstream fix to a d
 project doesn't control, or hand-writing quote-syntax parsing to bypass `haskell-src-meta` for this
 one construct — real, open-ended scope for a syntactic form no call site in this codebase, in any
 example app, has ever needed. That tips this toward "flag and stop" for the *feature*, while still
-leaving a small, clearly-bounded, unambiguously-beneficial fix available for the *crash*: force
-`Meta.parseExp`'s result inside `Q` (`runIO` wrapping `try (evaluate expression)`) and reroute a
-caught `ErrorCall` through the same `failAt` path an ordinary parse error already takes. This is
-deliberately scoped to the *direct* case — a name quote written as the entire `{...}` expression,
-matching the finding's own example — since WHNF forcing does not reach a quote buried inside a
-larger expression tree (`{f 'Just}`); reaching that would need full-AST forcing (an `NFData`
-instance and `deepseq`, or a hand-written traversal) for a case with, again, no demonstrated need.
-Recorded as a named, narrower residual gap rather than silently treated as closed by the WHNF fix.
+leaving a small, clearly-bounded, unambiguously-beneficial fix available for the *crash*: traverse
+`Meta.parseExp`'s complete `Exp` inside `Q` by fully consuming its `pprint` representation (`runIO`
+wrapping `try (evaluate (length (pprint expression)))`), then reroute a caught `ErrorCall` through
+the same `failAt` path an ordinary parse error already takes. `Exp` has no `NFData` instance, and
+this existing structural renderer reaches every nested child without adding a second parser or
+claiming to implement TH-name-quote syntax. Direct `{'Just}` and nested `{f 'Just}` regressions both
+prove the dependency error now becomes the positioned markup failure. Name quotes remain unsupported
+syntax, but they no longer leak an unhelpful compiler-time panic.
 
 ### Follow-up decision — BX: explicit-prop caching, not a second global CAF (2026-08-21)
 

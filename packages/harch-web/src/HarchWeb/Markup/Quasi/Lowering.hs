@@ -29,6 +29,7 @@ import Language.Haskell.TH
     lookupValueName,
     mkName,
     nameBase,
+    pprint,
     reify,
     runIO,
   )
@@ -431,24 +432,21 @@ applyNamedPure name = foldl AppE (VarE name)
 -- VarQuote ...@) — confirmed directly against @haskell-src-meta-0.8.16@,
 -- not assumed. Left uncaught, that crash would surface as a confusing
 -- GHC-internal panic at the *calling* module's compile time, far from
--- where the actual mistake is. Forcing the result here, inside 'Q' (which
--- runs in 'IO'), converts that crash into the same kind of clean,
--- positioned parse failure an ordinary syntax error already gets. This
--- only catches the name quote written as the expression's own outermost
--- syntax (@{'Just}@, matching the finding's own examples); one nested
--- inside a larger expression (@{f 'Just}@) is not forced by this WHNF
--- check and may still surface as an unhelpful panic — a known, narrower
--- residual gap, not silently claimed as closed.
+-- where the actual mistake is. Fully consuming 'pprint' inside 'Q' (which
+-- runs in 'IO') traverses the complete parsed 'Exp', including nested
+-- children, without adding a second parser or treating TH name quotes as
+-- supported syntax. That converts the dependency's crash into the same
+-- clean, positioned parse failure an ordinary syntax error already gets.
 parseExpression :: Position -> String -> Q Exp
 parseExpression position expressionSource =
   case Meta.parseExp expressionSource of
     Left message -> failAt position ("invalid Haskell expression: " <> message)
     Right expression -> do
-      forcedExpression <- runIO (try (evaluate expression))
+      forcedExpression <- runIO (try (evaluate (length (pprint expression))))
       case forcedExpression of
         Left (ErrorCall message) ->
           failAt position ("unsupported Haskell expression syntax: " <> message)
-        Right validExpression -> pure validExpression
+        Right _ -> pure expression
 
 textLiteral :: String -> Exp
 textLiteral literal = AppE (VarE 'Text.pack) (LitE (StringL literal))
