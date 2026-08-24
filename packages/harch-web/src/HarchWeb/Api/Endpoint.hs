@@ -7,7 +7,8 @@
 -- @.Family@ owns the one method-aware route-family adapter, and @.Runtime@
 -- owns request decoding and protocol-response interpretation. This is a
 -- structural extension of the existing boundary, not a second dispatcher or
--- a newly exposed internal API: all callers continue to compose the same
+-- a newly exposed internal API: all callers construct one
+-- 'ApiEndpointFamily' and compose its
 -- 'apiRouteEndpointFamilyCodec'/'apiRouteEndpointFamilyDefinition' pair.
 -- The split repairs the module-health signal while keeping the family
 -- dispatcher's ownership and 'ApiPath' abstraction intact; see
@@ -38,6 +39,10 @@ module HarchWeb.Api.Endpoint
     apiRouteDefinitionWithContextWithFieldFailure,
     apiRouteDefinitionWithContextNeverFailing,
     apiRouteDefinitionWithContextNeverFailingWithFieldFailure,
+    ApiEndpointFamily,
+    ApiEndpointFamilyError (..),
+    apiEndpointFamily,
+    requireApiEndpointFamily,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     at,

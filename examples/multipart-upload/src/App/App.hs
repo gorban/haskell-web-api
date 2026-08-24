@@ -9,7 +9,7 @@ where
 
 import App.MultipartUpload (NativeUploadState, nativeUploadEndpoints, newNativeUploadState)
 import HarchWeb qualified
-import HarchWeb.Api (ApiPath, apiRouteEndpointFamilyCodec, apiRouteEndpointFamilyDefinition)
+import HarchWeb.Api (ApiPath, apiRouteEndpointFamilyCodec, apiRouteEndpointFamilyDefinition, requireApiEndpointFamily)
 import HarchWeb.Site qualified as Site
 import Network.Wai qualified as Wai
 
@@ -37,7 +37,8 @@ multipartUploadSite state =
   Site.apiOnlySite
     "multipart-upload-example"
     ()
-    (apiRouteEndpointFamilyCodec endpoints)
-    (apiRouteEndpointFamilyDefinition endpoints)
+    (apiRouteEndpointFamilyCodec endpointFamily)
+    (apiRouteEndpointFamilyDefinition endpointFamily)
   where
     endpoints = nativeUploadEndpoints state
+    endpointFamily = requireApiEndpointFamily endpoints

@@ -50,13 +50,17 @@ declarativeApiEndpoints =
     SomeApiRouteEndpoint uploadAvatarEndpoint
   ]
 
+declarativeApiEndpointFamily :: ApiEndpointFamily
+declarativeApiEndpointFamily =
+  requireApiEndpointFamily declarativeApiEndpoints
+
 declarativeApiSite :: Site.Site ApiPath () ()
 declarativeApiSite =
   Site.apiOnlySite
     "custom-api"
     ()
-    (apiRouteEndpointFamilyCodec declarativeApiEndpoints)
-    (apiRouteEndpointFamilyDefinition declarativeApiEndpoints)
+    (apiRouteEndpointFamilyCodec declarativeApiEndpointFamily)
+    (apiRouteEndpointFamilyDefinition declarativeApiEndpointFamily)
 
 declarativeApiApplication :: IO Wai.Application
 declarativeApiApplication = HarchWeb.toWaiApplication (Site.buildSiteApplication declarativeApiSite)

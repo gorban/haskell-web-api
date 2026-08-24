@@ -2,6 +2,7 @@
 
 {-# SPEC #-}
 
+import Control.Exception (ErrorCall (..), evaluate)
 import Data.ByteString qualified as ByteString
 import Data.ByteString.Builder qualified as Builder
 import Data.ByteString.Lazy qualified as LazyByteString
@@ -29,6 +30,9 @@ testEndpointTable =
     SomeApiRouteEndpoint neverFailingEndpoint,
     SomeApiRouteEndpoint streamEndpoint
   ]
+
+testEndpointFamily :: ApiEndpointFamily
+testEndpointFamily = requireApiEndpointFamily testEndpointTable
 
 testEndpoint :: ApiMethod -> ApiPath -> Text -> ApiRouteEndpoint () () () Text
 testEndpoint method path responseText =
@@ -126,9 +130,9 @@ runApiRoute :: ApiRouteEndpoint fields body domainFailure response -> Wai.Reques
 runApiRoute endpoint request =
   routeResponse (apiRouteDefinition endpoint) request (RouteRequest () ())
 
-runApiRouteEndpointGroup :: [SomeApiRouteEndpoint] -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
-runApiRouteEndpointGroup endpoints declaredPath request =
-  routeResponse (apiRouteEndpointFamilyDefinition endpoints declaredPath) request (RouteRequest declaredPath ())
+runApiRouteEndpointGroup :: ApiEndpointFamily -> ApiPath -> Wai.Request -> IO (Response ApiPath ())
+runApiRouteEndpointGroup family declaredPath request =
+  routeResponse (apiRouteEndpointFamilyDefinition family declaredPath) request (RouteRequest declaredPath ())
 
 -- | Pull every chunk from a streaming request body one at a time,
 -- concatenating them, until the body ends or a pull reports the running
@@ -144,27 +148,63 @@ pullAllStreamingChunks streamingRequest accumulated = do
 
 spec =
   describe "HarchWeb.Api.Endpoint" $ do
-    describe "apiRouteEndpointFamilyCodec and apiRouteEndpointFamilyDefinition" $ do
+    describe "apiEndpointFamily and its route interpreters" $ do
+      it "rejects an empty endpoint family" $
+        case apiEndpointFamily [] of
+          Left EmptyApiEndpointFamily -> pure ()
+          Left _ -> expectationFailure "expected the empty-family error"
+          Right _ -> expectationFailure "accepted an empty family"
+
+      it "gives static endpoint declarations a clear empty-family assertion" $
+        evaluate (requireApiEndpointFamily [] `seq` ())
+          `shouldThrow` \(ErrorCall message) ->
+            message == "API endpoint family must not be empty"
+
+      it "rejects a duplicate path and method with the precise declaration identity" $
+        let path = at "/api/duplicate"
+            duplicate = SomeApiRouteEndpoint (testEndpoint ApiGet path "Duplicate")
+         in case apiEndpointFamily [duplicate, duplicate] of
+              Left (DuplicateApiEndpointDeclaration duplicatePath duplicateMethod) ->
+                expectAll
+                  ( (duplicatePath `shouldBe` path)
+                      :| [duplicateMethod `shouldBe` ApiGet]
+                  )
+              Left EmptyApiEndpointFamily -> expectationFailure "reported the wrong family error"
+              Right _ -> expectationFailure "accepted a duplicate declaration"
+
+      it "gives static endpoint declarations a clear duplicate-family assertion" $
+        let path = at "/api/duplicate"
+            duplicate = SomeApiRouteEndpoint (testEndpoint ApiGet path "Duplicate")
+         in evaluate (requireApiEndpointFamily [duplicate, duplicate] `seq` ())
+              `shouldThrow` \(ErrorCall message) ->
+                message == "API endpoint family declares GET more than once at /api/duplicate"
+
+      it "accepts distinct methods declared at the same path" $
+        let path = at "/api/methods"
+         in case apiEndpointFamily [SomeApiRouteEndpoint (testEndpoint ApiGet path "Get"), SomeApiRouteEndpoint (testEndpoint ApiPost path "Post")] of
+              Left _ -> expectationFailure "rejected distinct method declarations"
+              Right _ -> pure ()
+
       it "parses a declared path into its ApiPath route identity" $
-        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointTable) () "/api/status"
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () "/api/status"
           `shouldBe` Just (RouteRequest (at "/api/status") ())
 
       it "reports no match for an undeclared path" $
-        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointTable) () "/api/unknown" `shouldBe` Nothing
+        HarchWeb.parseRoute (apiRouteEndpointFamilyCodec testEndpointFamily) () "/api/unknown" `shouldBe` Nothing
 
       it "renders the route identity back to its declared path" $
-        HarchWeb.renderRoute (apiRouteEndpointFamilyCodec testEndpointTable) (RouteRequest (at "/api/status") ())
+        HarchWeb.renderRoute (apiRouteEndpointFamilyCodec testEndpointFamily) (RouteRequest (at "/api/status") ())
           `shouldBe` "/api/status"
 
       it "falls back to an empty path for the family's own not-found request" $
-        HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ())
+        HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointFamily) ())
           `shouldBe` at ""
 
       it "renders the family's own not-found route as an ordinary 404 with no headers or body, instead of raising, when used standalone with no catch-all family" $ do
         notFoundResponse <-
           runApiRouteEndpointGroup
-            testEndpointTable
-            (HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointTable) ()))
+            testEndpointFamily
+            (HarchWeb.requestRoute (HarchWeb.notFoundRequest (apiRouteEndpointFamilyCodec testEndpointFamily) ()))
             (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/unknown"})
         expectAll
           ( (apiRouteResponseStatus notFoundResponse `shouldBe` HttpTypes.status404)
@@ -174,22 +214,22 @@ spec =
           )
 
       it "reports every declared method at a path, deduplicated" $
-        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
           `shouldBe` HarchWeb.routeMethodPolicy [HarchWeb.RouteGet, HarchWeb.RoutePost]
 
       it "reports no methods for a path with no declared endpoint" $
-        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/unknown") `shouldBe` HarchWeb.RouteHidden
+        HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/unknown") `shouldBe` HarchWeb.RouteHidden
 
       it "agrees with the codec's routeMethods so the shared dispatcher and the definition never diverge" $
-        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status")))
-          `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointTable) (at "/api/status")
+        HarchWeb.routeMethodPolicy (routeMethods (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")))
+          `shouldBe` HarchWeb.routeMethods (apiRouteEndpointFamilyCodec testEndpointFamily) (at "/api/status")
 
       it "keeps the definition's navigation label unset like the single-endpoint adapter" $
-        routeNavigationLabel (apiRouteEndpointFamilyDefinition testEndpointTable (at "/api/status")) `shouldBe` Nothing
+        routeNavigationLabel (apiRouteEndpointFamilyDefinition testEndpointFamily (at "/api/status")) `shouldBe` Nothing
 
       it "runs the one endpoint matching the request's real method" $ do
-        getResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/status"})
-        postResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/status"})
+        getResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/status"})
+        postResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "POST", Wai.rawPathInfo = "/api/status"})
         expectAll
           ( (apiRouteResponseBody getResponse `shouldBe` "ReadStatus")
               :| [ apiRouteResponseBody postResponse `shouldBe` "WriteStatus",
@@ -198,18 +238,18 @@ spec =
           )
 
       it "runs a never-failing endpoint without inventing a domain-failure renderer" $ do
-        response <- runApiRouteEndpointGroup testEndpointTable (at "/api/total") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/total"})
+        response <- runApiRouteEndpointGroup testEndpointFamily (at "/api/total") (Wai.defaultRequest {Wai.requestMethod = "GET", Wai.rawPathInfo = "/api/total"})
         apiRouteResponseBody response `shouldBe` "Total"
 
       it "resolves HEAD to the declared GET endpoint's handler, same as the shared dispatcher's HEAD synthesis" $ do
-        headResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
+        headResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/status"})
         apiRouteResponseBody headResponse `shouldBe` "ReadStatus"
 
       it "renders stable 405 responses for a method outside the route definition's declared policy" $ do
-        deleteResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "DELETE", Wai.rawPathInfo = "/api/status"})
-        let postOnlyTable = [SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/post-only") "WriteOnly")]
-        headResponse <- runApiRouteEndpointGroup postOnlyTable (at "/api/post-only") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
-        malformedMethodResponse <- runApiRouteEndpointGroup testEndpointTable (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
+        deleteResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "DELETE", Wai.rawPathInfo = "/api/status"})
+        let postOnlyFamily = requireApiEndpointFamily [SomeApiRouteEndpoint (testEndpoint ApiPost (at "/api/post-only") "WriteOnly")]
+        headResponse <- runApiRouteEndpointGroup postOnlyFamily (at "/api/post-only") (Wai.defaultRequest {Wai.requestMethod = "HEAD", Wai.rawPathInfo = "/api/post-only"})
+        malformedMethodResponse <- runApiRouteEndpointGroup testEndpointFamily (at "/api/status") (Wai.defaultRequest {Wai.requestMethod = "\xFF", Wai.rawPathInfo = "/api/status"})
         expectAll
           ( (apiRouteResponseStatus deleteResponse `shouldBe` HttpTypes.status405)
               :| [ apiRouteResponseStatus headResponse `shouldBe` HttpTypes.status405,
@@ -245,7 +285,7 @@ spec =
                   HarchWeb.notFoundRequest = RouteRequest "not-found",
                   HarchWeb.routeMethods = const (HarchWeb.routeMethodPolicy [HarchWeb.RouteGet])
                 }
-            combined = HarchWeb.combineRouteCodecs (apiRouteEndpointFamilyCodec testEndpointTable) pageCodec
+            combined = HarchWeb.combineRouteCodecs (apiRouteEndpointFamilyCodec testEndpointFamily) pageCodec
         expectAll
           ( ( HarchWeb.matchRouteMethod combined () (HarchWeb.requestMethod "GET") (HarchWeb.requestPath "/home")
                 `shouldBe` HarchWeb.RouteMatched (RouteRequest (HarchWeb.RouteFamilyB "home") ())

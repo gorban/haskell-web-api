@@ -4,11 +4,12 @@
 -- The AC design decision extends the shared
 -- 'HarchWeb.Routing.RouteCodec'/'HarchWeb.Site.RouteDefinition' boundary and
 -- the server response interpreter so pages, actions, and APIs have one
--- method/path owner: 'apiRouteEndpointFamilyCodec' adapts a
--- 'SomeApiRouteEndpoint' table into that shared 'HarchWeb.Routing.RouteCodec'
--- family, for combination via 'HarchWeb.Routing.combineRouteCodecs' with an
--- application's other route families, and 'apiRouteEndpointFamilyDefinition'
--- supplies the matching 'HarchWeb.Site.RouteDefinition'. See
+-- method/path owner: 'apiEndpointFamily' validates one heterogeneous
+-- 'SomeApiRouteEndpoint' table before 'apiRouteEndpointFamilyCodec' adapts it
+-- into that shared 'HarchWeb.Routing.RouteCodec' family, for combination via
+-- 'HarchWeb.Routing.combineRouteCodecs' with an application's other route
+-- families, and 'apiRouteEndpointFamilyDefinition' supplies the matching
+-- 'HarchWeb.Site.RouteDefinition'. See
 -- @docs/design-guidance.md@. This route-family pair is the only supported
 -- dispatch path: the legacy @ApiEndpoint@/@apiEndpointMiddleware@
 -- compatibility table and the intermediate @apiRouteEndpointMiddleware@
@@ -50,6 +51,10 @@ module HarchWeb.Api
     apiRouteDefinitionWithContextWithFieldFailure,
     apiRouteDefinitionWithContextNeverFailing,
     apiRouteDefinitionWithContextNeverFailingWithFieldFailure,
+    ApiEndpointFamily,
+    ApiEndpointFamilyError (..),
+    apiEndpointFamily,
+    requireApiEndpointFamily,
     apiRouteEndpointFamilyCodec,
     apiRouteEndpointFamilyDefinition,
     at,

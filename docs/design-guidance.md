@@ -383,8 +383,9 @@ ownership; a missing `name` remains a typed consumer rejection (`MultipartMissin
 
 `apiRouteDefinition` places one endpoint directly in an application's `RouteDefinition` table; for a
 heterogeneous endpoint table, `SomeApiRouteEndpoint` wraps declarations of different types and
-`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` adapt the whole table into one
-`HarchWeb.RouteCodec`/`RouteDefinition` route family (see the closed route-family registry below) — the
+`apiEndpointFamily` validates one non-empty, duplicate-free table before
+`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` derive one
+`HarchWeb.RouteCodec`/`RouteDefinition` route family from it (see the closed route-family registry below) — the
 shared server dispatcher supplies the real WAI request only after it has selected the route and enforced
 the table's method policy, so API declarations cannot create competing 404/405/`Allow`/`HEAD`/`OPTIONS`
 behaviour with any other route family in the same application. A bounded buffered decoder maps oversized,
@@ -1616,6 +1617,26 @@ it into the same "Google Workspace ..." domain error every other rejection alrea
 the actual security property BY cared about (malformed key material must fail cleanly, not succeed
 silently or crash unexpectedly) more completely than reusing `crypton-x509` alone would have, since
 that library's own decoder shares the same underlying `asn1-encoding` crash risk.
+
+### Follow-up decision — PR-F3: one validated API endpoint family (2026-08-24)
+
+**Decision: add the opaque `ApiEndpointFamily` smart-construction boundary to the existing
+route-family adapter, rather than retaining two raw endpoint-list arguments or creating another
+dispatcher.** The existing `RouteCodec`/`RouteDefinition` pair is still the sole owner of path and
+method policy; the gap was that `apiRouteEndpointFamilyCodec` and
+`apiRouteEndpointFamilyDefinition` each independently accepted `[SomeApiRouteEndpoint]`, letting a
+caller accidentally supply different tables. The new `apiEndpointFamily` constructor rejects an
+empty family and reports the precise duplicate `ApiPath`/`ApiMethod` declaration, while permitting
+different methods at the same path. Its private non-empty representation is then the only input both
+adapters accept, so public callers cannot construct mismatched dispatch halves or rely on the old
+first-declaration-wins behavior. This is a small extension of the existing route-family boundary,
+not a replacement registry and not a parallel WAI dispatcher.
+
+The family definition still retains its typed direct-invocation 404/405 guard. That branch is no
+longer an attempt to repair a public construction mismatch; it remains the total, safe behavior for
+the codec's synthetic not-found route and for a caller that invokes a `RouteDefinition` outside the
+normal shared dispatcher. Unit coverage proves empty rejection, precise duplicate rejection,
+same-path/different-method acceptance, and normal heterogeneous dispatch.
 
 ### Follow-up decision — PR-S1: durable security time is Unix epoch time, not process uptime (2026-08-23)
 

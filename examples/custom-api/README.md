@@ -19,9 +19,9 @@ the same primitives a real application's page routes use, not a separately bolte
   JSON, before the handler ever runs.
 - `POST /api/avatar` consumes a `multipart/form-data` upload through `HarchWeb.Api.Multipart`'s
   bounded in-memory storage adapter, discarding every part without promoting it.
-- `declarativeApiEndpoints :: [SomeApiRouteEndpoint]` is adapted by
-  `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` into one `HarchWeb.RouteCodec`/
-  `HarchWeb.Site.RouteDefinition` pair, composed into an ordinary `HarchWeb.Site.Site` via
+- `declarativeApiEndpoints :: [SomeApiRouteEndpoint]` is validated once by `apiEndpointFamily`; that
+  opaque value is adapted by `apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition` into
+  one `HarchWeb.RouteCodec`/`HarchWeb.Site.RouteDefinition` pair, composed into an ordinary `HarchWeb.Site.Site` via
   `simpleSite`. The endpoint table is the sole `404`/`405`+`Allow`/`HEAD`/`OPTIONS` authority for
   every path it owns — there is no separately wrapped fallback `Wai.Application` with its own,
   potentially disagreeing, idea of what a path means. Since this example has no page routes, its
