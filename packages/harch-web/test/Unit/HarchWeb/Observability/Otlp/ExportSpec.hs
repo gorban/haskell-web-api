@@ -329,6 +329,35 @@ spec = do
         requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"harch.request.duration_ns\""
         Text.count "\"name\":\"GET /assets/*\"" requestBodyText `shouldBe` 1
 
+    it "leaves OTLP span status unset for client-error responses" $
+      withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
+        exportRequestObservabilityToOtlp
+          manager
+          "sample-app"
+          OtlpExporter
+            { otlpEndpoint = collectorUrl,
+              otlpHeaders = []
+            }
+          ( Observability.buildRequestObservability
+              Observability.RequestIdentity
+                { Observability.requestIdentityMethod = Observability.mkSpanMethodLabel "GET",
+                  Observability.requestIdentityScheme = "https",
+                  Observability.requestIdentityPath = "/missing",
+                  Observability.requestIdentityRoutePath = Observability.mkSpanRoutePath "/missing"
+                }
+              404
+              Observability.PageResponseKind
+              []
+          )
+        CapturedCollectorRequest {capturedCollectorBody = requestBody} <- readMVar capturedRequestReference
+        let requestBodyText = TextEncoding.decodeUtf8 (LazyByteString.toStrict requestBody)
+        expectAll
+          ( (requestBodyText `shouldSatisfy` Text.isInfixOf "\"key\":\"http.response.status_code\"")
+              :| [ requestBodyText `shouldSatisfy` Text.isInfixOf "\"intValue\":\"404\"",
+                   requestBodyText `shouldNotSatisfy` Text.isInfixOf "\"status\":"
+                 ]
+          )
+
     it "reuses incoming W3C trace context for OTLP request exports" $
       withOtlpCollector Http.ok200 "{}" $ \manager collectorUrl capturedRequestReference -> do
         exportRequestObservabilityToOtlp
