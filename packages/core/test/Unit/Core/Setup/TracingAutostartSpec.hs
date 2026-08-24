@@ -13,6 +13,7 @@ import Data.Text qualified as Text
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.IO.Temp (withSystemTempDirectory)
 import System.Process (callProcess)
+import Unit.Core.Setup.TestSupport (withEmptyPath)
 
 withPathScripts :: [(FilePath, String)] -> IO a -> IO a
 withPathScripts scripts action =
@@ -28,21 +29,6 @@ withPathScripts scripts action =
             (\existingPath -> tempDirectory <> ":" <> existingPath)
             originalPath
     setEnv "PATH" updatedPath
-    action
-      `finally` maybe
-        (unsetEnv "PATH")
-        (setEnv "PATH")
-        originalPath
-
-withIsolatedPathScripts :: [(FilePath, String)] -> IO a -> IO a
-withIsolatedPathScripts scripts action =
-  withSystemTempDirectory "tracing-autostart-bin" $ \tempDirectory -> do
-    forM_ scripts $ \(scriptName, scriptBody) -> do
-      let scriptPath = tempDirectory <> "/" <> scriptName
-      writeFile scriptPath scriptBody
-      callProcess "chmod" ["+x", scriptPath]
-    originalPath <- lookupEnv "PATH"
-    setEnv "PATH" tempDirectory
     action
       `finally` maybe
         (unsetEnv "PATH")
@@ -251,7 +237,7 @@ spec = do
             ]
 
     it "surfaces missing runtime executables from the real runner explicitly" $
-      withIsolatedPathScripts [] $
+      withEmptyPath $
         do
           autostartResult <-
             TracingAutostart.attemptTracingAutostart
