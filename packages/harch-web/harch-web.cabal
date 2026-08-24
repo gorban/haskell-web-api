@@ -99,6 +99,7 @@ library
     HarchWeb.Api.Endpoint.Family
     HarchWeb.Api.Endpoint.Internal
     HarchWeb.Api.Endpoint.Runtime
+    HarchWeb.Api.HeaderName
     HarchWeb.Api.MediaType
     HarchWeb.Api.Multipart.Disposition
     HarchWeb.Api.Multipart.Scanner

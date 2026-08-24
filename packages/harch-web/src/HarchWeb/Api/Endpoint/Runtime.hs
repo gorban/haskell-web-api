@@ -28,6 +28,7 @@ import Data.Text.Encoding qualified as TextEncoding
 import Data.Type.Equality ((:~:) (Refl))
 import Data.Typeable (Typeable, eqT)
 import HarchWeb.Api.Endpoint.Internal
+import HarchWeb.Api.HeaderName (apiHeaderNameLiteral)
 import HarchWeb.Api.MediaType (ApiContentType, apiContentTypeText)
 import HarchWeb.Api.Multipart (MultipartLimits, MultipartStorage, withMultipartRequestBodyWithStorage)
 import HarchWeb.Api.Negotiation
@@ -180,10 +181,10 @@ newApiMultipartRequest storage limits request = do
       }
 
 contentType :: ApiRequestData -> Maybe Text
-contentType = singleHeaderValue (apiHeaderName "content-type")
+contentType = singleHeaderValue (apiHeaderNameLiteral "content-type")
 
 acceptHeader :: ApiRequestData -> Maybe Text
-acceptHeader = singleHeaderValue (apiHeaderName "accept")
+acceptHeader = singleHeaderValue (apiHeaderNameLiteral "accept")
 
 -- | RFC 9110 section 5.3 requires repeated comma-list header lines to be
 -- combined before their value is interpreted.
@@ -219,13 +220,13 @@ responseEncoderFor selectedContentType encoders =
       | apiResponseEncoderContentType candidate == selectedContentType = candidate
       | otherwise = fallback
 
-endpointResponseHeaders :: ApiResponse response -> [(Text, ApiHeaderValue)]
+endpointResponseHeaders :: ApiResponse response -> [(ApiHeaderName, ApiHeaderValue)]
 endpointResponseHeaders responseValue = addVaryAccept (apiEndpointResponseHeaders responseValue)
 
 endpointProtocolResponseHeaders :: ApiResponse response -> ApiResponseEncoder response -> HttpTypes.ResponseHeaders
 endpointProtocolResponseHeaders responseValue encoder =
   ("Content-Type", TextEncoding.encodeUtf8 (apiContentTypeText (apiResponseEncoderContentType encoder)))
-    : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 name), TextEncoding.encodeUtf8 (apiHeaderValueText value))
+    : [ (CaseInsensitive.mk (TextEncoding.encodeUtf8 (apiHeaderNameText name)), TextEncoding.encodeUtf8 (apiHeaderValueText value))
       | (name, value) <- endpointResponseHeaders responseValue
       ]
 
@@ -235,10 +236,10 @@ protocolResponseBodyFor encodedBody =
     ApiEncodedResponseBytes bytes -> ProtocolResponseBytes bytes
     ApiEncodedResponseStream stream -> ProtocolResponseStream stream
 
-addVaryAccept :: [(Text, ApiHeaderValue)] -> [(Text, ApiHeaderValue)]
+addVaryAccept :: [(ApiHeaderName, ApiHeaderValue)] -> [(ApiHeaderName, ApiHeaderValue)]
 addVaryAccept headers =
-  case break ((== "vary") . Text.toCaseFold . fst) headers of
-    (_, []) -> headers <> [("Vary", apiHeaderValueLiteral "Accept")]
+  case break ((== "vary") . apiHeaderNameText . fst) headers of
+    (_, []) -> headers <> [(apiHeaderNameLiteral "Vary", apiHeaderValueLiteral "Accept")]
     (beforeVary, (name, value) : afterVary) -> beforeVary <> [(name, varyValueWithAccept value)] <> afterVary
 
 varyValueWithAccept :: ApiHeaderValue -> ApiHeaderValue

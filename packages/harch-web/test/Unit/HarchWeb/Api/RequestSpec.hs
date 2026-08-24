@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Api
@@ -23,7 +24,7 @@ spec =
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData
                 { apiRequestQueryParameters = [("q", "hello")],
-                  apiRequestHeaders = [(apiHeaderName "x-custom", "value")],
+                  apiRequestHeaders = [(validHeaderName "x-custom", "value")],
                   apiRequestCookies = [],
                   apiRequestFormFields = []
                 }
@@ -38,6 +39,16 @@ spec =
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData {apiRequestQueryParameters = [("q", "bad\65533")], apiRequestHeaders = [], apiRequestCookies = [], apiRequestFormFields = []}
 
+      it "drops malformed WAI header names before typed request decoding" $
+        let request = Wai.defaultRequest {Wai.requestHeaders = [("Bad Name", "discarded"), ("X-Valid", "kept")]}
+         in apiRequestDataFromWaiRequest request
+              `shouldBe` ApiRequestData
+                { apiRequestQueryParameters = [],
+                  apiRequestHeaders = [(validHeaderName "x-valid", "kept")],
+                  apiRequestCookies = [],
+                  apiRequestFormFields = []
+                }
+
       it "extracts case-sensitive cookie pairs from every Cookie header" $
         let request =
               Wai.defaultRequest
@@ -49,7 +60,7 @@ spec =
          in apiRequestDataFromWaiRequest request
               `shouldBe` ApiRequestData
                 { apiRequestQueryParameters = [],
-                  apiRequestHeaders = [(apiHeaderName "cookie", "session=first; theme=dark"), (apiHeaderName "cookie", "session=second; malformed; bad name=ignored; Empty=")],
+                  apiRequestHeaders = [(validHeaderName "cookie", "session=first; theme=dark"), (validHeaderName "cookie", "session=second; malformed; bad name=ignored; Empty=")],
                   apiRequestCookies = [("session", "first"), ("theme", "dark"), ("session", "second"), ("Empty", "")],
                   apiRequestFormFields = []
                 }
@@ -58,7 +69,7 @@ spec =
       let sampleRequestData =
             ApiRequestData
               { apiRequestQueryParameters = [("q", "hello"), ("dup", "one"), ("dup", "two")],
-                apiRequestHeaders = [(apiHeaderName "X-Token", "secret"), (apiHeaderName "X-Bad", "")],
+                apiRequestHeaders = [(validHeaderName "X-Token", "secret"), (validHeaderName "X-Bad", "")],
                 apiRequestCookies = [("session", "opaque"), ("repeat", "first"), ("repeat", "second")],
                 apiRequestFormFields = [("name", "Ada"), ("repeat-form", "first"), ("repeat-form", "second")]
               }
@@ -68,7 +79,7 @@ spec =
           `shouldBe` ([], Just "hello")
 
       it "decodes a required header field" $
-        runRequestCodec (requiredField (headerField (apiHeaderName "X-Token") apiTextValue)) sampleRequestData
+        runRequestCodec (requiredField (headerField (validHeaderName "X-Token") apiTextValue)) sampleRequestData
           `shouldBe` ([], Just "secret")
 
       it "decodes a required case-sensitive cookie field" $
@@ -104,13 +115,13 @@ spec =
               `shouldBe` ([], Just ("hello", "Ada"))
 
       it "canonicalizes header names for equality and diagnostics" $
-        let declaredName = apiHeaderName "X-Token"
+        let declaredName = validHeaderName "X-Token"
          in expectAll
-              ( (declaredName `shouldBe` apiHeaderName "x-token")
-                  :| [ declaredName `shouldNotBe` apiHeaderName "x-other",
+              ( (Just declaredName `shouldBe` apiHeaderName "x-token")
+                  :| [ declaredName `shouldNotBe` validHeaderName "x-other",
                        apiHeaderNameText declaredName `shouldBe` "x-token",
-                       apiHeaderName "\8490" `shouldNotBe` apiHeaderName "k",
-                       apiHeaderNameText (apiHeaderName "\8490") `shouldBe` "\8490",
+                       apiHeaderName "\8490" `shouldBe` Nothing,
+                       apiHeaderName "k" `shouldBe` Just (validHeaderName "k"),
                        length (show declaredName) + length (showList [declaredName] "") `shouldSatisfy` (> 0)
                      ]
               )
@@ -118,7 +129,7 @@ spec =
       it "matches declared and extracted header names case-insensitively" $
         let request = Wai.defaultRequest {Wai.requestHeaders = [("X-Token", "secret")]}
          in runRequestCodec
-              (requiredField (headerField (apiHeaderName "x-TOKEN") apiTextValue))
+              (requiredField (headerField (validHeaderName "x-TOKEN") apiTextValue))
               (apiRequestDataFromWaiRequest request)
               `shouldBe` ([], Just "secret")
 
@@ -164,7 +175,7 @@ spec =
         runRequestCodec
           ( (,)
               <$> requiredField (queryField "missing" apiTextValue)
-              <*> requiredField (headerField (apiHeaderName "X-Missing") apiTextValue)
+              <*> requiredField (headerField (validHeaderName "X-Missing") apiTextValue)
           )
           sampleRequestData
           `shouldBe` ( [MissingApiField ApiQuerySource "missing", MissingApiField ApiHeaderSource "x-missing"],
@@ -191,3 +202,10 @@ spec =
                        length (show sampleRequestData) + length (showList [sampleRequestData] "") `shouldSatisfy` (> 0)
                      ]
               )
+
+    it "rejects non-token, empty, and non-ASCII header names" $
+      map apiHeaderName ["", "Bad Name", "Bad:Name", "Bad\rName", "Bad\nName", "Bad\NULName", "\8490"]
+        `shouldBe` replicate 7 Nothing
+
+validHeaderName :: Text -> ApiHeaderName
+validHeaderName name = fromMaybe (error "Expected a valid test header name") (apiHeaderName name)

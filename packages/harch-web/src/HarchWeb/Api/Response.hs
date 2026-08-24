@@ -42,6 +42,7 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word8)
+import HarchWeb.Api.HeaderName (ApiHeaderName)
 import HarchWeb.Api.MediaType
 import HarchWeb.Database (DatabaseOperation)
 import HarchWeb.Observability qualified as Observability
@@ -82,7 +83,7 @@ data ApiBodyOutcome request
 -- typed response boundary and become OTLP child spans only in the exporter.
 data ApiResponse response = ApiResponse
   { apiEndpointResponseStatus :: HttpTypes.Status,
-    apiEndpointResponseHeaders :: [(Text, ApiHeaderValue)],
+    apiEndpointResponseHeaders :: [(ApiHeaderName, ApiHeaderValue)],
     apiEndpointResponseObservabilityAttributes :: [Observability.ObservabilityAttribute],
     apiEndpointResponseLogEntries :: [Text],
     apiEndpointResponseDatabaseOperations :: [DatabaseOperation],
@@ -93,10 +94,9 @@ data ApiResponse response = ApiResponse
 -- response-splitting and header-injection payload — a handler that echoes
 -- request-derived text into a header value, such as a redirect
 -- @Location@, an @ETag@, or a filename, would otherwise get injection for
--- free), and no leading or trailing optional whitespace. Header *names* are
--- left as plain 'Text' deliberately: every name in this codebase is a
--- framework or application literal ("Content-Type", "Location", …), never
--- attacker-echoed, so the vulnerable position this closes is values only.
+-- free), and no leading or trailing optional whitespace. Header names use
+-- the shared abstract 'ApiHeaderName' type, so response emission receives
+-- only RFC-token ASCII names rather than raw application text.
 newtype ApiHeaderValue = ApiHeaderValue Text
   deriving (Eq, Show)
 

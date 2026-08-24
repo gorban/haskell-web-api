@@ -67,6 +67,9 @@ streamEndpoint =
 testHeaderValue :: Text -> ApiHeaderValue
 testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
 
+testHeaderName :: Text -> ApiHeaderName
+testHeaderName value = fromMaybe (error "expected test header name to be valid") (apiHeaderName value)
+
 testMediaType :: Text -> ApiMediaType
 testMediaType value = fromMaybe (error "expected test media type to be valid") (apiMediaType value)
 
@@ -342,7 +345,7 @@ spec =
                 ApiGet
                 ( (,)
                     <$> requiredField (queryField "query" apiTextValue)
-                    <*> requiredField (headerField (apiHeaderName "x-token") apiTextValue)
+                    <*> requiredField (headerField (testHeaderName "x-token") apiTextValue)
                 )
                 ApiNoRequestBody
                 (textResponseEncoder :| [])
@@ -599,7 +602,7 @@ spec =
                     pure
                       ( Right
                           ( (apiResponse "hello")
-                              { apiEndpointResponseHeaders = [("Cache-Control", testHeaderValue "no-store")]
+                              { apiEndpointResponseHeaders = [(testHeaderName "Cache-Control", testHeaderValue "no-store")]
                               }
                           )
                       )
@@ -665,7 +668,7 @@ spec =
                     pure
                       ( Right
                           ( (apiResponse "hello")
-                              { apiEndpointResponseHeaders = [("X-Trace", testHeaderValue "present"), ("vArY", testHeaderValue "Origin"), ("Cache-Control", testHeaderValue "no-store")]
+                              { apiEndpointResponseHeaders = [(testHeaderName "X-Trace", testHeaderValue "present"), (testHeaderName "vArY", testHeaderValue "Origin"), (testHeaderName "Cache-Control", testHeaderValue "no-store")]
                               }
                           )
                       )
@@ -677,7 +680,7 @@ spec =
                 (pure ())
                 ApiNoRequestBody
                 (textResponseEncoder :| [jsonResponseEncoder])
-                (\_ -> pure (Right ((apiResponse "hello") {apiEndpointResponseHeaders = [("Vary", testHeaderValue "Accept")]})))
+                (\_ -> pure (Right ((apiResponse "hello") {apiEndpointResponseHeaders = [(testHeaderName "Vary", testHeaderValue "Accept")]})))
                 (\() -> apiResponse "unreachable")
         response <- runApiRoute varyEndpoint Wai.defaultRequest
         alreadyVaryResponse <- runApiRoute alreadyVaryEndpoint Wai.defaultRequest

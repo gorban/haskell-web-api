@@ -20,6 +20,9 @@ testMediaType value = fromMaybe (error "expected test media type to be valid") (
 testHeaderValue :: Text -> ApiHeaderValue
 testHeaderValue value = fromMaybe (error "expected test header value to be valid") (apiHeaderValue value)
 
+testHeaderName :: Text -> ApiHeaderName
+testHeaderName value = fromMaybe (error "expected test header name to be valid") (apiHeaderName value)
+
 strictEncodedResponseBytes :: ApiEncodedResponseBody -> ByteString.ByteString
 strictEncodedResponseBytes encodedResponse =
   case encodedResponse of
@@ -172,7 +175,7 @@ spec =
                   ( (runApiFormCodec (requiredField (formField "name" apiTextValue)) decodedForm `shouldBe` ([], Just "Ada"))
                       :| [ runApiFormCodec (optionalField (queryField "q" apiTextValue)) decodedForm
                              `shouldBe` ([], Just Nothing),
-                           runApiFormCodec (optionalField (headerField (apiHeaderName "X-Test") apiTextValue)) decodedForm
+                           runApiFormCodec (optionalField (headerField (testHeaderName "X-Test") apiTextValue)) decodedForm
                              `shouldBe` ([], Just Nothing),
                            runApiFormCodec (optionalField (cookieField "session" apiTextValue)) decodedForm
                              `shouldBe` ([], Just Nothing)

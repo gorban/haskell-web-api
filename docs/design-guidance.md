@@ -1585,6 +1585,24 @@ payload under a `PRIVATE KEY` label remains rejected. This keeps BY's malformed-
 its rejection of indefinite/invalid DER while replacing the stale custom key-construction logic with
 the maintained implementation.
 
+### Follow-up decision — PR-F2: one checked HTTP field-name boundary (2026-08-24)
+
+**Decision: extract the existing abstract `ApiHeaderName` into the private
+`HarchWeb.Api.HeaderName` collaborator, re-export its checked constructor through the public request
+API, and require that same type in `ApiResponse`; do not add a response-only validation layer or
+leave the existing raw `Text` response field.** Request data already depended on response form types,
+so putting the common type in either existing module would create an import cycle. The tiny private
+leaf is the narrow shared protocol boundary: it validates a non-empty ASCII RFC 9110 token, stores
+the ASCII-lowercase representation for case-insensitive request lookup, and has no knowledge of
+request decoding or response rendering.
+
+Public callers now receive `Maybe ApiHeaderName` and must handle runtime-derived invalid names. Only
+the private collaborator exposes a literal constructor for fixed framework names such as `Accept` and
+`Vary`; this prevents an application from converting request text into a response name by assertion.
+The response record itself stores `ApiHeaderName`, so invalid names cannot reach WAI emission after
+construction. Regressions cover empty, whitespace, colon, CR/LF/NUL, and non-ASCII rejection, while
+valid mixed-case names retain canonical, case-insensitive request behavior.
+
 A second, unplanned finding surfaced while verifying the fix against every one of the original
 task's malformed-input test cases rather than assuming the replacement was correct by construction:
 `asn1-encoding` itself is not exception-safe against every malformed input. A zero-length DER `BIT

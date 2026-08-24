@@ -31,13 +31,17 @@ where
 import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
-import Data.Char (chr, isAsciiUpper, ord)
 import Data.Functor.Compose (Compose (..), getCompose)
+import Data.Maybe (mapMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Text.Encoding.Error qualified as TextEncodingError
 import Data.Word (Word8)
+import HarchWeb.Api.HeaderName
+  ( ApiHeaderName,
+    apiHeaderName,
+    apiHeaderNameText,
+  )
 import HarchWeb.Api.Response (ApiForm, apiFormFields)
 import Network.Wai qualified as Wai
 
@@ -57,14 +61,15 @@ apiRequestDataFromWaiRequest request =
         [ (decodeUtf8Leniently name, maybe "" decodeUtf8Leniently value)
         | (name, value) <- Wai.queryString request
         ],
-      apiRequestHeaders =
-        [ (apiHeaderName (decodeUtf8Leniently (CaseInsensitive.foldedCase name)), decodeUtf8Leniently value)
-        | (name, value) <- Wai.requestHeaders request
-        ],
+      apiRequestHeaders = mapMaybe requestHeader (Wai.requestHeaders request),
       apiRequestCookies =
         concatMap requestCookies (Wai.requestHeaders request),
       apiRequestFormFields = []
     }
+
+requestHeader :: (CaseInsensitive.CI ByteString, ByteString) -> Maybe (ApiHeaderName, Text)
+requestHeader (name, value) =
+  (,decodeUtf8Leniently value) <$> apiHeaderName (decodeUtf8Leniently (CaseInsensitive.foldedCase name))
 
 requestCookies :: (CaseInsensitive.CI ByteString, ByteString) -> [(Text, Text)]
 requestCookies (headerName, headerValue)
@@ -109,23 +114,6 @@ data ApiRequestParseError
   | DuplicateApiField ApiRequestSource Text
   | InvalidApiField ApiRequestSource Text
   deriving (Eq, Show)
-
-newtype ApiHeaderName = ApiHeaderName Text
-  deriving (Eq, Show)
-
-apiHeaderName :: Text -> ApiHeaderName
-apiHeaderName = ApiHeaderName . Text.map asciiLower
-
--- HTTP field names are ASCII protocol tokens. Unicode case folding would make
--- unrelated non-ASCII text (such as the Kelvin sign) collide with a valid
--- ASCII header name.
-asciiLower :: Char -> Char
-asciiLower character
-  | isAsciiUpper character = chr (ord character + 32)
-  | otherwise = character
-
-apiHeaderNameText :: ApiHeaderName -> Text
-apiHeaderNameText (ApiHeaderName name) = name
 
 newtype ApiFieldValue value = ApiFieldValue
   { runApiFieldValue :: Text -> Maybe value
