@@ -27,16 +27,14 @@ import Control.Monad (void)
 import Control.Monad.Except (ExceptT, runExceptT)
 import Core.Control.Error (fromMaybeError, liftEitherWith)
 import Crypto.Error (maybeCryptoError)
-import Data.ByteString qualified as ByteString
-import Data.List (find)
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import HarchWeb.Account (AccountId, accountIdText)
 import HarchWeb.Email (EmailAddress, emailAddressText)
 import HarchWeb.LoginProtection (LoginProtectionPolicy)
-import HarchWeb.Password (Password, PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, verifyPassword)
-import HarchWeb.RecoveryCode (RecoveryCode, readRecoveryCodeHash, recoveryCodeHashText, verifyRecoveryCode)
+import HarchWeb.Password (Password, PasswordHash (..), PasswordWorkGate, passwordHashWorkKibibytes, verifyPassword, withPasswordWork)
+import HarchWeb.RecoveryCode (RecoveryCode, RecoveryCodeHash, readRecoveryCodeHash, recoveryCodeHashText, recoveryCodeHashWorkKibibytes, verifyRecoveryCode)
 import HarchWeb.Secret (SecretEncryptionKey, decryptSecretText)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
 import HarchWeb.Totp (TotpCode, TotpSecret, mkTotpSecret, validateTotpCodeCounter)
@@ -125,6 +123,7 @@ data PasswordLoginResult
   | PasswordLoginCredentialStoreError AccountCredentialStoreError
   | PasswordLoginMfaStoreError MfaStoreError
   | PasswordLoginAttemptStoreError LoginAttemptStoreError
+  | PasswordLoginPasswordWorkBudgetExhausted
   deriving (Eq)
 
 data MfaLoginProof
@@ -142,6 +141,7 @@ data PasswordMfaLoginResult
   | PasswordMfaLoginMfaStoreError MfaStoreError
   | PasswordMfaLoginAttemptStoreError LoginAttemptStoreError
   | PasswordMfaLoginCorruptEnrollment
+  | PasswordMfaLoginPasswordWorkBudgetExhausted
   deriving (Eq)
 
 data LoginInfrastructureError
@@ -174,7 +174,10 @@ data SecondFactorContext = SecondFactorContext
     -- surface ('completeRecoveryCode' hashes against up to eight stored
     -- recovery codes) needs the same throttle machinery as the password
     -- step, keyed by account id once one is known.
-    secondFactorThrottle :: LoginThrottleContext
+    secondFactorThrottle :: LoginThrottleContext,
+    -- | EJ's application-owned password-work gate also covers the password
+    -- step and each recovery-code verification.
+    secondFactorPasswordWorkGate :: PasswordWorkGate
   }
 
 -- | A fixed, always-computed Argon2id hash consumed to keep an unknown
@@ -182,37 +185,22 @@ data SecondFactorContext = SecondFactorContext
 -- with a wrong password. Without this, 'beginPasswordLoginWithIdentifier'
 -- returning immediately for an unknown identifier while a known one runs a
 -- full KDF verification is a reliable existence oracle.
--- | Per @docs/design-guidance.md@'s never-mask-a-gate-finding rule: the @$!@
--- below on the diagnostic-message literal is a last resort, confirmed
--- directly rather than assumed. The literal is unique to this call site (not
--- duplicated anywhere else in this module), so there is no shared expression
--- to deduplicate; it remains permanently unforced without the @$!@ because
--- 'dummyPasswordHash' is a 'NOINLINE' CAF evaluated at most once across the
--- whole test run, and nothing else in this module's test path forces it a
--- second time to pick up a tick.
-{-# ANN dummyPasswordHash ("HLint: ignore Redundant $!" :: String) #-}
+-- | The precomputed, valid default-policy encoding ensures an unknown-account
+-- request cannot become the first caller to allocate an otherwise
+-- unbudgeted native Argon2 hash.
 dummyPasswordHash :: PasswordHash
-dummyPasswordHash =
-  (requiredPasswordHashOrDie $! "expected a valid dummy password hash for the login existence-oracle defense")
-    (hashPasswordWithSalt defaultPasswordHashingPolicy dummySalt (mkPassword "login-existence-oracle-defense"))
-  where
-    dummySalt = ByteString.replicate 16 0
-{-# NOINLINE dummyPasswordHash #-}
+dummyPasswordHash = PasswordHash "$argon2id$v=19$m=65536,t=3,p=1$MDAwMDAwMDAwMDAwMDAwMA$nTQzDQsyrnF98d3p5wV9nHhxGtnnTCDElTqAkW2qVkk"
 
 -- | Decision (AZ, 2026-08-19, per @docs/design-guidance.md@'s
 -- missing-framework-capability protocol): 'HarchWeb.Password.hashPasswordWithSalt'
 -- is necessarily 'Maybe'-returning (a native Argon2 resource failure is a real,
 -- if practically unreachable, outcome for any policy/salt/password), so
--- 'dummyPasswordHash''s fixed, already-validated inputs leave an @error@
--- fallback no production test can force without corrupting the fixed
--- constant the timing defense depends on. Adding a total framework-level
--- variant would mean asserting a native library call can never fail, which
--- is not a claim this codebase can honestly make — not taken. Instead this
--- follows the same shape as 'WebApi.AccountPages.Actions.Contract''s
+-- callers must still handle the native failure. Rather than assert it cannot
+-- occur with a total framework-level variant, this follows the same shape as
+-- 'WebApi.AccountPages.Actions.Contract''s
 -- @buildActionCodecOrDie@: extracted into its own named, exported helper so
 -- a dedicated test can force the failure path directly with a deliberately
--- invalid 'Maybe' value (see 'Unit.WebApi.LoginSpec'), leaving
--- 'dummyPasswordHash''s own real call site untouched.
+-- invalid 'Maybe' value (see 'Unit.WebApi.LoginSpec').
 requiredPasswordHashOrDie :: Text -> Maybe PasswordHash -> PasswordHash
 requiredPasswordHashOrDie context = fromMaybe (error ("WebApi.Login: " <> Text.unpack context))
 
@@ -272,17 +260,17 @@ runAdmittedLoginAttempt throttle key throttled storeFailure work = do
 -- | Validates the password first, then requires a confirmed authenticator.
 -- This function intentionally never creates a session: completing the second
 -- factor is required before the application may authenticate the account.
-beginPasswordLogin :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> EmailAddress -> Password -> IO PasswordLoginResult
-beginPasswordLogin credentialStore mfaStore throttle emailAddress =
-  beginPasswordLoginWithIdentifier credentialStore mfaStore throttle (LoginEmailAddress emailAddress)
+beginPasswordLogin :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> EmailAddress -> Password -> IO PasswordLoginResult
+beginPasswordLogin credentialStore mfaStore throttle passwordWorkGate emailAddress =
+  beginPasswordLoginWithIdentifier credentialStore mfaStore throttle passwordWorkGate (LoginEmailAddress emailAddress)
 
-beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> LoginIdentifier -> Password -> IO PasswordLoginResult
-beginPasswordLoginWithIdentifier credentialStore mfaStore throttle identifier password =
+beginPasswordLoginWithIdentifier :: AccountCredentialStore -> MfaStore -> LoginThrottleContext -> PasswordWorkGate -> LoginIdentifier -> Password -> IO PasswordLoginResult
+beginPasswordLoginWithIdentifier credentialStore mfaStore throttle passwordWorkGate identifier password =
   runAdmittedLoginAttempt throttle key PasswordLoginThrottled PasswordLoginAttemptStoreError work
   where
     work = do
       credentialResult <- lookupCredential credentialStore identifier
-      outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential mfaStore password) credentialResult
+      outcome <- either (pure . CredentialCheckCredentialStoreError) (continueWithCredential mfaStore passwordWorkGate password) credentialResult
       pure (credentialCheckToPasswordLoginAdmission outcome)
     key = loginIdentifierKey identifier
 
@@ -303,6 +291,7 @@ data CredentialCheckOutcome
   | CredentialCheckMfaRequired AccountId
   | CredentialCheckCredentialStoreError AccountCredentialStoreError
   | CredentialCheckMfaStoreError MfaStoreError
+  | CredentialCheckPasswordWorkBudgetExhausted
 
 credentialCheckToPasswordLoginAdmission :: CredentialCheckOutcome -> (PasswordLoginResult, Maybe Bool)
 credentialCheckToPasswordLoginAdmission outcome =
@@ -313,6 +302,7 @@ credentialCheckToPasswordLoginAdmission outcome =
     CredentialCheckMfaRequired accountId -> (PasswordLoginMfaRequired accountId, Just True)
     CredentialCheckCredentialStoreError storeError -> (PasswordLoginCredentialStoreError storeError, Nothing)
     CredentialCheckMfaStoreError storeError -> (PasswordLoginMfaStoreError storeError, Just True)
+    CredentialCheckPasswordWorkBudgetExhausted -> (PasswordLoginPasswordWorkBudgetExhausted, Nothing)
 
 lookupCredential :: AccountCredentialStore -> LoginIdentifier -> IO (Either AccountCredentialStoreError (Maybe AccountCredential))
 lookupCredential credentialStore identifier =
@@ -320,24 +310,32 @@ lookupCredential credentialStore identifier =
     LoginEmailAddress emailAddress -> findAccountCredentialByEmail credentialStore emailAddress
     LoginUsername username -> findAccountCredentialByUsername credentialStore username
 
-continueWithCredential :: MfaStore -> Password -> Maybe AccountCredential -> IO CredentialCheckOutcome
-continueWithCredential mfaStore password maybeCredential =
+continueWithCredential :: MfaStore -> PasswordWorkGate -> Password -> Maybe AccountCredential -> IO CredentialCheckOutcome
+continueWithCredential mfaStore passwordWorkGate password maybeCredential =
   case maybeCredential of
-    Nothing -> do
-      _ <- evaluate (verifyPassword password dummyPasswordHash)
-      pure CredentialCheckRejected
-    Just credential -> continueWithKnownCredential mfaStore password credential
+    Nothing -> credentialCheckFromPasswordWork passwordWorkGate password dummyPasswordHash (pure CredentialCheckRejected)
+    Just credential -> continueWithKnownCredential mfaStore passwordWorkGate password credential
 
-continueWithKnownCredential :: MfaStore -> Password -> AccountCredential -> IO CredentialCheckOutcome
-continueWithKnownCredential mfaStore password credential =
-  case verifyPassword password (accountCredentialPasswordHash credential) of
-    False -> pure CredentialCheckRejected
-    True ->
+continueWithKnownCredential :: MfaStore -> PasswordWorkGate -> Password -> AccountCredential -> IO CredentialCheckOutcome
+continueWithKnownCredential mfaStore passwordWorkGate password credential =
+  credentialCheckFromPasswordWork passwordWorkGate password (accountCredentialPasswordHash credential) acceptedCredential
+  where
+    accountId = accountCredentialId credential
+    acceptedCredential =
       case accountCredentialEmailVerified credential of
         False -> pure (CredentialCheckEmailVerificationRequired accountId)
         True -> classifyMfaEnrollment accountId <$> loadTotpEnrollment mfaStore accountId
-  where
-    accountId = accountCredentialId credential
+
+credentialCheckFromPasswordWork :: PasswordWorkGate -> Password -> PasswordHash -> IO CredentialCheckOutcome -> IO CredentialCheckOutcome
+credentialCheckFromPasswordWork passwordWorkGate password passwordHash accepted =
+  case passwordHashWorkKibibytes passwordHash of
+    Nothing -> pure CredentialCheckRejected
+    Just cost -> do
+      maybeVerified <- withPasswordWork passwordWorkGate cost (evaluate (verifyPassword password passwordHash))
+      case maybeVerified of
+        Nothing -> pure CredentialCheckPasswordWorkBudgetExhausted
+        Just False -> pure CredentialCheckRejected
+        Just True -> accepted
 
 classifyMfaEnrollment :: AccountId -> Either MfaStoreError (Maybe StoredTotpEnrollment) -> CredentialCheckOutcome
 classifyMfaEnrollment accountId enrollmentResult =
@@ -356,7 +354,7 @@ completePasswordLogin credentialStore context emailAddress =
 
 completePasswordLoginWithIdentifier :: AccountCredentialStore -> SecondFactorContext -> LoginIdentifier -> Password -> IO PasswordMfaLoginResult
 completePasswordLoginWithIdentifier credentialStore context identifier password = do
-  passwordResult <- beginPasswordLoginWithIdentifier credentialStore (secondFactorMfaStore context) (secondFactorThrottle context) identifier password
+  passwordResult <- beginPasswordLoginWithIdentifier credentialStore (secondFactorMfaStore context) (secondFactorThrottle context) (secondFactorPasswordWorkGate context) identifier password
   continuePasswordLogin context passwordResult
 
 continuePasswordLogin :: SecondFactorContext -> PasswordLoginResult -> IO PasswordMfaLoginResult
@@ -369,6 +367,7 @@ continuePasswordLogin context passwordResult =
     PasswordLoginCredentialStoreError storeError -> pure (PasswordMfaLoginCredentialStoreError storeError)
     PasswordLoginMfaStoreError storeError -> pure (PasswordMfaLoginMfaStoreError storeError)
     PasswordLoginAttemptStoreError storeError -> pure (PasswordMfaLoginAttemptStoreError storeError)
+    PasswordLoginPasswordWorkBudgetExhausted -> pure PasswordMfaLoginPasswordWorkBudgetExhausted
     PasswordLoginMfaRequired accountId -> completeConfirmedEnrollment context accountId
 
 completeConfirmedEnrollment :: SecondFactorContext -> AccountId -> IO PasswordMfaLoginResult
@@ -435,20 +434,38 @@ completeRecoveryCode context accountId suppliedCode =
     work = do
       recoveryResult <- runExceptT $ do
         recoveryHashValues <- liftMfaStore (loadUnusedRecoveryCodeHashes (secondFactorMfaStore context) accountId)
-        recoveryHashes <-
-          fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
-        maybe (pure False) consumeMatchingHash (find (verifyRecoveryCode suppliedCode) recoveryHashes)
+        fromMaybeError LoginCorruptEnrollment (traverse readRecoveryCodeHash recoveryHashValues)
       case recoveryResult of
         Left infrastructureError -> pure (infrastructureFailureResult infrastructureError, Nothing)
-        Right accepted ->
-          case accepted of
-            False -> pure (PasswordMfaLoginRejected, Just False)
-            True -> pure (PasswordMfaLoginAccepted accountId, Just True)
+        Right recoveryHashes -> do
+          matchingHash <- findMatchingRecoveryHash (secondFactorPasswordWorkGate context) suppliedCode recoveryHashes
+          case matchingHash of
+            Nothing -> pure (PasswordMfaLoginPasswordWorkBudgetExhausted, Nothing)
+            Just Nothing -> pure (PasswordMfaLoginRejected, Just False)
+            Just (Just hashValue) -> do
+              consumed <- runExceptT (consumeMatchingHash hashValue)
+              case consumed of
+                Left infrastructureError -> pure (infrastructureFailureResult infrastructureError, Nothing)
+                Right True -> pure (PasswordMfaLoginAccepted accountId, Just True)
+                Right False -> pure (PasswordMfaLoginRejected, Just False)
     throttle = secondFactorThrottle context
     key = secondFactorAttemptKey accountId
     consumeMatchingHash matchingHash =
       liftMfaStore
         (consumeRecoveryCodeHash (secondFactorMfaStore context) accountId (recoveryCodeHashText matchingHash) (secondFactorNowNanoseconds context))
+
+findMatchingRecoveryHash :: PasswordWorkGate -> RecoveryCode -> [RecoveryCodeHash] -> IO (Maybe (Maybe RecoveryCodeHash))
+findMatchingRecoveryHash passwordWorkGate suppliedCode = go
+  where
+    go hashes =
+      case hashes of
+        [] -> pure (Just Nothing)
+        hashValue : remainingHashes -> do
+          maybeMatches <- withPasswordWork passwordWorkGate (recoveryCodeHashWorkKibibytes hashValue) (evaluate (verifyRecoveryCode suppliedCode hashValue))
+          case maybeMatches of
+            Nothing -> pure Nothing
+            Just True -> pure (Just (Just hashValue))
+            Just False -> go remainingHashes
 
 liftMfaStore :: IO (Either MfaStoreError value) -> ExceptT LoginInfrastructureError IO value
 liftMfaStore = liftEitherWith LoginMfaStoreError

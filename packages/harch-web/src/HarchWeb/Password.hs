@@ -7,20 +7,29 @@ module HarchWeb.Password
     Password,
     PasswordHash (..),
     PasswordHashingPolicy,
+    PasswordWorkBudget,
+    PasswordWorkGate,
     argon2Iterations,
     argon2MemoryKib,
     argon2Parallelism,
+    defaultPasswordWorkBudget,
     defaultPasswordHashingPolicy,
     hashPassword,
     hashPasswordWithSalt,
     mkPassword,
     mkPasswordHashingPolicy,
+    mkPasswordWorkBudget,
+    newPasswordWorkGate,
     passwordHashText,
+    passwordHashWorkKibibytes,
     passwordHashIterations,
     passwordHashMemoryKibibytes,
     passwordHashParallelism,
+    passwordWorkBudgetKibibytes,
     readPasswordHash,
+    readPasswordHashWithWorkKibibytes,
     verifyPassword,
+    withPasswordWork,
   )
 where
 
@@ -33,10 +42,24 @@ import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word32, Word64)
+import HarchWeb.Password.WorkBudget
+  ( PasswordWorkBudget,
+    PasswordWorkGate,
+    mkPasswordWorkBudget,
+    newPasswordWorkGate,
+    passwordWorkBudgetKibibytes,
+    withPasswordWork,
+  )
+import HarchWeb.Password.WorkBudget qualified as WorkBudget
 import HarchWeb.Security.ConstantTime (constantWorkEquals)
 import Text.Read (readMaybe)
 
 newtype Password = Password ByteString.ByteString
+
+-- | The reference application's shared 512-MiB Argon2 admission capacity and
+-- eight-operation CPU-concurrency ceiling.
+defaultPasswordWorkBudget :: PasswordWorkBudget
+defaultPasswordWorkBudget = WorkBudget.defaultPasswordWorkBudget
 
 newtype PasswordHash = PasswordHash Text
 
@@ -136,9 +159,27 @@ hashPasswordWithSalt policy salt (Password password) =
 passwordHashText :: PasswordHash -> Text
 passwordHashText (PasswordHash hashValue) = hashValue
 
+-- | The validated Argon2 memory cost a verification would reserve.  A
+-- malformed externally constructed 'PasswordHash' cannot trigger native work,
+-- so it has no reservable cost.
+passwordHashWorkKibibytes :: PasswordHash -> Maybe Word32
+passwordHashWorkKibibytes (PasswordHash storedHash) =
+  passwordHashMemoryKibibytes . firstOfThree <$> parsePasswordHash storedHash
+  where
+    firstOfThree (policy, _, _) = policy
+
 readPasswordHash :: Text -> Maybe PasswordHash
-readPasswordHash hashValue =
-  PasswordHash hashValue <$ parsePasswordHash hashValue
+readPasswordHash = fmap fst . readPasswordHashWithWorkKibibytes
+
+-- | Parse a stored password hash once and retain the validated Argon2 memory
+-- cost needed before its verification can begin. Consumers that first accept
+-- a textual hash at a trust boundary can use this to carry that evidence into
+-- a resource-admission decision without reparsing or admitting malformed
+-- input to native Argon2 work.
+readPasswordHashWithWorkKibibytes :: Text -> Maybe (PasswordHash, Word32)
+readPasswordHashWithWorkKibibytes hashValue = do
+  (policy, _, _) <- parsePasswordHash hashValue
+  pure (PasswordHash hashValue, passwordHashMemoryKibibytes policy)
 
 verifyPassword :: Password -> PasswordHash -> Bool
 verifyPassword (Password password) (PasswordHash storedHash) =

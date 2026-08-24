@@ -31,6 +31,7 @@ import HarchWeb.Site qualified as Site
 import HarchWeb.Time qualified as HarchWebTime
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
+import System.IO.Unsafe (unsafePerformIO)
 import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
 import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
@@ -213,6 +214,7 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
     { accountWorkflowStore = buildRuntimePostgresAccountStore pool,
       accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
       accountWorkflowPasswordHasher = Password.hashPassword,
+      accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
       accountWorkflowClock = HarchWebTime.currentUnixTimeNanoseconds,
       accountWorkflowMfaStore = buildRuntimePostgresMfaStore pool,
       accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore pool,
@@ -254,6 +256,18 @@ runtimeVerificationUrl baseUrl requestContext verificationToken =
     <> renderRoutePath (HarchWeb.RouteRequest EmailVerificationRoute requestContext)
     <> "?token="
     <> HarchAccount.emailVerificationTokenText verificationToken
+
+-- | EJ (2026-08-24): the reference application owns one process-wide
+-- 512-MiB Argon2 work budget.  It is deliberately shared by every runtime
+-- account workflow, so test or helper construction cannot accidentally make
+-- a second competing application budget in the same process.  Individual
+-- work is admitted by its validated Argon2 KiB cost and the framework's
+-- eight-operation CPU-concurrency ceiling in 'HarchWeb.Password'.
+runtimePasswordWorkGate :: Password.PasswordWorkGate
+runtimePasswordWorkGate =
+  unsafePerformIO $
+    Password.newPasswordWorkGate Password.defaultPasswordWorkBudget
+{-# NOINLINE runtimePasswordWorkGate #-}
 
 trimTrailingSlash :: Text.Text -> Text.Text
 trimTrailingSlash value =
@@ -360,6 +374,7 @@ unavailableAccountWorkflow =
     { accountWorkflowStore = unavailableAccountStore,
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
       accountWorkflowPasswordHasher = Password.hashPassword,
+      accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
       accountWorkflowClock = pure (HarchWebTime.unixTimeNanoseconds 0),
       accountWorkflowMfaStore = unavailableMfaStore,
       accountWorkflowCredentialStore = unavailableAccountCredentialStore,

@@ -32,6 +32,7 @@ data AccountWorkflow = AccountWorkflow
   { accountWorkflowStore :: AccountStore,
     accountWorkflowEmailDelivery :: Email.EmailDelivery,
     accountWorkflowPasswordHasher :: Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash),
+    accountWorkflowPasswordWorkGate :: Password.PasswordWorkGate,
     accountWorkflowClock :: IO UnixTimeNanoseconds,
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
@@ -56,6 +57,7 @@ data FailureCode
   = RegistrationDeliveryFailure
   | RegistrationStoreFailure
   | RegistrationPasswordHashFailure
+  | RegistrationPasswordWorkBudgetFailure
   | RegistrationClockFailure
   | VerificationStoreFailure
   | MfaEnrollmentSessionFailure
@@ -64,6 +66,7 @@ data FailureCode
   | LoginCredentialStoreFailure
   | LoginMfaStoreFailure
   | LoginAttemptStoreFailure
+  | LoginPasswordWorkBudgetFailure
   | LoginCorruptEnrollmentFailure
   | LoginSessionFailure
   | LogoutSessionFailure
@@ -79,6 +82,7 @@ renderFailureCode failureCodeValue =
     RegistrationDeliveryFailure -> "account.registration.delivery"
     RegistrationStoreFailure -> "account.registration.store"
     RegistrationPasswordHashFailure -> "account.registration.password-hash"
+    RegistrationPasswordWorkBudgetFailure -> "account.registration.password-work-budget"
     RegistrationClockFailure -> "account.registration.clock"
     VerificationStoreFailure -> "account.verification.store"
     MfaEnrollmentSessionFailure -> "account.mfa.enrollment-session"
@@ -87,6 +91,7 @@ renderFailureCode failureCodeValue =
     LoginCredentialStoreFailure -> "account.login.credential-store"
     LoginMfaStoreFailure -> "account.login.mfa-store"
     LoginAttemptStoreFailure -> "account.login.attempt-store"
+    LoginPasswordWorkBudgetFailure -> "account.login.password-work-budget"
     LoginCorruptEnrollmentFailure -> "account.login.corrupt-enrollment"
     LoginSessionFailure -> "account.login.session"
     LogoutSessionFailure -> "account.logout.session"

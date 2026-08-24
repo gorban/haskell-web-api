@@ -52,6 +52,7 @@ module Unit.WebApi.TestSupport
     postgresTestConfig,
     unescapeLibpqConnectionValue,
     testPasswordHashingPolicy,
+    testPasswordWorkGate,
     permissiveLoginAttemptStore,
     permissiveLoginThrottleContext,
     registrationEnvironmentAt,
@@ -158,6 +159,7 @@ import System.Environment (getEnv, getEnvironment, lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
 import System.IO.Error (isAlreadyInUseError)
 import System.IO.Temp (withSystemTempDirectory)
+import System.IO.Unsafe (unsafePerformIO)
 import System.Process (callProcess)
 import Test.Hspec (Expectation, expectationFailure)
 import Text.Read (readMaybe)
@@ -502,6 +504,16 @@ testPasswordHashingPolicy =
     (error "Expected valid test password hashing policy")
     (Password.mkPasswordHashingPolicy (Password.argon2Iterations 1) (Password.argon2MemoryKib 8) (Password.argon2Parallelism 1))
 
+-- | A capacity that admits the production-strength hashes used by login
+-- specs while leaving focused admission tests free to construct a smaller
+-- gate. It is process-wide only for test convenience.
+testPasswordWorkGate :: Password.PasswordWorkGate
+testPasswordWorkGate =
+  unsafePerformIO $
+    Password.newPasswordWorkGate
+      (fromMaybe (error "Expected valid test password-work budget") (Password.mkPasswordWorkBudget 524288))
+{-# NOINLINE testPasswordWorkGate #-}
+
 -- | A 'LoginAttemptStore' that always admits and successfully settles an
 -- attempt. For tests exercising login/logout behavior unrelated to throttling.
 permissiveLoginAttemptStore :: LoginAttemptStore
@@ -531,6 +543,7 @@ registrationEnvironmentAt passwordHasher accountStore emailDelivery now verifica
   RegistrationEnvironment
     { registrationPasswordHasher = passwordHasher,
       registrationHashingPolicy = testPasswordHashingPolicy,
+      registrationPasswordWorkGate = testPasswordWorkGate,
       registrationStore = accountStore,
       registrationDelivery = emailDelivery,
       registrationLocale = Email.EmailEnglish,

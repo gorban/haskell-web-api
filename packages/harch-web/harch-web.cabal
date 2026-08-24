@@ -119,6 +119,7 @@ library
     HarchWeb.Observability.Otlp.Export
     HarchWeb.Observability.Otlp.Wire
     HarchWeb.Observability.Types
+    HarchWeb.Password.WorkBudget
     HarchWeb.PathPrefix
     HarchWeb.Security.ConstantTime
     HarchWeb.Security.ForwardedTrust

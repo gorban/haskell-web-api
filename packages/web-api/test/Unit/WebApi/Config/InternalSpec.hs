@@ -1488,6 +1488,7 @@ spec = do
           <> "/verify?token=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         accountWorkflowStore workflow `seq` pure ()
         accountWorkflowPasswordHasher workflow `seq` pure ()
+        accountWorkflowPasswordWorkGate workflow `seq` pure ()
         accountWorkflowMfaStore workflow `seq` pure ()
         accountWorkflowCredentialStore workflow `seq` pure ()
         accountWorkflowLoginAttemptStore workflow `seq` pure ()

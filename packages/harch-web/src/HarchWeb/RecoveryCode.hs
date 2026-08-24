@@ -9,6 +9,7 @@ module HarchWeb.RecoveryCode
     mkRecoveryCode,
     readRecoveryCodeHash,
     recoveryCodeHashText,
+    recoveryCodeHashWorkKibibytes,
     recoveryCodeText,
     verifyRecoveryCode,
   )
@@ -21,6 +22,7 @@ import Data.Char (isDigit)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
+import Data.Word (Word32)
 import HarchWeb.Password
   ( Password,
     PasswordHash,
@@ -28,15 +30,20 @@ import HarchWeb.Password
     hashPassword,
     hashPasswordWithSalt,
     mkPassword,
+    passwordHashMemoryKibibytes,
     passwordHashText,
-    readPasswordHash,
+    readPasswordHashWithWorkKibibytes,
     verifyPassword,
   )
 
 newtype RecoveryCode = RecoveryCode Text
   deriving (Eq)
 
-newtype RecoveryCodeHash = RecoveryCodeHash PasswordHash
+-- | A recovery-code verifier paired with the validated Argon2 memory it
+-- needs. The constructor remains private, so a successfully read or produced
+-- hash always has an admission cost; callers cannot reach native verification
+-- with a malformed externally constructed password hash.
+data RecoveryCodeHash = RecoveryCodeHash PasswordHash Word32
 
 generateRecoveryCode :: IO RecoveryCode
 generateRecoveryCode = RecoveryCode . renderCode <$> getEntropy recoveryCodeBytes
@@ -52,19 +59,28 @@ recoveryCodeText :: RecoveryCode -> Text
 recoveryCodeText (RecoveryCode code) = Text.intercalate "-" (Text.chunksOf recoveryCodeGroupLength code)
 
 hashRecoveryCode :: PasswordHashingPolicy -> RecoveryCode -> IO (Maybe RecoveryCodeHash)
-hashRecoveryCode policy code = fmap (fmap RecoveryCodeHash) (hashPassword policy (passwordFor code))
+hashRecoveryCode policy code =
+  fmap (fmap (recoveryCodeHashWithPolicy policy)) (hashPassword policy (passwordFor code))
 
 hashRecoveryCodeWithSalt :: PasswordHashingPolicy -> ByteString.ByteString -> RecoveryCode -> Maybe RecoveryCodeHash
-hashRecoveryCodeWithSalt policy salt code = RecoveryCodeHash <$> hashPasswordWithSalt policy salt (passwordFor code)
+hashRecoveryCodeWithSalt policy salt code = recoveryCodeHashWithPolicy policy <$> hashPasswordWithSalt policy salt (passwordFor code)
 
 verifyRecoveryCode :: RecoveryCode -> RecoveryCodeHash -> Bool
-verifyRecoveryCode code (RecoveryCodeHash storedHash) = verifyPassword (passwordFor code) storedHash
+verifyRecoveryCode code (RecoveryCodeHash storedHash _) = verifyPassword (passwordFor code) storedHash
 
 recoveryCodeHashText :: RecoveryCodeHash -> Text
-recoveryCodeHashText (RecoveryCodeHash storedHash) = passwordHashText storedHash
+recoveryCodeHashText (RecoveryCodeHash storedHash _) = passwordHashText storedHash
+
+recoveryCodeHashWorkKibibytes :: RecoveryCodeHash -> Word32
+recoveryCodeHashWorkKibibytes (RecoveryCodeHash _ workKibibytes) = workKibibytes
 
 readRecoveryCodeHash :: Text -> Maybe RecoveryCodeHash
-readRecoveryCodeHash storedHash = RecoveryCodeHash <$> readPasswordHash storedHash
+readRecoveryCodeHash storedHash = do
+  (passwordHash, workKibibytes) <- readPasswordHashWithWorkKibibytes storedHash
+  pure (RecoveryCodeHash passwordHash workKibibytes)
+
+recoveryCodeHashWithPolicy :: PasswordHashingPolicy -> PasswordHash -> RecoveryCodeHash
+recoveryCodeHashWithPolicy policy passwordHash = RecoveryCodeHash passwordHash (passwordHashMemoryKibibytes policy)
 
 passwordFor :: RecoveryCode -> Password
 passwordFor (RecoveryCode code) = mkPassword code

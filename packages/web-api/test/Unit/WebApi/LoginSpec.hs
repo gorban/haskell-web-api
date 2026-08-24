@@ -8,46 +8,59 @@ import Control.Concurrent.MVar (newEmptyMVar, putMVar, takeMVar)
 import Control.Exception (AsyncException (ThreadKilled), ErrorCall (..), SomeException, evaluate, throwTo, try)
 import Crypto.Error (CryptoFailable, maybeCryptoError)
 import Data.ByteString qualified as ByteString
-import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
+import Data.IORef (atomicModifyIORef', modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
 import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import HarchWeb.Account (accountIdText)
 import HarchWeb.LoginProtection (defaultLoginProtectionPolicy, loginProtectionLockoutNanoseconds, loginProtectionWindowNanoseconds)
-import HarchWeb.Password (PasswordHash, defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword)
+import HarchWeb.Password (PasswordHash (..), defaultPasswordHashingPolicy, hashPasswordWithSalt, mkPassword, mkPasswordWorkBudget, newPasswordWorkGate, withPasswordWork)
 import HarchWeb.RecoveryCode (hashRecoveryCodeWithSalt, mkRecoveryCode, recoveryCodeHashText)
 import HarchWeb.Secret (SecretEncryptionKey, encryptSecretWithNonce, mkEncryptionNonce, mkSecretEncryptionKey, mkSecretPlaintext)
 import HarchWeb.Time (unixTimeNanoseconds)
 import HarchWeb.Totp (mkTotpCode, mkTotpSecret, renderTotpSecret, totpCode)
 import HarchWeb.Username (mkUsername)
-import Unit.WebApi.TestSupport (accountId, emailAddress, required, shouldReturnEqual)
+import Unit.WebApi.TestSupport (accountId, emailAddress, required, shouldReturnEqual, testPasswordWorkGate)
 import WebApi.Login
 import WebApi.Mfa (MfaStore (..), MfaStoreError (..), StoredTotpEnrollment (..))
 
 spec = do
   describe "password-first MFA login" $ do
     it "requires a confirmed authenticator only after a correct verified password" $ do
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) confirmedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "incorrect password")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "incorrect password")
         `shouldReturnEqual` PasswordLoginRejected
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginRejected
 
     it "directs verified accounts without a confirmed enrollment back to MFA setup" $ do
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right Nothing)) permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing Nothing)))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Right (Just (StoredTotpEnrollment "encrypted" Nothing Nothing)))) permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaEnrollmentRequired accountId
-      beginPasswordLogin (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just unverifiedCredential))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginEmailVerificationRequired accountId
 
     it "preserves credential and MFA persistence failures" $ do
-      beginPasswordLogin (credentialStore (Left (AccountCredentialStoreUnavailable "database unavailable"))) unexpectedMfaStore permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Left (AccountCredentialStoreUnavailable "database unavailable"))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "database unavailable")
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Left (MfaStoreCorruptData "bad enrollment"))) permissiveThrottle emailAddress (mkPassword "correct horse battery staple")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) (mfaStore (Left (MfaStoreCorruptData "bad enrollment"))) permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordLoginMfaStoreError (MfaStoreCorruptData "bad enrollment")
+
+    it "reports exhausted password work without running or charging the credential check" $ do
+      passwordWorkGate <- newPasswordWorkGate (required "password-work budget" (mkPasswordWorkBudget 8))
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle passwordWorkGate emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordLoginPasswordWorkBudgetExhausted
+
+    it "keeps unknown-account verification on the fixed timing-defense path" $ do
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "login-existence-oracle-defense")
+        `shouldReturnEqual` PasswordLoginRejected
+
+    it "rejects an externally malformed stored password hash without native password work" $ do
+      beginPasswordLogin (credentialStore (Right (Just (AccountCredential accountId (PasswordHash "malformed") True)))) unexpectedMfaStore permissiveThrottle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
+        `shouldReturnEqual` PasswordLoginRejected
 
     it "accepts a validated TOTP only after validating the password" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -127,6 +140,77 @@ spec = do
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) (secondFactorContextFor confirmedStore (RecoveryCodeLoginProof recoveryCode)) emailAddress (mkPassword "correct horse battery staple")
         `shouldReturnEqual` PasswordMfaLoginAccepted accountId
       readIORef consumedHashReference `shouldReturn` Just (recoveryCodeHashText recoveryCodeHash)
+
+    it "bounds every recovery-code check and continues past a nonmatching verifier" $ do
+      let recoveryCode = required "recovery code" (mkRecoveryCode "0123456789ABCDEF0123")
+          otherRecoveryCode = required "other recovery code" (mkRecoveryCode "0123456789ABCDEF0124")
+          recoveryCodeHash = required "recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" recoveryCode)
+          otherRecoveryCodeHash = required "other recovery-code hash" (hashRecoveryCodeWithSalt defaultPasswordHashingPolicy "0123456789abcdef" otherRecoveryCode)
+          enrollment = StoredTotpEnrollment "not-needed-for-recovery-code" (Just 100) Nothing
+          recoveryStore hashes consumeResult =
+            (mfaStore (Right (Just enrollment)))
+              { loadUnusedRecoveryCodeHashes = \_ -> pure (Right hashes),
+                consumeRecoveryCodeHash = \_ _ _ -> pure consumeResult
+              }
+          complete gate store =
+            completePasswordLogin
+              (credentialStore (Right (Just verifiedCredential)))
+              ((secondFactorContextFor store (RecoveryCodeLoginProof recoveryCode)) {secondFactorPasswordWorkGate = gate})
+              emailAddress
+              (mkPassword "correct horse battery staple")
+          completeContext secondFactorContext =
+            completePasswordLogin
+              (credentialStore (Right (Just verifiedCredential)))
+              secondFactorContext
+              emailAddress
+              (mkPassword "correct horse battery staple")
+      complete testPasswordWorkGate (recoveryStore [recoveryCodeHashText otherRecoveryCodeHash] (Right True))
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      consumptionAttempted <- newIORef False
+      settledOutcome <- newIORef Nothing
+      let racedRecoveryStore =
+            (recoveryStore [recoveryCodeHashText recoveryCodeHash] (Right False))
+              { consumeRecoveryCodeHash = \_ _ _ -> writeIORef consumptionAttempted True >> pure (Right False)
+              }
+          settlingThrottle =
+            permissiveThrottle
+              { loginThrottleStore =
+                  (loginThrottleStore permissiveThrottle)
+                    { settleLoginAttempt = \_ outcome -> outcome `seq` writeIORef settledOutcome (Just outcome) >> pure (Right ())
+                    }
+              }
+          racedContext =
+            (secondFactorContextFor racedRecoveryStore (RecoveryCodeLoginProof recoveryCode))
+              { secondFactorPasswordWorkGate = testPasswordWorkGate,
+                secondFactorThrottle = settlingThrottle
+              }
+      completeContext racedContext
+        `shouldReturnEqual` PasswordMfaLoginRejected
+      readIORef consumptionAttempted `shouldReturn` True
+      readIORef settledOutcome `shouldReturn` Just False
+
+      passwordWorkGate <- newPasswordWorkGate (required "password-work budget" (mkPasswordWorkBudget 65536))
+      holderStarted <- newEmptyMVar
+      holderRelease <- newEmptyMVar
+      holderFinished <- newEmptyMVar
+      enrollmentLoads <- newIORef (0 :: Int)
+      let blockingStore =
+            (recoveryStore [recoveryCodeHashText recoveryCodeHash] (Right True))
+              { loadTotpEnrollment = \_ -> do
+                  isFirstLoad <- atomicModifyIORef' enrollmentLoads (\loads -> (loads + 1, loads == 0))
+                  if isFirstLoad
+                    then do
+                      _ <-
+                        forkIO $ do
+                          held <- withPasswordWork passwordWorkGate 65536 (putMVar holderStarted () >> takeMVar holderRelease)
+                          putMVar holderFinished held
+                      takeMVar holderStarted
+                      pure (Right (Just enrollment))
+                    else pure (Right (Just enrollment))
+              }
+      complete passwordWorkGate blockingStore `shouldReturnEqual` PasswordMfaLoginPasswordWorkBudgetExhausted
+      putMVar holderRelease ()
+      takeMVar holderFinished `shouldReturn` Just ()
 
     it "rejects unavailable, raced, and corrupt second-factor records" $ do
       let secret = required "TOTP secret" (mkTotpSecret "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP")
@@ -239,7 +323,7 @@ spec = do
                 loginThrottleNow = 500
               }
           unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup while throttled") (\_ -> error "unexpected credential lookup while throttled")
-      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore (throttledStoreFor "email:person@example.test") emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore (throttledStoreFor "email:person@example.test") testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginThrottled expectedLockoutEnd
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = throttledStoreFor "email:person@example.test"}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginThrottled expectedLockoutEnd
@@ -268,11 +352,11 @@ spec = do
                 loginThrottleNow = 500
               }
       unknownReference <- newIORef []
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (recordingThrottle unknownReference) emailAddress (mkPassword "whatever")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (recordingThrottle unknownReference) testPasswordWorkGate emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       unknownRecorded <- readIORef unknownReference
       knownReference <- newIORef []
-      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownReference) emailAddress (mkPassword "incorrect password")
+      beginPasswordLogin (credentialStore (Right (Just verifiedCredential))) unexpectedMfaStore (recordingThrottle knownReference) testPasswordWorkGate emailAddress (mkPassword "incorrect password")
         `shouldReturnEqual` PasswordLoginRejected
       knownRecorded <- readIORef knownReference
       expectAll
@@ -294,7 +378,7 @@ spec = do
                       loginThrottlePolicy = defaultLoginProtectionPolicy,
                       loginThrottleNow = 500
                     }
-            result <- beginPasswordLogin (credentialStore (Right (Just credential))) mfaStoreValue throttle emailAddress (mkPassword "correct horse battery staple")
+            result <- beginPasswordLogin (credentialStore (Right (Just credential))) mfaStoreValue throttle testPasswordWorkGate emailAddress (mkPassword "correct horse battery staple")
             recorded <- readIORef recordedReference
             pure (result, recorded)
       -- 'verifiedCredential' reaches 'loadTotpEnrollment' (needs 'confirmedMfaStore'
@@ -329,7 +413,7 @@ spec = do
                 loginThrottleNow = 500
               }
           unexpectedCredentialStore = AccountCredentialStore (\_ -> error "unexpected credential lookup") (\_ -> error "unexpected credential lookup")
-      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore failingThrottle emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin unexpectedCredentialStore unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
       completePasswordLogin unexpectedCredentialStore ((secondFactorContextFor unexpectedMfaStore (TotpLoginProof (required "TOTP code" (mkTotpCode "123456")))) {secondFactorThrottle = failingThrottle}) emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError (LoginAttemptStoreUnavailable "database unavailable")
@@ -349,10 +433,10 @@ spec = do
                 loginThrottleNow = 500
               }
           typedCredentialFailure = credentialStore (Left (AccountCredentialStoreUnavailable "credential store down"))
-      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Right ())) emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Right ())) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginCredentialStoreError (AccountCredentialStoreUnavailable "credential store down")
       (map showReservation <$> readIORef cancelledReservationsReference) `shouldReturn` ["password-reservation"]
-      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Left (LoginAttemptStoreUnavailable "cleanup failed"))) emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin typedCredentialFailure unexpectedMfaStore (cancellationThrottle (Left (LoginAttemptStoreUnavailable "cleanup failed"))) testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "cleanup failed")
       let settlementFailureThrottle =
             LoginThrottleContext
@@ -365,7 +449,7 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = 500
               }
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore settlementFailureThrottle emailAddress (mkPassword "irrelevant")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore settlementFailureThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")
         `shouldReturnEqual` PasswordLoginAttemptStoreError (LoginAttemptStoreUnavailable "settlement failed")
       (map showReservation <$> readIORef cancelledReservationsReference)
         `shouldReturn` ["password-reservation", "password-reservation", "password-reservation"]
@@ -391,7 +475,7 @@ spec = do
               (\_ -> putMVar credentialLookupStarted () >> takeMVar blockedCredentialResult)
               (\_ -> error "unexpected username lookup")
       worker <- forkIO $ do
-        result <- (try (beginPasswordLogin blockedCredentialStore unexpectedMfaStore cancellationThrottle emailAddress (mkPassword "irrelevant")) :: IO (Either SomeException PasswordLoginResult))
+        result <- (try (beginPasswordLogin blockedCredentialStore unexpectedMfaStore cancellationThrottle testPasswordWorkGate emailAddress (mkPassword "irrelevant")) :: IO (Either SomeException PasswordLoginResult))
         putMVar workerResult result
       takeMVar credentialLookupStarted
       throwTo worker ThreadKilled
@@ -416,9 +500,9 @@ spec = do
               }
           username = required "username" (mkUsername "Person_01")
           lowercaseUsername = required "lowercase username" (mkUsername "person_01")
-      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername username) (mkPassword "whatever")
+      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle testPasswordWorkGate (LoginUsername username) (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
-      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle (LoginUsername lowercaseUsername) (mkPassword "whatever")
+      beginPasswordLoginWithIdentifier (credentialStore (Right Nothing)) unexpectedMfaStore capturingThrottle testPasswordWorkGate (LoginUsername lowercaseUsername) (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       capturedKeys <- readIORef keyReference
       capturedKeys `shouldBe` ["username:person_01", "username:person_01"]
@@ -436,11 +520,11 @@ spec = do
                 loginThrottlePolicy = defaultLoginProtectionPolicy,
                 loginThrottleNow = now
               }
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) emailAddress (mkPassword "whatever")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt 500) testPasswordWorkGate emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       readIORef admissionReference `shouldReturn` Just (defaultLoginProtectionPolicy, 500)
       let largeNow = unixTimeNanoseconds (loginProtectionWindowNanoseconds defaultLoginProtectionPolicy + 500)
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt largeNow) emailAddress (mkPassword "whatever")
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore (capturingThrottleAt largeNow) testPasswordWorkGate emailAddress (mkPassword "whatever")
         `shouldReturnEqual` PasswordLoginRejected
       readIORef admissionReference `shouldReturn` Just (defaultLoginProtectionPolicy, largeNow)
 
@@ -637,7 +721,7 @@ spec = do
                 consumeRecoveryCodeHash = \_ _ _ -> pure (Right True)
               }
           password = mkPassword "correct horse battery staple"
-      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore failingThrottle emailAddress password
+      beginPasswordLogin (credentialStore (Right Nothing)) unexpectedMfaStore failingThrottle testPasswordWorkGate emailAddress password
         `shouldReturnEqual` PasswordLoginAttemptStoreError settlementFailure
       completePasswordLogin (credentialStore (Right (Just verifiedCredential))) ((secondFactorContextFor totpStore (TotpLoginProof (totpCode 123456 secret))) {secondFactorThrottle = secondFactorSettlementFailure}) emailAddress password
         `shouldReturnEqual` PasswordMfaLoginAttemptStoreError settlementFailure
@@ -701,7 +785,8 @@ secondFactorContextFor mfaStoreValue proof =
       secondFactorNowNanoseconds = 500,
       secondFactorNowSeconds = 123456,
       secondFactorProof = proof,
-      secondFactorThrottle = permissiveThrottle
+      secondFactorThrottle = permissiveThrottle,
+      secondFactorPasswordWorkGate = testPasswordWorkGate
     }
 
 -- | Never denies an attempt and always settles or cancels successfully. Used

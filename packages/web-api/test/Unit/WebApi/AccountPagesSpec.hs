@@ -571,6 +571,7 @@ spec = do
               { accountWorkflowStore = createdStore,
                 accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
                 accountWorkflowPasswordHasher = Password.hashPassword,
+                accountWorkflowPasswordWorkGate = accountWorkflowPasswordWorkGate unavailableAccountWorkflow,
                 accountWorkflowClock = pure 100,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -797,6 +798,7 @@ spec = do
               { accountWorkflowStore = accountStore,
                 accountWorkflowEmailDelivery = emailDelivery,
                 accountWorkflowPasswordHasher = Password.hashPassword,
+                accountWorkflowPasswordWorkGate = accountWorkflowPasswordWorkGate unavailableAccountWorkflow,
                 accountWorkflowClock = pure now,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -867,6 +869,23 @@ spec = do
           )
           (spanishAction "/register" validRegistration)
       spanishPasswordHashingFailure `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
+      exhaustedRegistrationBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))
+      registrationBudgetExhausted <-
+        handleAccountAction
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowPasswordWorkGate = exhaustedRegistrationBudget
+              }
+          )
+          (request "/register" validRegistration)
+      registrationBudgetExhausted `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
+      spanishRegistrationBudgetExhausted <-
+        handleAccountAction
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowPasswordWorkGate = exhaustedRegistrationBudget
+              }
+          )
+          (spanishAction "/register" validRegistration)
+      spanishRegistrationBudgetExhausted `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "no esta disponible"
       clockOverflow <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) maxBound delivery) (request "/register" validRegistration)
       clockOverflow `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       spanishClockOverflow <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) maxBound delivery) (spanishAction "/register" validRegistration)
@@ -1176,6 +1195,7 @@ spec = do
           (accountWorkflowCredentialStore validWorkflow)
           (accountWorkflowMfaStore validWorkflow)
           (permissiveLoginThrottleContext 500)
+          (accountWorkflowPasswordWorkGate validWorkflow)
           (LoginUsername (fromMaybe (error "expected valid username") (Username.mkUsername "person_01")))
           password
       case usernameLoginResult of
@@ -1225,6 +1245,11 @@ spec = do
         >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
       handleAccountAction validWorkflow (spanishLoginRequest validFields)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "Has iniciado sesion")
+      exhaustedLoginBudget <- Password.newPasswordWorkGate (fromMaybe (error "expected a positive password-work budget") (Password.mkPasswordWorkBudget 8))
+      handleAccountAction validWorkflow {accountWorkflowPasswordWorkGate = exhaustedLoginBudget} (loginRequest defaultRequestContext validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "temporarily unavailable")
+      handleAccountAction validWorkflow {accountWorkflowPasswordWorkGate = exhaustedLoginBudget} (spanishLoginRequest validFields)
+        >>= (`shouldSatisfy` actionHasStatusAndFocus 503 (Just "login-email") "no esta disponible")
       handleAccountAction validWorkflow (logoutRequest defaultRequestContext)
         >>= (`shouldSatisfy` actionHasStatusAndFocus 200 Nothing "You are signed out")
       handleAccountAction validWorkflow (typedAccountActionRequest "POST" "/es/logout" [] spanishRequestContext)

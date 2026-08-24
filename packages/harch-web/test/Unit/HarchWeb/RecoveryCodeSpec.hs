@@ -38,6 +38,8 @@ spec = do
       expectAll
         ( (Text.isInfixOf "12345" (recoveryCodeHashText hashValue) `shouldBe` False)
             :| [ fmap recoveryCodeHashText (readRecoveryCodeHash (recoveryCodeHashText hashValue)) `shouldBe` Just (recoveryCodeHashText hashValue),
+                 fmap recoveryCodeHashWorkKibibytes (readRecoveryCodeHash (recoveryCodeHashText hashValue)) `shouldBe` Just 65536,
+                 recoveryCodeHashWorkKibibytes hashValue `shouldBe` 65536,
                  isNothing (readRecoveryCodeHash "not-an-argon2id-hash") `shouldBe` True,
                  verifyRecoveryCode knownCode hashValue `shouldBe` True,
                  verifyRecoveryCode otherCode hashValue `shouldBe` False
@@ -45,6 +47,7 @@ spec = do
         )
       maybeRandomHash <- hashRecoveryCode defaultPasswordHashingPolicy knownCode
       fmap (verifyRecoveryCode knownCode) maybeRandomHash `shouldBe` Just True
+      fmap recoveryCodeHashWorkKibibytes maybeRandomHash `shouldBe` Just 65536
 
 knownCode :: RecoveryCode
 knownCode = required (mkRecoveryCode "12345-6789A-BCDEF-01234")

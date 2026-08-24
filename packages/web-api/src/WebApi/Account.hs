@@ -47,6 +47,9 @@ import HarchWeb.Password
   ( Password,
     PasswordHash,
     PasswordHashingPolicy,
+    PasswordWorkGate,
+    passwordHashMemoryKibibytes,
+    withPasswordWork,
   )
 import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds)
 import HarchWeb.Username (Username)
@@ -100,6 +103,7 @@ data CreatePendingAccountOutcome
 data RegistrationError
   = RegistrationStoreError AccountStoreError
   | RegistrationPasswordHashingFailed
+  | RegistrationPasswordWorkBudgetExhausted
   | RegistrationDeliveryFailed Text
   | RegistrationClockOverflow
 
@@ -133,6 +137,7 @@ data RegistrationRequest = RegistrationRequest
 data RegistrationEnvironment = RegistrationEnvironment
   { registrationPasswordHasher :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash),
     registrationHashingPolicy :: PasswordHashingPolicy,
+    registrationPasswordWorkGate :: PasswordWorkGate,
     registrationStore :: AccountStore,
     registrationDelivery :: EmailDelivery,
     registrationLocale :: EmailLocale,
@@ -145,10 +150,16 @@ registerAccount :: RegistrationEnvironment -> RegistrationRequest -> IO (Either 
 registerAccount environment request =
   runExceptT $ do
     expiresAt <- fromMaybeError RegistrationClockOverflow (addNanoseconds now verificationLifetime)
+    maybeInputs <-
+      liftIO $
+        withPasswordWork
+          passwordWorkGate
+          (passwordHashMemoryKibibytes passwordHashingPolicy)
+          (generateRegistrationInputs passwordHasher passwordHashingPolicy password)
     (passwordHash, accountId, token) <-
-      liftMaybeWith
-        RegistrationPasswordHashingFailed
-        (generateRegistrationInputs passwordHasher passwordHashingPolicy password)
+      case maybeInputs of
+        Nothing -> throwError RegistrationPasswordWorkBudgetExhausted
+        Just inputs -> liftMaybeWith RegistrationPasswordHashingFailed (pure inputs)
     let pendingAccount =
           PendingAccount
             { pendingAccountId = accountId,
@@ -169,6 +180,7 @@ registerAccount environment request =
   where
     passwordHasher = registrationPasswordHasher environment
     passwordHashingPolicy = registrationHashingPolicy environment
+    passwordWorkGate = registrationPasswordWorkGate environment
     accountStore = registrationStore environment
     emailDelivery = registrationDelivery environment
     locale = registrationLocale environment

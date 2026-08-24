@@ -122,6 +122,7 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
       RegistrationEnvironment
         { registrationPasswordHasher = accountWorkflowPasswordHasher workflow,
           registrationHashingPolicy = Password.defaultPasswordHashingPolicy,
+          registrationPasswordWorkGate = accountWorkflowPasswordWorkGate workflow,
           registrationStore = accountWorkflowStore workflow,
           registrationDelivery = accountWorkflowEmailDelivery workflow,
           registrationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
@@ -180,6 +181,7 @@ interpretRegistrationResult actionRequest usernameValue emailValue displayNameVa
         Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) RegistrationDeliveryFailure "EmailDeliveryError" detail
         Left (RegistrationStoreError storeError) -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
         Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
+        Left RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
         Left RegistrationClockOverflow -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
 
 handleVerificationSubmission :: AccountActionRequest -> VerificationSubmission -> AccountActionWorkflow
@@ -361,7 +363,8 @@ completePasswordLoginNow identifier passwordValue proof = do
                 { loginThrottleStore = accountWorkflowLoginAttemptStore workflow,
                   loginThrottlePolicy = LoginProtection.defaultLoginProtectionPolicy,
                   loginThrottleNow = nowNanoseconds
-                }
+                },
+            secondFactorPasswordWorkGate = accountWorkflowPasswordWorkGate workflow
           }
         identifier
         (Password.mkPassword passwordValue)
@@ -407,6 +410,7 @@ interpretLoginResult actionRequest emailValue nowNanoseconds loginResult =
         PasswordMfaLoginCredentialStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginCredentialStoreFailure "AccountCredentialStoreError" (credentialStoreErrorMessage storeError)
         PasswordMfaLoginMfaStoreError storeError -> throwClientActionFailure (unavailable (Just "login-code")) LoginMfaStoreFailure "MfaStoreError" (mfaStoreErrorMessage storeError)
         PasswordMfaLoginAttemptStoreError storeError -> throwClientActionFailure (unavailable (Just "login-email")) LoginAttemptStoreFailure "LoginAttemptStoreError" (loginAttemptStoreErrorMessage storeError)
+        PasswordMfaLoginPasswordWorkBudgetExhausted -> throwClientActionFailure (unavailable (Just "login-email")) LoginPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
         PasswordMfaLoginCorruptEnrollment -> throwClientActionFailure (unavailable (Just "login-code")) LoginCorruptEnrollmentFailure "CorruptTotpEnrollment" "stored MFA enrollment could not be decoded"
 
 issueLoginSession :: AccountActionRequest -> Text -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow

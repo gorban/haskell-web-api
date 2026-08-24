@@ -16,6 +16,32 @@ import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError
 
 spec = do
   describe "WebApi.Account" $ do
+    it "reports exhausted password work before hashing or persisting registration" $ do
+      passwordWorkGate <- Password.newPasswordWorkGate (required "password-work budget" (Password.mkPasswordWorkBudget 1))
+      let accountStore =
+            AccountStore
+              { createPendingAccount = \_ -> error "registration persistence must not run after password-work rejection",
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          environment =
+            RegistrationEnvironment
+              { registrationPasswordHasher = \_ _ -> error "password hashing must not run after password-work rejection",
+                registrationHashingPolicy = testPasswordHashingPolicy,
+                registrationPasswordWorkGate = passwordWorkGate,
+                registrationStore = accountStore,
+                registrationDelivery = Email.EmailDelivery (\_ -> error "email delivery must not run after password-work rejection"),
+                registrationLocale = Email.EmailEnglish,
+                registrationVerificationUrl = const "https://account.example.test/verify",
+                registrationNow = 100,
+                registrationLifetime = 200
+              }
+      registerAccount environment (registrationRequestOf (requiredEmailAddress "person@example.test"))
+        >>= \case
+          Left RegistrationPasswordWorkBudgetExhausted -> pure ()
+          _ -> expectationFailure "expected password-work budget exhaustion"
+
     it "persists only a password hash and verification digest before delivering a localized verification email" $ do
       pendingAccountsReference <- newIORef []
       deliveredMessagesReference <- newIORef []
@@ -35,6 +61,7 @@ spec = do
           RegistrationEnvironment
             { registrationPasswordHasher = Password.hashPassword,
               registrationHashingPolicy = testPasswordHashingPolicy,
+              registrationPasswordWorkGate = testPasswordWorkGate,
               registrationStore = accountStore,
               registrationDelivery = emailDelivery,
               registrationLocale = Email.EmailSpanish,
@@ -85,6 +112,7 @@ spec = do
             RegistrationEnvironment
               { registrationPasswordHasher = Password.hashPassword,
                 registrationHashingPolicy = testPasswordHashingPolicy,
+                registrationPasswordWorkGate = testPasswordWorkGate,
                 registrationStore = accountStore,
                 registrationDelivery = Email.EmailDelivery (\_ -> pure ()),
                 registrationLocale = Email.EmailEnglish,

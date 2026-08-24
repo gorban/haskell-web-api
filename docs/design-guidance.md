@@ -1681,6 +1681,29 @@ second, framework-owned CAF nothing else uses. The stale "same idiom `HarchWeb.O
 already uses" line in AU's own comment was corrected in the same change, since it would otherwise
 have been wrong the moment this landed.
 
+### Decision record — EJ: shared Argon2 work admission (2026-08-24)
+
+**Decision: add the small general `HarchWeb.Password` primitive
+`PasswordWorkBudget`/`PasswordWorkGate`, and retain one 512-MiB gate in the reference
+application, rather than extending the WAI-wide request-concurrency limiter or adding an
+application-local queue.** The existing inbound-resource controls own bytes and broad in-flight
+request counts, not the validated cost of a particular native password operation; changing their
+meaning would couple unrelated routes to login load. Argon2 cost parsing already belongs to the
+password boundary, so a KiB-weighted gate is both a narrowly reusable framework capability and the
+only boundary that can reserve the actual validated stored-hash cost. It also caps each gate at
+eight concurrent operations, so low-memory valid hashes with a higher iteration count cannot evade
+the handler-side CPU bound.
+
+Admission is non-queueing: when remaining capacity cannot cover a hash, the handler receives a
+typed, opaque temporary-unavailable outcome immediately. This prevents attacker-held queued work
+from becoming unbounded latency; a generic elapsed-time timeout would only report after capacity
+was already committed and cannot reliably interrupt native work. Reservations cover registration
+hashing, known and unknown password verification, and each recovery-code verification, and release
+through `finally` on ordinary or asynchronous exit. The reference application's process-wide gate
+preserves its pure runtime-builder API while making independently constructed runtime workflows
+share the same cap. This closes EJ's handler-side bounded-admission scope; the separate **P-S6**
+follow-up continues to own registration retry and cleanup lifecycle work.
+
 **A second, more consequential decision happened partway through this task, prompted directly by a
 question about it, not discovered independently:** two coverage gaps this refactor surfaced were
 initially closed the way this codebase's memory documents doing dozens of times this session —
@@ -1717,7 +1740,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |
-| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). |
+| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (EJ, 2026-08-24). |
 | `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. The now-unused compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` (and the legacy `ApiEndpoint` table) were deleted 2026-08-13 (see the AK decision record), which closed AK's module-health signal too (`HarchWeb.Api.Endpoint` is 499 lines). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). On 2026-08-18, `UntrustedFilename` made the filename metadata boundary explicit and non-negative byte/item limit types made malformed negative configuration unrepresentable. Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
