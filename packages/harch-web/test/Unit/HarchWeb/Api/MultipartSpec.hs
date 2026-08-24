@@ -394,17 +394,26 @@ spec =
               doesFileExist spooledPath `shouldReturn` False
             other -> expectationFailure ("unexpected result: " <> show other)
 
-      it "discards a file cancelled between its storage staging and its active-upload bookkeeping" $
+      it "discards a file when cancellation is requested during staging before active-upload bookkeeping completes" $
         withTestUploadOpener $ \openUploadFile -> do
           spooledPathReference <- IORef.newIORef Nothing
           openedSignal <- newEmptyMVar
+          nextChunkSignal <- newEmptyMVar
+          nextChunkReference <- IORef.newIORef (Just ("--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\nfile contents"))
           callingThreadId <- myThreadId
           let signalingOpener filename = do
                 (path, handle) <- openUploadFile filename
                 IORef.writeIORef spooledPathReference (Just path)
                 putMVar openedSignal ()
                 pure (path, handle)
-              readChunk = pure ("--" <> boundaryToken <> "\r\n" <> filePartHeaders <> "\r\n\r\nfile contents")
+              readChunk = do
+                maybeChunk <- IORef.atomicModifyIORef' nextChunkReference (Nothing,)
+                case maybeChunk of
+                  Just chunk -> pure chunk
+                  -- Once this interruptible read wait begins, the cancellation
+                  -- requested after staging must arrive only after the masked
+                  -- staging/bookkeeping hand-off made cleanup own the upload.
+                  Nothing -> takeMVar nextChunkSignal
           _ <- forkIO (takeMVar openedSignal >> Exception.throwTo callingThreadId Exception.ThreadKilled)
           attempt :: Either Exception.SomeException (Either MultipartConsumeError ()) <-
             Exception.try (withMultipartBodyWith (storageFromOpener signalingOpener) testLimits boundaryToken readChunk (const (pure (Right ()))))
