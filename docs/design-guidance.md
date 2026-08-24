@@ -336,8 +336,11 @@ controls, conditional leave warning, and safe/idempotent retry—in
 query/header/cookie decoder, either no body or exactly one bounded buffered/streaming/multipart body
 consumer, a domain-failure interpreter, and the response renderer. `RequestCodec` decodes query and
 header fields applicatively via `requiredField`/`optionalField`/`fieldWithDefault`, accumulating every
-independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one,
-matching `HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`
+independent `MissingApiField`/`DuplicateApiField`/`InvalidApiField` rather than stopping at the first one.
+Its opaque public representation returns a decoded value, a non-empty ordered parse-error collection,
+or an explicit invalid-codec outcome; the latter is a generic endpoint rejection, so a field-failure
+renderer cannot receive an empty rejection. This matches
+`HarchWeb.Action`'s decoder shape; `apiRequestDataFromWaiRequest` extracts the `ApiRequestData`
 a `RequestCodec` runs against from a real WAI request. `selectApiBodyDecoder` selects a declared, fully-buffered
 request-body decoder (`jsonBodyDecoder`, `textBodyDecoder`, `bytesBodyDecoder`, or an application-defined
 `ApiBodyDecoder`) by the request's `Content-Type` (ignoring its parameters, case-insensitively), and
@@ -1637,6 +1640,28 @@ longer an attempt to repair a public construction mismatch; it remains the total
 the codec's synthetic not-found route and for a caller that invokes a `RouteDefinition` outside the
 normal shared dispatcher. Unit coverage proves empty rejection, precise duplicate rejection,
 same-path/different-method acceptance, and normal heterogeneous dispatch.
+
+### Follow-up decision — PR-F4: total typed API request decoding (2026-08-24)
+
+**Decision: make `RequestCodec` an opaque newtype whose runner returns
+`ApiRequestDecodeResult`, rather than retaining its public nested `Compose` representation or adding
+an endpoint-only invalid-decoder fallback.** `RequestCodec` already owns field declaration,
+applicative accumulation, and endpoint input interpretation. Its former transparent shape let an
+application construct impossible `([], Nothing)` and `(errors, Just value)` results that the field
+combinators never produce; then endpoint runtime had to guess how to interpret those malformed
+states and could pass an empty list to a field-failure renderer. Extending this existing boundary
+keeps one owner for the invariant: the public outcomes are `ApiRequestDecoded value`,
+`ApiRequestRejected (NonEmpty ApiRequestParseError)`, and the explicit invalid-declaration outcome
+`ApiRequestCodecInvalid`, with the accumulating `Applicative` preserving
+declaration order when both independent fields reject.
+
+No parallel validation pass was added. Applications still compose `requiredField`, `optionalField`,
+and `fieldWithDefault` exactly as before; a deliberately invalid declaration is explicit and becomes
+a generic 400, never a field-failure callback. Runtime converts the non-empty rejection to a list
+exactly at that callback boundary, so the callback's established API stays compatible while the
+empty-list case becomes unrepresentable. Focused regressions exercise decoded values, each ordinary
+field rejection, ordered accumulation, form decoding, explicit invalid declarations, and
+field-failure rendering.
 
 ### Follow-up decision — PR-S1: durable security time is Unix epoch time, not process uptime (2026-08-23)
 

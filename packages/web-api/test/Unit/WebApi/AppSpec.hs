@@ -12,7 +12,7 @@ import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import GHC.Clock (getMonotonicTimeNSec)
 import HarchWeb qualified
-import HarchWeb.Api (apiRequestDataFromWaiRequest, runRequestCodec)
+import HarchWeb.Api (ApiRequestDecodeResult (..), apiRequestDataFromWaiRequest, runRequestCodec)
 import HarchWeb.Observability qualified as Observability
 import HarchWeb.Session qualified as Session
 import Network.HTTP.Types qualified as Http
@@ -353,7 +353,10 @@ spec = do
             }
 
     it "declares no fields for /api/status and /api/second, decoding an empty request to ()" $
-      runRequestCodec noApiRequestFields (apiRequestDataFromWaiRequest Wai.defaultRequest) `shouldBe` ([], Just ())
+      case runRequestCodec noApiRequestFields (apiRequestDataFromWaiRequest Wai.defaultRequest) of
+        ApiRequestDecoded () -> pure ()
+        ApiRequestRejected _ -> expectationFailure "expected the no-fields API request codec to decode"
+        ApiRequestCodecInvalid -> expectationFailure "expected the no-fields API request codec to be valid"
 
     it "adapts the pure application to WAI without changing rendered pages" $ do
       secondResponse <- performWaiRequest (HarchWeb.toWaiApplication pureApplication) (waiRequest ["es", "second"])

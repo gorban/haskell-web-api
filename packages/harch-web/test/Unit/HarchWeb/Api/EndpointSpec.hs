@@ -401,6 +401,22 @@ spec =
                  ]
           )
 
+      it "keeps an explicit invalid codec out of the field-failure renderer" $ do
+        let invalidEndpoint =
+              apiRouteEndpointWithFieldFailure
+                ApiGet
+                (requestCodec (const ApiRequestCodecInvalid))
+                ApiNoRequestBody
+                (textResponseEncoder :| [])
+                (const (apiResponse "field failures must be non-empty"))
+                (const (pure (Right (apiResponse "unreachable"))))
+                (\() -> apiResponse "unreachable")
+        response <- runApiRoute invalidEndpoint Wai.defaultRequest
+        expectAll
+          ( (apiRouteResponseStatus response `shouldBe` HttpTypes.status400)
+              :| [apiRouteResponseBody response `shouldBe` "API request fields were rejected."]
+          )
+
       it "lets a total handler declaration render typed field failures" $ do
         let totalEndpoint =
               apiRouteEndpointAtNeverFailingWithFieldFailure

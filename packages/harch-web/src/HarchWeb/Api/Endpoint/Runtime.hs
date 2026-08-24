@@ -94,12 +94,13 @@ runDecodedApiRequest requestData fields body encoders fieldFailure onDecoded req
       case fieldFailure of
         Nothing ->
           case runRequestCodec fields fieldsData of
-            ([], Just decodedFields) -> onDecodedFields decodedFields
+            ApiRequestDecoded decodedFields -> onDecodedFields decodedFields
             _ -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
         Just responseFor ->
           case runRequestCodec fields fieldsData of
-            ([], Just decodedFields) -> onDecodedFields decodedFields
-            (parseErrors, _) -> pure (fieldFailureResponse responseFor parseErrors)
+            ApiRequestDecoded decodedFields -> onDecodedFields decodedFields
+            ApiRequestRejected parseErrors -> pure (fieldFailureResponse responseFor (NonEmpty.toList parseErrors))
+            ApiRequestCodecInvalid -> pure (apiFailureProtocolResponse encoders HttpTypes.status400 "API request fields were rejected.")
 
     decodeBufferedBody missingContentTypePolicy maximumBytes decoders onDecodedBody = do
       bodyResult <- readRequestBodyUpTo maximumBytes request

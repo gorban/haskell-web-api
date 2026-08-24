@@ -1,6 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | Typed request-field declarations and their WAI extraction boundary.
+--
+-- Decision record (PR-F4, 2026-08-24): 'RequestCodec' owns the complete
+-- result invariant, rather than exposing its former nested @Compose@ encoding
+-- for callers to construct directly.  The existing accumulating applicative
+-- remains the only way to combine field declarations, and its public runner
+-- now returns a decoded value, a non-empty ordered rejection, or an explicit
+-- invalid-codec outcome. This extends the existing API-decoding boundary
+-- instead of adding a second validator at endpoint runtime, so a
+-- field-failure renderer can never receive an empty error list. See
+-- @docs/design-guidance.md@.
 module HarchWeb.Api.Request
   ( ApiRequestData (..),
     apiRequestDataFromWaiRequest,
@@ -12,6 +22,7 @@ module HarchWeb.Api.Request
     ApiFieldValue,
     RequestField,
     RequestCodec,
+    ApiRequestDecodeResult (..),
     noRequestFields,
     apiTextValue,
     parseApiField,
@@ -22,6 +33,7 @@ module HarchWeb.Api.Request
     requiredField,
     optionalField,
     fieldWithDefault,
+    requestCodec,
     runRequestCodec,
     runApiFormCodec,
     apiRequestDataWithForm,
@@ -32,6 +44,7 @@ import Data.ByteString (ByteString)
 import Data.ByteString qualified as ByteString
 import Data.CaseInsensitive qualified as CaseInsensitive
 import Data.Functor.Compose (Compose (..), getCompose)
+import Data.List.NonEmpty (NonEmpty (..), toList)
 import Data.Maybe (mapMaybe)
 import Data.Text (Text)
 import Data.Text.Encoding qualified as TextEncoding
@@ -125,9 +138,30 @@ apiTextValue = ApiFieldValue Just
 parseApiField :: (Text -> Maybe value) -> ApiFieldValue value
 parseApiField = ApiFieldValue
 
-newtype RequestField value = RequestField (ApiRequestData -> ([ApiRequestParseError], Maybe value))
+newtype RequestField value = RequestField (ApiRequestData -> Either (NonEmpty ApiRequestParseError) value)
 
-type RequestCodec value = Compose ((->) ApiRequestData) (Compose ((,) [ApiRequestParseError]) Maybe) value
+-- | The total outcome of decoding an API endpoint's declared request fields.
+-- A rejection always carries at least one ordered, stable parse error; an
+-- explicit invalid outcome remains a generic endpoint rejection.
+data ApiRequestDecodeResult value
+  = ApiRequestDecoded value
+  | ApiRequestRejected (NonEmpty ApiRequestParseError)
+  | ApiRequestCodecInvalid
+
+-- | An opaque, accumulating API request decoder. Build one with the field
+-- combinators below; its constructor stays private so invalid success/error
+-- combinations cannot reach endpoint interpretation.
+newtype RequestCodec value
+  = RequestCodec (Compose ((->) ApiRequestData) (Compose ((,) [ApiRequestParseError]) Maybe) value)
+
+instance Functor RequestCodec where
+  fmap transform (RequestCodec codec) =
+    RequestCodec (fmap transform codec)
+
+instance Applicative RequestCodec where
+  pure value = RequestCodec (pure value)
+  RequestCodec functionCodec <*> RequestCodec valueCodec =
+    RequestCodec (functionCodec <*> valueCodec)
 
 -- | A named declaration for endpoints that intentionally decode no query,
 -- header, cookie, or form fields. It communicates that the empty input is
@@ -136,17 +170,34 @@ type RequestCodec value = Compose ((->) ApiRequestData) (Compose ((,) [ApiReques
 noRequestFields :: RequestCodec ()
 noRequestFields = pure ()
 
-requestCodec :: (ApiRequestData -> ([ApiRequestParseError], Maybe value)) -> RequestCodec value
-requestCodec decode = Compose (Compose . decode)
+requestCodec :: (ApiRequestData -> ApiRequestDecodeResult value) -> RequestCodec value
+requestCodec decode =
+  RequestCodec . Compose $ \requestData ->
+    Compose (toCodecRepresentation (decode requestData))
 
-runRequestCodec :: RequestCodec value -> ApiRequestData -> ([ApiRequestParseError], Maybe value)
-runRequestCodec codec requestData = getCompose (getCompose codec requestData)
+runRequestCodec :: RequestCodec value -> ApiRequestData -> ApiRequestDecodeResult value
+runRequestCodec (RequestCodec codec) requestData =
+  fromCodecRepresentation (getCompose (getCompose codec requestData))
 
 -- | Run a field codec against the fields decoded from one bounded form body.
 -- The caller owns that single body-consumption declaration.
-runApiFormCodec :: RequestCodec value -> ApiForm -> ([ApiRequestParseError], Maybe value)
+runApiFormCodec :: RequestCodec value -> ApiForm -> ApiRequestDecodeResult value
 runApiFormCodec codec formValue =
   runRequestCodec codec (ApiRequestData [] [] [] (apiFormFields formValue))
+
+toCodecRepresentation :: ApiRequestDecodeResult value -> ([ApiRequestParseError], Maybe value)
+toCodecRepresentation result =
+  case result of
+    ApiRequestDecoded value -> ([], Just value)
+    ApiRequestRejected parseErrors -> (toList parseErrors, Nothing)
+    ApiRequestCodecInvalid -> ([], Nothing)
+
+fromCodecRepresentation :: ([ApiRequestParseError], Maybe value) -> ApiRequestDecodeResult value
+fromCodecRepresentation representation =
+  case representation of
+    ([], Nothing) -> ApiRequestCodecInvalid
+    (firstError : remainingErrors, Nothing) -> ApiRequestRejected (firstError :| remainingErrors)
+    (_, Just value) -> ApiRequestDecoded value
 
 -- | Add fields from a successfully decoded form to the original request data.
 -- This preserves query, header, and cookie declarations when an endpoint
@@ -169,11 +220,11 @@ requestField source fieldName valueDecoder =
     case [fieldValue | (name, fieldValue) <- sourceFields source requestData, name == fieldName] of
       [fieldValue] ->
         maybe
-          ([InvalidApiField source fieldName], Nothing)
-          (\value -> ([], Just value))
+          (Left (InvalidApiField source fieldName :| []))
+          Right
           (runApiFieldValue valueDecoder fieldValue)
-      [] -> ([MissingApiField source fieldName], Nothing)
-      _ -> ([DuplicateApiField source fieldName], Nothing)
+      [] -> Left (MissingApiField source fieldName :| [])
+      _ -> Left (DuplicateApiField source fieldName :| [])
 
 queryField :: Text -> ApiFieldValue value -> RequestField value
 queryField = requestField ApiQuerySource
@@ -191,20 +242,22 @@ formField :: Text -> ApiFieldValue value -> RequestField value
 formField = requestField ApiFormSource
 
 requiredField :: RequestField value -> RequestCodec value
-requiredField (RequestField decode) = requestCodec decode
+requiredField (RequestField decode) =
+  requestCodec $ \requestData ->
+    either ApiRequestRejected ApiRequestDecoded (decode requestData)
 
 optionalField :: RequestField value -> RequestCodec (Maybe value)
 optionalField (RequestField decode) =
   requestCodec $ \requestData ->
     case decode requestData of
-      ([], Just value) -> ([], Just (Just value))
-      ([MissingApiField _ _], Nothing) -> ([], Just Nothing)
-      (parseErrors, _) -> (parseErrors, Nothing)
+      Right value -> ApiRequestDecoded (Just value)
+      Left (MissingApiField _ _ :| []) -> ApiRequestDecoded Nothing
+      Left parseErrors -> ApiRequestRejected parseErrors
 
 fieldWithDefault :: value -> RequestField value -> RequestCodec value
 fieldWithDefault defaultValue (RequestField decode) =
   requestCodec $ \requestData ->
     case decode requestData of
-      ([], Just value) -> ([], Just value)
-      ([MissingApiField _ _], Nothing) -> ([], Just defaultValue)
-      parseErrors -> parseErrors
+      Right value -> ApiRequestDecoded value
+      Left (MissingApiField _ _ :| []) -> ApiRequestDecoded defaultValue
+      Left parseErrors -> ApiRequestRejected parseErrors

@@ -81,11 +81,10 @@ import WebApi.RouteData (SecondRouteData (..))
 -- it directly with 'HarchWeb.Api.runRequestCodec' and compare the result:
 -- neither endpoint's own handler reads its decoded fields (there are none
 -- to read), so routing a request through the full endpoint only pattern
--- matches the surrounding @Just@, never forcing the @()@ payload itself —
--- an 'HarchWeb.Api.RequestCodec' is a nested 'Data.Functor.Compose' over
--- @(->) ApiRequestData@, and HPC only ticks that @()@ when something
--- actually demands it, not merely when the endpoint runs. See the AC
--- decision record in @docs/design-guidance.md@.
+-- matches the 'ApiRequestDecoded' constructor, never forcing the @()@
+-- payload itself. A Unit test therefore decodes this declaration directly
+-- and demands that value. See the AC decision record in
+-- @docs/design-guidance.md@.
 noApiRequestFields :: RequestCodec ()
 noApiRequestFields = pure ()
 

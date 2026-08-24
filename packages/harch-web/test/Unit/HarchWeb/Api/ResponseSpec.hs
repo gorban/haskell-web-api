@@ -171,16 +171,20 @@ spec =
          in case apiBodyDecoderParse formDecoder "name=Ada" of
               Left _parseError -> expectationFailure "expected the form body to decode"
               Right decodedForm ->
-                expectAll
-                  ( (runApiFormCodec (requiredField (formField "name" apiTextValue)) decodedForm `shouldBe` ([], Just "Ada"))
-                      :| [ runApiFormCodec (optionalField (queryField "q" apiTextValue)) decodedForm
-                             `shouldBe` ([], Just Nothing),
-                           runApiFormCodec (optionalField (headerField (testHeaderName "X-Test") apiTextValue)) decodedForm
-                             `shouldBe` ([], Just Nothing),
-                           runApiFormCodec (optionalField (cookieField "session" apiTextValue)) decodedForm
-                             `shouldBe` ([], Just Nothing)
-                         ]
-                  )
+                case ( runApiFormCodec (requiredField (formField "name" apiTextValue)) decodedForm,
+                       runApiFormCodec (optionalField (queryField "q" apiTextValue)) decodedForm,
+                       runApiFormCodec (optionalField (headerField (testHeaderName "X-Test") apiTextValue)) decodedForm,
+                       runApiFormCodec (optionalField (cookieField "session" apiTextValue)) decodedForm
+                     ) of
+                  (ApiRequestDecoded name, ApiRequestDecoded queryValue, ApiRequestDecoded headerValue, ApiRequestDecoded cookieValue) ->
+                    expectAll
+                      ( (name `shouldBe` "Ada")
+                          :| [ queryValue `shouldBe` Nothing,
+                               headerValue `shouldBe` Nothing,
+                               cookieValue `shouldBe` Nothing
+                             ]
+                      )
+                  _ -> expectationFailure "expected every form codec to decode successfully"
 
       it "derives comparable, printable representations for MissingContentTypePolicy and ApiBodyOutcome" $
         let policies = [RejectMissingContentType, AssumeMediaType (testMediaType "application/json")]

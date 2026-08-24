@@ -3,6 +3,7 @@
 {-# SPEC #-}
 
 import Data.List.NonEmpty (NonEmpty (..))
+import Data.List.NonEmpty qualified as NonEmpty
 import Data.Maybe (fromMaybe)
 import Data.Text (Text)
 import Data.Text qualified as Text
@@ -12,7 +13,7 @@ import Network.Wai qualified as Wai
 spec =
   describe "HarchWeb.Api.Request" $ do
     it "runs the named no-request-fields codec without errors" $
-      runRequestCodec noRequestFields (ApiRequestData [] [] [] []) `shouldBe` ([], Just ())
+      expectDecoded (runRequestCodec noRequestFields (ApiRequestData [] [] [] [])) ()
 
     describe "apiRequestDataFromWaiRequest" $ do
       it "extracts query parameters and headers from a WAI request" $
@@ -75,30 +76,32 @@ spec =
               }
 
       it "decodes a required, present field from its declared source" $
-        runRequestCodec (requiredField (queryField "q" apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just "hello")
+        expectDecoded (runRequestCodec (requiredField (queryField "q" apiTextValue)) sampleRequestData) "hello"
 
       it "decodes a required header field" $
-        runRequestCodec (requiredField (headerField (validHeaderName "X-Token") apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just "secret")
+        expectDecoded (runRequestCodec (requiredField (headerField (validHeaderName "X-Token") apiTextValue)) sampleRequestData) "secret"
 
       it "decodes a required case-sensitive cookie field" $
         expectAll
-          ( (runRequestCodec (requiredField (cookieField "session" apiTextValue)) sampleRequestData `shouldBe` ([], Just "opaque"))
-              :| [ runRequestCodec (requiredField (cookieField "SESSION" apiTextValue)) sampleRequestData
-                     `shouldBe` ([MissingApiField ApiCookieSource "SESSION"], Nothing),
-                   runRequestCodec (requiredField (cookieField "repeat" apiTextValue)) sampleRequestData
-                     `shouldBe` ([DuplicateApiField ApiCookieSource "repeat"], Nothing)
+          ( expectDecoded (runRequestCodec (requiredField (cookieField "session" apiTextValue)) sampleRequestData) "opaque"
+              :| [ expectRejected
+                     (runRequestCodec (requiredField (cookieField "SESSION" apiTextValue)) sampleRequestData)
+                     [MissingApiField ApiCookieSource "SESSION"],
+                   expectRejected
+                     (runRequestCodec (requiredField (cookieField "repeat" apiTextValue)) sampleRequestData)
+                     [DuplicateApiField ApiCookieSource "repeat"]
                  ]
           )
 
       it "decodes a required form field and retains duplicate-form rejection" $
         expectAll
-          ( (runRequestCodec (requiredField (formField "name" apiTextValue)) sampleRequestData `shouldBe` ([], Just "Ada"))
-              :| [ runRequestCodec (requiredField (formField "repeat-form" apiTextValue)) sampleRequestData
-                     `shouldBe` ([DuplicateApiField ApiFormSource "repeat-form"], Nothing),
-                   runRequestCodec (requiredField (formField "missing-form" apiTextValue)) sampleRequestData
-                     `shouldBe` ([MissingApiField ApiFormSource "missing-form"], Nothing)
+          ( expectDecoded (runRequestCodec (requiredField (formField "name" apiTextValue)) sampleRequestData) "Ada"
+              :| [ expectRejected
+                     (runRequestCodec (requiredField (formField "repeat-form" apiTextValue)) sampleRequestData)
+                     [DuplicateApiField ApiFormSource "repeat-form"],
+                   expectRejected
+                     (runRequestCodec (requiredField (formField "missing-form" apiTextValue)) sampleRequestData)
+                     [MissingApiField ApiFormSource "missing-form"]
                  ]
           )
 
@@ -106,13 +109,15 @@ spec =
         case apiBodyDecoderParse (urlEncodedFormBodyDecoder 1) "name=Ada" of
           Left parseError -> expectationFailure (Text.unpack parseError)
           Right decodedForm ->
-            runRequestCodec
-              ( (,)
-                  <$> requiredField (queryField "q" apiTextValue)
-                  <*> requiredField (formField "name" apiTextValue)
+            expectDecoded
+              ( runRequestCodec
+                  ( (,)
+                      <$> requiredField (queryField "q" apiTextValue)
+                      <*> requiredField (formField "name" apiTextValue)
+                  )
+                  (apiRequestDataWithForm decodedForm sampleRequestData)
               )
-              (apiRequestDataWithForm decodedForm sampleRequestData)
-              `shouldBe` ([], Just ("hello", "Ada"))
+              ("hello", "Ada")
 
       it "canonicalizes header names for equality and diagnostics" $
         let declaredName = validHeaderName "X-Token"
@@ -128,59 +133,104 @@ spec =
 
       it "matches declared and extracted header names case-insensitively" $
         let request = Wai.defaultRequest {Wai.requestHeaders = [("X-Token", "secret")]}
-         in runRequestCodec
-              (requiredField (headerField (validHeaderName "x-TOKEN") apiTextValue))
-              (apiRequestDataFromWaiRequest request)
-              `shouldBe` ([], Just "secret")
+         in expectDecoded
+              (runRequestCodec (requiredField (headerField (validHeaderName "x-TOKEN") apiTextValue)) (apiRequestDataFromWaiRequest request))
+              "secret"
 
       it "reports a missing required field" $
-        runRequestCodec (requiredField (queryField "missing" apiTextValue)) sampleRequestData
-          `shouldBe` ([MissingApiField ApiQuerySource "missing"], Nothing)
+        expectRejected (runRequestCodec (requiredField (queryField "missing" apiTextValue)) sampleRequestData) [MissingApiField ApiQuerySource "missing"]
 
       it "reports a duplicate field" $
-        runRequestCodec (requiredField (queryField "dup" apiTextValue)) sampleRequestData
-          `shouldBe` ([DuplicateApiField ApiQuerySource "dup"], Nothing)
+        expectRejected (runRequestCodec (requiredField (queryField "dup" apiTextValue)) sampleRequestData) [DuplicateApiField ApiQuerySource "dup"]
 
       it "reports an invalid field that fails its value parser" $
-        runRequestCodec
-          (requiredField (queryField "q" (parseApiField (const Nothing :: Text -> Maybe Text))))
-          sampleRequestData
-          `shouldBe` ([InvalidApiField ApiQuerySource "q"], Nothing)
+        expectRejected
+          (runRequestCodec (requiredField (queryField "q" (parseApiField (const Nothing :: Text -> Maybe Text)))) sampleRequestData)
+          [InvalidApiField ApiQuerySource "q"]
 
       it "resolves a present optional field to Just" $
-        runRequestCodec (optionalField (queryField "q" apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just (Just "hello"))
+        expectDecoded (runRequestCodec (optionalField (queryField "q" apiTextValue)) sampleRequestData) (Just "hello")
 
       it "resolves a missing optional field to Nothing without an error" $
-        runRequestCodec (optionalField (queryField "missing" apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just Nothing)
+        expectDecoded (runRequestCodec (optionalField (queryField "missing" apiTextValue)) sampleRequestData) Nothing
 
       it "keeps a duplicate optional field an error rather than silently defaulting" $
-        runRequestCodec (optionalField (queryField "dup" apiTextValue)) sampleRequestData
-          `shouldBe` ([DuplicateApiField ApiQuerySource "dup"], Nothing)
+        expectRejected (runRequestCodec (optionalField (queryField "dup" apiTextValue)) sampleRequestData) [DuplicateApiField ApiQuerySource "dup"]
 
       it "resolves a present field-with-default to its value" $
-        runRequestCodec (fieldWithDefault "fallback" (queryField "q" apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just "hello")
+        expectDecoded (runRequestCodec (fieldWithDefault "fallback" (queryField "q" apiTextValue)) sampleRequestData) "hello"
 
       it "resolves a missing field-with-default to its default" $
-        runRequestCodec (fieldWithDefault "fallback" (queryField "missing" apiTextValue)) sampleRequestData
-          `shouldBe` ([], Just "fallback")
+        expectDecoded (runRequestCodec (fieldWithDefault "fallback" (queryField "missing" apiTextValue)) sampleRequestData) "fallback"
 
       it "keeps a duplicate field-with-default an error rather than silently defaulting" $
-        runRequestCodec (fieldWithDefault "fallback" (queryField "dup" apiTextValue)) sampleRequestData
-          `shouldBe` ([DuplicateApiField ApiQuerySource "dup"], Nothing)
+        expectRejected (runRequestCodec (fieldWithDefault "fallback" (queryField "dup" apiTextValue)) sampleRequestData) [DuplicateApiField ApiQuerySource "dup"]
 
       it "accumulates independent errors from multiple required fields" $
-        runRequestCodec
-          ( (,)
-              <$> requiredField (queryField "missing" apiTextValue)
-              <*> requiredField (headerField (validHeaderName "X-Missing") apiTextValue)
+        expectRejected
+          ( runRequestCodec
+              ( (,)
+                  <$> requiredField (queryField "missing" apiTextValue)
+                  <*> requiredField (headerField (validHeaderName "X-Missing") apiTextValue)
+              )
+              sampleRequestData
           )
-          sampleRequestData
-          `shouldBe` ( [MissingApiField ApiQuerySource "missing", MissingApiField ApiHeaderSource "x-missing"],
-                       Nothing
-                     )
+          [MissingApiField ApiQuerySource "missing", MissingApiField ApiHeaderSource "x-missing"]
+
+      it "keeps an explicit invalid codec result distinct from field errors" $
+        case runRequestCodec (requestCodec (const ApiRequestCodecInvalid)) sampleRequestData of
+          ApiRequestCodecInvalid -> pure ()
+          ApiRequestDecoded _ -> expectationFailure "expected an explicit invalid codec result"
+          ApiRequestRejected _ -> expectationFailure "expected an explicit invalid codec result"
+
+      it "preserves one rejection when its independent applicative field succeeds" $
+        let presentField = requiredField (queryField "q" apiTextValue)
+            missingField = requiredField (queryField "missing" apiTextValue)
+         in expectAll
+              ( expectRejected
+                  (runRequestCodec ((,) <$> missingField <*> presentField) sampleRequestData)
+                  [MissingApiField ApiQuerySource "missing"]
+                  :| [ expectRejected
+                         (runRequestCodec ((,) <$> presentField <*> missingField) sampleRequestData)
+                         [MissingApiField ApiQuerySource "missing"]
+                     ]
+              )
+
+      it "sequences homogeneous field codecs through the standard Applicative interface" $
+        let presentField = requiredField (queryField "q" apiTextValue)
+         in expectDecoded
+              (runRequestCodec (sequenceA [presentField, presentField]) sampleRequestData)
+              ["hello", "hello"]
+
+      it "maps and applies transformations through the standard codec interface" $
+        let presentField = requiredField (queryField "q" apiTextValue)
+         in expectAll
+              ( expectDecoded
+                  (runRequestCodec (Text.toUpper <$> presentField) sampleRequestData)
+                  "HELLO"
+                  :| [ expectDecoded
+                         (runRequestCodec (pure "provided" :: RequestCodec Text) sampleRequestData)
+                         "provided",
+                       expectDecoded
+                         (runRequestCodec (("answer=" <>) <$> presentField) sampleRequestData)
+                         "answer=hello"
+                     ]
+              )
+
+      it "keeps standard Functor and Applicative selection operations in the codec" $
+        let presentField = requiredField (queryField "q" apiTextValue)
+         in expectAll
+              ( expectDecoded
+                  (runRequestCodec (("constant" :: Text) <$ presentField) sampleRequestData)
+                  "constant"
+                  :| [ expectDecoded
+                         (runRequestCodec (presentField <* presentField) sampleRequestData)
+                         "hello",
+                       expectDecoded
+                         (runRequestCodec (presentField *> presentField) sampleRequestData)
+                         "hello"
+                     ]
+              )
 
       it "derives comparable, printable representations for request codec types" $
         let sources = [ApiQuerySource, ApiHeaderSource, ApiCookieSource, ApiFormSource]
@@ -209,3 +259,17 @@ spec =
 
 validHeaderName :: Text -> ApiHeaderName
 validHeaderName name = fromMaybe (error "Expected a valid test header name") (apiHeaderName name)
+
+expectDecoded :: (Eq value, Show value) => ApiRequestDecodeResult value -> value -> Expectation
+expectDecoded result expectedValue =
+  case result of
+    ApiRequestDecoded actualValue -> actualValue `shouldBe` expectedValue
+    ApiRequestRejected _ -> expectationFailure "expected a decoded API request value"
+    ApiRequestCodecInvalid -> expectationFailure "expected a valid API request codec"
+
+expectRejected :: ApiRequestDecodeResult value -> [ApiRequestParseError] -> Expectation
+expectRejected result expectedErrors =
+  case result of
+    ApiRequestDecoded _ -> expectationFailure "expected API request field rejection"
+    ApiRequestRejected actualErrors -> NonEmpty.toList actualErrors `shouldBe` expectedErrors
+    ApiRequestCodecInvalid -> expectationFailure "expected API request field rejection"
