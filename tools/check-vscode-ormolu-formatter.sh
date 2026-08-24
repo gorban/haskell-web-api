@@ -20,6 +20,7 @@ if [ "$actual_format" != "$expected_format" ]; then
 fi
 
 npm ci --prefix "$extension_dir" --ignore-scripts
+npm audit --prefix "$extension_dir" --audit-level=high
 npm run lint --prefix "$extension_dir"
 npm run check --prefix "$extension_dir"
 
