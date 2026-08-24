@@ -390,7 +390,8 @@ the table's method policy, so API declarations cannot create competing 404/405/`
 behaviour with any other route family in the same application. A bounded buffered decoder maps oversized,
 unsupported-media, and malformed input to 413, 415, and 400 respectively, and passes expected domain
 failures through the endpoint's explicit interpreter. Additional streaming codec shapes and multipart
-storage policy remain AC/AD follow-up work.
+storage policy are delivered: endpoint declarations select either the bounded buffered, streaming, or
+scoped multipart consumer, and multipart storage remains application-selected through its adapter.
 
 **Historical note (2026-08-13):** this typed endpoint boundary previously coexisted with two now-removed
 compatibility layers: a legacy `ApiEndpoint`/`apiEndpointMiddleware` target-plus-handler table, and an
@@ -436,8 +437,8 @@ mid-handler the way it can reject before ever calling a buffered-body handler. T
 multipart parser failure already stays typed for the handler instead of becoming an automatic
 response. See below for the closed route-family registry. `ApiMultipartRequestBody` now lets an API
 route select the existing scoped multipart consumer exactly once; its storage adapter and staged
-ownership remain AD policy, so the endpoint does not create a new upload lifecycle or default to
-local files.
+ownership follow AD's completed application-selected adapter policy, so the endpoint does not create
+a new upload lifecycle or default to local files.
 
 `runServerWithWaiMiddleware`/`withLocalTestServerForApplication` are the raw-WAI composition points
 for a declared route-family application against a real running (or locally test-served) server, not
@@ -484,7 +485,7 @@ there (an inconsistent endpoint table between the codec and the definition), sin
 `routeResponse` sees for a *declared* path has already been validated against this same family's
 `routeMethods` by the shared dispatcher before `routeResponse` runs.
 
-This closes the primitive gap named in "A closed route-family registry ... remain AC steps" above.
+This closes the route-family primitive gap identified above.
 
 ### Follow-up decision — standalone family not-found and the custom-api migration (2026-08-13)
 
@@ -526,19 +527,11 @@ leniently decoded (replacement characters), not treated as absent, matching how
 now yields `406` rather than silently falling back to the default representation the way the
 example's old hand-written `Maybe`-based lookup did.
 
-`web-api`'s own `AppRoute = Page PageRoute | Api ApiRoute` still hand-writes its own combined path
-parsing/rendering instead of using `combineRouteCodecs`, and its `/api/status`/`/api/second` routes
-still dispatch through ad hoc `WebApi.Route`/`WebApi.Response` logic that does not call into
-`HarchWeb.Api.Endpoint` at all. This remains unstarted, and is now a materially larger lift than the
-custom-api migration was: `/api/second`'s database-failure path attaches specific observability
-attributes and a private log entry to its response (`WebApi.Response.renderApiResponseFromRouteDataWithOperations`),
-and the typed endpoint boundary's `ProtocolResponse` construction in
-`HarchWeb.Api.Endpoint.renderEndpointResult` currently hardcodes
-`protocolResponseObservabilityAttributes = []`/`protocolResponseLogEntries = []` with no way for a
-handler to attach either — a capability gap the typed boundary would need before this specific
-migration could preserve `web-api`'s existing DB-failure observability, not merely a bigger version of
-the same mechanical rewrite. Migrating `web-api` remains tracked as part of AC in `TASKS.md`; until
-then, its own hand-rolled dispatch is the only path it actually uses.
+At the time of this decision, `web-api` still hand-wrote its `/api/status`/`/api/second` dispatch and
+the typed endpoint boundary had no way to preserve `/api/second`'s response observability attributes
+or private log entry. The following decision added that general `ApiResponse` capability, and the
+subsequent AC implementation migrated both endpoints through `apiRouteDefinitionWithContext`; the
+current status table records the resulting single-dispatcher composition.
 
 ### Follow-up decision — typed endpoint observability attributes and log entries (2026-08-13)
 
@@ -1741,8 +1734,8 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |
 | Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). Argon2 admission is a shared, non-queueing 512-MiB KiB-weighted gate with an eight-operation CPU-concurrency ceiling across registration, password login, and recovery-code verification (EJ, 2026-08-24). |
-| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. The now-unused compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` (and the legacy `ApiEndpoint` table) were deleted 2026-08-13 (see the AK decision record), which closed AK's module-health signal too (`HarchWeb.Api.Endpoint` is 499 lines). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
-| `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). On 2026-08-18, `UntrustedFilename` made the filename metadata boundary explicit and non-negative byte/item limit types made malformed negative configuration unrepresentable. Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
+| `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented | `examples/custom-api` and `examples/multipart-upload` use the route-family registry; `web-api` uses its existing single dispatcher with `apiRouteDefinitionWithContext` for `/api/status` and `/api/second`. `ApiResponse` carries observability attributes/log entries. The unused compatibility middleware/table was deleted, and `HarchWeb.Api.Endpoint` is now a 73-line public facade over private declaration, family, and runtime modules. |
+| `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented | Storage ownership/cleanup, bounded in-memory default, media-type/boundary validation, preamble/header/body/declared-length bounds, bounded scanner state, untrusted filenames, and scripts-enabled/disabled native-upload cleanup are implemented. The consumer deliberately stops reading after cleanup rather than draining; that is the documented WAI transport policy, to be revisited only if a concrete backpressure problem is observed—not an unowned partial implementation. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |
 | Typed page-local CSS/JavaScript EDSLs | Design direction | Keep current assets narrow, deferred, and route-aware by convention. |
 | Automatic database-to-live-view subscriptions | Design direction | Use explicit SSE today; do not imply automatic subscriptions exist. |
