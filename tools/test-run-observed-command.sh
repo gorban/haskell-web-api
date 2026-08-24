@@ -23,6 +23,13 @@ if ! grep -Fq 'tools/run-observed-command.sh' "$formatter_installer"; then
   exit 1
 fi
 
+if ! grep -Fq "'Install cabal-gild' 5m" "$formatter_installer" \
+  || ! grep -Fq "'Download and install HLint' 5m" "$formatter_installer" \
+  || ! grep -Fq "'Download and install Ormolu' 20m" "$formatter_installer"; then
+  printf '%s\n' 'Formatter installer does not keep its per-operation timeout policy.' >&2
+  exit 1
+fi
+
 expect_failure() {
   local expected_status="$1"
   shift
