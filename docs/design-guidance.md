@@ -1640,6 +1640,31 @@ recovery-code-used). Focused coverage proves both a raw copied cookie is still
 rejected after a simulated clock-origin reset and the RFC 6238 SHA-1 vectors at
 known Unix instants.
 
+### Follow-up decision — PR-S5: bounded login-attempt reservations (2026-08-24)
+
+**Decision: extend the existing PostgreSQL login-attempt reservation lifecycle,
+not a parallel cleanup worker or a second aggregate table.** PR-S4 already made
+the reservation function the one atomic admission boundary.  Its next
+reservation now takes a short-lived global capacity lock, deletes rows outside
+the application-selected retention window, applies the global row ceiling, and
+only then inserts a provisional failure.  A successful settlement or an
+explicit cancellation deletes that provisional row; a failed or process-abandoned
+attempt stays only until a later admission performs the same in-transaction
+prune.  This gives stale-reservation cleanup one owner and means concurrent
+keys cannot race past the capacity budget.
+
+The `web-api` application owns the policy (100,000 rows and the normal
+15-minute login window); the PostgreSQL adapter's default builder selects it,
+and an explicit policy builder plus smart constructor support alternative
+deployments/tests.  The adapter rejects keys over 260 characters before issuing
+SQL, while the general framework-owned `EmailAddress` parser now enforces the RFC 5321 254-ASCII-octet
+mailbox limit.  That small universal validation primitive is the missing
+framework capability rather than an application-only workaround: every email
+transport and account workflow benefits from the same valid representation.
+The table also has a database check as defense in depth.  Capacity exhaustion
+is an ordinary typed store-unavailable outcome and fails authentication closed;
+it does not silently skip the throttle or discard a live reservation.
+
 ### Follow-up decision — BZ: two explicit-props fixes, and a mid-task correction to how coverage gaps get closed (2026-08-21)
 
 **Decision: `HarchWeb.Acme.Challenge`'s certbot webroot list becomes a `CertbotWebrootStore` prop
@@ -1692,7 +1717,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |
-| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. |
+| Auth, sessions, MFA, localization, telemetry, TLS, and proxy support | Implemented | Use the focused guides and full reference app. Login-attempt reservations retain only the application-owned 15-minute window, delete successful/cancelled rows, cap storage at 100,000 rows, and reject oversized keys before persistence (PR-S5, 2026-08-24). |
 | `HarchWeb.Api`/`HarchWeb.Api.Endpoint` typed endpoints (buffered, URL-encoded form, multipart, and streaming request bodies) and closed route-family registry (`RouteFamily`/`combineRouteCodecs`/`apiRouteEndpointFamilyCodec`/`apiRouteEndpointFamilyDefinition`) | Implemented (partial — see AC) | `examples/custom-api` and `examples/multipart-upload` are both migrated onto the route-family registry (2026-08-13), which also fixed a standalone-family not-found crash the migration surfaced (see the follow-up decision above). `ApiResponse` can now carry observability attributes/log entries (2026-08-13), closing the capability gap the custom-api migration surfaced. The now-unused compatibility `apiEndpointMiddleware`/`apiRouteEndpointMiddleware` (and the legacy `ApiEndpoint` table) were deleted 2026-08-13 (see the AK decision record), which closed AK's module-health signal too (`HarchWeb.Api.Endpoint` is 499 lines). `web-api` still hand-writes its own combined `AppRoute` dispatch and does not route `/api/*` through `HarchWeb.Api.Endpoint` at all; migrating it is the remaining AC follow-up work. |
 | `HarchWeb.Api.Multipart` bounded streaming consumer, in-memory default, and native upload form | Implemented (partial — see AD) | Audited 2026-08-12 against AD's full text: storage ownership/cleanup, the in-memory default, case-insensitive media-type/boundary validation, preamble/header/body/declared-`Content-Length` bounds, the delimiter-sized scanning suffix, filenames-as-untrusted-metadata, and both scripts-enabled/disabled native-upload E2E cleanup proofs were already in place. `multipartLimitsMaxFieldCount`/`multipartLimitsMaxFileCount` closed the one confirmed gap (field/file counts were only bounded together via `multipartLimitsMaxParts`). On 2026-08-18, `UntrustedFilename` made the filename metadata boundary explicit and non-negative byte/item limit types made malformed negative configuration unrepresentable. Remaining open item: the unread-body/backpressure policy is a documented deferral to the WAI transport (`HarchWeb.Api.Multipart` stops reading after cleanup rather than draining), not an implemented drain mechanism — revisit only if a concrete backpressure problem is observed. See [multipart-upload](../examples/multipart-upload/README.md)'s `/native-upload` page (`App.MultipartUpload`) for the compiled, real-browser-tested demonstration. |
 | Declarative dynamic path/query templates | Design direction | Use explicit typed codecs until the route-template DSL is executable. |

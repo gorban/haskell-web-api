@@ -196,6 +196,10 @@ migrations =
     PostgresMigration
       { postgresMigrationVersion = "login-attempt-reservation-function-v1",
         postgresMigrationStatements = loginAttemptReservationFunctionMigrationStatements
+      },
+    PostgresMigration
+      { postgresMigrationVersion = "login-attempt-storage-bound-v1",
+        postgresMigrationStatements = loginAttemptStorageBoundMigrationStatements
       }
   ]
 
@@ -292,6 +296,15 @@ loginAttemptReservationFunctionMigrationStatements =
   [ "CREATE OR REPLACE FUNCTION web_api.reserve_login_attempt(p_key TEXT, p_since BIGINT, p_now BIGINT, p_max BIGINT, p_lockout BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE latest_failure BIGINT; failure_count BIGINT; BEGIN PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0)); SELECT max(attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts WHERE attempt_key = p_key AND succeeded = 'false' AND attempted_at_nanoseconds >= p_since AND attempted_at_nanoseconds <= p_now; IF failure_count >= p_max AND latest_failure + p_lockout > p_now THEN RETURN QUERY SELECT 'throttled'::TEXT, (latest_failure + p_lockout)::TEXT; ELSE RETURN QUERY INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled) VALUES (p_key, p_now, 'false', false) RETURNING 'reserved'::TEXT, attempt_id::TEXT; END IF; END $$;"
   ]
 
+loginAttemptStorageBoundMigrationStatements :: [Text]
+loginAttemptStorageBoundMigrationStatements =
+  [ "DELETE FROM web_api.login_attempts WHERE succeeded = 'true';",
+    "ALTER TABLE web_api.login_attempts ADD CONSTRAINT login_attempts_key_length CHECK (char_length(attempt_key) <= 260) NOT VALID;",
+    "CREATE INDEX IF NOT EXISTS login_attempts_time ON web_api.login_attempts (attempted_at_nanoseconds);",
+    "DROP FUNCTION IF EXISTS web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT);",
+    "CREATE FUNCTION web_api.reserve_login_attempt(p_key TEXT, p_since BIGINT, p_retention_since BIGINT, p_now BIGINT, p_max BIGINT, p_lockout BIGINT, p_storage_max BIGINT) RETURNS TABLE(outcome TEXT, value TEXT) LANGUAGE plpgsql VOLATILE AS $$ DECLARE latest_failure BIGINT; failure_count BIGINT; stored_count BIGINT; BEGIN IF char_length(p_key) > 260 THEN RETURN QUERY SELECT 'key-too-long'::TEXT, ''::TEXT; RETURN; END IF; PERFORM pg_advisory_xact_lock(hashtextextended('web_api.login_attempts.capacity', 0)); DELETE FROM web_api.login_attempts WHERE attempted_at_nanoseconds < p_retention_since; PERFORM pg_advisory_xact_lock(hashtextextended(p_key, 0)); SELECT max(attempted_at_nanoseconds), count(*) INTO latest_failure, failure_count FROM web_api.login_attempts WHERE attempt_key = p_key AND succeeded = 'false' AND attempted_at_nanoseconds >= p_since AND attempted_at_nanoseconds <= p_now; IF failure_count >= p_max AND latest_failure + p_lockout > p_now THEN RETURN QUERY SELECT 'throttled'::TEXT, (latest_failure + p_lockout)::TEXT; RETURN; END IF; SELECT count(*) INTO stored_count FROM web_api.login_attempts; IF stored_count >= p_storage_max THEN RETURN QUERY SELECT 'storage-exhausted'::TEXT, ''::TEXT; RETURN; END IF; RETURN QUERY INSERT INTO web_api.login_attempts (attempt_key, attempted_at_nanoseconds, succeeded, settled) VALUES (p_key, p_now, 'false', false) RETURNING 'reserved'::TEXT, attempt_id::TEXT; END $$;"
+  ]
+
 migrationEpochNanoseconds :: Text
 migrationEpochNanoseconds = "floor(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000000000)::BIGINT"
 
@@ -344,7 +357,7 @@ tablePrivileges runtimeOwner =
   let revoke tableName = "REVOKE ALL ON TABLE " <> qualifiedTableName tableName <> " FROM PUBLIC;"
       readOnly tableName = "GRANT SELECT ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
       readWrite tableName = "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " <> qualifiedTableName tableName <> " TO " <> runtimeOwner <> ";"
-   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";"]
+   in [revoke "page_content", revoke "page_highlights", revoke "accounts", revoke "email_verifications", revoke "account_totp", revoke "account_recovery_codes", revoke "account_sessions", revoke "mfa_enrollment_sessions", revoke "login_attempts", readOnly "page_content", readOnly "page_highlights", readWrite "accounts", readWrite "email_verifications", readWrite "account_totp", readWrite "account_recovery_codes", readWrite "account_sessions", readWrite "mfa_enrollment_sessions", readWrite "login_attempts", "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA " <> appSchemaName <> " TO " <> runtimeOwner <> ";", "REVOKE ALL ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) FROM PUBLIC;", "GRANT EXECUTE ON FUNCTION web_api.reserve_login_attempt(TEXT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT, BIGINT) TO " <> runtimeOwner <> ";"]
 
 seedStatements :: [Text]
 seedStatements =

@@ -10,6 +10,7 @@ import Data.ByteString qualified as ByteString
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, isJust, isNothing)
 import Data.Text (Text)
+import Data.Text qualified as Text
 import Data.Text.Encoding qualified as TextEncoding
 import Data.Word (Word16)
 import HarchWeb.Email
@@ -52,7 +53,9 @@ spec = do
                  mkEmailAddress "ada.example.test" `shouldBe` Nothing,
                  mkEmailAddress "ada@example@test" `shouldBe` Nothing,
                  mkEmailAddress "ada space@example.test" `shouldBe` Nothing,
-                 mkEmailAddress "ada@example test" `shouldBe` Nothing
+                 mkEmailAddress "ada@example test" `shouldBe` Nothing,
+                 mkEmailAddress (Text.replicate 64 "a" <> "@" <> Text.replicate 189 "b") `shouldSatisfy` (/= Nothing),
+                 mkEmailAddress (Text.replicate 64 "a" <> "@" <> Text.replicate 190 "b") `shouldBe` Nothing
                ]
         )
 

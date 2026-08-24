@@ -109,7 +109,7 @@ mkEmailAddress :: Text -> Maybe EmailAddress
 mkEmailAddress value =
   case Text.splitOn "@" value of
     [localPart, domainPart]
-      | validLocalPart localPart && validDomainPart domainPart -> Just (EmailAddress value)
+      | validEmailAddressLength value && validLocalPart localPart && validDomainPart domainPart -> Just (EmailAddress value)
     _ -> Nothing
 
 emailAddressText :: EmailAddress -> Text
@@ -283,6 +283,13 @@ dotStuff body =
 validLocalPart :: Text -> Bool
 validLocalPart value =
   not (Text.null value) && Text.all isLocalPartCharacter value
+
+-- | The RFC 5321 mailbox limit is 254 ASCII octets.  'EmailAddress' accepts
+-- only ASCII characters, so 'Text.length' is the same bound in this parser;
+-- keeping it here rejects an oversized login identifier before it can own a
+-- durable authentication-attempt key.
+validEmailAddressLength :: Text -> Bool
+validEmailAddressLength value = Text.length value <= 254
 
 validDomainPart :: Text -> Bool
 validDomainPart value =
