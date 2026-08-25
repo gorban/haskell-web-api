@@ -1860,6 +1860,18 @@ extensionless paths static. Static misses retain their plain 404 but deliberatel
 `Cache-Control`, preventing a shared cache from pinning a missing deployment artifact for the
 successful asset TTL.
 
+### Follow-up decision — CO: no global 108-column source limit (2026-08-25)
+
+**Decision: remove the unenforced 108-column target rather than turn it into a formatting gate.**
+The target had no project policy or tooling behind it, while 3,298 existing source lines exceeded
+it. A global width check would force broad, mechanically motivated rewrites and would still be a
+poor proxy for readability in declarative markup, records, type signatures, and tests. Pinned
+Ormolu remains the formatting authority. Reviewers should instead use the existing compositional
+and module-health rules: extract a cohesive responsibility when ownership is obscured, preserve
+direct total ADT folds, and do not split declarative tests merely to satisfy a metric. A future
+line-length policy needs a concrete readability failure and a formatter-compatible enforcement
+plan; it must not be reintroduced solely as a count-based gate.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
