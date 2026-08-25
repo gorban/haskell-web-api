@@ -3,6 +3,7 @@
 
 {-# SPEC #-}
 
+import Control.Concurrent (threadDelay)
 import Data.IORef (modifyIORef', newIORef, readIORef, writeIORef)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe)
@@ -12,7 +13,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Username qualified as Username
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
-import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), confirmEmailVerificationAt, registerAccount, resendEmailVerificationAt)
+import WebApi.Account (AccountProfile (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), ResendVerificationError (..), VerificationDeliveryFailure (..), confirmEmailVerificationAt, defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout, mkPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts, registerAccount, resendEmailVerificationAt)
 
 spec = do
   describe "WebApi.Account" $ do
@@ -20,7 +21,9 @@ spec = do
       passwordWorkGate <- Password.newPasswordWorkGate (required "password-work budget" (Password.mkPasswordWorkBudget 1))
       let accountStore =
             AccountStore
-              { createPendingAccount = \_ -> error "registration persistence must not run after password-work rejection",
+              { createPendingAccount = \_ _ -> error "registration persistence must not run after password-work rejection",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -30,6 +33,8 @@ spec = do
               { registrationPasswordHasher = \_ _ -> error "password hashing must not run after password-work rejection",
                 registrationHashingPolicy = testPasswordHashingPolicy,
                 registrationPasswordWorkGate = passwordWorkGate,
+                registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
+                registrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
                 registrationStore = accountStore,
                 registrationDelivery = Email.EmailDelivery (\_ -> error "email delivery must not run after password-work rejection"),
                 registrationLocale = Email.EmailEnglish,
@@ -45,11 +50,14 @@ spec = do
     it "persists only a password hash and verification digest before delivering a localized verification email" $ do
       pendingAccountsReference <- newIORef []
       deliveredMessagesReference <- newIORef []
+      settledClaimsReference <- newIORef []
       let accountStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> do
+              { createPendingAccount = \_ pendingAccount -> do
                   modifyIORef' pendingAccountsReference (<> [pendingAccount])
                   pure (Right PendingAccountCreated),
+                completePendingRegistrationDelivery = \claim -> modifyIORef' settledClaimsReference (<> [claim]) >> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -62,6 +70,8 @@ spec = do
             { registrationPasswordHasher = Password.hashPassword,
               registrationHashingPolicy = testPasswordHashingPolicy,
               registrationPasswordWorkGate = testPasswordWorkGate,
+              registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
+              registrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
               registrationStore = accountStore,
               registrationDelivery = emailDelivery,
               registrationLocale = Email.EmailSpanish,
@@ -77,6 +87,7 @@ spec = do
             }
       pendingAccounts <- readIORef pendingAccountsReference
       deliveredMessages <- readIORef deliveredMessagesReference
+      settledClaims <- readIORef settledClaimsReference
       createdAccountId <-
         case registrationResult of
           Right (RegistrationCreated accountId) -> pure accountId
@@ -94,13 +105,23 @@ spec = do
           Email.emailMessageRecipient message `shouldBe` emailAddress
           Email.emailMessageSubject message `shouldBe` "Verifica tu correo electronico"
           Email.emailMessageBody message `shouldSatisfy` Text.isPrefixOf "Abre este enlace para verificar tu correo electronico:\nhttps://account.example.test/es/verify?token="
+          case settledClaims of
+            [claim] -> do
+              pendingRegistrationClaimAccountId claim `shouldBe` pendingAccountId pendingAccount
+              pendingRegistrationClaimTokenDigest claim `shouldBe` Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)
+              case pendingRegistrationClaimStage claim of
+                PendingRegistrationCreated -> pure ()
+                PendingRegistrationRetried -> expectationFailure "created registrations must settle a created claim"
+            _ -> expectationFailure "expected the created delivery claim to be settled"
         _ -> expectationFailure "expected exactly one pending account and verification email"
 
     it "persists typed account identity without changing verification delivery" $ do
       pendingAccountsReference <- newIORef []
       let accountStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+              { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -113,6 +134,8 @@ spec = do
               { registrationPasswordHasher = Password.hashPassword,
                 registrationHashingPolicy = testPasswordHashingPolicy,
                 registrationPasswordWorkGate = testPasswordWorkGate,
+                registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
+                registrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
                 registrationStore = accountStore,
                 registrationDelivery = Email.EmailDelivery (\_ -> pure ()),
                 registrationLocale = Email.EmailEnglish,
@@ -138,7 +161,9 @@ spec = do
     it "covers password-hashing failures and account-workflow value representations" $ do
       let accountStore =
             AccountStore
-              { createPendingAccount = \_ -> error "password hashing should stop before persistence",
+              { createPendingAccount = \_ _ -> error "password hashing should stop before persistence",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -152,7 +177,9 @@ spec = do
       pendingAccountsReference <- newIORef []
       let successfulStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+              { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -195,13 +222,15 @@ spec = do
           emailAddress = requiredEmailAddress "person@example.test"
           existingStore =
             AccountStore
-              { createPendingAccount = \_ -> pure (Right PendingAccountEmailTaken),
+              { createPendingAccount = \_ _ -> pure (Right PendingAccountEmailTaken),
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
-          takenUsernameStore = existingStore {createPendingAccount = \_ -> pure (Right PendingAccountUsernameTaken)}
-          unavailableStore = existingStore {createPendingAccount = \_ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
+          takenUsernameStore = existingStore {createPendingAccount = \_ _ -> pure (Right PendingAccountUsernameTaken)}
+          unavailableStore = existingStore {createPendingAccount = \_ _ -> pure (Left (AccountStoreUnavailable "database unavailable"))}
       assertRegistrationResult
         (registerAccount (registrationEnvironmentAt Password.hashPassword existingStore emailDelivery 100 200) (registrationRequestOf emailAddress))
         (\case Right RegistrationAlreadyRegistered -> True; _ -> False)
@@ -222,7 +251,9 @@ spec = do
           verifiedProfile = AccountProfile accountId emailAddress Nothing Nothing True
           successfulStore =
             AccountStore
-              { createPendingAccount = \_ -> error "unexpected account creation",
+              { createPendingAccount = \_ _ -> error "unexpected account creation",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
                 replaceEmailVerification = \verification -> writeIORef storedVerificationReference (Just verification) >> pure (Right True),
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -232,7 +263,7 @@ spec = do
           delivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message]))
           failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
           resend store emailDelivery profile now lifetime =
-            resendEmailVerificationAt store emailDelivery Email.EmailSpanish (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token) now lifetime profile
+            resendEmailVerificationAt store defaultRegistrationDeliveryTimeout emailDelivery Email.EmailSpanish (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token) now lifetime profile
       resend successfulStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Right () -> True; _ -> False)
       storedVerification <- readIORef storedVerificationReference
       deliveredMessages <- readIORef deliveredMessagesReference
@@ -248,6 +279,7 @@ spec = do
       resend unavailableStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationStoreError storeError) -> isUnavailable "database unavailable" storeError; _ -> False)
       resend noLongerPendingStore delivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
       resend successfulStore failingDelivery pendingProfile 100 200 >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> "SMTP unavailable" `Text.isInfixOf` detail; _ -> False)
+      resendEmailVerificationAt successfulStore (required "delivery timeout" (mkRegistrationDeliveryTimeout 1)) (Email.EmailDelivery (\_ -> threadDelay 50000)) Email.EmailSpanish (\token -> "https://account.example.test/es/verify?token=" <> Account.emailVerificationTokenText token) 100 200 pendingProfile >>= (`shouldSatisfy` \case Left (ResendVerificationDeliveryFailed detail) -> detail == "email delivery timed out"; _ -> False)
       resend successfulStore delivery pendingProfile maxBound 1 >>= (`shouldSatisfy` \case Left ResendVerificationClockOverflow -> True; _ -> False)
       resend successfulStore delivery verifiedProfile 100 200 >>= (`shouldSatisfy` \case Left ResendVerificationNoLongerPending -> True; _ -> False)
 
@@ -255,20 +287,135 @@ spec = do
       pendingAccountsReference <- newIORef []
       let accountStore =
             AccountStore
-              { createPendingAccount = \pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+              { createPendingAccount = \_ pendingAccount -> modifyIORef' pendingAccountsReference (<> [pendingAccount]) >> pure (Right PendingAccountCreated),
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
               }
           failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
           emailAddress = requiredEmailAddress "person@example.test"
-      assertRegistrationResult
-        (registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery 100 200) (registrationRequestOf emailAddress))
-        (\case Left (RegistrationDeliveryFailed message) -> "SMTP unavailable" `Text.isInfixOf` message; _ -> False)
+      registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery 100 200) (registrationRequestOf emailAddress) >>= \case
+        Left (RegistrationDeliveryFailed (VerificationDeliveryTransportFailed message)) -> do
+          "SMTP unavailable" `Text.isInfixOf` message `shouldBe` True
+        _ -> expectationFailure "expected the SMTP transport failure to remain distinct"
       length <$> readIORef pendingAccountsReference `shouldReturn` 1
+      let releaseFailureStore = accountStore {releasePendingRegistrationDelivery = \_ -> pure (Left (AccountStoreUnavailable "release unavailable"))}
+          completionFailureStore = accountStore {completePendingRegistrationDelivery = \_ -> pure (Left (AccountStoreUnavailable "completion unavailable"))}
+          successfulDelivery = Email.EmailDelivery (\_ -> pure ())
+      assertRegistrationResult
+        (registerAccount (registrationEnvironmentAt Password.hashPassword releaseFailureStore failingDelivery 100 200) (registrationRequestOf emailAddress))
+        (\case Left (RegistrationStoreError storeError) -> isUnavailable "release unavailable" storeError; _ -> False)
+      assertRegistrationResult
+        (registerAccount (registrationEnvironmentAt Password.hashPassword completionFailureStore successfulDelivery 100 200) (registrationRequestOf emailAddress))
+        (\case Left (RegistrationStoreError storeError) -> isUnavailable "completion unavailable" storeError; _ -> False)
       assertRegistrationResult
         (registerAccount (registrationEnvironmentAt Password.hashPassword accountStore failingDelivery maxBound 1) (registrationRequestOf emailAddress))
         (\case Left RegistrationClockOverflow -> True; _ -> False)
+
+    it "settles a retry claim after delivery and releases it after a failure or timeout" $ do
+      settledClaimsReference <- newIORef []
+      releasedClaimsReference <- newIORef []
+      deliveredBodiesReference <- newIORef []
+      let emailAddress = requiredEmailAddress "person@example.test"
+          claimStore stage =
+            AccountStore
+              { createPendingAccount = \_ pendingAccount ->
+                  pure
+                    ( Right
+                        ( PendingAccountDeliveryClaimed
+                            ( PendingRegistrationClaim
+                                (pendingAccountId pendingAccount)
+                                (Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount))
+                                stage
+                            )
+                        )
+                    ),
+                completePendingRegistrationDelivery = \claim -> modifyIORef' settledClaimsReference (<> [claim]) >> pure (Right True),
+                releasePendingRegistrationDelivery = \claim -> modifyIORef' releasedClaimsReference (<> [claim]) >> pure (Right True),
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          retryStore = claimStore PendingRegistrationRetried
+          createdClaimStore = claimStore PendingRegistrationCreated
+          successfulDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredBodiesReference (<> [Email.emailMessageBody message]))
+          failingDelivery = Email.EmailDelivery (\_ -> ioError (userError "SMTP unavailable"))
+          timedOutDelivery = Email.EmailDelivery (\_ -> threadDelay 1000000)
+          shortTimeout = required "short delivery timeout" (mkRegistrationDeliveryTimeout 1)
+          environmentFor accountStore delivery =
+            (registrationEnvironmentAt Password.hashPassword accountStore delivery 100 200)
+              { registrationVerificationUrl = \token -> "https://account.example.test/verify?token=" <> Account.emailVerificationTokenText token
+              }
+          retryEnvironment = environmentFor retryStore
+      registeredAccountId <-
+        registerAccount (retryEnvironment successfulDelivery) (registrationRequestOf emailAddress) >>= \case
+          Right (RegistrationRetried accountId) -> pure accountId
+          _ -> expectationFailure "expected a settled retry delivery" >> pure (error "unreachable")
+      readIORef settledClaimsReference >>= \case
+        [claim] -> do
+          pendingRegistrationClaimAccountId claim `shouldBe` registeredAccountId
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> expectationFailure "retried registrations must settle a retry claim"
+            PendingRegistrationRetried -> pure ()
+        _ -> expectationFailure "expected one completed registration delivery claim"
+      registerAccount (environmentFor createdClaimStore successfulDelivery) (registrationRequestOf emailAddress) >>= \case
+        Right (RegistrationCreated createdAccountId) -> createdAccountId `shouldSatisfy` (not . Text.null . Account.accountIdText)
+        _ -> expectationFailure "expected a created claim to report a created registration"
+      deliveredBodies <- readIORef deliveredBodiesReference
+      deliveredBodies `shouldSatisfy` all (Text.isInfixOf "?token=")
+      registerAccount (retryEnvironment failingDelivery) (registrationRequestOf emailAddress) >>= \case
+        Left (RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail)) | "SMTP unavailable" `Text.isInfixOf` detail -> pure ()
+        _ -> expectationFailure "expected failed delivery to release its claim"
+      registerAccount ((retryEnvironment timedOutDelivery) {registrationDeliveryTimeout = shortTimeout}) (registrationRequestOf emailAddress) >>= \case
+        Left (RegistrationDeliveryFailed VerificationDeliveryTimedOut) -> pure ()
+        _ -> expectationFailure "expected timed-out delivery to release its claim"
+      readIORef releasedClaimsReference >>= \case
+        [failedClaim, timedOutClaim] -> do
+          case (pendingRegistrationClaimStage failedClaim, pendingRegistrationClaimStage timedOutClaim) of
+            (PendingRegistrationRetried, PendingRegistrationRetried) -> pure ()
+            _ -> expectationFailure "failed and timed-out deliveries must release retry claims"
+        _ -> expectationFailure "expected failed and timed-out deliveries to release their claims"
+
+    it "keeps invalid registration bounds out of the lifecycle and reports typed staging failures" $ do
+      let emailAddress = requiredEmailAddress "person@example.test"
+          storageExhaustedStore =
+            AccountStore
+              { createPendingAccount = \storagePolicy _ -> do
+                  pendingRegistrationMaximumAccounts storagePolicy `shouldBe` 100000
+                  pendingRegistrationClaimLeaseNanoseconds storagePolicy `shouldBe` 300000000000
+                  pure (Right PendingAccountStorageExhausted),
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
+                replaceEmailVerification = \_ -> error "unexpected verification replacement",
+                findEmailVerification = \_ -> error "unexpected verification lookup",
+                consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
+              }
+          lostClaimStore =
+            storageExhaustedStore
+              { createPendingAccount = \_ pendingAccount -> pure (Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim (pendingAccountId pendingAccount) (Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) PendingRegistrationCreated))),
+                completePendingRegistrationDelivery = \claim -> do
+                  case pendingRegistrationClaimStage claim of
+                    PendingRegistrationCreated -> pure ()
+                    PendingRegistrationRetried -> expectationFailure "a created registration must complete a created claim"
+                  pure (Right False)
+              }
+          delivery = Email.EmailDelivery (\_ -> pure ())
+      case (mkPendingRegistrationStoragePolicy 0 1, mkPendingRegistrationStoragePolicy 1 0, mkPendingRegistrationStoragePolicy 1 1) of
+        (Nothing, Nothing, Just storagePolicy) -> do
+          pendingRegistrationMaximumAccounts storagePolicy `shouldBe` 1
+          pendingRegistrationClaimLeaseNanoseconds storagePolicy `shouldBe` 1
+        _ -> expectationFailure "expected only positive pending-registration bounds to be accepted"
+      case (mkRegistrationDeliveryTimeout 0, mkRegistrationDeliveryTimeout 1) of
+        (Nothing, Just _) -> pure ()
+        _ -> expectationFailure "expected only a positive delivery timeout to be accepted"
+      assertRegistrationResult
+        (registerAccount (registrationEnvironmentAt Password.hashPassword storageExhaustedStore delivery 100 200) (registrationRequestOf emailAddress))
+        (\case Left RegistrationStorageExhausted -> True; _ -> False)
+      assertRegistrationResult
+        (registerAccount (registrationEnvironmentAt Password.hashPassword lostClaimStore delivery 100 200) (registrationRequestOf emailAddress))
+        (\case Left RegistrationDeliveryClaimLost -> True; _ -> False)
 
     it "validates and atomically consumes a matching verification token" $ do
       let accountId = requiredAccountId "account_01"
@@ -277,7 +424,9 @@ spec = do
           storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
           accountStore =
             AccountStore
-              { createPendingAccount = \_ -> error "unexpected account creation",
+              { createPendingAccount = \_ _ -> error "unexpected account creation",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \digest ->
                   if digest == Account.emailVerificationTokenDigest token
@@ -303,7 +452,9 @@ spec = do
           storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
           storeWith lookupResult consumptionResult =
             AccountStore
-              { createPendingAccount = \_ -> error "unexpected account creation",
+              { createPendingAccount = \_ _ -> error "unexpected account creation",
+                completePendingRegistrationDelivery = \_ -> error "unexpected registration delivery completion",
+                releasePendingRegistrationDelivery = \_ -> error "unexpected registration delivery release",
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumptionResult

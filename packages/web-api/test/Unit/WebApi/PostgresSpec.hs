@@ -18,7 +18,7 @@ import Network.HTTP.Types qualified as Http
 import System.Exit (ExitCode (..))
 import TestSupport.RealPostgres (containerizedPsqlScriptContents, defaultMigrationPostgresConfig, defaultRealPostgresConfig, ensureDefaultPostgresAvailable, ensureDefaultPostgresAvailableScript, withContainerizedPsqlOnPath)
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..))
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkPendingRegistrationStoragePolicy)
 import WebApi.App (buildAppWithDatabase)
 import WebApi.Config (DatabaseConfig (..), defaultAppConfig)
 import WebApi.Database (DatabaseError (..), DatabaseOperation (..), DatabaseResult (..), SecondPageData (..))
@@ -51,8 +51,8 @@ spec = do
             config `seq` do
               modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
               pure $
-                if "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql
-                  then Right []
+                if "stage_pending_registration" `Text.isInfixOf` sql
+                  then Right [["created", "account_01"]]
                   else
                     if "INSERT INTO web_api.accounts" `Text.isInfixOf` sql
                       then Right [["account_01"]]
@@ -64,7 +64,14 @@ spec = do
                               then Right [["account_01"]]
                               else Left "unexpected query"
           accountStore = buildRuntimePostgresAccountStoreWithRunner runner postgresTestConfig
-      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) (\case PendingAccountCreated -> True; _ -> False)
+      createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount >>= \case
+        Right (PendingAccountDeliveryClaimed claim) -> do
+          pendingRegistrationClaimAccountId claim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest claim `shouldBe` Account.storedVerificationTokenDigest (pendingAccountVerification pendingAccount)
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> pure ()
+            PendingRegistrationRetried -> expectationFailure "a created database row must produce a created claim"
+        _ -> expectationFailure "expected a created pending-registration claim"
       assertAccountStoreSuccess
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
         (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
@@ -84,7 +91,7 @@ spec = do
       Text.isInfixOf (Username.usernameText username) parameterText `shouldBe` True
       Text.isInfixOf "Person Example" parameterText `shouldBe` True
 
-    it "checks username availability before inserting, and skips the check entirely when no username is given" $ do
+    it "delegates username and capacity decisions to one atomic pending-registration stage" $ do
       recordedQueriesReference <- newIORef []
       let accountId = requiredAccountId "account_01"
           emailAddress = requiredEmailAddress "person@example.test"
@@ -104,12 +111,12 @@ spec = do
           takenUsernameRunner _config sql parameters = do
             modifyIORef' recordedQueriesReference (<> [(sql, parameters)])
             pure $
-              if "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql
-                then Right [["1"]]
-                else Left "unexpected query: insert should not run after a taken username"
+              if "stage_pending_registration" `Text.isInfixOf` sql
+                then Right [["username-taken", ""]]
+                else Left "unexpected query"
           takenUsernameStore = buildRuntimePostgresAccountStoreWithRunner takenUsernameRunner postgresTestConfig
       assertAccountStoreSuccess
-        (createPendingAccount takenUsernameStore (pendingAccountWith (Just username)))
+        (createPendingAccount takenUsernameStore defaultPendingRegistrationStoragePolicy (pendingAccountWith (Just username)))
         (\case PendingAccountUsernameTaken -> True; _ -> False)
       takenUsernameQueries <- readIORef recordedQueriesReference
       length takenUsernameQueries `shouldBe` 1
@@ -117,14 +124,20 @@ spec = do
       noUsernameQueriesReference <- newIORef []
       let noUsernameRunner _config sql parameters = do
             modifyIORef' noUsernameQueriesReference (<> [(sql, parameters)])
-            pure (Right [["account_01"]])
+            pure (Right [["created", "account_01"]])
           noUsernameStore = buildRuntimePostgresAccountStoreWithRunner noUsernameRunner postgresTestConfig
-      assertAccountStoreSuccess
-        (createPendingAccount noUsernameStore (pendingAccountWith Nothing))
-        (\case PendingAccountCreated -> True; _ -> False)
+      createPendingAccount noUsernameStore (required "pending-registration storage policy" (mkPendingRegistrationStoragePolicy 1 1)) (pendingAccountWith Nothing) >>= \case
+        Right (PendingAccountDeliveryClaimed claim) -> do
+          pendingRegistrationClaimAccountId claim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest claim `shouldBe` Account.emailVerificationTokenDigest token
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> pure ()
+            PendingRegistrationRetried -> expectationFailure "a created database row must produce a created claim"
+        _ -> expectationFailure "expected a created pending-registration claim without a username"
       noUsernameQueries <- readIORef noUsernameQueriesReference
       length noUsernameQueries `shouldBe` 1
-      any (\(sql, _) -> "SELECT 1 FROM web_api.accounts" `Text.isInfixOf` sql) noUsernameQueries `shouldBe` False
+      all (\(sql, _) -> "stage_pending_registration" `Text.isInfixOf` sql) noUsernameQueries `shouldBe` True
+      fmap snd noUsernameQueries `shouldBe` [["account_01", "person@example.test", Password.passwordHashText passwordHash, Account.emailVerificationTokenDigestText (Account.emailVerificationTokenDigest token), "500", "100", "", "", "1", "99"]]
 
     it "maps malformed account-store query results to application-owned errors" $ do
       let accountId = requiredAccountId "account_01"
@@ -142,9 +155,24 @@ spec = do
                 pendingAccountCreatedAtNanoseconds = 100
               }
           storeFor result = buildRuntimePostgresAccountStoreWithRunner (\_ _ _ -> pure result) postgresTestConfig
-      assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) pendingAccount) (isUnavailable "connection failed")
-      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [])) pendingAccount) (\case PendingAccountEmailTaken -> True; _ -> False)
-      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) pendingAccount) (isCorrupt "unexpected pending-account result: [[\"other_account\"]]")
+          claim = PendingRegistrationClaim accountId (Account.emailVerificationTokenDigest token) PendingRegistrationCreated
+      assertAccountStoreError (createPendingAccount (storeFor (Left "connection failed")) defaultPendingRegistrationStoragePolicy pendingAccount) (isUnavailable "connection failed")
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [["email-taken", ""]])) defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountEmailTaken -> True; _ -> False)
+      assertAccountStoreSuccess (createPendingAccount (storeFor (Right [["storage-exhausted", ""]])) defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountStorageExhausted -> True; _ -> False)
+      createPendingAccount (storeFor (Right [["retried", "account_01"]])) defaultPendingRegistrationStoragePolicy pendingAccount >>= \case
+        Right (PendingAccountDeliveryClaimed retryClaim) -> do
+          pendingRegistrationClaimAccountId retryClaim `shouldBe` accountId
+          pendingRegistrationClaimTokenDigest retryClaim `shouldBe` Account.emailVerificationTokenDigest token
+          case pendingRegistrationClaimStage retryClaim of
+            PendingRegistrationCreated -> expectationFailure "a retried database row must produce a retry claim"
+            PendingRegistrationRetried -> pure ()
+        _ -> expectationFailure "expected a retried pending-registration claim"
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["created", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["retried", "invalid id"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "pending-registration staging returned an invalid account id")
+      assertAccountStoreError (createPendingAccount (storeFor (Right [["other_account"]])) defaultPendingRegistrationStoragePolicy pendingAccount) (isCorrupt "unexpected pending-registration staging result: [[\"other_account\"]]")
+      assertAccountStoreSuccess (completePendingRegistrationDelivery (storeFor (Right [])) claim) not
+      assertAccountStoreSuccess (releasePendingRegistrationDelivery (storeFor (Right [])) claim) not
+      assertAccountStoreError (completePendingRegistrationDelivery (storeFor (Right [["other_account"]])) claim) (isCorrupt "unexpected pending-registration delivery update result: [[\"other_account\"]]")
       assertAccountStoreError (replaceEmailVerification (storeFor (Left "connection failed")) (pendingAccountVerification pendingAccount)) (isUnavailable "connection failed")
       assertAccountStoreSuccess (replaceEmailVerification (storeFor (Right [])) (pendingAccountVerification pendingAccount)) not
       assertAccountStoreError (replaceEmailVerification (storeFor (Right [["other_account"]])) (pendingAccountVerification pendingAccount)) (isCorrupt "unexpected email-verification replacement result: [[\"other_account\"]]")
@@ -555,13 +583,48 @@ spec = do
               }
       pool <- newPostgresPool (databasePoolCapacity defaultRealPostgresConfig) defaultRealPostgresConfig
       let accountStore = buildRuntimePostgresAccountStore pool
-      assertAccountStoreSuccess (createPendingAccount accountStore pendingAccount) (\case PendingAccountCreated -> True; _ -> False)
+      assertAccountStoreSuccess (createPendingAccount accountStore defaultPendingRegistrationStoragePolicy pendingAccount) (\case PendingAccountDeliveryClaimed _ -> True; _ -> False)
       assertAccountStoreSuccess
         (findEmailVerification accountStore (Account.emailVerificationTokenDigest token))
         (\case Just storedVerification -> storedVerification == pendingAccountVerification pendingAccount; Nothing -> False)
       assertAccountStoreSuccess
         (consumeEmailVerification accountStore (Account.emailVerificationTokenDigest token) 499)
         (\case Just consumedAccountId -> consumedAccountId == accountId; Nothing -> False)
+
+      retryAccountId <- Account.generateAccountId
+      initialRetryToken <- Account.generateEmailVerificationToken
+      retryToken <- Account.generateEmailVerificationToken
+      let retryEmailAddress = requiredEmailAddress (Account.accountIdText retryAccountId <> "@retry.example.test")
+          initialRetryPendingAccount =
+            PendingAccount
+              { pendingAccountId = retryAccountId,
+                pendingAccountEmail = retryEmailAddress,
+                pendingAccountUsername = Nothing,
+                pendingAccountDisplayName = Nothing,
+                pendingAccountPasswordHash = passwordHash,
+                pendingAccountVerification = Account.mkStoredEmailVerification retryAccountId retryEmailAddress 1500 initialRetryToken,
+                pendingAccountCreatedAtNanoseconds = 1000
+              }
+          retryPendingAccount =
+            initialRetryPendingAccount
+              { pendingAccountVerification = Account.mkStoredEmailVerification retryAccountId retryEmailAddress 1600 retryToken,
+                pendingAccountCreatedAtNanoseconds = 1100
+              }
+      initialClaim <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy initialRetryPendingAccount
+      initialClaimValue <-
+        case initialClaim of
+          Right (PendingAccountDeliveryClaimed claim) -> pure claim
+          _ -> expectationFailure "expected the initial pending registration claim" >> pure (error "unreachable")
+      assertAccountStoreSuccess (releasePendingRegistrationDelivery accountStore initialClaimValue) id
+      retriedClaim <- createPendingAccount accountStore defaultPendingRegistrationStoragePolicy retryPendingAccount
+      retriedClaimValue <-
+        case retriedClaim of
+          Right (PendingAccountDeliveryClaimed claim) -> pure claim
+          _ -> expectationFailure "expected a retryable pending registration claim" >> pure (error "unreachable")
+      assertAccountStoreSuccess (completePendingRegistrationDelivery accountStore retriedClaimValue) id
+      assertAccountStoreSuccess
+        (createPendingAccount accountStore defaultPendingRegistrationStoragePolicy retryPendingAccount)
+        (\case PendingAccountEmailTaken -> True; _ -> False)
 
       let mfaStoreForAccount = buildRuntimePostgresMfaStore pool
           assertMfaBoolResult label action expected = do
@@ -624,7 +687,7 @@ spec = do
       ensureDefaultPostgresAvailable
       runPostgresMigrations defaultMigrationPostgresConfig `shouldReturn` Right ()
       runRuntimeRowsQuery defaultMigrationPostgresConfig "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
-        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1", "login-attempt-storage-bound-v1"]
+        `shouldReturn` Right ["epoch-security-time-v1", "initial-schema", "login-attempt-reservation-function-v1", "login-attempt-reservations-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"]
       withUnusedTcpEndpoint $ \unusedEndpoint -> do
         runPostgresMigrations
           defaultMigrationPostgresConfig
@@ -705,7 +768,7 @@ spec = do
               "CREATE TABLE IF NOT EXISTS web_api.schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP);",
               "SELECT version FROM web_api.schema_migrations ORDER BY version ASC;"
             ]
-      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
+      runPostgresMigrationsWithExecutor (executor ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] "never") migrationPostgresTestConfig postgresTestConfig `shouldReturn` Right ()
       skippedRecordedSql <- readIORef recordedSqlReference
       take (length setupSql) skippedRecordedSql `shouldBe` setupSql
       skippedRecordedSql `shouldContain` ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";"]
@@ -784,18 +847,18 @@ spec = do
       recordSql `shouldBe` setupSql <> migrationStatementsFor <> ["INSERT INTO web_api.schema_migrations (version) VALUES ('initial-schema');", "ROLLBACK;"]
 
       (reconciliationResult, reconciliationSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "ALTER SCHEMA web_api OWNER TO \"web_api_owner\";" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] sql)
       reconciliationResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       reconciliationSql `shouldBe` setupSql <> ["ALTER SCHEMA web_api OWNER TO \"web_api_owner\";", "ROLLBACK;"]
 
       (commitResult, commitSql) <-
-        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1"] sql)
+        runWith migrationPostgresTestConfig postgresTestConfig (\sql -> if sql == "COMMIT;" then migrationFailure else versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"] sql)
       commitResult `shouldBe` Left (PostgresMigrationFailed "PostgreSQL migration command failed")
       take (length setupSql) commitSql `shouldBe` setupSql
       drop (length commitSql - 2) commitSql `shouldBe` ["COMMIT;", "ROLLBACK;"]
 
       (sameIdentityResult, sameIdentitySql) <-
-        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1"])
+        runWith migrationPostgresTestConfig migrationPostgresTestConfig (versionRows ["initial-schema", "epoch-security-time-v1", "login-attempt-reservations-v1", "login-attempt-reservation-function-v1", "login-attempt-storage-bound-v1", "pending-registration-lifecycle-v1"])
       sameIdentityResult `shouldBe` Right ()
       sameIdentitySql `shouldNotContain` ["DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = 'web_api_owner') THEN EXECUTE 'ALTER ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; ELSE EXECUTE 'CREATE ROLE \"web_api_owner\" WITH LOGIN PASSWORD ''owner-secret'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT'; END IF; END $$;"]
 

@@ -3,6 +3,7 @@
 
 {-# SPEC #-}
 
+import Control.Concurrent (threadDelay)
 import Control.Exception (ErrorCall (..), IOException, displayException, evaluate, try)
 import Control.Monad (forM_)
 import Data.ByteString qualified as ByteString
@@ -31,7 +32,7 @@ import HarchWeb.Totp qualified as Totp
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
 import Unit.WebApi.TestSupport hiding (accountId, databaseConfig, emailAddress, opaqueSession, sessionIdValue, testSessionId)
-import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..))
+import WebApi.Account (AccountProfile (..), AccountProfileStore (..), AccountStore (..), AccountStoreError (..), CreatePendingAccountOutcome (..), PendingAccount (..), PendingRegistrationClaim (..), PendingRegistrationDeliveryStage (..), defaultPendingRegistrationStoragePolicy, mkRegistrationDeliveryTimeout, pendingRegistrationClaimLeaseNanoseconds, pendingRegistrationMaximumAccounts)
 import WebApi.AccountPages (AccountAction, AccountActionTarget (..), AccountWorkflow (..), LoginForm (..), MfaEnrollmentForm (..), PendingProfileForm (..), RegistrationForm (..), VerificationForm (..), accountActions, authorizeAccountActionCsrf, emptyRegistrationForm, handleAccountAction, mfaEnrollmentFailureDiagnostics, pageCsrfTokenForAccountPage, renderLoginPage, renderLoginRegion, renderLogoutPage, renderLogoutRegion, renderMfaEnrollmentPage, renderMfaEnrollmentRegion, renderPendingProfileRegion, renderRegistrationPage, renderRegistrationRegion, renderVerificationPage, renderVerificationRegion)
 import WebApi.AccountPages.Actions.Contract (AccountAction (LogoutAccount), buildActionCodecOrDie)
 import WebApi.App (buildRuntimeAppWithDatabaseBuilder, unavailableAccountWorkflow)
@@ -172,7 +173,9 @@ existingSpec = do
               WebApi.Route.Spanish -> "/es/profile"
           store replacementResult =
             AccountStore
-              { createPendingAccount = \_ -> error "unexpected account creation",
+              { createPendingAccount = \_ _ -> error "unexpected account creation",
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \verification -> storedVerificationTokenDigest verification `seq` pure replacementResult,
                 findEmailVerification = \_ -> error "unexpected verification lookup",
                 consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -556,12 +559,14 @@ spec = do
           storedVerification = Account.mkStoredEmailVerification accountId emailAddress 500 token
           createdStore =
             AccountStore
-              { createPendingAccount = \pendingAccount ->
+              { createPendingAccount = \_ pendingAccount ->
                   do
                     pendingAccountUsername pendingAccount `shouldBe` Just (fromMaybe (error "expected username") (Username.mkUsername "person_01"))
                     pendingAccountDisplayName pendingAccount `shouldSatisfy` (`elem` [Nothing, Just "Person Example"])
                     pendingAccountEmail pendingAccount `shouldBe` emailAddress
                     pure (Right PendingAccountCreated),
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure (Right (Just storedVerification)),
                 consumeEmailVerification = \_ _ -> pure (Right (Just accountId))
@@ -572,6 +577,7 @@ spec = do
                 accountWorkflowEmailDelivery = Email.EmailDelivery (\message -> modifyIORef' deliveredMessagesReference (<> [message])),
                 accountWorkflowPasswordHasher = Password.hashPassword,
                 accountWorkflowPasswordWorkGate = accountWorkflowPasswordWorkGate unavailableAccountWorkflow,
+                accountWorkflowRegistrationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout unavailableAccountWorkflow,
                 accountWorkflowClock = pure 100,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -690,7 +696,13 @@ spec = do
       unconfiguredAction `shouldSatisfy` actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable"
       let unconfiguredStore = accountWorkflowStore unavailableAccountWorkflow
       assertAccountStoreError
-        (createPendingAccount unconfiguredStore (error "the unavailable store must ignore pending-account input"))
+        (createPendingAccount unconfiguredStore defaultPendingRegistrationStoragePolicy (error "the unavailable store must ignore pending-account input"))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (completePendingRegistrationDelivery unconfiguredStore (error "the unavailable store must ignore delivery-claim input"))
+        (isUnavailable "account persistence is not configured")
+      assertAccountStoreError
+        (releasePendingRegistrationDelivery unconfiguredStore (error "the unavailable store must ignore delivery-claim input"))
         (isUnavailable "account persistence is not configured")
       assertAccountStoreError
         (replaceEmailVerification unconfiguredStore (error "the unavailable store must ignore verification input"))
@@ -754,6 +766,7 @@ spec = do
           Left (AccountStoreUnavailable "account profiles are not configured") -> pure ()
           _ -> expectationFailure "expected unavailable account profiles"
       accountWorkflowPasswordHasher unavailableAccountWorkflow `seq` pure ()
+      accountWorkflowRegistrationDeliveryTimeout unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpEncryptionKey unavailableAccountWorkflow `seq` pure ()
       accountWorkflowTotpClock unavailableAccountWorkflow 0 `shouldBe` 0
       unavailableDelivery <-
@@ -799,6 +812,7 @@ spec = do
                 accountWorkflowEmailDelivery = emailDelivery,
                 accountWorkflowPasswordHasher = Password.hashPassword,
                 accountWorkflowPasswordWorkGate = accountWorkflowPasswordWorkGate unavailableAccountWorkflow,
+                accountWorkflowRegistrationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout unavailableAccountWorkflow,
                 accountWorkflowClock = pure now,
                 accountWorkflowMfaStore = accountWorkflowMfaStore unavailableAccountWorkflow,
                 accountWorkflowCredentialStore = accountWorkflowCredentialStore unavailableAccountWorkflow,
@@ -812,7 +826,12 @@ spec = do
               }
           store createResult lookupResult consumeResult =
             AccountStore
-              { createPendingAccount = \_ -> pure createResult,
+              { createPendingAccount = \storagePolicy _ -> do
+                  pendingRegistrationMaximumAccounts storagePolicy `shouldBe` pendingRegistrationMaximumAccounts defaultPendingRegistrationStoragePolicy
+                  pendingRegistrationClaimLeaseNanoseconds storagePolicy `shouldBe` pendingRegistrationClaimLeaseNanoseconds defaultPendingRegistrationStoragePolicy
+                  pure createResult,
+                completePendingRegistrationDelivery = \_ -> pure (Right True),
+                releasePendingRegistrationDelivery = \_ -> pure (Right True),
                 replaceEmailVerification = \_ -> error "unexpected verification replacement",
                 findEmailVerification = \_ -> pure lookupResult,
                 consumeEmailVerification = \_ _ -> pure consumeResult
@@ -827,10 +846,22 @@ spec = do
       spanishAlreadyRegistered `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "Si esa direccion"
       createdEnglish <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       createdEnglish `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
-      -- Byte-identical responses for the already-registered and newly-created
-      -- outcomes: the hedged "if that address can register" wording only
-      -- protects against enumeration if both branches answer identically.
-      alreadyRegistered `shouldBe` createdEnglish
+      retriedRegistration <-
+        handleAccountAction
+          ( workflowFor
+              (store (Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim accountId (storedVerificationTokenDigest storedVerification) PendingRegistrationRetried))) (Right Nothing) (Right Nothing))
+              100
+              delivery
+          )
+          (request "/register" validRegistration)
+      retriedRegistration `shouldSatisfy` actionHasStatusAndFocus 202 Nothing "If that address can register"
+      -- Byte-identical wire responses for the already-registered and
+      -- newly-created outcomes: private telemetry may distinguish lifecycle
+      -- stages, but the hedged wording only protects against enumeration if
+      -- status, headers, and encoded client-action bytes remain identical.
+      fmap HarchWeb.clientActionStatus alreadyRegistered `shouldBe` fmap HarchWeb.clientActionStatus createdEnglish
+      fmap HarchWeb.clientActionHeaders alreadyRegistered `shouldBe` fmap HarchWeb.clientActionHeaders createdEnglish
+      fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody) alreadyRegistered `shouldBe` fmap (HarchWeb.responseBody . HarchWeb.clientActionResponseBody) createdEnglish
       usernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
       usernameTaken `shouldSatisfy` actionHasStatusAndFocus 422 (Just "registration-username") "That username is already taken"
       spanishUsernameTaken <- handleAccountAction (workflowFor (store (Right PendingAccountUsernameTaken) (Right Nothing) (Right Nothing)) 100 delivery) (spanishAction "/register" validRegistration)
@@ -853,6 +884,46 @@ spec = do
       deliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "could not send"
       spanishDeliveryFailure <- handleAccountAction (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> ioError (userError "mail down")))) (spanishAction "/register" validRegistration)
       spanishDeliveryFailure `shouldSatisfy` actionHasStatusAndFocus 502 (Just "registration-email") "No pudimos enviar"
+      timeoutFailure <-
+        handleAccountAction
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 (Email.EmailDelivery (\_ -> threadDelay 50000)))
+              { accountWorkflowRegistrationDeliveryTimeout = required "delivery timeout" (mkRegistrationDeliveryTimeout 10000)
+              }
+          )
+          (request "/register" validRegistration)
+      timeoutFailure
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              actionHasStatusAndFocus 502 (Just "registration-email") "could not send" (Just response)
+                && any (\attribute -> Observability.attributeName attribute == "error.type" && Observability.attributeValue attribute == Observability.TextAttribute "EmailDeliveryTimeout") (HarchWeb.clientActionObservabilityAttributes response)
+                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.delivery-timeout") (HarchWeb.clientActionObservabilityAttributes response)
+          )
+      storageExhausted <- handleAccountAction (workflowFor (store (Right PendingAccountStorageExhausted) (Right Nothing) (Right Nothing)) 100 delivery) (request "/register" validRegistration)
+      storageExhausted
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
+                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.storage-capacity") (HarchWeb.clientActionObservabilityAttributes response)
+          )
+      claimLost <-
+        handleAccountAction
+          ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)
+              { accountWorkflowStore =
+                  (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing))
+                    { completePendingRegistrationDelivery = \_ -> pure (Right False)
+                    }
+              }
+          )
+          (request "/register" validRegistration)
+      claimLost
+        `shouldSatisfy` maybe
+          False
+          ( \response ->
+              actionHasStatusAndFocus 503 (Just "registration-email") "temporarily unavailable" (Just response)
+                && any (\attribute -> Observability.attributeName attribute == "app.failure.code" && Observability.attributeValue attribute == Observability.TextAttribute "account.registration.delivery-claim") (HarchWeb.clientActionObservabilityAttributes response)
+          )
       passwordHashingFailure <-
         handleAccountAction
           ( (workflowFor (store (Right PendingAccountCreated) (Right Nothing) (Right Nothing)) 100 delivery)

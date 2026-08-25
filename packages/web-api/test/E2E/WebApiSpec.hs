@@ -223,7 +223,9 @@ pendingProfileWorkflow =
   unavailableAccountWorkflow
     { accountWorkflowStore =
         AccountStore
-          { createPendingAccount = \_ -> error "unexpected account creation",
+          { createPendingAccount = \_ _ -> error "unexpected account creation",
+            completePendingRegistrationDelivery = \_ -> pure (Right True),
+            releasePendingRegistrationDelivery = \_ -> pure (Right True),
             replaceEmailVerification = \_ -> pure (Right True),
             findEmailVerification = \_ -> error "unexpected verification lookup",
             consumeEmailVerification = \_ _ -> error "unexpected verification consumption"
@@ -250,7 +252,9 @@ localizedRegistrationWorkflow =
   unavailableAccountWorkflow
     { accountWorkflowStore =
         (accountWorkflowStore unavailableAccountWorkflow)
-          { createPendingAccount = \_ -> pure (Right PendingAccountEmailTaken)
+          { createPendingAccount = \_ _ -> pure (Right PendingAccountEmailTaken),
+            completePendingRegistrationDelivery = \_ -> pure (Right True),
+            releasePendingRegistrationDelivery = \_ -> pure (Right True)
           },
       accountWorkflowPasswordHasher = \_ _ -> pure (Just (Password.PasswordHash "test-password-hash"))
     }

@@ -164,7 +164,7 @@ import System.Process (callProcess)
 import Test.Hspec (Expectation, expectationFailure)
 import Text.Read (readMaybe)
 import WebApi (buildApp)
-import WebApi.Account (AccountStore (..), AccountStoreError (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..))
+import WebApi.Account (AccountStore (..), AccountStoreError (..), RegistrationEnvironment (..), RegistrationError (..), RegistrationRequest (..), RegistrationResult (..), defaultPendingRegistrationStoragePolicy, defaultRegistrationDeliveryTimeout)
 import WebApi.AccountPages (AccountAction, accountActions)
 import WebApi.Config (AppConfig (..), DatabaseConfig (..), DatabasePoolCapacity, ForwardedHeaderTrust (..), RequestPolicyConfig (..), StaticAssetRoot (..), StaticAssetsConfig (..), defaultAppConfig, defaultStaticAssetContentTypes, mkDatabasePoolCapacity)
 import WebApi.Database (DatabaseError (..), DatabaseResult (..), PageRepository (..), SecondPageData (..))
@@ -544,6 +544,8 @@ registrationEnvironmentAt passwordHasher accountStore emailDelivery now verifica
     { registrationPasswordHasher = passwordHasher,
       registrationHashingPolicy = testPasswordHashingPolicy,
       registrationPasswordWorkGate = testPasswordWorkGate,
+      registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
+      registrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
       registrationStore = accountStore,
       registrationDelivery = emailDelivery,
       registrationLocale = Email.EmailEnglish,

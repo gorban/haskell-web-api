@@ -22,7 +22,7 @@ import HarchWeb.Email qualified as Email
 import HarchWeb.Password qualified as Password
 import HarchWeb.Secret (SecretEncryptionKey)
 import HarchWeb.Time (UnixTimeNanoseconds, UnixTimeSeconds)
-import WebApi.Account (AccountProfileStore, AccountStore)
+import WebApi.Account (AccountProfileStore, AccountStore, RegistrationDeliveryTimeout)
 import WebApi.Login (AccountCredentialStore, LoginAttemptStore)
 import WebApi.Mfa (MfaStore)
 import WebApi.Route (AppRequestContext)
@@ -33,6 +33,11 @@ data AccountWorkflow = AccountWorkflow
     accountWorkflowEmailDelivery :: Email.EmailDelivery,
     accountWorkflowPasswordHasher :: Password.PasswordHashingPolicy -> Password.Password -> IO (Maybe Password.PasswordHash),
     accountWorkflowPasswordWorkGate :: Password.PasswordWorkGate,
+    -- | One bounded SMTP deadline shared by registration and authenticated
+    -- verification resends.  Keeping it here makes the operational timeout
+    -- injectable in workflow tests while the application selects the safe
+    -- reference default at startup.
+    accountWorkflowRegistrationDeliveryTimeout :: RegistrationDeliveryTimeout,
     accountWorkflowClock :: IO UnixTimeNanoseconds,
     accountWorkflowMfaStore :: MfaStore,
     accountWorkflowCredentialStore :: AccountCredentialStore,
@@ -55,9 +60,12 @@ newtype AppServices = AppServices
 -- | Stable low-cardinality application failure codes emitted to telemetry.
 data FailureCode
   = RegistrationDeliveryFailure
+  | RegistrationDeliveryTimeoutFailure
   | RegistrationStoreFailure
   | RegistrationPasswordHashFailure
   | RegistrationPasswordWorkBudgetFailure
+  | RegistrationStorageCapacityFailure
+  | RegistrationDeliveryClaimFailure
   | RegistrationClockFailure
   | VerificationStoreFailure
   | MfaEnrollmentSessionFailure
@@ -80,9 +88,12 @@ renderFailureCode :: FailureCode -> Text
 renderFailureCode failureCodeValue =
   case failureCodeValue of
     RegistrationDeliveryFailure -> "account.registration.delivery"
+    RegistrationDeliveryTimeoutFailure -> "account.registration.delivery-timeout"
     RegistrationStoreFailure -> "account.registration.store"
     RegistrationPasswordHashFailure -> "account.registration.password-hash"
     RegistrationPasswordWorkBudgetFailure -> "account.registration.password-work-budget"
+    RegistrationStorageCapacityFailure -> "account.registration.storage-capacity"
+    RegistrationDeliveryClaimFailure -> "account.registration.delivery-claim"
     RegistrationClockFailure -> "account.registration.clock"
     VerificationStoreFailure -> "account.verification.store"
     MfaEnrollmentSessionFailure -> "account.mfa.enrollment-session"

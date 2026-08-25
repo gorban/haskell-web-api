@@ -1794,6 +1794,32 @@ first reference. Keeping the `$!` there, with a comment stating exactly what was
 deduplication does not apply, is what the new rule itself asks for as its last-resort case — not a
 quiet exception to it.
 
+### Decision record — PR-S6: bounded, retryable pending registration delivery (2026-08-24)
+
+**Decision: extend `WebApi.Account`'s existing pending-account and verification-store boundary
+with an atomically staged delivery claim, rather than add an application-local mail queue or a
+second account lifecycle.** Registration now reserves EJ's existing shared `PasswordWorkGate`
+before it runs Argon2id, then submits the hashed candidate to one PostgreSQL staging function. That
+function serializes capacity, email, and username decisions with transaction advisory locks; it
+removes expired unverified accounts, enforces the application-owned 100,000 pending-account cap,
+and either creates a delivery claim, claims a retryable pending account, or returns the established
+opaque already-registered outcome. A successful SMTP send settles the matching digest claim;
+an exception or ten-second transport deadline releases it, and an uncompleted claim becomes
+reclaimable after five minutes. This is a staged retry lifecycle whose persistent data remains the
+already-owned `accounts` plus `email_verifications` records, not a parallel outbox with competing
+cleanup rules. The client receives exactly the same status, headers, and encoded action body for a
+new, retryable, or already-registered address; only private low-cardinality `created`, `retried`,
+and `already-registered` lifecycle diagnostics differ. SMTP timeout is likewise a distinct private
+`account.registration.delivery-timeout` failure code (rather than a string matched out of a generic
+transport exception), so it is alertable without retaining recipient or token data.
+
+**Password-work inventory:** the only unauthenticated attacker-reachable native password work is
+registration hashing, known/unknown password verification, and recovery-code verification. All three
+now reserve the same process-wide gate. Recovery-code *hashing* occurs only after a verified account
+has reached its authenticated MFA-enrollment workflow, and hashes server-generated recovery values;
+it is not an unauthenticated caller-controlled KDF surface. No other production caller reaches
+`hashPassword`, `verifyPassword`, `hashRecoveryCode`, or `verifyRecoveryCode` outside those paths.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 

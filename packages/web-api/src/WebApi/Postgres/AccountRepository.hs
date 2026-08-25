@@ -39,6 +39,11 @@ import WebApi.Account
     AccountStoreError (..),
     CreatePendingAccountOutcome (..),
     PendingAccount (..),
+    PendingRegistrationClaim (..),
+    PendingRegistrationDeliveryStage (..),
+    PendingRegistrationStoragePolicy,
+    pendingRegistrationClaimLeaseNanoseconds,
+    pendingRegistrationMaximumAccounts,
   )
 import WebApi.Login
   ( AccountCredential (..),
@@ -85,49 +90,35 @@ buildRuntimePostgresAccountStoreWithRunner ::
 buildRuntimePostgresAccountStoreWithRunner runQuery source =
   AccountStore
     { createPendingAccount = createAccount,
+      completePendingRegistrationDelivery = completeRegistrationDelivery,
+      releasePendingRegistrationDelivery = releaseRegistrationDelivery,
       replaceEmailVerification = replaceVerification,
       findEmailVerification = findVerification,
       consumeEmailVerification = consumeVerification
     }
   where
-    -- Two round trips, not one atomic statement: the accounts table has two
-    -- independent unique constraints (email, case-insensitive username),
-    -- and the insert below only targets the email one with
-    -- 'ON CONFLICT (email_normalized) DO NOTHING', so a username collision
-    -- must be found before attempting it. This leaves a narrow race for two
-    -- concurrent registrations racing for the same available username: both
-    -- can pass this check, and the loser's insert then violates the
-    -- username unique index outright (an 'AccountStoreUnavailable' error,
-    -- not a clean 'PendingAccountUsernameTaken' outcome) rather than a
-    -- silent no-op. Accepted rather than a single CTE union query, matching
-    -- BA's own suggested design.
-    createAccount pendingAccount =
+    createAccount storagePolicy pendingAccount =
       runExceptT $ do
-        usernameTaken <- case pendingAccountUsername pendingAccount of
-          Nothing -> pure False
-          Just username -> do
-            availabilityRows <-
-              unavailableAccountStoreQuery $
-                runQuery source usernameAvailabilityQuery [usernameText username]
-            pure (not (null availabilityRows))
-        if usernameTaken
-          then pure PendingAccountUsernameTaken
-          else do
-            rows <-
-              unavailableAccountStoreQuery $
-                runQuery
-                  source
-                  createPendingAccountQuery
-                  [ accountIdText (pendingAccountId pendingAccount),
-                    emailAddressText (pendingAccountEmail pendingAccount),
-                    passwordHashText (pendingAccountPasswordHash pendingAccount),
-                    emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
-                    Text.pack (show (unixTimeNanosecondsValue (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount)))),
-                    Text.pack (show (unixTimeNanosecondsValue (pendingAccountCreatedAtNanoseconds pendingAccount))),
-                    maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
-                    fromMaybe Text.empty (pendingAccountDisplayName pendingAccount)
-                  ]
-            liftEither (decodeCreatedAccount pendingAccount rows)
+        rows <-
+          unavailableAccountStoreQuery $
+            runQuery source stagePendingRegistrationQuery (stagePendingRegistrationParameters storagePolicy pendingAccount)
+        liftEither (decodeStagedPendingAccount pendingAccount rows)
+
+    completeRegistrationDelivery = updateRegistrationDeliveryClaim completePendingRegistrationDeliveryQuery
+
+    releaseRegistrationDelivery = updateRegistrationDeliveryClaim releasePendingRegistrationDeliveryQuery
+
+    updateRegistrationDeliveryClaim query claim =
+      runExceptT $ do
+        rows <-
+          unavailableAccountStoreQuery $
+            runQuery
+              source
+              query
+              [ accountIdText (pendingRegistrationClaimAccountId claim),
+                emailVerificationTokenDigestText (pendingRegistrationClaimTokenDigest claim)
+              ]
+        liftEither (decodeRegistrationDeliveryClaimUpdate claim rows)
 
     replaceVerification verification =
       runExceptT $ do
@@ -213,13 +204,27 @@ nonEmptyText :: Text -> Maybe Text
 nonEmptyText "" = Nothing
 nonEmptyText value = Just value
 
-decodeCreatedAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError CreatePendingAccountOutcome
-decodeCreatedAccount pendingAccount rows =
+decodeStagedPendingAccount :: PendingAccount -> [[Text]] -> Either AccountStoreError CreatePendingAccountOutcome
+decodeStagedPendingAccount pendingAccount rows =
   case rows of
-    [] -> Right PendingAccountEmailTaken
-    [[createdAccountId]]
-      | createdAccountId == accountIdText (pendingAccountId pendingAccount) -> Right PendingAccountCreated
-    _ -> Left (AccountStoreCorruptData ("unexpected pending-account result: " <> Text.pack (show rows)))
+    [["created", accountIdValue]] -> do
+      accountId <- maybe (Left (AccountStoreCorruptData "pending-registration staging returned an invalid account id")) Right (mkAccountId accountIdValue)
+      Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim accountId (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) PendingRegistrationCreated))
+    [["retried", accountIdValue]] -> do
+      accountId <- maybe (Left (AccountStoreCorruptData "pending-registration staging returned an invalid account id")) Right (mkAccountId accountIdValue)
+      Right (PendingAccountDeliveryClaimed (PendingRegistrationClaim accountId (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) PendingRegistrationRetried))
+    [["email-taken", ""]] -> Right PendingAccountEmailTaken
+    [["username-taken", ""]] -> Right PendingAccountUsernameTaken
+    [["storage-exhausted", ""]] -> Right PendingAccountStorageExhausted
+    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration staging result: " <> Text.pack (show rows)))
+
+decodeRegistrationDeliveryClaimUpdate :: PendingRegistrationClaim -> [[Text]] -> Either AccountStoreError Bool
+decodeRegistrationDeliveryClaimUpdate claim rows =
+  case rows of
+    [] -> Right False
+    [[accountIdValue]]
+      | accountIdValue == accountIdText (pendingRegistrationClaimAccountId claim) -> Right True
+    _ -> Left (AccountStoreCorruptData ("unexpected pending-registration delivery update result: " <> Text.pack (show rows)))
 
 decodeReplacedVerification :: StoredEmailVerification -> [[Text]] -> Either AccountStoreError Bool
 decodeReplacedVerification verification rows =
@@ -259,9 +264,31 @@ decodeConsumedVerification rows =
         (mkAccountId accountIdValue)
     _ -> Left (AccountStoreCorruptData ("unexpected email-verification consumption result: " <> Text.pack (show rows)))
 
-usernameAvailabilityQuery, createPendingAccountQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery :: Text
-usernameAvailabilityQuery = "SELECT 1 FROM web_api.accounts WHERE username IS NOT NULL AND lower(username) = lower($1) LIMIT 1;"
-createPendingAccountQuery = "WITH inserted_account AS (INSERT INTO web_api.accounts (account_id, email_normalized, password_hash, created_at_nanoseconds, username, display_name) VALUES ($1, $2, $3, $6, NULLIF($7, ''), NULLIF($8, '')) ON CONFLICT (email_normalized) DO NOTHING RETURNING account_id) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $4, account_id, $2, $5 FROM inserted_account RETURNING account_id;"
+stagePendingRegistrationParameters :: PendingRegistrationStoragePolicy -> PendingAccount -> [Text]
+stagePendingRegistrationParameters storagePolicy pendingAccount =
+  [ accountIdText (pendingAccountId pendingAccount),
+    emailAddressText (pendingAccountEmail pendingAccount),
+    passwordHashText (pendingAccountPasswordHash pendingAccount),
+    emailVerificationTokenDigestText (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)),
+    Text.pack (show (unixTimeNanosecondsValue (storedVerificationExpiresAtNanoseconds (pendingAccountVerification pendingAccount)))),
+    Text.pack (show now),
+    maybe Text.empty usernameText (pendingAccountUsername pendingAccount),
+    fromMaybe Text.empty (pendingAccountDisplayName pendingAccount),
+    Text.pack (show maximumAccounts),
+    Text.pack (show claimRecoveryBefore)
+  ]
+  where
+    now = unixTimeNanosecondsValue (pendingAccountCreatedAtNanoseconds pendingAccount)
+    maximumAccounts = pendingRegistrationMaximumAccounts storagePolicy
+    claimRecoveryBefore =
+      if now > pendingRegistrationClaimLeaseNanoseconds storagePolicy
+        then now - pendingRegistrationClaimLeaseNanoseconds storagePolicy
+        else 0
+
+stagePendingRegistrationQuery, completePendingRegistrationDeliveryQuery, releasePendingRegistrationDeliveryQuery, replaceEmailVerificationQuery, findEmailVerificationQuery, consumeEmailVerificationQuery :: Text
+stagePendingRegistrationQuery = "SELECT outcome, value FROM web_api.stage_pending_registration($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);"
+completePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'delivered', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
+releasePendingRegistrationDeliveryQuery = "UPDATE web_api.email_verifications SET delivery_state = 'awaiting', delivery_claimed_at_nanoseconds = NULL WHERE account_id = $1 AND token_digest = $2 AND delivery_state = 'claimed' RETURNING account_id;"
 replaceEmailVerificationQuery = "WITH pending_account AS (SELECT account_id FROM web_api.accounts WHERE account_id = $1 AND email_verified_at_nanoseconds IS NULL FOR UPDATE), removed_verifications AS (DELETE FROM web_api.email_verifications WHERE account_id IN (SELECT account_id FROM pending_account)) INSERT INTO web_api.email_verifications (token_digest, account_id, email_normalized, expires_at_nanoseconds) SELECT $2, account_id, $3, $4 FROM pending_account RETURNING account_id;"
 findEmailVerificationQuery = "SELECT account_id, email_normalized, expires_at_nanoseconds FROM web_api.email_verifications WHERE token_digest = $1;"
 consumeEmailVerificationQuery = "WITH consumed_verification AS (DELETE FROM web_api.email_verifications WHERE token_digest = $1 AND expires_at_nanoseconds > $2 RETURNING account_id) UPDATE web_api.accounts SET email_verified_at_nanoseconds = $2 WHERE account_id IN (SELECT account_id FROM consumed_verification) RETURNING account_id;"

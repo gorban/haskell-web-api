@@ -1489,6 +1489,7 @@ spec = do
         accountWorkflowStore workflow `seq` pure ()
         accountWorkflowPasswordHasher workflow `seq` pure ()
         accountWorkflowPasswordWorkGate workflow `seq` pure ()
+        accountWorkflowRegistrationDeliveryTimeout workflow `seq` pure ()
         accountWorkflowMfaStore workflow `seq` pure ()
         accountWorkflowCredentialStore workflow `seq` pure ()
         accountWorkflowLoginAttemptStore workflow `seq` pure ()

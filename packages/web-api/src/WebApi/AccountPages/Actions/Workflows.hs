@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions.Workflows
@@ -21,6 +22,7 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.LoginProtection qualified as LoginProtection
+import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Session
@@ -43,7 +45,9 @@ import WebApi.Account
     RegistrationRequest (..),
     RegistrationResult (..),
     ResendVerificationError (..),
+    VerificationDeliveryFailure (..),
     confirmEmailVerificationAt,
+    defaultPendingRegistrationStoragePolicy,
     registerAccount,
     resendEmailVerificationAt,
   )
@@ -123,6 +127,8 @@ registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, usernam
         { registrationPasswordHasher = accountWorkflowPasswordHasher workflow,
           registrationHashingPolicy = Password.defaultPasswordHashingPolicy,
           registrationPasswordWorkGate = accountWorkflowPasswordWorkGate workflow,
+          registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
+          registrationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
           registrationStore = accountWorkflowStore workflow,
           registrationDelivery = accountWorkflowEmailDelivery workflow,
           registrationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
@@ -161,28 +167,53 @@ interpretRegistrationResult ::
   Text ->
   Either RegistrationError RegistrationResult ->
   AccountActionWorkflow
-interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult =
-  let path = HarchWeb.clientActionContext actionRequest
-      response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
-   in case registrationResult of
-        -- A taken username is a recoverable, user-correctable input (the
-        -- applicant can simply pick another one), unlike a taken email
-        -- address — reporting it plainly restores the recovery path BA's
-        -- own note found missing, and does not reopen the address-enumeration
-        -- concern the branch below exists to close: usernames, unlike email
-        -- addresses, are not privacy-sensitive to confirm as taken.
-        Right RegistrationUsernameTaken -> pure (response Http.status422 (localized actionRequest "That username is already taken. Please choose another." "Ese nombre de usuario ya esta en uso. Elige otro.") True (Just "registration-username"))
-        -- Both remaining outcomes share this exact branch (not merely the
-        -- same wording) so a registered-address probe cannot be
-        -- distinguished from a genuine registration by response bytes: the
-        -- hedged "if that address can register" phrasing is meaningless if
-        -- the other outcome answers differently.
-        Right _ -> pure (response Http.status202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
-        Left (RegistrationDeliveryFailed detail) -> throwClientActionFailure (response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")) RegistrationDeliveryFailure "EmailDeliveryError" detail
-        Left (RegistrationStoreError storeError) -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
-        Left RegistrationPasswordHashingFailed -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
-        Left RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
-        Left RegistrationClockOverflow -> throwClientActionFailure (response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")) RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
+interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue = \case
+  Right registrationResult -> pure (registrationResultResponse registrationResult)
+  Left registrationError -> throwRegistrationFailure registrationError
+  where
+    path = HarchWeb.clientActionContext actionRequest
+    response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
+    registrationSuccess stage =
+      registrationLifecycleResponse
+        stage
+        (response Http.status202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
+    unavailableRegistration = response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")
+    deliveryFailureResponse = response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")
+
+    registrationResultResponse = \case
+      -- A taken username is a recoverable, user-correctable input (the
+      -- applicant can simply pick another one), unlike a taken email
+      -- address — reporting it plainly restores the recovery path BA's
+      -- own note found missing, and does not reopen the address-enumeration
+      -- concern the branch below exists to close: usernames, unlike email
+      -- addresses, are not privacy-sensitive to confirm as taken.
+      RegistrationUsernameTaken -> response Http.status422 (localized actionRequest "That username is already taken. Please choose another." "Ese nombre de usuario ya esta en uso. Elige otro.") True (Just "registration-username")
+      -- Both remaining outcomes share this exact branch (not merely the
+      -- same wording) so a registered-address probe cannot be
+      -- distinguished from a genuine registration by response bytes: the
+      -- hedged "if that address can register" phrasing is meaningless if
+      -- the other outcome answers differently.
+      RegistrationCreated _ -> registrationSuccess "created"
+      RegistrationRetried _ -> registrationSuccess "retried"
+      RegistrationAlreadyRegistered -> registrationSuccess "already-registered"
+
+    throwRegistrationFailure = \case
+      RegistrationDeliveryFailed VerificationDeliveryTimedOut -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryTimeoutFailure "EmailDeliveryTimeout" "registration verification delivery timed out"
+      RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail) -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryFailure "EmailDeliveryError" detail
+      RegistrationStoreError storeError -> throwClientActionFailure unavailableRegistration RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
+      RegistrationPasswordHashingFailed -> throwClientActionFailure unavailableRegistration RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
+      RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure unavailableRegistration RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
+      RegistrationStorageExhausted -> throwClientActionFailure unavailableRegistration RegistrationStorageCapacityFailure "PendingRegistrationStorageExhausted" "pending registration storage is at capacity"
+      RegistrationDeliveryClaimLost -> throwClientActionFailure unavailableRegistration RegistrationDeliveryClaimFailure "PendingRegistrationDeliveryClaimLost" "registration delivery claim was replaced before completion"
+      RegistrationClockOverflow -> throwClientActionFailure unavailableRegistration RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
+
+registrationLifecycleResponse :: Text -> HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
+registrationLifecycleResponse stage response =
+  response
+    { HarchWeb.clientActionObservabilityAttributes =
+        [Observability.ObservabilityAttribute "account.registration.stage" (Observability.TextAttribute stage)],
+      HarchWeb.clientActionLogEntries = ["INFO [account.registration] stage=" <> stage]
+    }
 
 handleVerificationSubmission :: AccountActionRequest -> VerificationSubmission -> AccountActionWorkflow
 handleVerificationSubmission actionRequest submission =
@@ -497,6 +528,7 @@ resendEmailVerificationNow actionRequest now profile = do
   liftIO $
     resendEmailVerificationAt
       (accountWorkflowStore workflow)
+      (accountWorkflowRegistrationDeliveryTimeout workflow)
       (accountWorkflowEmailDelivery workflow)
       (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
       (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))

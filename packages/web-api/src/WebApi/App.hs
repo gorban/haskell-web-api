@@ -32,7 +32,7 @@ import HarchWeb.Time qualified as HarchWebTime
 import System.Directory (doesFileExist)
 import System.IO (Handle, hFlush)
 import System.IO.Unsafe (unsafePerformIO)
-import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..))
+import WebApi.Account (AccountProfileStore (..), AccountStore (..), AccountStoreError (..), defaultRegistrationDeliveryTimeout)
 import WebApi.AccountPages (AccountAction, accountActions, authorizeAccountActionCsrf, handleAccountAction, pageCsrfTokenForAccountPage)
 import WebApi.Api.Endpoints (secondApiRouteDefinition, statusApiRouteDefinition)
 import WebApi.App.Observability
@@ -215,6 +215,7 @@ buildRuntimeAccountWorkflow pool !environmentConfig =
       accountWorkflowEmailDelivery = runtimeEmailDelivery (smtpDeliveryConfig environmentConfig),
       accountWorkflowPasswordHasher = Password.hashPassword,
       accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
+      accountWorkflowRegistrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
       accountWorkflowClock = HarchWebTime.currentUnixTimeNanoseconds,
       accountWorkflowMfaStore = buildRuntimePostgresMfaStore pool,
       accountWorkflowCredentialStore = buildRuntimePostgresAccountCredentialStore pool,
@@ -375,6 +376,7 @@ unavailableAccountWorkflow =
       accountWorkflowEmailDelivery = Email.EmailDelivery (\_ -> ioError (userError "email delivery is not configured")),
       accountWorkflowPasswordHasher = Password.hashPassword,
       accountWorkflowPasswordWorkGate = runtimePasswordWorkGate,
+      accountWorkflowRegistrationDeliveryTimeout = defaultRegistrationDeliveryTimeout,
       accountWorkflowClock = pure (HarchWebTime.unixTimeNanoseconds 0),
       accountWorkflowMfaStore = unavailableMfaStore,
       accountWorkflowCredentialStore = unavailableAccountCredentialStore,
@@ -390,7 +392,9 @@ unavailableAccountWorkflow =
 unavailableAccountStore :: AccountStore
 unavailableAccountStore =
   AccountStore
-    { createPendingAccount = const (unavailableResult accountPersistenceUnavailable),
+    { createPendingAccount = \_ _ -> unavailableResult accountPersistenceUnavailable,
+      completePendingRegistrationDelivery = const (unavailableResult accountPersistenceUnavailable),
+      releasePendingRegistrationDelivery = const (unavailableResult accountPersistenceUnavailable),
       replaceEmailVerification = const (unavailableResult accountPersistenceUnavailable),
       findEmailVerification = const (unavailableResult accountPersistenceUnavailable),
       consumeEmailVerification = \_ _ -> unavailableResult accountPersistenceUnavailable

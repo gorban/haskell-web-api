@@ -6,13 +6,24 @@ module WebApi.Account
     AccountProfile (..),
     AccountProfileStore (..),
     CreatePendingAccountOutcome (..),
+    PendingRegistrationClaim (..),
+    PendingRegistrationDeliveryStage (..),
+    PendingRegistrationStoragePolicy,
+    RegistrationDeliveryTimeout,
     PendingAccount (..),
     RegistrationEnvironment (..),
     RegistrationRequest (..),
     ResendVerificationError (..),
     RegistrationError (..),
     RegistrationResult (..),
+    VerificationDeliveryFailure (..),
     confirmEmailVerificationAt,
+    defaultPendingRegistrationStoragePolicy,
+    defaultRegistrationDeliveryTimeout,
+    mkPendingRegistrationStoragePolicy,
+    mkRegistrationDeliveryTimeout,
+    pendingRegistrationClaimLeaseNanoseconds,
+    pendingRegistrationMaximumAccounts,
     registerAccount,
     resendEmailVerificationAt,
   )
@@ -35,6 +46,7 @@ import HarchWeb.Account
     generateAccountId,
     generateEmailVerificationToken,
     mkStoredEmailVerification,
+    storedVerificationTokenDigest,
     validateEmailVerificationToken,
   )
 import HarchWeb.Email
@@ -53,6 +65,7 @@ import HarchWeb.Password
   )
 import HarchWeb.Time (UnixTimeNanoseconds, addUnixTimeNanoseconds)
 import HarchWeb.Username (Username)
+import System.Timeout (timeout)
 
 data AccountStoreError
   = AccountStoreUnavailable Text
@@ -84,7 +97,9 @@ data PendingAccount = PendingAccount
   }
 
 data AccountStore = AccountStore
-  { createPendingAccount :: PendingAccount -> IO (Either AccountStoreError CreatePendingAccountOutcome),
+  { createPendingAccount :: PendingRegistrationStoragePolicy -> PendingAccount -> IO (Either AccountStoreError CreatePendingAccountOutcome),
+    completePendingRegistrationDelivery :: PendingRegistrationClaim -> IO (Either AccountStoreError Bool),
+    releasePendingRegistrationDelivery :: PendingRegistrationClaim -> IO (Either AccountStoreError Bool),
     replaceEmailVerification :: StoredEmailVerification -> IO (Either AccountStoreError Bool),
     findEmailVerification :: EmailVerificationTokenDigest -> IO (Either AccountStoreError (Maybe StoredEmailVerification)),
     consumeEmailVerification :: EmailVerificationTokenDigest -> UnixTimeNanoseconds -> IO (Either AccountStoreError (Maybe AccountId))
@@ -97,18 +112,75 @@ data AccountStore = AccountStore
 -- successful registration — see BA's decision record).
 data CreatePendingAccountOutcome
   = PendingAccountCreated
+  | PendingAccountDeliveryClaimed PendingRegistrationClaim
   | PendingAccountEmailTaken
   | PendingAccountUsernameTaken
+  | PendingAccountStorageExhausted
+
+-- | The durable identity of one currently claimed registration delivery.  It
+-- contains only the account id and token digest, never the raw token; the
+-- caller retains the latter only long enough to hand it to the mail transport.
+data PendingRegistrationClaim = PendingRegistrationClaim
+  { pendingRegistrationClaimAccountId :: AccountId,
+    pendingRegistrationClaimTokenDigest :: EmailVerificationTokenDigest,
+    pendingRegistrationClaimStage :: PendingRegistrationDeliveryStage
+  }
+
+-- | The only observable lifecycle stages for a registration delivery.  These
+-- stable values are safe for telemetry because they never identify an email,
+-- account, or verification token.
+data PendingRegistrationDeliveryStage
+  = PendingRegistrationCreated
+  | PendingRegistrationRetried
+
+-- | Application-owned bounds for unauthenticated pending registrations.  A
+-- positive capacity prevents attacker-chosen addresses from owning unlimited
+-- rows; a positive claim lease makes a process that stops during SMTP delivery
+-- recoverable by a later identical registration.  Expired verification rows
+-- are removed during the same staging transaction.
+data PendingRegistrationStoragePolicy = PendingRegistrationStoragePolicy
+  { pendingRegistrationMaximumAccounts :: Word64,
+    pendingRegistrationClaimLeaseNanoseconds :: Word64
+  }
+
+mkPendingRegistrationStoragePolicy :: Word64 -> Word64 -> Maybe PendingRegistrationStoragePolicy
+mkPendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds
+  | maximumAccounts == 0 || claimLeaseNanoseconds == 0 = Nothing
+  | otherwise = Just (PendingRegistrationStoragePolicy maximumAccounts claimLeaseNanoseconds)
+
+-- | Reference-application policy: a maximum of 100,000 unverified accounts
+-- and a five-minute abandoned-delivery lease.  Expired verification tokens
+-- are the retention boundary, so the staging transaction removes their
+-- unverified accounts before it evaluates this capacity.
+defaultPendingRegistrationStoragePolicy :: PendingRegistrationStoragePolicy
+defaultPendingRegistrationStoragePolicy = PendingRegistrationStoragePolicy 100000 (5 * 60 * 1000000000)
+
+-- | A positive, account-workflow-owned deadline for one SMTP delivery.  The
+-- SMTP transport can otherwise wait indefinitely for DNS, connect, or a peer
+-- response, retaining a registration delivery claim forever instead of
+-- returning the recoverable failure its caller expects.
+newtype RegistrationDeliveryTimeout = RegistrationDeliveryTimeout Int
+
+mkRegistrationDeliveryTimeout :: Int -> Maybe RegistrationDeliveryTimeout
+mkRegistrationDeliveryTimeout microseconds
+  | microseconds <= 0 = Nothing
+  | otherwise = Just (RegistrationDeliveryTimeout microseconds)
+
+defaultRegistrationDeliveryTimeout :: RegistrationDeliveryTimeout
+defaultRegistrationDeliveryTimeout = RegistrationDeliveryTimeout (10 * 1000000)
 
 data RegistrationError
   = RegistrationStoreError AccountStoreError
   | RegistrationPasswordHashingFailed
   | RegistrationPasswordWorkBudgetExhausted
-  | RegistrationDeliveryFailed Text
+  | RegistrationStorageExhausted
+  | RegistrationDeliveryClaimLost
+  | RegistrationDeliveryFailed VerificationDeliveryFailure
   | RegistrationClockOverflow
 
 data RegistrationResult
   = RegistrationCreated AccountId
+  | RegistrationRetried AccountId
   | RegistrationAlreadyRegistered
   | RegistrationUsernameTaken
 
@@ -118,6 +190,14 @@ data ResendVerificationError
   | ResendVerificationClockOverflow
   | ResendVerificationNoLongerPending
   deriving (Eq, Show)
+
+-- | Private failure classification for a verification-email attempt.  A
+-- timeout is a distinct operational outcome, rather than a matching message
+-- string, so application telemetry can alert on exhausted SMTP deadlines
+-- without recording the recipient, token, or SMTP conversation.
+data VerificationDeliveryFailure
+  = VerificationDeliveryTimedOut
+  | VerificationDeliveryTransportFailed Text
 
 -- | What is being registered: the applicant-supplied identity and
 -- credential. Grouping these stops a positional call site from, for
@@ -138,6 +218,8 @@ data RegistrationEnvironment = RegistrationEnvironment
   { registrationPasswordHasher :: PasswordHashingPolicy -> Password -> IO (Maybe PasswordHash),
     registrationHashingPolicy :: PasswordHashingPolicy,
     registrationPasswordWorkGate :: PasswordWorkGate,
+    registrationStoragePolicy :: PendingRegistrationStoragePolicy,
+    registrationDeliveryTimeout :: RegistrationDeliveryTimeout,
     registrationStore :: AccountStore,
     registrationDelivery :: EmailDelivery,
     registrationLocale :: EmailLocale,
@@ -170,17 +252,27 @@ registerAccount environment request =
               pendingAccountVerification = mkStoredEmailVerification accountId emailAddress expiresAt token,
               pendingAccountCreatedAtNanoseconds = now
             }
-    outcome <- liftAccountStore RegistrationStoreError (createPendingAccount accountStore pendingAccount)
+    outcome <- liftAccountStore RegistrationStoreError (createPendingAccount accountStore storagePolicy pendingAccount)
     case outcome of
       PendingAccountCreated -> do
-        deliverVerificationEmail RegistrationDeliveryFailed emailDelivery locale emailAddress renderVerificationUrl token
+        let claim = PendingRegistrationClaim accountId (storedVerificationTokenDigest (pendingAccountVerification pendingAccount)) PendingRegistrationCreated
+        deliverRegistrationVerification claim token
         pure (RegistrationCreated accountId)
+      PendingAccountDeliveryClaimed claim -> do
+        deliverRegistrationVerification claim token
+        pure $
+          case pendingRegistrationClaimStage claim of
+            PendingRegistrationCreated -> RegistrationCreated (pendingRegistrationClaimAccountId claim)
+            PendingRegistrationRetried -> RegistrationRetried (pendingRegistrationClaimAccountId claim)
       PendingAccountEmailTaken -> pure RegistrationAlreadyRegistered
       PendingAccountUsernameTaken -> pure RegistrationUsernameTaken
+      PendingAccountStorageExhausted -> throwError RegistrationStorageExhausted
   where
     passwordHasher = registrationPasswordHasher environment
     passwordHashingPolicy = registrationHashingPolicy environment
     passwordWorkGate = registrationPasswordWorkGate environment
+    storagePolicy = registrationStoragePolicy environment
+    deliveryTimeout = registrationDeliveryTimeout environment
     accountStore = registrationStore environment
     emailDelivery = registrationDelivery environment
     locale = registrationLocale environment
@@ -189,6 +281,24 @@ registerAccount environment request =
     verificationLifetime = registrationLifetime environment
     emailAddress = registrationEmail request
     password = registrationPassword request
+
+    -- \| PR-S6 (2026-08-24): a registration is staged before SMTP, then its
+    -- delivery claim is settled only after the transport succeeds.  A failed
+    -- send releases the matching claim for a later identical registration;
+    -- an abandoned claim becomes retryable after the storage policy lease.
+    -- This extends 'AccountStore' rather than introducing an independent
+    -- outbox because that store already owns pending-account and verification
+    -- token persistence.  The application supplies the bounded capacity and
+    -- lease policy; see @docs/design-guidance.md@.
+    deliverRegistrationVerification claim token = do
+      deliveryResult <- liftIO (deliverVerificationMessage deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token)
+      case deliveryResult of
+        Left deliveryFailure -> do
+          _ <- liftAccountStore RegistrationStoreError (releasePendingRegistrationDelivery accountStore claim)
+          throwError (RegistrationDeliveryFailed deliveryFailure)
+        Right () -> do
+          completed <- liftAccountStore RegistrationStoreError (completePendingRegistrationDelivery accountStore claim)
+          guardError RegistrationDeliveryClaimLost completed
 
 confirmEmailVerificationAt :: AccountStore -> UnixTimeNanoseconds -> EmailVerificationToken -> IO (Either AccountStoreError EmailVerificationValidation)
 confirmEmailVerificationAt accountStore now token =
@@ -209,6 +319,7 @@ confirmEmailVerificationAt accountStore now token =
 
 resendEmailVerificationAt ::
   AccountStore ->
+  RegistrationDeliveryTimeout ->
   EmailDelivery ->
   EmailLocale ->
   (EmailVerificationToken -> Text) ->
@@ -216,7 +327,7 @@ resendEmailVerificationAt ::
   Word64 ->
   AccountProfile ->
   IO (Either ResendVerificationError ())
-resendEmailVerificationAt accountStore emailDelivery locale renderVerificationUrl now verificationLifetime profile =
+resendEmailVerificationAt accountStore deliveryTimeout emailDelivery locale renderVerificationUrl now verificationLifetime profile =
   runExceptT $ do
     guardError ResendVerificationNoLongerPending (not (accountProfileEmailVerified profile))
     expiresAt <- fromMaybeError ResendVerificationClockOverflow (addNanoseconds now verificationLifetime)
@@ -224,7 +335,7 @@ resendEmailVerificationAt accountStore emailDelivery locale renderVerificationUr
     let verification = mkStoredEmailVerification (accountProfileId profile) (accountProfileEmail profile) expiresAt token
     replaced <- liftAccountStore ResendVerificationStoreError (replaceEmailVerification accountStore verification)
     guardError ResendVerificationNoLongerPending replaced
-    deliverVerificationEmail ResendVerificationDeliveryFailed emailDelivery locale (accountProfileEmail profile) renderVerificationUrl token
+    deliverVerificationEmail (ResendVerificationDeliveryFailed . renderVerificationDeliveryFailure) deliveryTimeout emailDelivery locale (accountProfileEmail profile) renderVerificationUrl token
 
 liftAccountStore ::
   (AccountStoreError -> error) ->
@@ -244,16 +355,39 @@ generateRegistrationInputs passwordHasher passwordHashingPolicy password =
       (,,) passwordHash <$> generateAccountId <*> generateEmailVerificationToken
 
 deliverVerificationEmail ::
-  (Text -> error) ->
+  (VerificationDeliveryFailure -> error) ->
+  RegistrationDeliveryTimeout ->
   EmailDelivery ->
   EmailLocale ->
   EmailAddress ->
   (EmailVerificationToken -> Text) ->
   EmailVerificationToken ->
   ExceptT error IO ()
-deliverVerificationEmail toError emailDelivery locale emailAddress renderVerificationUrl token =
-  either (throwError . toError . Text.pack . displayException) pure
-    =<< liftIO (try (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token))) :: IO (Either SomeException ()))
+deliverVerificationEmail toError deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token =
+  either (throwError . toError) pure
+    =<< liftIO (deliverVerificationMessage deliveryTimeout emailDelivery locale emailAddress renderVerificationUrl token)
+
+deliverVerificationMessage ::
+  RegistrationDeliveryTimeout ->
+  EmailDelivery ->
+  EmailLocale ->
+  EmailAddress ->
+  (EmailVerificationToken -> Text) ->
+  EmailVerificationToken ->
+  IO (Either VerificationDeliveryFailure ())
+deliverVerificationMessage (RegistrationDeliveryTimeout microseconds) emailDelivery locale emailAddress renderVerificationUrl token = do
+  deliveryResult <- try (timeout microseconds (deliverEmail emailDelivery (verificationEmail locale emailAddress (renderVerificationUrl token)))) :: IO (Either SomeException (Maybe ()))
+  pure $
+    case deliveryResult of
+      Left deliveryFailure -> Left (VerificationDeliveryTransportFailed (Text.pack (displayException deliveryFailure)))
+      Right Nothing -> Left VerificationDeliveryTimedOut
+      Right (Just ()) -> Right ()
+
+renderVerificationDeliveryFailure :: VerificationDeliveryFailure -> Text
+renderVerificationDeliveryFailure deliveryFailure =
+  case deliveryFailure of
+    VerificationDeliveryTimedOut -> "email delivery timed out"
+    VerificationDeliveryTransportFailed detail -> detail
 
 addNanoseconds :: UnixTimeNanoseconds -> Word64 -> Maybe UnixTimeNanoseconds
 addNanoseconds = addUnixTimeNanoseconds
