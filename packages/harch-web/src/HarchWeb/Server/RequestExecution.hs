@@ -286,61 +286,50 @@ dispatchRoutedRequest
           Right renderDispatch@RenderMatchedHead {} -> renderRouteDispatch webApplication request renderDispatch
           Right renderDispatch
             | isClientActionRequest request ->
-                do
-                  let expectedOrigin =
-                        (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
-                          <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
-                  case validateClientActionRequest expectedOrigin request of
-                    Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                    Right () -> do
-                      actionBody <- readClientActionBody request
-                      case actionBody >>= parseClientActionFields of
-                        Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                        Right actionFields -> do
-                          case validateClientActionCsrf request actionFields of
-                            Left protocolError -> pure (BodyResponse (clientActionProtocolErrorResponse protocolError))
-                            Right csrfToken -> do
-                              let actionPayload =
-                                    ClientActionPayload
-                                      { clientActionMethod = requestMethodText request,
-                                        clientActionPath = requestPath,
-                                        clientActionFields = actionFields,
-                                        clientActionCsrfToken = lookup "_harch_csrf" actionFields,
-                                        clientActionIdempotencyKey = requestIdempotencyKey request,
-                                        clientActionPayloadContext = routedRequestContext
-                                      }
-                              case decodeClientAction webApplication actionPayload of
-                                UnrecognizedClientAction ->
-                                  pure
-                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                                MethodNotAllowedClientAction allowedMethods ->
-                                  pure
-                                    (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
-                                MalformedClientAction _ ->
-                                  pure
-                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
-                                InvalidClientActionDecoder ->
-                                  pure
-                                    (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
-                                DecodedClientAction action -> do
-                                  let actionRequest =
-                                        ClientActionRequest
-                                          { clientAction = action,
-                                            clientActionRequestIdempotencyKey = requestIdempotencyKey request,
-                                            clientActionContext = routedRequestContext
-                                          }
-                                  authorized <- authorizeClientActionCsrf webApplication actionRequest csrfToken
-                                  case authorized of
-                                    False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
-                                    True -> do
-                                      maybeActionResponse <- handleClientAction webApplication actionRequest
-                                      pure
-                                        ( maybe
-                                            (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
-                                            ClientActionBodyResponse
-                                            maybeActionResponse
-                                        )
+                clientActionResponse webApplication request requestPath requestPolicyConfig routedRequestContext
             | otherwise -> renderRouteDispatch webApplication request renderDispatch
+
+clientActionResponse :: Application route action context -> Wai.Request -> Text -> RequestPolicyConfig -> context -> IO (Response route context)
+clientActionResponse webApplication request requestPath requestPolicyConfig routedRequestContext = do
+  result <- runExceptT $ do
+    let expectedOrigin =
+          (\host -> requestScheme requestPolicyConfig request <> "://" <> host)
+            <$> (lookup "Host" (Wai.requestHeaders request) >>= either (const Nothing) Just . TextEncoding.decodeUtf8')
+    () <- liftClientActionEither (validateClientActionRequest expectedOrigin request)
+    actionBody <- liftIO (readClientActionBody request)
+    actionFields <- liftClientActionEither (actionBody >>= parseClientActionFields)
+    csrfToken <- liftClientActionEither (validateClientActionCsrf request actionFields)
+    let actionPayload =
+          ClientActionPayload
+            { clientActionMethod = requestMethodText request,
+              clientActionPath = requestPath,
+              clientActionFields = actionFields,
+              clientActionCsrfToken = lookup "_harch_csrf" actionFields,
+              clientActionIdempotencyKey = requestIdempotencyKey request,
+              clientActionPayloadContext = routedRequestContext
+            }
+    case decodeClientAction webApplication actionPayload of
+      UnrecognizedClientAction -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound))
+      MethodNotAllowedClientAction allowedMethods -> pure (ClientActionBodyResponse (clientActionMethodNotAllowedResponse allowedMethods))
+      MalformedClientAction _ -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionPayloadMalformed))
+      InvalidClientActionDecoder -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionDecoderInvalid))
+      DecodedClientAction action -> do
+        let actionRequest =
+              ClientActionRequest
+                { clientAction = action,
+                  clientActionRequestIdempotencyKey = requestIdempotencyKey request,
+                  clientActionContext = routedRequestContext
+                }
+        authorized <- liftIO (authorizeClientActionCsrf webApplication actionRequest csrfToken)
+        case authorized of
+          False -> pure (BodyResponse (clientActionProtocolErrorResponse ClientActionCsrfRejected))
+          True -> do
+            maybeActionResponse <- liftIO (handleClientAction webApplication actionRequest)
+            pure (maybe (BodyResponse (clientActionProtocolErrorResponse ClientActionNotFound)) ClientActionBodyResponse maybeActionResponse)
+  pure (either (BodyResponse . clientActionProtocolErrorResponse) id result)
+
+liftClientActionEither :: Either ClientActionProtocolError value -> ExceptT ClientActionProtocolError IO value
+liftClientActionEither = either throwError pure
 
 data RouteRenderDispatch route context
   = RenderNotFound (RouteRequest route context)
