@@ -2,13 +2,12 @@
 
 module Unit.HarchWeb.TestSupport where
 
-import Control.Concurrent (MVar, forkIO, killThread, newEmptyMVar, putMVar, threadDelay)
+import Control.Concurrent (threadDelay)
 import Control.Exception (Exception (displayException), SomeException, finally, try)
 import Control.Monad ()
 import Data.ByteString qualified as ByteString (ByteString, drop, empty, null)
 import Data.ByteString.Builder qualified as Builder ()
 import Data.ByteString.Char8 qualified as ByteStringChar8 (breakSubstring, pack)
-import Data.ByteString.Lazy qualified as LazyByteString (ByteString)
 import Data.Char ()
 import Data.Either ()
 import Data.Functor.Compose ()
@@ -17,7 +16,7 @@ import Data.List (find)
 import Data.List.NonEmpty (NonEmpty (..))
 import Data.Maybe (fromMaybe, listToMaybe, mapMaybe)
 import Data.Text (Text)
-import Data.Text qualified as Text (breakOn, drop, dropWhileEnd, empty, isPrefixOf, length, null, pack, splitOn, strip, stripPrefix, takeWhile, unpack)
+import Data.Text qualified as Text (dropWhileEnd, empty, isPrefixOf, null, pack, splitOn, strip, stripPrefix, unpack)
 import Data.Text.Encoding qualified as TextEncoding (decodeUtf8)
 import HarchWeb
 import HarchWeb.Action qualified as Action (ActionCodec, action, actionCodec, formField, getAt, postAt, required, textValue)
@@ -26,12 +25,10 @@ import HarchWeb.Markup.Unsafe qualified as MarkupUnsafe (unsafeTrustHtml)
 import HarchWeb.Observability qualified as Observability (ConnectionObservability (observabilityConnectionSpan), HttpServerMetrics (httpServerMetricAttributes), ObservabilityAttribute (attributeName, attributeValue), ObservabilityAttributeValue (IntAttribute, TextAttribute), RequestObservability (observabilityHttpServerMetrics, observabilityRequestSpan), RequestSpan (requestSpanAttributes), buildConnectionObservability)
 import HarchWeb.Security qualified as Security ()
 import HarchWeb.Session (generateCsrfToken)
-import Network.HTTP.Client qualified as HttpClient (Manager, defaultManagerSettings, newManager)
-import Network.HTTP.Types qualified as Http (Header, RequestHeaders, Status, status200, status202, status501)
+import Network.HTTP.Types qualified as Http (RequestHeaders, status200, status202, status501)
 import Network.Socket qualified as Socket (Family (AF_INET), SockAddr (SockAddrInet), Socket, SocketType (Stream), bind, close, connect, defaultProtocol, getSocketName, listen, maxListenQueue, socket, tupleToHostAddress, withSocketsDo)
 import Network.Socket.ByteString qualified as SocketByteString (recv, sendAll)
-import Network.Wai qualified as Wai (Request (rawPathInfo, remoteHost, requestHeaders, requestMethod), responseLBS, strictRequestBody)
-import Network.Wai.Handler.Warp qualified as Warp (run)
+import Network.Wai qualified as Wai (Request (remoteHost, requestHeaders))
 import System.Directory ()
 import System.Environment (lookupEnv, setEnv, unsetEnv)
 import System.Exit (ExitCode (..))
@@ -42,22 +39,13 @@ import System.IO.Temp (withSystemTempDirectory)
 import System.Posix.Signals ()
 import System.Process (callProcess, readProcessWithExitCode)
 import Test.Hspec (Expectation, expectationFailure, shouldBe, shouldSatisfy)
-import TestCore.CustomAssertions (expectAll)
 import TestCore.Wai (waiRequest)
-import Text.Read (readMaybe)
 
 data TestContext = TestContext
   { requestLanguage :: Text,
     testContextPathPrefix :: Text
   }
   deriving (Eq, Show)
-
-data CapturedCollectorRequest = CapturedCollectorRequest
-  { capturedCollectorMethod :: ByteString.ByteString,
-    capturedCollectorPath :: ByteString.ByteString,
-    capturedCollectorHeaders :: [Http.Header],
-    capturedCollectorBody :: LazyByteString.ByteString
-  }
 
 data TestRoute
   = KnownRoute
@@ -926,72 +914,6 @@ isVolatileRequestTimingAttribute attribute =
              "harch.phase.render-response.start_offset_ns",
              "harch.phase.render-response.duration_ns"
            ]
-
-withOtlpCollector ::
-  Http.Status ->
-  LazyByteString.ByteString ->
-  (HttpClient.Manager -> Text -> MVar CapturedCollectorRequest -> IO a) ->
-  IO a
-withOtlpCollector responseStatus responseBody action =
-  withUnusedLoopbackPort $ \collectorPort -> do
-    manager <- HttpClient.newManager HttpClient.defaultManagerSettings
-    capturedRequestReference <- newEmptyMVar
-    let collectorUrl = Text.pack ("http://127.0.0.1:" <> show collectorPort <> "/v1/traces")
-        collectorApplication request respond = do
-          requestBody <- Wai.strictRequestBody request
-          putMVar
-            capturedRequestReference
-            CapturedCollectorRequest
-              { capturedCollectorMethod = Wai.requestMethod request,
-                capturedCollectorPath = Wai.rawPathInfo request,
-                capturedCollectorHeaders = Wai.requestHeaders request,
-                capturedCollectorBody = requestBody
-              }
-          respond (Wai.responseLBS responseStatus [("Content-Type", "application/json")] responseBody)
-    serverThreadId <- forkIO (Warp.run collectorPort collectorApplication)
-    threadDelay 50000
-    action manager collectorUrl capturedRequestReference `finally` killThread serverThreadId
-
-extractQuotedJsonField :: Text -> Text -> Maybe Text
-extractQuotedJsonField fieldName bodyText =
-  listToMaybe (extractQuotedJsonFields fieldName bodyText)
-
-extractQuotedJsonFields :: Text -> Text -> [Text]
-extractQuotedJsonFields fieldName bodyText =
-  case Text.breakOn fieldPrefix bodyText of
-    (_, withField)
-      | Text.null withField -> []
-      | otherwise ->
-          let fieldValueStart = Text.drop (Text.length fieldPrefix) withField
-              fieldValue = Text.takeWhile (/= '"') fieldValueStart
-              remainingBody = Text.drop (Text.length fieldValue + 1) fieldValueStart
-           in fieldValue : extractQuotedJsonFields fieldName remainingBody
-  where
-    fieldPrefix = "\"" <> fieldName <> "\":\""
-
-extractQuotedJsonIntegerFields :: Text -> Text -> [Integer]
-extractQuotedJsonIntegerFields fieldName bodyText =
-  mapMaybe (readMaybe . Text.unpack) (extractQuotedJsonFields fieldName bodyText)
-
-expectPlausibleEpochNanoTimestamps :: Text -> Expectation
-expectPlausibleEpochNanoTimestamps bodyText = do
-  let earliestPlausibleEpochNano = 1577836800000000000
-      latestPlausibleEpochNano = 4102444800000000000
-      startTimes = extractQuotedJsonIntegerFields "startTimeUnixNano" bodyText
-      endTimes = extractQuotedJsonIntegerFields "endTimeUnixNano" bodyText
-  startTimes `shouldSatisfy` (not . null)
-  length startTimes `shouldBe` length endTimes
-  mapM_
-    ( \(startTimeUnixNano, endTimeUnixNano) ->
-        expectAll
-          ( (startTimeUnixNano `shouldSatisfy` (>= earliestPlausibleEpochNano))
-              :| [ endTimeUnixNano `shouldSatisfy` (< latestPlausibleEpochNano),
-                   startTimeUnixNano `shouldSatisfy` (< endTimeUnixNano),
-                   (endTimeUnixNano - startTimeUnixNano) `shouldSatisfy` (>= 1000)
-                 ]
-          )
-    )
-    (zip startTimes endTimes)
 
 expectLoopbackPortReusable :: Int -> IO ()
 expectLoopbackPortReusable port = do

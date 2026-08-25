@@ -43,7 +43,7 @@ import System.Process ()
 import TestCore.CustomAssertions ()
 import TestCore.Wai ()
 import Text.Read ()
-import Unit.HarchWeb.TestSupport (CapturedCollectorRequest (CapturedCollectorRequest, capturedCollectorBody, capturedCollectorHeaders, capturedCollectorMethod, capturedCollectorPath), expectPlausibleEpochNanoTimestamps, extractQuotedJsonField, extractQuotedJsonIntegerFields, withOtlpCollector)
+import Unit.HarchWeb.Observability.Otlp.TestSupport (CapturedCollectorRequest (CapturedCollectorRequest, capturedCollectorBody, capturedCollectorHeaders, capturedCollectorMethod, capturedCollectorPath), expectPlausibleEpochNanoTimestamps, extractQuotedJsonField, extractQuotedJsonIntegerFields, withOtlpCollector)
 
 spec = do
   describe "exportRequestObservabilityToOtlp" $ do
