@@ -1,6 +1,14 @@
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
+-- | Fixtures and assertions genuinely shared across the @Unit.WebApi@ specs.
+--
+-- The CN helper-usage audit (2026-08-25) keeps this as one test-only boundary:
+-- configuration, account, route, page, PostgreSQL, and runtime specs share its
+-- values directly, while the App runtime's socket/OTLP helpers retain their
+-- private implementation details here.  Helpers with no external consumer are
+-- deliberately not exported, so a future spec can only depend on a fixture
+-- after the fixture's actual cross-spec use has been established.
 module Unit.WebApi.TestSupport
   ( shouldReturnEqual,
     required,
@@ -28,8 +36,6 @@ module Unit.WebApi.TestSupport
     spanishRequestContext,
     assertSameProfilePageModel,
     explicitEnglishRequestContext,
-    prefixedRequestContext,
-    prefixedSpanishRequestContext,
     spanishHomeRequest,
     spanishSecondRequest,
     spanishSpacesRequest,
@@ -38,7 +44,6 @@ module Unit.WebApi.TestSupport
     prefixedSpanishSecondRequest,
     prefixedApiStatusRequest,
     spanishApiStatusRequest,
-    spanishApiSecondRequest,
     notFoundRequest,
     spanishNotFoundRequest,
     apiStatusRequest,
@@ -77,7 +82,6 @@ module Unit.WebApi.TestSupport
     metadataFields,
     migrationPostgresTestConfig,
     setupMigrationPostgresTestConfig,
-    runtimeSetupPostgresTestConfig,
     successfulPostgresResult,
     failingPostgresResult,
     commandSql,
@@ -85,7 +89,6 @@ module Unit.WebApi.TestSupport
     withCurrentDirectory,
     withUnreadableFile,
     withClearedAppEnvironment,
-    withClearedEnvironmentPrefixes,
     withClearedRuntimeEnvironment,
     withClearedSetupEnvironment,
     withFakePsqlScriptResults,
@@ -95,12 +98,6 @@ module Unit.WebApi.TestSupport
     withDefaultRuntimePortUnavailable,
     withOtlpCaptureServer,
     withSlowOtlpCaptureServer,
-    readCapturedHttpRequest,
-    readHttpRequestBytes,
-    parseHttpContentLength,
-    parseCapturedHeader,
-    stripHeaderLineEnd,
-    buildHttpResponse,
     readLoopbackHttpResponse,
     readLoopbackHttpResponseBytes,
     waitForRuntimeServerResponse,
@@ -111,8 +108,6 @@ module Unit.WebApi.TestSupport
     decodeChunkedBody,
     protocolResponseStrictBody,
     stripVolatileDatabaseTimingResponse,
-    stripVolatileDatabaseTimingResponseBody,
-    stripVolatileDatabaseTiming,
     expectedSecondDatabaseOperations,
     expectedDatabaseOperation,
     lookupTextObservabilityAttribute,
@@ -381,13 +376,6 @@ spanishApiStatusRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
 spanishApiStatusRequest =
   HarchWeb.RouteRequest
     { HarchWeb.requestRoute = StatusApiRoute,
-      HarchWeb.requestContext = spanishRequestContext
-    }
-
-spanishApiSecondRequest :: HarchWeb.RouteRequest AppRoute AppRequestContext
-spanishApiSecondRequest =
-  HarchWeb.RouteRequest
-    { HarchWeb.requestRoute = SecondApiRoute,
       HarchWeb.requestContext = spanishRequestContext
     }
 
@@ -705,18 +693,6 @@ setupMigrationPostgresTestConfig =
       databaseName = "web_api_dev",
       databaseUser = "web_api_owner",
       databasePassword = "owner-secret",
-      databaseConnectTimeoutSeconds = 10,
-      databasePoolCapacity = requiredDatabasePoolCapacity 10
-    }
-
-runtimeSetupPostgresTestConfig :: DatabaseConfig
-runtimeSetupPostgresTestConfig =
-  DatabaseConfig
-    { databaseHost = "127.0.0.1",
-      databasePort = 5432,
-      databaseName = "web_api_dev",
-      databaseUser = "web_api_runtime",
-      databasePassword = "runtime-secret",
       databaseConnectTimeoutSeconds = 10,
       databasePoolCapacity = requiredDatabasePoolCapacity 10
     }
