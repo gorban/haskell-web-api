@@ -1838,6 +1838,28 @@ The framework needs a small, general primitive from Warp/WarpTLS (or a transport
 the accepted socket and peer address before handshake processing) before DQ can be completed and
 tested without a fabricated association. DQ remains open with that concrete prerequisite.
 
+### Decision record — DS: static representation metadata and file-backed delivery (2026-08-25)
+
+**Decision: keep static-file ownership at the configured root boundary, and extend that one
+dispatcher with standard representation semantics rather than introduce an asset-serving runtime or
+an application-visible file abstraction.** A request may select only a safe relative path; the
+dispatcher still canonicalizes the candidate against the configured root before obtaining metadata
+or handing its canonical path to Warp. Successful `GET` responses are `responseFile` values, so
+the server can use its file/sendfile path instead of allocating one in-memory `ByteString` per
+request. The response derives a weak ETag from the file size plus high-resolution modification time,
+emits `Last-Modified` and `Accept-Ranges: bytes`, accepts `If-None-Match` (including weak matches)
+before `If-Modified-Since`, and supports one satisfiable byte range through `FilePart`; unsatisfied
+or malformed ranges receive 416. `HEAD` preserves the selected representation's status and headers
+without sending a body. These are transport representations of application-owned files, not a new
+untrusted-input storage lifecycle, so the multipart storage-adapter rule does not apply.
+
+**Root-prefix policy:** a `staticUrlPrefix = "/"` root owns only paths with an explicitly configured
+content type. Unmapped paths fall through to the route table instead of producing a static 404 before
+routing; deliberately allowlisting the empty extension remains an explicit choice to make
+extensionless paths static. Static misses retain their plain 404 but deliberately omit
+`Cache-Control`, preventing a shared cache from pinning a missing deployment artifact for the
+successful asset TTL.
+
 Every row's `State` follows the "Naming a partial slice" convention above: `Implemented` means
 the full designed scope shipped; a partial slice must say so and name its follow-up.
 
@@ -1848,6 +1870,7 @@ the full designed scope shipped; a partial slice must say so and name its follow
 | Generated static page algebra/dispatch | Implemented | Export `pageDefinition`; keep API and dynamic routes explicit. |
 | Typed markup and component calls | Implemented | Prefer named record fields; reserve positional `props` for distinct typed values. |
 | Scoped CSS names | Implemented | Use `cssScope`; typed CSS authoring remains future work. |
+| Configured static assets | Implemented | Successful assets are canonical-root-checked file responses with weak ETags, `Last-Modified`, conditional 304s, single-range 206/416 semantics, and `HEAD` metadata; static 404s are never cacheable. |
 | Declarative client actions and region patches | Implemented | Declare `ActionCodec` endpoints once; render forms and dispatch from it, then mutate with typed action responses and `RegionPatch`, not page POST/reload workflows. |
 | SSE live updates | Implemented | Start from meaningful SSR content; treat streaming as an enhancement. |
 | PostgreSQL and custom adapters | Implemented (partial — see AY) | Keep operations typed and interpreters app-selectable. Runtime queries now share a bounded `WebApi.Postgres.Pool` instead of one connection per query (2026-08-21). `sslmode` still defaults to `prefer` (deferred to a deployment decision, not this codebase's to make unilaterally) and migrations still run one `psql` subprocess per statement with no transaction or advisory lock (tracked by AX). |

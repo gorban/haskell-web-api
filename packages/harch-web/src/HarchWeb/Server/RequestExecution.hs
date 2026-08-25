@@ -99,7 +99,7 @@ runEarlyRequestStages webApplication request requestPath policyResponseHeaders =
     earlyResponse (externalRequestPath requestPolicyConfig request) (httpsRedirectResponse redirectLocation)
   for_ (applicationNavigationRuntime webApplication >>= (`navigationRuntimeResponse` requestPath)) $
     earlyResponse requestPath . toWaiBodyResponse []
-  maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) requestPath)
+  maybeStaticResponse <- liftIO (serveStaticAssetResponse (applicationStaticAssets webApplication) request requestPath)
   for_ maybeStaticResponse $ \(staticRoutePath, staticResponse) ->
     earlyResponse
       ( urlPathText

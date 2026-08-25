@@ -160,6 +160,7 @@ library
     haskell-src-meta ^>=0.8.16,
     http-client ^>=0.7.19,
     http-client-tls ^>=0.3.6.4,
+    http-date ^>=0.0.11,
     http-types ^>=0.12.5,
     memory ^>=0.18.0,
     mtl ^>=2.3.1,

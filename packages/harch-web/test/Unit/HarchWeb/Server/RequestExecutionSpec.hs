@@ -27,7 +27,7 @@ import HarchWeb.Observability qualified as Observability (ObservabilityAttribute
 import HarchWeb.Security qualified as Security ()
 import HarchWeb.Session (csrfTokenText, generateCsrfToken)
 import Network.HTTP.Client qualified as HttpClient ()
-import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAllow, hCacheControl, hContentType, hLocation, status200, status201, status202, status204, status302, status308, status400, status401, status403, status404, status405, status413, status415, status422, status500, status503)
+import Network.HTTP.Types qualified as Http (Status (statusCode, statusMessage), hAcceptRanges, hAllow, hCacheControl, hContentLength, hContentRange, hContentType, hETag, hIfModifiedSince, hIfNoneMatch, hLastModified, hLocation, hRange, status200, status201, status202, status204, status206, status302, status304, status308, status400, status401, status403, status404, status405, status413, status415, status416, status422, status500, status503)
 import Network.Socket qualified as Socket (SockAddr (SockAddrInet, SockAddrUnix), tupleToHostAddress)
 import Network.Socket.ByteString qualified as SocketByteString ()
 import Network.Wai qualified as Wai (Request (isSecure, pathInfo, rawPathInfo, rawQueryString, requestHeaders, requestMethod), defaultRequest, responseHeaders, responseStatus, setRequestBodyChunks)
@@ -2556,12 +2556,14 @@ spec = do
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) Wai.defaultRequest
         Wai.responseStatus rootResponse `shouldBe` Http.status404
         lookup Http.hContentType (Wai.responseHeaders rootResponse)
-          `shouldBe` Just (TextEncoding.encodeUtf8 "text/plain; charset=utf-8")
+          `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
         lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` Nothing
-        readResponseBody rootResponse `shouldReturn` "Not Found"
+        rootResponseBody <- readResponseBody rootResponse
+        rootResponseBody `shouldNotBe` "Not Found"
         unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["blob.bin"])
         Wai.responseStatus unsupportedExtensionResponse `shouldBe` Http.status404
-        readResponseBody unsupportedExtensionResponse `shouldReturn` "Not Found"
+        lookup Http.hContentType (Wai.responseHeaders unsupportedExtensionResponse)
+          `shouldBe` Just (TextEncoding.encodeUtf8 "text/html; charset=utf-8")
 
     it "serves configured extensionless static assets when the empty extension is explicitly allowlisted" $
       withSystemTempDirectory "harch-web-static-extensionless" $ \tempDirectory -> do
@@ -2689,7 +2691,104 @@ spec = do
         Wai.responseStatus symlinkResponse `shouldBe` Http.status404
         readResponseBody symlinkResponse `shouldReturn` "Not Found"
 
-    it "keeps cache-control headers on missing static asset responses when configured" $
+    it "serves static files with validators, byte ranges, and HEAD metadata" $
+      withSystemTempDirectory "harch-web-static-validators" $ \tempDirectory -> do
+        let assetDirectory = tempDirectory <> "/public"
+            assetConfig =
+              StaticAssetsConfig
+                { staticAssetRoots = [StaticAssetRoot {staticUrlPrefix = "/assets", staticDirectory = assetDirectory}],
+                  staticAssetContentTypes = defaultStaticAssetContentTypes,
+                  staticCacheControlSeconds = Just 60
+                }
+            staticApplication = sampleApplicationWithStaticAssets assetConfig
+            assetRequest = waiRequest ["assets", "alphabet.js"]
+        createDirectoryIfMissing True assetDirectory
+        writeFile (assetDirectory <> "/alphabet.js") "abcdefghij"
+        fullResponse <- performWaiRequest (toWaiApplication staticApplication) assetRequest
+        let responseHeaders = Wai.responseHeaders fullResponse
+            assetETag = fromMaybe (error "expected ETag") (lookup Http.hETag responseHeaders)
+            assetLastModified = fromMaybe (error "expected Last-Modified") (lookup Http.hLastModified responseHeaders)
+        Wai.responseStatus fullResponse `shouldBe` Http.status200
+        lookup Http.hAcceptRanges responseHeaders `shouldBe` Just "bytes"
+        lookup Http.hCacheControl responseHeaders `shouldBe` Just "public, max-age=60"
+        lookup Http.hContentLength responseHeaders `shouldBe` Just "10"
+        readResponseBody fullResponse `shouldReturn` "abcdefghij"
+        matchingETagResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hIfNoneMatch, assetETag)]})
+        Wai.responseStatus matchingETagResponse `shouldBe` Http.status304
+        lookup Http.hContentType (Wai.responseHeaders matchingETagResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+        lookup Http.hCacheControl (Wai.responseHeaders matchingETagResponse) `shouldBe` Just "public, max-age=60"
+        lookup Http.hETag (Wai.responseHeaders matchingETagResponse) `shouldBe` Just assetETag
+        readResponseBody matchingETagResponse `shouldReturn` ""
+        strongETagResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hIfNoneMatch, ByteString.drop 2 assetETag)]})
+        Wai.responseStatus strongETagResponse `shouldBe` Http.status304
+        matchingDateResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hIfModifiedSince, assetLastModified)]})
+        Wai.responseStatus matchingDateResponse `shouldBe` Http.status304
+        nonMatchingETagResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hIfNoneMatch, "W/\"other\""), (Http.hIfModifiedSince, assetLastModified)]})
+        Wai.responseStatus nonMatchingETagResponse `shouldBe` Http.status200
+        readResponseBody nonMatchingETagResponse `shouldReturn` "abcdefghij"
+        rangeResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hRange, "bytes=2-5")]})
+        Wai.responseStatus rangeResponse `shouldBe` Http.status206
+        lookup Http.hContentType (Wai.responseHeaders rangeResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+        lookup Http.hCacheControl (Wai.responseHeaders rangeResponse) `shouldBe` Just "public, max-age=60"
+        lookup Http.hETag (Wai.responseHeaders rangeResponse) `shouldBe` Just assetETag
+        lookup Http.hContentRange (Wai.responseHeaders rangeResponse) `shouldBe` Just "bytes 2-5/10"
+        lookup Http.hContentLength (Wai.responseHeaders rangeResponse) `shouldBe` Just "4"
+        readResponseBody rangeResponse `shouldReturn` "cdef"
+        suffixRangeResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hRange, "bytes=-3")]})
+        Wai.responseStatus suffixRangeResponse `shouldBe` Http.status206
+        lookup Http.hContentRange (Wai.responseHeaders suffixRangeResponse) `shouldBe` Just "bytes 7-9/10"
+        readResponseBody suffixRangeResponse `shouldReturn` "hij"
+        openRangeResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hRange, "bytes=7-")]})
+        Wai.responseStatus openRangeResponse `shouldBe` Http.status206
+        lookup Http.hContentRange (Wai.responseHeaders openRangeResponse) `shouldBe` Just "bytes 7-9/10"
+        readResponseBody openRangeResponse `shouldReturn` "hij"
+        unsatisfiableRangeResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestHeaders = [(Http.hRange, "bytes=10-")]})
+        Wai.responseStatus unsatisfiableRangeResponse `shouldBe` Http.status416
+        lookup Http.hContentType (Wai.responseHeaders unsatisfiableRangeResponse) `shouldBe` Just "application/javascript; charset=utf-8"
+        lookup Http.hCacheControl (Wai.responseHeaders unsatisfiableRangeResponse) `shouldBe` Just "public, max-age=60"
+        lookup Http.hETag (Wai.responseHeaders unsatisfiableRangeResponse) `shouldBe` Just assetETag
+        lookup Http.hContentRange (Wai.responseHeaders unsatisfiableRangeResponse) `shouldBe` Just "bytes */10"
+        lookup Http.hContentLength (Wai.responseHeaders unsatisfiableRangeResponse) `shouldBe` Just "0"
+        readResponseBody unsatisfiableRangeResponse `shouldReturn` ""
+        forM_ ["bytes=0-1,2-3", "bytes=1", "bytes=-0", "bytes=5-3", "bytes=-", "bytes=x-y"] $ \invalidRange -> do
+          invalidRangeResponse <-
+            performWaiRequest
+              (toWaiApplication staticApplication)
+              (assetRequest {Wai.requestHeaders = [(Http.hRange, invalidRange)]})
+          Wai.responseStatus invalidRangeResponse `shouldBe` Http.status416
+        headResponse <-
+          performWaiRequest
+            (toWaiApplication staticApplication)
+            (assetRequest {Wai.requestMethod = "HEAD"})
+        Wai.responseStatus headResponse `shouldBe` Http.status200
+        lookup Http.hContentLength (Wai.responseHeaders headResponse) `shouldBe` Just "10"
+        readResponseBody headResponse `shouldReturn` ""
+
+    it "does not cache missing static asset responses when configured" $
       withSystemTempDirectory "harch-web-static-missing-cache" $ \tempDirectory -> do
         let assetConfig =
               StaticAssetsConfig
@@ -2698,12 +2797,11 @@ spec = do
                   staticCacheControlSeconds = Just 60
                 }
             staticApplication = sampleApplicationWithStaticAssets assetConfig
-            expectedCacheControl = Just (TextEncoding.encodeUtf8 "public, max-age=60")
         missingResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "missing.js"])
-        lookup Http.hCacheControl (Wai.responseHeaders missingResponse) `shouldBe` expectedCacheControl
+        lookup Http.hCacheControl (Wai.responseHeaders missingResponse) `shouldBe` Nothing
         invalidResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "..", "secret.txt"])
-        lookup Http.hCacheControl (Wai.responseHeaders invalidResponse) `shouldBe` expectedCacheControl
+        lookup Http.hCacheControl (Wai.responseHeaders invalidResponse) `shouldBe` Nothing
         rootResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets"])
-        lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` expectedCacheControl
+        lookup Http.hCacheControl (Wai.responseHeaders rootResponse) `shouldBe` Nothing
         unsupportedExtensionResponse <- performWaiRequest (toWaiApplication staticApplication) (waiRequest ["assets", "secret.bin"])
-        lookup Http.hCacheControl (Wai.responseHeaders unsupportedExtensionResponse) `shouldBe` expectedCacheControl
+        lookup Http.hCacheControl (Wai.responseHeaders unsupportedExtensionResponse) `shouldBe` Nothing
