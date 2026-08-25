@@ -1,7 +1,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions.Common
-  ( accountWorkflow,
+  ( AccountActionRequest,
+    AccountActionWorkflow,
+    accountWorkflow,
+    issueMfaEnrollmentSessionNow,
     pendingProfileForm,
     resendLabel,
     profileLoadErrorType,
@@ -32,12 +35,16 @@ module WebApi.AccountPages.Actions.Common
   )
 where
 
+import Control.Monad.IO.Class (liftIO)
 import Data.Text (Text)
 import Data.Text qualified as Text
 import Data.Word (Word64)
 import HarchWeb qualified
+import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.Observability qualified as Observability
+import HarchWeb.Session (OpaqueSession)
+import HarchWeb.Time (UnixTimeNanoseconds)
 import Network.HTTP.Types qualified as Http
 import WebApi.Account (AccountProfile (..), AccountStoreError (..))
 import WebApi.AccountPages.Actions.Contract (AccountAction, AccountActionTarget (UpdateProfileTarget))
@@ -59,12 +66,30 @@ import WebApi.Mfa (MfaStoreError (..))
 import WebApi.MfaEnrollment (MfaEnrollmentError (..))
 import WebApi.Profile (ProfileLoadError (..))
 import WebApi.Route (AppLocale (..), AppRequestContext (..))
-import WebApi.Session (AccountSessionStoreError (..), MfaEnrollmentSessionStoreError (..))
+import WebApi.Session
+  ( AccountSessionStoreError (..),
+    MfaEnrollmentSessionStoreError (..),
+    issueMfaEnrollmentSession,
+  )
 
 type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
 
+-- | The account action effect exposes one public client-action response on
+-- both its success and failure rails. Focused workflow modules use this
+-- shared boundary instead of inventing per-action effect stacks.
+type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
+
 accountWorkflow :: AppM publicFailure AccountWorkflow
 accountWorkflow = appAccountWorkflow <$> askAppServices
+
+-- | Issue the already-narrow MFA enrollment capability after a workflow has
+-- independently established an account principal. Registration verification
+-- and password login are the two legitimate callers; response rendering stays
+-- with their respective focused modules.
+issueMfaEnrollmentSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either MfaEnrollmentSessionStoreError (OpaqueSession Account.AccountId))
+issueMfaEnrollmentSessionNow accountId now = do
+  workflow <- accountWorkflow
+  liftIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId now)
 
 pendingProfileForm :: AccountActionRequest -> AccountProfile -> Maybe Text -> Bool -> PendingProfileForm
 pendingProfileForm actionRequest profile message isError =

@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 
 module WebApi.AccountPages.Actions.Workflows
@@ -22,7 +21,6 @@ import HarchWeb qualified
 import HarchWeb.Account qualified as Account
 import HarchWeb.Email qualified as Email
 import HarchWeb.LoginProtection qualified as LoginProtection
-import HarchWeb.Observability qualified as Observability
 import HarchWeb.Password qualified as Password
 import HarchWeb.RecoveryCode qualified as RecoveryCode
 import HarchWeb.Session
@@ -37,22 +35,10 @@ import HarchWeb.Time (UnixTimeNanoseconds)
 import HarchWeb.Totp qualified as Totp
 import HarchWeb.Username qualified as Username
 import Network.HTTP.Types qualified as Http
-import WebApi.Account
-  ( AccountProfile (..),
-    AccountStoreError,
-    RegistrationEnvironment (..),
-    RegistrationError (..),
-    RegistrationRequest (..),
-    RegistrationResult (..),
-    ResendVerificationError (..),
-    VerificationDeliveryFailure (..),
-    confirmEmailVerificationAt,
-    defaultPendingRegistrationStoragePolicy,
-    registerAccount,
-    resendEmailVerificationAt,
-  )
 import WebApi.AccountPages.Actions.Common
 import WebApi.AccountPages.Actions.Contract
+import WebApi.AccountPages.Actions.Profile qualified as Profile
+import WebApi.AccountPages.Actions.Registration qualified as Registration
 import WebApi.AccountPages.Forms
 import WebApi.AppEffect
   ( AccountWorkflow (..),
@@ -77,185 +63,33 @@ import WebApi.MfaEnrollment
     confirmMfaEnrollment,
     startMfaEnrollment,
   )
-import WebApi.Profile
-  ( ProfileLoadError,
-    ProfileState (..),
-    loadProfile,
-  )
 import WebApi.Route
   ( AppRequestContext (..),
   )
 import WebApi.Session
-  ( AccountSessionStore (..),
-    AccountSessionStoreError,
+  ( AccountSessionStoreError,
     MfaEnrollmentSessionStore (..),
     MfaEnrollmentSessionStoreError,
+    invalidateAccountSession,
     issueAccountSession,
-    issueMfaEnrollmentSession,
     mfaEnrollmentSessionCookiePolicy,
   )
 
-type AccountActionRequest = HarchWeb.ClientActionRequest AccountAction AppRequestContext
-
-type AccountActionWorkflow = AppM HarchWeb.ClientActionResponse HarchWeb.ClientActionResponse
-
-type ParsedRegistration = (Text, Text, Text, Text, Username.Username, Email.EmailAddress)
-
 handleRegistrationSubmission :: AccountActionRequest -> RegistrationSubmission -> AccountActionWorkflow
 handleRegistrationSubmission actionRequest submission =
-  case parseRegistrationForm actionRequest submission of
-    Left response -> pure response
-    Right registration -> do
-      registrationResult <- registerAccountNow actionRequest registration
-      let (usernameValue, emailValue, displayNameValue, _, _, _) = registration
-      interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue registrationResult
-
--- | Registration is one application operation: it obtains one clock value
--- and invokes the account service with dependencies selected for this
--- request. This keeps the workflow from splitting that operation across
--- generic IO lifts.
-registerAccountNow ::
-  AccountActionRequest ->
-  ParsedRegistration ->
-  AppM publicFailure (Either RegistrationError RegistrationResult)
-registerAccountNow actionRequest (_, _, displayNameValue, passwordValue, username, emailAddress) = do
-  workflow <- accountWorkflow
-  liftIO $ do
-    now <- accountWorkflowClock workflow
-    registerAccount
-      RegistrationEnvironment
-        { registrationPasswordHasher = accountWorkflowPasswordHasher workflow,
-          registrationHashingPolicy = Password.defaultPasswordHashingPolicy,
-          registrationPasswordWorkGate = accountWorkflowPasswordWorkGate workflow,
-          registrationStoragePolicy = defaultPendingRegistrationStoragePolicy,
-          registrationDeliveryTimeout = accountWorkflowRegistrationDeliveryTimeout workflow,
-          registrationStore = accountWorkflowStore workflow,
-          registrationDelivery = accountWorkflowEmailDelivery workflow,
-          registrationLocale = emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)),
-          registrationVerificationUrl = accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest),
-          registrationNow = now,
-          registrationLifetime = emailVerificationLifetimeNanoseconds
-        }
-      RegistrationRequest
-        { registrationEmail = emailAddress,
-          registrationPassword = Password.mkPassword passwordValue,
-          registrationUsername = Just username,
-          registrationDisplayName = nonEmptyText displayNameValue
-        }
-
-parseRegistrationForm ::
-  AccountActionRequest ->
-  RegistrationSubmission ->
-  Either HarchWeb.ClientActionResponse ParsedRegistration
-parseRegistrationForm actionRequest submission =
-  let usernameValue = registrationUsernameValue submission
-      emailValue = registrationEmailValue submission
-      displayNameValue = registrationDisplayNameValue submission
-      passwordValue = registrationPasswordValue submission
-      path = HarchWeb.clientActionContext actionRequest
-      form = RegistrationForm usernameValue emailValue displayNameValue
-   in case (Username.mkUsername usernameValue, Email.mkEmailAddress emailValue, validPassword passwordValue) of
-        (Nothing, _, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Use a username with 3 to 20 letters, numbers, underscores, or hyphens." "Usa un nombre de usuario de 3 a 20 letras, numeros, guiones bajos o guiones.")) True) (Just "registration-username"))
-        (_, Nothing, _) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Enter a valid email address." "Introduce una direccion de correo valida.")) True) (Just "registration-email"))
-        (_, _, False) -> Left (registrationResponse (actionLocale actionRequest) path Http.status422 (form (Just (localized actionRequest "Use a password with at least 12 characters." "Usa una contrasena de al menos 12 caracteres.")) True) (Just "registration-password"))
-        (Just username, Just emailAddress, True) -> Right (usernameValue, emailValue, displayNameValue, passwordValue, username, emailAddress)
-
-interpretRegistrationResult ::
-  AccountActionRequest ->
-  Text ->
-  Text ->
-  Text ->
-  Either RegistrationError RegistrationResult ->
-  AccountActionWorkflow
-interpretRegistrationResult actionRequest usernameValue emailValue displayNameValue = \case
-  Right registrationResult -> pure (registrationResultResponse registrationResult)
-  Left registrationError -> throwRegistrationFailure registrationError
-  where
-    path = HarchWeb.clientActionContext actionRequest
-    response status message isError = registrationResponse (actionLocale actionRequest) path status (RegistrationForm usernameValue emailValue displayNameValue (Just message) isError)
-    registrationSuccess stage =
-      registrationLifecycleResponse
-        stage
-        (response Http.status202 (localized actionRequest "If that address can register, check its inbox for a verification link." "Si esa direccion puede registrarse, revisa su bandeja de entrada para obtener un enlace de verificacion.") False Nothing)
-    unavailableRegistration = response Http.status503 (localized actionRequest "Registration is temporarily unavailable." "El registro no esta disponible temporalmente.") True (Just "registration-email")
-    deliveryFailureResponse = response Http.status502 (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True (Just "registration-email")
-
-    registrationResultResponse = \case
-      -- A taken username is a recoverable, user-correctable input (the
-      -- applicant can simply pick another one), unlike a taken email
-      -- address — reporting it plainly restores the recovery path BA's
-      -- own note found missing, and does not reopen the address-enumeration
-      -- concern the branch below exists to close: usernames, unlike email
-      -- addresses, are not privacy-sensitive to confirm as taken.
-      RegistrationUsernameTaken -> response Http.status422 (localized actionRequest "That username is already taken. Please choose another." "Ese nombre de usuario ya esta en uso. Elige otro.") True (Just "registration-username")
-      -- Both remaining outcomes share this exact branch (not merely the
-      -- same wording) so a registered-address probe cannot be
-      -- distinguished from a genuine registration by response bytes: the
-      -- hedged "if that address can register" phrasing is meaningless if
-      -- the other outcome answers differently.
-      RegistrationCreated _ -> registrationSuccess "created"
-      RegistrationRetried _ -> registrationSuccess "retried"
-      RegistrationAlreadyRegistered -> registrationSuccess "already-registered"
-
-    throwRegistrationFailure = \case
-      RegistrationDeliveryFailed VerificationDeliveryTimedOut -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryTimeoutFailure "EmailDeliveryTimeout" "registration verification delivery timed out"
-      RegistrationDeliveryFailed (VerificationDeliveryTransportFailed detail) -> throwClientActionFailure deliveryFailureResponse RegistrationDeliveryFailure "EmailDeliveryError" detail
-      RegistrationStoreError storeError -> throwClientActionFailure unavailableRegistration RegistrationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
-      RegistrationPasswordHashingFailed -> throwClientActionFailure unavailableRegistration RegistrationPasswordHashFailure "PasswordHashingError" "password hashing failed"
-      RegistrationPasswordWorkBudgetExhausted -> throwClientActionFailure unavailableRegistration RegistrationPasswordWorkBudgetFailure "PasswordWorkBudgetExhausted" "password work budget is exhausted"
-      RegistrationStorageExhausted -> throwClientActionFailure unavailableRegistration RegistrationStorageCapacityFailure "PendingRegistrationStorageExhausted" "pending registration storage is at capacity"
-      RegistrationDeliveryClaimLost -> throwClientActionFailure unavailableRegistration RegistrationDeliveryClaimFailure "PendingRegistrationDeliveryClaimLost" "registration delivery claim was replaced before completion"
-      RegistrationClockOverflow -> throwClientActionFailure unavailableRegistration RegistrationClockFailure "ClockOverflow" "verification expiry overflowed"
-
-registrationLifecycleResponse :: Text -> HarchWeb.ClientActionResponse -> HarchWeb.ClientActionResponse
-registrationLifecycleResponse stage response =
-  response
-    { HarchWeb.clientActionObservabilityAttributes =
-        [Observability.ObservabilityAttribute "account.registration.stage" (Observability.TextAttribute stage)],
-      HarchWeb.clientActionLogEntries = ["INFO [account.registration] stage=" <> stage]
-    }
+  Registration.handleRegistrationWorkflow
+    Registration.RegistrationWorkflowInput
+      { Registration.registrationWorkflowRequest = actionRequest,
+        Registration.registrationWorkflowSubmission = submission
+      }
 
 handleVerificationSubmission :: AccountActionRequest -> VerificationSubmission -> AccountActionWorkflow
 handleVerificationSubmission actionRequest submission =
-  let tokenValue = verificationTokenValue submission
-      path = HarchWeb.clientActionContext actionRequest
-   in case Account.mkEmailVerificationToken tokenValue of
-        Nothing -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "The verification link is invalid." "El enlace de verificacion no es valido.")) True) (Just "verification-token") [])
-        Just token -> do
-          (now, confirmationResult) <- confirmEmailVerificationNow token
-          case confirmationResult of
-            Right (Account.EmailVerificationAccepted accountId _) -> issueVerificationEnrollmentSession actionRequest now accountId
-            Right Account.EmailVerificationExpired -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link has expired." "Ese enlace de verificacion ha caducado.")) True) (Just "verification-token") [])
-            Right Account.EmailVerificationRejected -> pure (verificationResponse (actionLocale actionRequest) path Http.status422 (VerificationForm tokenValue (Just (localized actionRequest "That verification link is invalid or has already been used." "Ese enlace de verificacion no es valido o ya se ha utilizado.")) True) (Just "verification-token") [])
-            Left storeError -> throwClientActionFailure (verificationResponse (actionLocale actionRequest) path Http.status503 (VerificationForm tokenValue (Just (localized actionRequest "Verification is temporarily unavailable." "La verificacion no esta disponible temporalmente.")) True) (Just "verification-token") []) VerificationStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
-
--- | Verification confirmation reads the clock and store as one operation so
--- the accepted result and subsequent enrollment session share one time.
-confirmEmailVerificationNow :: Account.EmailVerificationToken -> AppM publicFailure (UnixTimeNanoseconds, Either AccountStoreError Account.EmailVerificationValidation)
-confirmEmailVerificationNow token = do
-  workflow <- accountWorkflow
-  liftIO $ do
-    now <- accountWorkflowClock workflow
-    confirmationResult <- confirmEmailVerificationAt (accountWorkflowStore workflow) now token
-    pure (now, confirmationResult)
-
-issueMfaEnrollmentSessionNow :: Account.AccountId -> UnixTimeNanoseconds -> AppM publicFailure (Either MfaEnrollmentSessionStoreError (OpaqueSession Account.AccountId))
-issueMfaEnrollmentSessionNow accountId now = do
-  workflow <- accountWorkflow
-  liftIO (issueMfaEnrollmentSession (accountWorkflowMfaEnrollmentSessionStore workflow) accountId now)
-
--- | Email verification just proved ownership of the account, so this is the
--- one legitimate place to grant enrollment access — see the AM decision
--- record below for why that access is a distinct, short-lived session
--- rather than the ordinary login session or a client-supplied account id.
-issueVerificationEnrollmentSession :: AccountActionRequest -> UnixTimeNanoseconds -> Account.AccountId -> AccountActionWorkflow
-issueVerificationEnrollmentSession actionRequest now accountId = do
-  let path = HarchWeb.clientActionContext actionRequest
-      successResponse = verificationResponse (actionLocale actionRequest) path Http.status200 (VerificationForm Text.empty (Just (localized actionRequest "Your email address is verified. Enroll your authenticator next." "Tu direccion de correo esta verificada. A continuacion, registra tu autenticador.")) False) Nothing
-  issued <- issueMfaEnrollmentSessionNow accountId now
-  case issued of
-    Right opaqueSession -> pure (successResponse [("Set-Cookie", TextEncoding.encodeUtf8 (renderSessionCookie mfaEnrollmentSessionCookiePolicy (sessionId opaqueSession)))])
-    Left storeError -> throwClientActionFailure (successResponse []) MfaEnrollmentSessionFailure "MfaEnrollmentSessionStoreError" (mfaEnrollmentSessionStoreErrorMessage storeError)
+  Registration.handleVerificationWorkflow
+    Registration.VerificationWorkflowInput
+      { Registration.verificationWorkflowRequest = actionRequest,
+        Registration.verificationWorkflowSubmission = submission
+      }
 
 -- | Decision record (AM, 2026-08-14): MFA enrollment previously trusted a
 -- client-supplied @account@ form field with no session check at all — see
@@ -493,62 +327,12 @@ invalidateAccountSessionNow sessionToken = do
     invalidateAccountSession (accountWorkflowSessionStore workflow) sessionToken now
 
 handleProfileSubmission :: AccountActionRequest -> ProfileSubmission -> AccountActionWorkflow
-handleProfileSubmission actionRequest submission = do
-  (now, loadedProfile) <- loadProfileNow (requestSessionId (HarchWeb.clientActionContext actionRequest))
-  case loadedProfile of
-    Left loadError -> throwClientActionFailure (profileResponse actionRequest Http.status503 (PendingProfileForm Text.empty (Just (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.")) True (resendLabel actionRequest))) ProfileLoadFailure (profileLoadErrorType loadError) (profileLoadErrorDetail loadError)
-    Right ProfileUnauthenticated -> pure (profileResponse actionRequest Http.status403 (PendingProfileForm Text.empty (Just (localized actionRequest "Sign in before requesting another verification email." "Inicia sesion antes de solicitar otro correo de verificacion.")) True (resendLabel actionRequest)))
-    Right (ProfileAuthenticated profile) -> pure (profileResponse actionRequest Http.status409 (PendingProfileForm (Email.emailAddressText (accountProfileEmail profile)) (Just (localized actionRequest "Your email address is already verified." "Tu direccion de correo ya esta verificada.")) True (resendLabel actionRequest)))
-    Right (ProfilePending profile) -> handlePendingProfile actionRequest submission now profile
-
-loadProfileNow :: Maybe SessionId -> AppM publicFailure (UnixTimeNanoseconds, Either ProfileLoadError ProfileState)
-loadProfileNow maybeSessionId = do
-  workflow <- accountWorkflow
-  liftIO $ do
-    now <- accountWorkflowClock workflow
-    loadedProfile <- loadProfile (accountWorkflowSessionStore workflow) (accountWorkflowProfileStore workflow) now maybeSessionId
-    pure (now, loadedProfile)
-
-handlePendingProfile ::
-  AccountActionRequest ->
-  ProfileSubmission ->
-  UnixTimeNanoseconds ->
-  AccountProfile ->
-  AccountActionWorkflow
-handlePendingProfile actionRequest submission now profile =
-  case profileIntentValue submission of
-    "resend-verification" -> do
-      resendResult <- resendEmailVerificationNow actionRequest now profile
-      interpretProfileResendResult actionRequest profile resendResult
-    _ -> pure (profileResponse actionRequest Http.status422 (pendingProfileForm actionRequest profile (Just (localized actionRequest "Choose a profile action." "Elige una accion de perfil.")) True))
-
-resendEmailVerificationNow :: AccountActionRequest -> UnixTimeNanoseconds -> AccountProfile -> AppM publicFailure (Either ResendVerificationError ())
-resendEmailVerificationNow actionRequest now profile = do
-  workflow <- accountWorkflow
-  liftIO $
-    resendEmailVerificationAt
-      (accountWorkflowStore workflow)
-      (accountWorkflowRegistrationDeliveryTimeout workflow)
-      (accountWorkflowEmailDelivery workflow)
-      (emailLocale (requestLocale (HarchWeb.clientActionContext actionRequest)))
-      (accountWorkflowVerificationUrl workflow (HarchWeb.clientActionContext actionRequest))
-      now
-      emailVerificationLifetimeNanoseconds
-      profile
-
-interpretProfileResendResult ::
-  AccountActionRequest ->
-  AccountProfile ->
-  Either ResendVerificationError () ->
-  AccountActionWorkflow
-interpretProfileResendResult actionRequest profile resendResult =
-  let form message = pendingProfileForm actionRequest profile (Just message)
-   in case resendResult of
-        Right () -> pure (profileResponse actionRequest Http.status202 (form (localized actionRequest "Check your inbox for a verification link." "Revisa tu bandeja de entrada para obtener un enlace de verificacion.") False))
-        Left ResendVerificationNoLongerPending -> pure (profileResponse actionRequest Http.status409 (form (localized actionRequest "Your profile state changed. Reload the page before trying again." "El estado de tu perfil ha cambiado. Recarga la pagina antes de intentarlo de nuevo.") True))
-        Left (ResendVerificationDeliveryFailed detail) -> throwClientActionFailure (profileResponse actionRequest Http.status502 (form (localized actionRequest "We could not send the verification email. Try again shortly." "No pudimos enviar el correo de verificacion. Intentalo de nuevo en breve.") True)) ProfileResendDeliveryFailure "EmailDeliveryError" detail
-        Left (ResendVerificationStoreError storeError) -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) ProfileResendStoreFailure "AccountStoreError" (accountStoreErrorDetail storeError)
-        Left ResendVerificationClockOverflow -> throwClientActionFailure (profileResponse actionRequest Http.status503 (form (localized actionRequest "Your profile is temporarily unavailable." "Tu perfil no esta disponible temporalmente.") True)) ProfileResendClockFailure "ClockOverflow" "verification expiry overflowed"
+handleProfileSubmission actionRequest submission =
+  Profile.handleProfileWorkflow
+    Profile.ProfileWorkflowInput
+      { Profile.profileWorkflowRequest = actionRequest,
+        Profile.profileWorkflowSubmission = submission
+      }
 
 loginProof :: LoginSubmission -> Maybe MfaLoginProof
 loginProof submission =
